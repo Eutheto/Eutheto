@@ -22,17 +22,17 @@ use eutheto_export::{
     CHECKSUM_ALGORITHM, CHECKSUMS_PATH, CURRENT_BUNDLE_FORMAT_VERSION,
     CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, MANIFEST_PATH, OmittedAssetPlaceholder,
     OmittedAssetReason, PORTABLE_LIMITS, PortableBackupAssetSelection, PortableLimits,
-    PortableScenario, backup_selection_from_manifest, canonical_json, collect_scenario_owned_uuids,
-    collect_self_declared_uuids, omitted_asset_placeholder, parse_omitted_asset_placeholder,
-    reject_prohibited_portable_content, sha256_hex, validate_portable_json_value,
-    validate_portable_path, validate_portable_payloads, validate_scenario_owned_uuid_uniqueness,
+    PortableScenario, backup_selection_from_manifest, canonical_json, omitted_asset_placeholder,
+    parse_omitted_asset_placeholder, reject_prohibited_portable_content, sha256_hex,
+    validate_portable_json_value, validate_portable_path, validate_portable_payloads,
     validate_scenario_snapshot,
 };
 use eutheto_types::{
     BundleId, PackId, PortableAsset, Revision, Rfc3339Timestamp, SCENARIO_SNAPSHOT_SCHEMA_VERSION,
     ScenarioDocument, ScenarioFormat, ScenarioId, ScenarioSnapshotV1, SemanticCapability,
-    SupplementalIdentity, SupplementalSectionKind, ValidationReport, extract_asset_references,
-    extract_result_dependency, extract_result_id, extract_scenario_references,
+    SupplementalIdentity, SupplementalSectionKind, ValidationReport, collect_scenario_owned_uuids,
+    collect_self_declared_uuids, extract_asset_references, extract_result_dependency,
+    extract_result_id, extract_scenario_references, validate_scenario_owned_uuid_uniqueness,
 };
 use serde::de::{
     self, DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor,
@@ -2162,8 +2162,11 @@ fn validate_bundle_references(
     entries: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(), ImportError> {
     for scenario in scenarios.iter().chain(scenario_revisions) {
-        validate_scenario_owned_uuid_uniqueness(scenario)
-            .map_err(|error| ImportError::InvalidManifest(error.to_string()))?;
+        validate_scenario_owned_uuid_uniqueness(scenario).map_err(|error| {
+            ImportError::InvalidManifest(
+                eutheto_export::ExportError::InvalidModel(error.to_string()).to_string(),
+            )
+        })?;
     }
     validate_owned_identity_families(scenarios.iter().chain(scenario_revisions))?;
     let mut identity_owners = BTreeMap::new();
@@ -4857,10 +4860,8 @@ fn rewrite_self_declared_definitions(
             let taken = std::mem::take(values);
             for (key, mut value) in taken {
                 rewrite_self_declared_definitions(&mut value, mapping)?;
-                let rewritten_key = Uuid::parse_str(&key)
-                    .ok()
+                let rewritten_key = eutheto_types::self_declared_uuid(&key, &value)
                     .and_then(|old| mapping.get(&old))
-                    .filter(|_| value.get("id").and_then(Value::as_str) == Some(key.as_str()))
                     .map_or_else(
                         || key.clone(),
                         |new| {
@@ -7496,7 +7497,7 @@ mod tests {
             "note": format!("keep external UUID {person_id}")
         });
         document_references["definitions"] = Value::Object(Map::from_iter([(
-            document_extension_owned.to_string(),
+            document_extension_owned.to_string().to_ascii_uppercase(),
             serde_json::json!({"id": document_extension_owned, "managerId": person_id}),
         )]));
         document_references["unknownDefinitions"] = Value::Object(Map::from_iter([(

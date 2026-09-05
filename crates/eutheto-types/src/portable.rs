@@ -88,15 +88,16 @@ impl ScenarioSnapshotV1 {
 /// # Errors
 ///
 /// Returns a deserialization error for invalid keys/values or repeated typed identities.
-pub fn deserialize_unique_id_map<'de, D, K>(deserializer: D) -> Result<BTreeMap<K, Value>, D::Error>
+pub fn deserialize_unique_id_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
 where
     D: Deserializer<'de>,
     K: Deserialize<'de> + Ord,
+    V: Deserialize<'de>,
 {
-    struct UniqueIdMap<K>(std::marker::PhantomData<K>);
+    struct UniqueIdMap<K, V>(std::marker::PhantomData<(K, V)>);
 
-    impl<'de, K: Deserialize<'de> + Ord> Visitor<'de> for UniqueIdMap<K> {
-        type Value = BTreeMap<K, Value>;
+    impl<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>> Visitor<'de> for UniqueIdMap<K, V> {
+        type Value = BTreeMap<K, V>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("records with unique typed identities")
@@ -108,13 +109,13 @@ where
                 let std::collections::btree_map::Entry::Vacant(entry) = records.entry(id) else {
                     return Err(de::Error::custom("duplicate typed record identity"));
                 };
-                entry.insert(map.next_value::<Value>()?);
+                entry.insert(map.next_value::<V>()?);
             }
             Ok(records)
         }
     }
 
-    deserializer.deserialize_map(UniqueIdMap::<K>(std::marker::PhantomData))
+    deserializer.deserialize_map(UniqueIdMap::<K, V>(std::marker::PhantomData))
 }
 
 /// Whether a portable capability or nonsemantic extension has the established namespace shape.
@@ -526,6 +527,8 @@ fn is_prohibited_field(field: &str) -> bool {
             | "authenticationstatus"
             | "authenticationlabel"
             | "authenticationmethod"
+            // Domain recurrence reference, not executable template content.
+            | "templateid"
     ) {
         return false;
     }
@@ -953,6 +956,51 @@ mod tests {
         max_collection_items: 1024,
     };
 
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    struct TypedRecord {
+        minutes: u32,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TypedRecords {
+        #[serde(deserialize_with = "deserialize_unique_id_map")]
+        records: BTreeMap<crate::EntityId, TypedRecord>,
+    }
+
+    #[test]
+    fn unique_id_map_decodes_typed_records_without_overwriting_aliases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let lower = "018f47f2-e880-7000-8000-0000000000ab";
+        let upper = lower.to_uppercase();
+        let input = format!(r#"{{"records":{{"{lower}":{{"minutes":30}}}}}}"#);
+        let decoded: TypedRecords = serde_json::from_str(&input)?;
+        assert_eq!(
+            decoded.records,
+            BTreeMap::from([(lower.parse()?, TypedRecord { minutes: 30 })]),
+        );
+        let duplicate =
+            format!(r#"{{"records":{{"{lower}":{{"minutes":30}},"{upper}":{{"minutes":90}}}}}}"#);
+        assert!(serde_json::from_str::<TypedRecords>(&duplicate).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn unique_id_map_rejects_normalized_duplicate_before_decoding_its_value()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let lower = "018f47f2-e880-7000-8000-0000000000ab";
+        let upper = lower.to_uppercase();
+        let duplicate_prefix = format!(r#"{{"records":{{"{lower}":{{"minutes":30}},"{upper}":"#);
+        let input = format!(r#"{duplicate_prefix}"not a typed record"}}}}"#);
+        let error = serde_json::from_str::<TypedRecords>(&input)
+            .err()
+            .ok_or("a repeated normalized UUID must reject before decoding its value")?;
+        assert!(
+            error.column() <= duplicate_prefix.len(),
+            "the duplicate value must remain unread",
+        );
+        Ok(())
+    }
+
     #[test]
     fn value_and_streaming_validation_enforce_the_same_aggregate_boundary()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1029,6 +1077,27 @@ mod tests {
             json!({"auth": {"bearer": "sentinel"}}),
         ] {
             assert!(validate_nonsecret_portable_json(&value, &LIMITS).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn domain_template_references_keep_all_content_and_executable_field_checks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let reference = json!({"templateId": "018f7b40-a000-7000-8000-000000000006"});
+        validate_nonsecret_portable_json(&reference, &LIMITS)?;
+        validate_nonsecret_portable_json_bytes(&serde_json::to_vec(&reference)?, &LIMITS)?;
+        for prohibited in [
+            json!({"template": "executable source"}),
+            json!({"scriptId": "018f7b40-a000-7000-8000-000000000006"}),
+            json!({"templateId": "{{ executable_expression }}"}),
+            json!({"templateId": {"script": "executable source"}}),
+        ] {
+            assert!(validate_nonsecret_portable_json(&prohibited, &LIMITS).is_err());
+            assert!(
+                validate_nonsecret_portable_json_bytes(&serde_json::to_vec(&prohibited)?, &LIMITS)
+                    .is_err()
+            );
         }
         Ok(())
     }

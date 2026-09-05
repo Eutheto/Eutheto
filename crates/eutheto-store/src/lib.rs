@@ -13,10 +13,7 @@ use eutheto_domain_ir::{
     RunRequestSemanticsV1, RunTerminalOutcomeV1, ScoreVector, VerificationReport,
     VerificationValue, compare_accepted_results, counterfactual_condition_satisfied,
 };
-use eutheto_export::{
-    ApplicationMetadata, collect_scenario_owned_uuids, collect_self_declared_uuids,
-    validate_scenario_owned_uuid_uniqueness,
-};
+use eutheto_export::ApplicationMetadata;
 use eutheto_import::{
     AppliedMigration, ImportProvenance, MigrationRegistryKind, MigrationSubject,
     PackMigrationVersionSpace, PreviewBinding, RestoreAuthorization, RestoreMode,
@@ -29,8 +26,9 @@ use eutheto_types::{
     SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
     ScenarioSnapshotId, ScenarioSnapshotV1, SemanticCapability, SolutionId, SolveOptions,
     SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
-    extract_result_dependency, extract_result_id, extract_scenario_references,
-    validate_nonsecret_portable_json,
+    collect_scenario_owned_uuids, collect_self_declared_uuids, extract_result_dependency,
+    extract_result_id, extract_scenario_references, validate_nonsecret_portable_json,
+    validate_scenario_owned_uuid_uniqueness,
 };
 use rusqlite::{
     Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, limits::Limit, params,

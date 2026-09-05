@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entities": {
+      "additionalProperties": {
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "lockedAssignments": {
+      "additionalProperties": {
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "preferences": {
+      "additionalProperties": {
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "rules": {
+      "additionalProperties": {
+        "type": "object"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "entities",
+    "rules",
+    "preferences",
+    "lockedAssignments"
+  ],
+  "type": "object"
+}

@@ -3,41 +3,114 @@
   "manifest": {
     "entityKinds": [
       {
+        "description": {
+          "defaultText": "Synthetic Boolean/integer entity.",
+          "key": "official.test.ui.description"
+        },
         "id": "official.test.entity",
-        "titleKey": "official.test.entity.title"
+        "title": {
+          "defaultText": "Synthetic test contract",
+          "key": "official.test.entity.title"
+        }
       }
     ],
     "exporters": [
       {
         "id": "official.test.export.portable-v2",
-        "titleKey": "official.test.export.title"
+        "schemaVersion": 1,
+        "title": {
+          "defaultText": "Export portable test data",
+          "key": "official.test.export.title"
+        }
+      }
+    ],
+    "goalKinds": [
+      {
+        "description": {
+          "defaultText": "Minimize the bounded target total.",
+          "key": "official.test.goal.target.title.description"
+        },
+        "id": "official.test.goal.target",
+        "title": {
+          "defaultText": "Minimize target",
+          "key": "official.test.goal.target.title"
+        }
       }
     ],
     "importers": [
       {
         "id": "official.test.import.portable-v2",
-        "titleKey": "official.test.import.title"
+        "schemaVersion": 1,
+        "title": {
+          "defaultText": "Import portable test data",
+          "key": "official.test.import.title"
+        }
+      }
+    ],
+    "provenanceKinds": [
+      {
+        "description": {
+          "defaultText": "Traces the synthetic enabled/target relation.",
+          "key": "official.test.provenance.required_target.title.description"
+        },
+        "id": "official.test.provenance.required-target",
+        "title": {
+          "defaultText": "Required target",
+          "key": "official.test.provenance.required_target.title"
+        }
       }
     ],
     "resultViews": [
       {
+        "description": {
+          "defaultText": "Synthetic result summary.",
+          "key": "official.test.ui.description"
+        },
         "id": "official.test.result.summary",
-        "titleKey": "official.test.result.summary.title"
+        "title": {
+          "defaultText": "Synthetic test contract",
+          "key": "official.test.result.summary.title"
+        }
       }
     ],
     "ruleKinds": [
       {
+        "description": {
+          "defaultText": "Enabled iff target is positive.",
+          "key": "official.test.ui.description"
+        },
         "id": "official.test.required-target",
-        "titleKey": "official.test.rule.required_target.title"
+        "title": {
+          "defaultText": "Synthetic test contract",
+          "key": "official.test.rule.required_target.title"
+        }
+      }
+    ],
+    "scoreKinds": [
+      {
+        "id": "official.test.score.target-total",
+        "minimize": true,
+        "title": {
+          "defaultText": "Target total",
+          "key": "official.test.score.target_total.title"
+        }
       }
     ],
     "setupSteps": [
       {
+        "description": {
+          "defaultText": "Configure a synthetic entity.",
+          "key": "official.test.ui.description"
+        },
         "id": "official.test.setup.entity",
-        "titleKey": "official.test.setup.entity.title"
+        "title": {
+          "defaultText": "Synthetic test contract",
+          "key": "official.test.setup.entity.title"
+        }
       }
     ]
   },
   "packId": "official.test",
-  "schemaVersion": 1
+  "schemaVersion": 3,
+  "sourceBlake3": "9f1bd7a78b52ab3d00440425be27209e3142c0866fab786e3f734e306449f41e"
 }

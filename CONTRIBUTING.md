@@ -49,6 +49,8 @@ nix flake check
 
 Before running one, inspect the checked-in `Justfile` and `just --list`; a recipe is supported only when it exists there. Do not invent a successful invocation in an issue, pull request, or document. When a recipe exists, use it instead of an ad hoc script so local and CI behavior stay aligned. Shell entry must remain side-effect-free: entering `nix develop` or direnv must not install packages, fetch dependencies, run migrations, build solvers, or generate source files. Bootstrap, installation, generation, and native-worker work require explicit recipes.
 
+Domain-pack generation and drift checking also require the locked JavaScript dependencies from `just install`: `xtask` invokes the workspace-pinned Prettier and checked-in desktop configuration for the combined TypeScript contract product. It verifies the exact formatter version and does not install dependencies or exempt generated TypeScript from formatting.
+
 Report exactly what you ran and what it proved. A build does not prove product acceptance, a unit test does not prove packaging, and repository checks do not prove deferred product behavior.
 
 ## Architecture and security boundaries

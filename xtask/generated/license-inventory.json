@@ -1341,6 +1341,14 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-workforce",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "domains/workforce/core"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "fallible-iterator",
       "version": "0.3.0",
       "kind": "dependency",

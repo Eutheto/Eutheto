@@ -1047,6 +1047,7 @@ dependencies = [
  "eutheto-domain-api",
  "eutheto-export",
  "eutheto-types",
+ "eutheto-workforce",
  "serde",
  "serde_json",
  "sha2",
@@ -1184,6 +1185,18 @@ dependencies = [
  "eutheto-planning-ir",
  "eutheto-solver-api",
  "eutheto-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "eutheto-workforce"
+version = "0.1.0"
+dependencies = [
+ "eutheto-domain-api",
+ "eutheto-domain-ir",
+ "eutheto-types",
+ "jiff",
  "serde",
  "serde_json",
 ]
@@ -5524,6 +5537,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "clap",
+ "eutheto-domain-api",
  "eutheto-export",
  "eutheto-protocol",
  "eutheto-types",

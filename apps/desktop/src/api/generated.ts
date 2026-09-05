@@ -232,6 +232,7 @@ export interface DomainKindDescriptorDto {
 export interface DomainCatalogDto {
   readonly packId: string;
   readonly scenarioSchemaVersion: number;
+  readonly internalSchema: JsonValue;
   readonly portableSchema: JsonValue;
   readonly shareResultSchema: JsonValue;
   readonly commands: readonly DomainCommandDescriptorDto[];

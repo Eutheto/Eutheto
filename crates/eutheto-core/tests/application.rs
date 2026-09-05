@@ -27,7 +27,7 @@ use eutheto_domain_ir::{
 use eutheto_export::{
     BackupSections, CHECKSUMS_PATH, CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, FullBackupSnapshot,
     MANIFEST_PATH, ScenarioExportSnapshot, assemble_full_backup, assemble_scenario_export,
-    backup_selection_from_manifest, collect_scenario_owned_uuids, parse_omitted_asset_placeholder,
+    backup_selection_from_manifest, parse_omitted_asset_placeholder,
 };
 use eutheto_import::{
     CollisionAction, CollisionPlan, ImportOptions, ImportProvenance, InspectedBundle,
@@ -54,6 +54,7 @@ use eutheto_types::{
     SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioId,
     ScenarioSettings, SemanticCapability, SolutionId, SolveMode, SolveOptions, SolveRunId,
     SolveStatus, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, WorkerThreadPolicy,
+    collect_scenario_owned_uuids,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};

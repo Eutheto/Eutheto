@@ -2,12 +2,14 @@
 
 mod budget;
 mod contracts;
+mod identity;
 mod ids;
 mod portable;
 mod values;
 
 pub use budget::*;
 pub use contracts::*;
+pub use identity::*;
 pub use ids::*;
 pub use portable::*;
 pub use values::*;

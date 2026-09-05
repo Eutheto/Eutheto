@@ -17,7 +17,7 @@ This phase incorporates blueprint Section 18 in full; the workforce document con
 - [Phase 03](03-ortools-worker-vertical-slice.md): supported CP-SAT Boolean/integer/cardinality/linear translation, deterministic test profile, process budgets, candidate values, statuses, and assumption evidence.
 - [Phase 04](04-independent-verifier-and-explanations.md): the completed pack-neutral projection/acceptance, verifier/report/score/evidence contracts, quarantine boundary, provenance mapping, and conformance harness. Phase 05 supplies the workforce implementations.
 - `jiff` or the approved time layer must provide explicit IANA timezone and ambiguity handling. CSV import/export uses streaming parsing and bounded reports. Domain crates cannot depend on Tauri, SQLite implementation details, or solver implementations.
-- The approved portable-v2 prerequisite separates pack-owned wire payloads from the frozen internal snapshot before WF-001 implementation. See the [compatibility contract](../architecture/compatibility-policy.md#portable-v2-prerequisite-compatibility). Its local implementation is present; exact-candidate hosted evidence and protected-main integration remain prerequisite gates, not evidence of completed Workforce behavior.
+- The approved portable-v2 prerequisite separates pack-owned wire payloads from the frozen internal snapshot before WF-001 implementation. See the [compatibility contract](../architecture/compatibility-policy.md#portable-v2-prerequisite-compatibility). PR #21 integrated as `9b0b55ecb622a75b90e2bd97f30c0a223e6c3eb6` after all required PR and merge-group gates passed; this closes the portability prerequisite, not Workforce behavior.
 
 ## Domain purpose and boundary
 
