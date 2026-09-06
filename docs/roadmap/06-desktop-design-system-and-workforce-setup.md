@@ -393,6 +393,8 @@ Generate the authoritative preview from validated typed commands, not free-form 
 
 Only Phase 05-complete rule types are enabled as executable normal-flow choices. Later catalog items may appear only with accurate unavailable status; never save a rule the core will ignore.
 
+The [Phase 07 practitioner scheduling decision ledger](07-workforce-solving-results-repair-and-export.md#practitioner-scheduling-clarifications) also governs editor language. Distinguish Required exact/minimum/maximum/ranged totals from preferred targets; distinct weekends worked from weekend shifts/hours; grouping newly selected work from adjacency to a base schedule; and predefined partial shifts from optimizer-selected linked alternatives. Show units, period/membership, population, strength, and unresolved policy choices explicitly. Phase 06 must not invent defaults, speculative controls or replacement schemas for unanswered requirements. Once the corresponding Rust contract and capability land in Phase 07, extend these same accessible generated editors; do not create a parallel editor or enable unsupported choices.
+
 ### Validation experience
 
 Group issues as **Must fix before optimizing**, **Likely problem**, **Review suggested**, and **Information**. Every issue uses plain language, names affected entities, links to exact editor/field, offers only deterministic safe bulk fixes, and distinguishes data validation from solver-proven infeasibility.
@@ -526,6 +528,7 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 - CSV mapping through the generated typed client previews additions/updates/duplicates/rejections from the Phase 05 service, never guesses similar-name identity, rejects stale previews, applies atomically, retrieves rejected-row details, and undoes as one batch;
 - recurrence regeneration shows diff and protects detached edits;
 - opening a proposed `.eutheto` bundle shows exact inspect/migration/reconnection/collision preview before mutation; Create copy/Replace/Skip, cancellation and stale preview map to Phase-01 typed services without frontend authority;
+- practitioner-ledger distinctions are not collapsed into misleading target/fairness labels; unanswered or unsupported choices remain accurately unavailable, and later enabled controls use the same typed preview, keyboard, validation and revision contracts;
 - scenario export is labelled editable; full backup lists included/excluded data; add versus replace restore is unmistakable; destructive replace requires confirmation and truthfully reports pre-restore safety-backup failure/recovery;
 - all validation severities link to exact editors/fields and distinguish data issues from infeasibility.
 - users can distinguish draft from applied configuration and explain the proposed scope, units, and Required/Preference meaning before committing; ambiguous identity or time interpretation is resolved explicitly rather than silently guessed.
