@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Cross-layer evidence for the WF-003 contribution, not registered-pack acceptance or scoring.
+//! Cross-layer evidence for WF-003/WF-004 contributions, not registered-pack acceptance or scoring.
 
 #[path = "../../../domains/workforce/core/tests/support/mod.rs"]
 mod workforce_fixture;
@@ -94,6 +94,32 @@ fn fixture_value() -> Result<Value, Box<dyn Error>> {
         rules.insert(id(index), rule);
     }
     value["domain"]["rules"] = Value::Object(rules);
+    Ok(value)
+}
+
+fn rest_fixture() -> Result<Value, Box<dyn Error>> {
+    let mut value = fixture_value()?;
+    let mut call = value["domain"]["entities"][id(4)].clone();
+    call["id"] = json!(id(24));
+    call["name"] = json!("Call");
+    call["category"] = json!("call");
+    value["domain"]["entities"][id(24)] = call;
+    value["domain"]["entities"][id(8)]["assignmentTypeId"] = json!(id(24));
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint("19:59:59.999999999");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint("21:00:00");
+    for person in [1, 20, 21] {
+        value["domain"]["entities"][id(person)]["eligibleAssignmentTypeIds"] =
+            json!([id(4), id(24)]);
+    }
+    value["domain"]["entities"][id(20)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    value["domain"]["rules"][id(34)] = json!({
+        "id":id(34),"kind":"minimumRest","active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},
+        "afterScope":{"people":{"kind":"all"},"categories":["call"]},
+        "beforeScope":{"people":{"kind":"all"},"categories":["clinic"]},
+        "minimumMinutes":600
+    });
     Ok(value)
 }
 
@@ -299,6 +325,125 @@ fn exhaustive_original_domain_and_compiled_mathematics_agree() -> TestResult {
             accepted += usize::from(original);
         }
         assert_eq!(accepted, expected_count, "{name}");
+    }
+    Ok(())
+}
+
+#[test]
+fn exhaustive_rest_mathematics_matches_original_direction_and_boundary() -> TestResult {
+    let base = rest_fixture()?;
+    let mut equal = base.clone();
+    equal["domain"]["entities"][id(22)]["startsAt"] = endpoint("20:00:00");
+    let mut above = base.clone();
+    above["domain"]["entities"][id(22)]["startsAt"] = endpoint("20:00:00.000000001");
+    let mut reverse = base.clone();
+    reverse["domain"]["rules"][id(34)]["afterScope"]["categories"] = json!(["clinic"]);
+    reverse["domain"]["rules"][id(34)]["beforeScope"]["categories"] = json!(["call"]);
+    let mut inactive = base.clone();
+    inactive["domain"]["rules"][id(34)]["active"] = json!(false);
+    let mut empty = base.clone();
+    empty["domain"]["rules"][id(34)]["scope"]["people"] =
+        json!({"kind":"selected","personIds":[id(21)]});
+    for (name, value, expected) in [
+        ("one nanosecond short", base, 1),
+        ("exact ten hours", equal, 2),
+        ("one nanosecond above", above, 2),
+        ("reverse chronological roles", reverse, 2),
+        ("inactive rest", inactive, 2),
+        ("no eligible scoped person", empty, 2),
+    ] {
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_assignment_rules(&document, &context())?;
+        assert!(compiled.obligations.remaining.is_empty());
+        summarize(&problem(&document, &compiled)?, PlanningIrLimitsV1::DEFAULT)?;
+        let mut accepted = 0;
+        for selected in selections()? {
+            let original = original_accepts(&document, &selected)?;
+            assert_eq!(
+                mathematics_accepts(&compiled, &selected)?,
+                original,
+                "{name}: {selected:?}"
+            );
+            accepted += usize::from(original);
+        }
+        assert_eq!(accepted, expected, "{name}");
+    }
+    Ok(())
+}
+
+#[test]
+fn original_rest_evaluator_detects_missing_edge_threshold_and_direction_mutants() -> TestResult {
+    let original = rest_fixture()?;
+    let document: ScenarioDocument = serde_json::from_value(original.clone())?;
+    let mut missing = compile_assignment_rules(&document, &context())?;
+    missing
+        .constraints
+        .retain(|record| !matches!(record.body, Constraint::AtMostOne { .. }));
+    detects_mutation(&document, &missing)?;
+    let mut threshold = original.clone();
+    threshold["domain"]["rules"][id(34)]["minimumMinutes"] = json!(599);
+    let threshold = serde_json::from_value(threshold)?;
+    detects_mutation(
+        &document,
+        &compile_assignment_rules(&threshold, &context())?,
+    )?;
+    let mut direction = original;
+    direction["domain"]["rules"][id(34)]["afterScope"]["categories"] = json!(["clinic"]);
+    direction["domain"]["rules"][id(34)]["beforeScope"]["categories"] = json!(["call"]);
+    let direction = serde_json::from_value(direction)?;
+    detects_mutation(
+        &document,
+        &compile_assignment_rules(&direction, &context())?,
+    )
+}
+
+#[test]
+fn original_rest_evaluator_detects_nonadjacent_and_equal_start_omissions() -> TestResult {
+    let mut nonadjacent = rest_fixture()?;
+    nonadjacent["domain"]["rules"][id(32)]["active"] = json!(false);
+    let mut admin = nonadjacent["domain"]["entities"][id(4)].clone();
+    admin["id"] = json!(id(26));
+    admin["category"] = json!("administrative");
+    nonadjacent["domain"]["entities"][id(26)] = admin;
+    nonadjacent["domain"]["entities"][id(1)]["eligibleAssignmentTypeIds"] =
+        json!([id(4), id(24), id(26)]);
+    let mut middle = nonadjacent["domain"]["entities"][id(22)].clone();
+    middle["id"] = json!(id(25));
+    middle["assignmentTypeId"] = json!(id(26));
+    middle["startsAt"] = endpoint("12:00:00");
+    middle["endsAt"] = endpoint("13:00:00");
+    nonadjacent["domain"]["entities"][id(25)] = middle;
+    let mut equal = rest_fixture()?;
+    equal["domain"]["rules"][id(32)]["active"] = json!(false);
+    equal["domain"]["entities"][id(22)]["startsAt"] = endpoint("08:00:00");
+    equal["domain"]["entities"][id(22)]["endsAt"] = endpoint("09:00:00");
+    equal["domain"]["rules"][id(33)]["compatibleCategoryPairs"] =
+        json!([{"firstCategory":"call","secondCategory":"clinic"}]);
+    // Source has the larger UUID: chronological equality must not use ID orientation.
+    equal["domain"]["rules"][id(34)]["afterScope"]["categories"] = json!(["clinic"]);
+    equal["domain"]["rules"][id(34)]["beforeScope"]["categories"] = json!(["call"]);
+    for (value, selected) in [
+        (nonadjacent, vec![pair(1, 8)?, pair(1, 25)?, pair(1, 22)?]),
+        (equal, vec![pair(1, 8)?, pair(1, 22)?]),
+    ] {
+        let document = serde_json::from_value(value)?;
+        let mut mutant = compile_assignment_rules(&document, &context())?;
+        assert!(!mathematics_accepts(&mutant, &selected)?);
+        assert!(!original_accepts(&document, &selected)?);
+        let variables: BTreeSet<_> = mutant
+            .variables
+            .iter()
+            .filter(|item| selected.contains(&item.pair))
+            .map(|item| item.variable.id.clone())
+            .collect();
+        mutant.constraints.retain(|record| match &record.body {
+            Constraint::AtMostOne { literals } => !literals
+                .iter()
+                .all(|literal| variables.contains(&literal.variable)),
+            _ => true,
+        });
+        assert!(mathematics_accepts(&mutant, &selected)?);
+        assert!(!original_accepts(&document, &selected)?);
     }
     Ok(())
 }
@@ -568,5 +713,140 @@ async fn real_worker_solves_and_rejects_assignment_rule_models() -> TestResult {
         BackendTerminationReason::InfeasibilityClaimed
     );
     assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_solves_and_rejects_minimum_rest_models() -> TestResult {
+    let value = rest_fixture()?;
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let result = solve_with_real_worker(problem(&document, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    assert_eq!(result.candidates.len(), 1);
+    let mut selected = Vec::new();
+    for item in &compiled.variables {
+        if *result.candidates[0]
+            .values
+            .booleans
+            .get(&item.variable.id)
+            .ok_or("candidate omitted assignment Boolean")?
+        {
+            selected.push(item.pair);
+        }
+    }
+    assert_eq!(
+        selected.iter().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from([pair(1, 8)?, pair(20, 22)?])
+    );
+    assert!(original_accepts(&document, &selected)?);
+    let mut impossible = value;
+    impossible["domain"]["entities"][id(20)]["eligibleAssignmentTypeIds"] = json!([]);
+    let impossible = serde_json::from_value(impossible)?;
+    let compiled = compile_assignment_rules(&impossible, &context())?;
+    let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[test]
+fn rest_command_inverse_and_portable_roundtrip_preserve_assignment_semantics() -> TestResult {
+    use eutheto_domain_api::{
+        DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, PortableImportContext,
+    };
+    use eutheto_types::{DomainCommandEnvelope, ScenarioDomain};
+    use eutheto_workforce::{
+        commands,
+        portable::{export_portable, import_portable},
+    };
+
+    let original: ScenarioDocument = serde_json::from_value(rest_fixture()?)?;
+    let selected = [pair(1, 8)?, pair(1, 22)?];
+    assert!(!original_accepts(&original, &selected)?);
+    let mut relaxed = original
+        .domain
+        .rules
+        .get(&id(34).parse()?)
+        .ok_or("rest rule")?
+        .clone();
+    relaxed["minimumMinutes"] = json!(599);
+    let change = commands::apply_batch(
+        &original,
+        &DomainBatchCommand {
+            schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
+            pack_id: original.domain_pack.id.clone(),
+            scenario_schema_version: 1,
+            label: None,
+            commands: vec![DomainCommandEnvelope {
+                command_type: commands::UPDATE_RULE.to_owned(),
+                payload: json!({"rule":relaxed}),
+            }],
+        },
+    )?;
+    assert!(original_accepts(&change.document, &selected)?);
+    let undone = commands::apply_batch(&change.document, &change.inverse)?;
+    assert_eq!(undone.document, original);
+    assert!(!original_accepts(&undone.document, &selected)?);
+
+    let portable = export_portable(&original)?;
+    let wire = serde_json::to_vec(&portable)?;
+    let mut shell = original.clone();
+    shell.domain = ScenarioDomain::default();
+    shell.extensions.clear();
+    let restored = import_portable(
+        &serde_json::from_slice(&wire)?,
+        &PortableImportContext {
+            scenario_shell: shell,
+        },
+    )?;
+    assert_eq!(restored, original);
+    let compiled = compile_assignment_rules(&restored, &context())?;
+    for selection in selections()? {
+        assert_eq!(
+            mathematics_accepts(&compiled, &selection)?,
+            original_accepts(&original, &selection)?
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn directional_rest_identities_match_frozen_vectors() -> TestResult {
+    let mut value = rest_fixture()?;
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint("08:00:00");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint("09:00:00");
+    for (reverse, constraint, provenance) in [
+        (
+            false,
+            "official.workforce.constraint.8b4fbd99b990ecb97899a8575c3963d6a9ed209e39fcfd1cf058cf830b29f23c",
+            "official.workforce.provenance.f238b99439ad38ee4fbc21af420358e300bd6f4bd3ad24e40f49f495755554d8",
+        ),
+        (
+            true,
+            "official.workforce.constraint.78529b53b934b292be43b5e4e04da46848115b2291c74488ce667c2c8b0ef091",
+            "official.workforce.provenance.6005be31f5bd93811600310cf4b71a973a2bd2a7d95b4762b22c64d8041ab909",
+        ),
+    ] {
+        if reverse {
+            value["domain"]["rules"][id(34)]["afterScope"]["categories"] = json!(["clinic"]);
+            value["domain"]["rules"][id(34)]["beforeScope"]["categories"] = json!(["call"]);
+        }
+        let document = serde_json::from_value(value.clone())?;
+        let compiled = compile_assignment_rules(&document, &context())?;
+        let record = compiled
+            .constraints
+            .iter()
+            .find(|record| record.id.as_str() == constraint)
+            .ok_or("directional rest identity changed")?;
+        assert_eq!(record.provenance.as_str(), provenance);
+    }
     Ok(())
 }

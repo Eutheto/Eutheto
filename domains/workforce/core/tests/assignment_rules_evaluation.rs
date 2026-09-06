@@ -45,6 +45,70 @@ fn rule(value: &mut Value, index: u32, kind: &str) {
     }
 }
 
+fn rest_rule(value: &mut Value, index: u32, minimum_minutes: u32) {
+    rule(value, index, "minimumRest");
+    value["domain"]["rules"][id(index)]["afterScope"] = json!({"people":{"kind":"all"}});
+    value["domain"]["rules"][id(index)]["beforeScope"] = json!({"people":{"kind":"all"}});
+    value["domain"]["rules"][id(index)]["minimumMinutes"] = json!(minimum_minutes);
+}
+
+fn rest_evidence(
+    result: &AssignmentRuleEvaluation,
+    index: u32,
+    source: u32,
+    target: u32,
+    minimum_minutes: u32,
+    seconds: i64,
+    nanos: i64,
+) -> Result {
+    let record = evaluation(result, index)?;
+    assert_eq!(
+        record.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_reason"
+        )?),
+        Some(&VerificationValue::Text("minimum_rest".to_owned())),
+    );
+    for (key, shift) in [
+        ("official.workforce.fact.rest_source_shift", source),
+        ("official.workforce.fact.rest_target_shift", target),
+    ] {
+        let Some(VerificationValue::Entity(entity)) =
+            record.observed.get(&VerificationFactId::new(key)?)
+        else {
+            return Err("missing typed rest role".into());
+        };
+        assert_eq!(entity.kind.as_str(), "official.workforce.shift");
+        assert_eq!(
+            entity.id.as_str(),
+            format!("official.workforce.{}", id(shift))
+        );
+        assert!(record.affected_entities.contains(entity));
+    }
+    assert_eq!(
+        record.expected.get(&VerificationFactId::new(
+            "official.workforce.fact.required_rest_minutes"
+        )?),
+        Some(&VerificationValue::Integer(i64::from(minimum_minutes))),
+    );
+    for (key, value) in [
+        ("official.workforce.fact.actual_rest_seconds", seconds),
+        (
+            "official.workforce.fact.actual_rest_subsecond_nanoseconds",
+            nanos,
+        ),
+    ] {
+        assert_eq!(
+            record.observed.get(&VerificationFactId::new(key)?),
+            Some(&VerificationValue::Integer(value)),
+        );
+    }
+    assert_eq!(record.affected_entities.len(), 3);
+    assert_eq!(record.expected.len(), 2);
+    assert_eq!(record.observed.len(), 7);
+    assert!(record.evidence.is_empty());
+    Ok(())
+}
+
 fn pair(person: u32, shift: u32) -> Result<AssignmentPair> {
     Ok(AssignmentPair {
         person_id: id(person).parse()?,
@@ -785,5 +849,439 @@ fn repeated_instant_availability_expansion_has_an_explicit_operation_limit() -> 
             AssignmentRuleLimit::ExpandedIntervals
         ))
     );
+    Ok(())
+}
+
+#[test]
+fn rest_uses_exact_elapsed_threshold_and_directional_evidence() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 600);
+    another_shift(&mut value, 30, "2026-11-01T20:00:00", "2026-11-01T21:00:00");
+    for (start, violations) in [
+        ("2026-11-01T20:00:00", 0),
+        ("2026-11-01T19:59:59.999999999", 1),
+        ("2026-11-01T20:00:00.000000001", 0),
+    ] {
+        times(
+            &mut value["domain"]["entities"][id(30)],
+            start,
+            "2026-11-01T21:00:00",
+        );
+        let result = run(&value, &[(1, 30), (1, 8)])?;
+        assert_eq!(totals(&result, 20)?, (1, violations));
+        assert_eq!(
+            result.evaluations,
+            run(&value, &[(1, 8), (1, 30)])?.evaluations
+        );
+        if violations != 0 {
+            rest_evidence(&result, 20, 8, 30, 600, 35_999, 999_999_999)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn rest_role_chronology_is_not_uuid_or_selection_order() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 600);
+    value["domain"]["entities"][id(31)] = value["domain"]["entities"][id(4)].clone();
+    value["domain"]["entities"][id(31)]["id"] = json!(id(31));
+    value["domain"]["entities"][id(31)]["category"] = json!("call");
+    another_shift(&mut value, 30, "2026-11-01T06:00:00", "2026-11-01T07:00:00");
+    value["domain"]["entities"][id(30)]["assignmentTypeId"] = json!(id(31));
+    value["domain"]["rules"][id(20)]["afterScope"]["categories"] = json!(["call"]);
+    value["domain"]["rules"][id(20)]["beforeScope"]["categories"] = json!(["clinic"]);
+    let forward = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&forward, 20)?, (1, 1));
+    rest_evidence(&forward, 20, 30, 8, 600, 3600, 0)?;
+    assert_eq!(
+        forward.evaluations,
+        run(&value, &[(1, 30), (1, 8)])?.evaluations
+    );
+    value["domain"]["rules"][id(20)]["afterScope"]["categories"] = json!(["clinic"]);
+    value["domain"]["rules"][id(20)]["beforeScope"]["categories"] = json!(["call"]);
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (0, 0));
+
+    times(
+        &mut value["domain"]["entities"][id(30)],
+        "2026-11-01T08:00:00",
+        "2026-11-01T09:00:00",
+    );
+    let equal = run(&value, &[(1, 30), (1, 8)])?;
+    assert_eq!(totals(&equal, 20)?, (1, 1));
+    rest_evidence(&equal, 20, 8, 30, 600, -7200, 0)?;
+    value["domain"]["rules"][id(20)]["afterScope"]["categories"] = json!(["call"]);
+    value["domain"]["rules"][id(20)]["beforeScope"]["categories"] = json!(["clinic"]);
+    let reversed = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&reversed, 20)?, (1, 1));
+    rest_evidence(&reversed, 20, 30, 8, 600, -3600, 0)?;
+    rest_rule(&mut value, 20, 600);
+    let both = run(&value, &[(1, 30), (1, 8)])?;
+    assert_eq!(totals(&both, 20)?, (2, 2));
+    rest_evidence(&both, 20, 8, 30, 600, -7200, 0)?;
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (0, 0));
+    Ok(())
+}
+
+#[test]
+fn rest_overlap_violates_zero_even_when_no_overlap_is_compatible() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 0);
+    rule(&mut value, 21, "noOverlap");
+    value["domain"]["rules"][id(21)]["compatibleCategoryPairs"] =
+        json!([{"firstCategory":"clinic","secondCategory":"clinic"}]);
+    another_shift(
+        &mut value,
+        30,
+        "2026-11-01T09:59:59.999999999",
+        "2026-11-01T11:00:00",
+    );
+    let result = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&result, 20)?, (1, 1));
+    assert_eq!(totals(&result, 21)?, (1, 0));
+    rest_evidence(&result, 20, 8, 30, 0, 0, -1)?;
+    times(
+        &mut value["domain"]["entities"][id(30)],
+        "2026-11-01T10:00:00",
+        "2026-11-01T11:00:00",
+    );
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (1, 0));
+    Ok(())
+}
+
+#[test]
+fn rest_counts_nonadjacent_pairs_without_an_intervening_reset() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 120);
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "2026-11-01T08:00:00",
+        "2026-11-01T18:00:00",
+    );
+    another_shift(&mut value, 30, "2026-11-01T09:00:00", "2026-11-01T10:00:00");
+    another_shift(&mut value, 31, "2026-11-01T19:00:00", "2026-11-01T20:00:00");
+    let result = run(&value, &[(1, 30), (1, 31), (1, 8)])?;
+    assert_eq!(totals(&result, 20)?, (3, 2));
+    value["domain"]["entities"][id(32)] = value["domain"]["entities"][id(4)].clone();
+    value["domain"]["entities"][id(32)]["id"] = json!(id(32));
+    value["domain"]["entities"][id(32)]["category"] = json!("other");
+    value["domain"]["entities"][id(30)]["assignmentTypeId"] = json!(id(32));
+    value["domain"]["rules"][id(20)]["afterScope"]["categories"] = json!(["clinic"]);
+    value["domain"]["rules"][id(20)]["beforeScope"]["categories"] = json!(["clinic"]);
+    let scoped = run(&value, &[(1, 8), (1, 30), (1, 31)])?;
+    assert_eq!(totals(&scoped, 20)?, (1, 1));
+    rest_evidence(&scoped, 20, 8, 31, 120, 3600, 0)?;
+    Ok(())
+}
+
+#[test]
+fn rest_intersects_every_common_and_directional_scope_dimension() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 600);
+    another_shift(&mut value, 40, "2026-11-01T11:00:00", "2026-11-01T12:00:00");
+    another_person(&mut value, 32);
+    value["domain"]["entities"][id(30)] = json!({"kind":"team","id":id(30),"name":"Team"});
+    value["domain"]["entities"][id(31)] = json!({"kind":"team","id":id(31),"name":"Other"});
+    value["domain"]["entities"][id(1)]["teamIds"] = json!([id(30)]);
+    value["domain"]["entities"][id(34)] = value["domain"]["entities"][id(4)].clone();
+    value["domain"]["entities"][id(34)]["id"] = json!(id(34));
+    value["domain"]["entities"][id(35)] =
+        json!({"kind":"location","id":id(35),"name":"Other","transitions":[]});
+    let full_scope = json!({"people":{"kind":"selected","personIds":[id(1)]},"teamIds":[id(30)],"assignmentTypeIds":[id(4)],"categories":["clinic"],"weekdays":["sunday"],"locationIds":[id(5)]});
+    for role in ["scope", "afterScope", "beforeScope"] {
+        value["domain"]["rules"][id(20)][role] = full_scope.clone();
+    }
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 40)])?, 20)?, (1, 1));
+    for role in ["scope", "afterScope", "beforeScope"] {
+        for (field, replacement) in [
+            ("people", json!({"kind":"selected","personIds":[id(32)]})),
+            (
+                "people",
+                json!({"kind":"filter","allTags":["absent"],"anyTags":[]}),
+            ),
+            (
+                "people",
+                json!({"kind":"filter","allTags":[],"anyTags":["absent"]}),
+            ),
+            ("teamIds", json!([id(31)])),
+            ("assignmentTypeIds", json!([id(34)])),
+            ("categories", json!(["other"])),
+            ("weekdays", json!(["monday"])),
+            ("locationIds", json!([id(35)])),
+        ] {
+            value["domain"]["rules"][id(20)][role][field] = replacement;
+            let result = run(&value, &[(1, 8), (1, 40)])?;
+            assert_eq!(totals(&result, 20)?, (0, 0), "{role}.{field}");
+            assert!(result.obligations.handled.contains(&id(20).parse()?));
+            value["domain"]["rules"][id(20)][role] = full_scope.clone();
+        }
+    }
+    // Common scope must match both ends, not merely the source.
+    value["domain"]["entities"][id(40)]["assignmentTypeId"] = json!(id(34));
+    for role in ["afterScope", "beforeScope"] {
+        value["domain"]["rules"][id(20)][role] = json!({"people":{"kind":"all"}});
+    }
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 40)])?, 20)?, (0, 0));
+    value["domain"]["rules"][id(20)]["scope"] =
+        json!({"people":{"kind":"all"},"assignmentTypeIds":[id(34)]});
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 40)])?, 20)?, (0, 0));
+    value["domain"]["rules"][id(20)]["active"] = json!(false);
+    value["domain"]["rules"][id(20)]["afterScope"]["people"] =
+        json!({"kind":"selected","personIds":[]});
+    let inactive = run(&value, &[(1, 8), (1, 40)])?;
+    assert!(evaluation(&inactive, 20).is_err());
+    assert!(!inactive.obligations.handled.contains(&id(20).parse()?));
+    assert!(!inactive.obligations.remaining.contains(&id(20).parse()?));
+    value["domain"]["rules"][id(20)]["active"] = json!(true);
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    assert!(matches!(
+        evaluate_assignment_rules(&document, &[], None),
+        Err(AssignmentRuleError::InvalidDocument(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn rest_sees_identified_inadmissible_selections_and_empty_selections() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 600);
+    rule(&mut value, 21, "eligibility");
+    rule(&mut value, 22, "availability");
+    another_shift(&mut value, 30, "2026-11-01T11:00:00", "2026-11-01T12:00:00");
+    value["domain"]["entities"][id(1)]["eligibleAssignmentTypeIds"] = json!([]);
+    availability(
+        &mut value,
+        31,
+        "unavailable",
+        "2026-11-01T11:00:00Z",
+        "2026-11-01T12:00:00Z",
+    );
+    availability(
+        &mut value,
+        32,
+        "approvedTimeOff",
+        "2026-11-01T11:00:00Z",
+        "2026-11-01T12:00:00Z",
+    );
+    let result = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&result, 20)?, (1, 1));
+    assert!(!evaluation(&result, 21)?.satisfied);
+    assert!(!evaluation(&result, 22)?.satisfied);
+    assert!(!evaluation(&result, 32)?.satisfied);
+    let empty = run(&value, &[])?;
+    assert_eq!(totals(&empty, 20)?, (0, 0));
+    assert!(empty.obligations.handled.contains(&id(20).parse()?));
+    assert!(!empty.obligations.remaining.contains(&id(20).parse()?));
+    Ok(())
+}
+
+#[test]
+fn rest_distinguishes_overnight_dst_elapsed_time_from_reporting_weekday() -> Result {
+    for (
+        date,
+        next,
+        source_start,
+        source_end,
+        target_start,
+        target_end,
+        horizon_start,
+        horizon_end,
+        offset,
+        next_offset,
+        violations,
+        seconds,
+    ) in [
+        (
+            "2026-03-07",
+            "2026-03-08",
+            "2026-03-08T04:00:00Z",
+            "2026-03-08T06:00:00Z",
+            "2026-03-08T15:00:00Z",
+            "2026-03-08T16:00:00Z",
+            "2026-03-07T05:00:00Z",
+            "2026-03-09T04:00:00Z",
+            -18000,
+            -14400,
+            1,
+            32400,
+        ),
+        (
+            "2026-10-31",
+            "2026-11-01",
+            "2026-11-01T03:00:00Z",
+            "2026-11-01T05:00:00Z",
+            "2026-11-01T16:00:00Z",
+            "2026-11-01T17:00:00Z",
+            "2026-10-31T04:00:00Z",
+            "2026-11-02T05:00:00Z",
+            -14400,
+            -18000,
+            0,
+            39600,
+        ),
+    ] {
+        let mut value = base()?;
+        value["settings"]["timeZone"] = json!("America/New_York");
+        value["settings"]["overlapPolicy"] = json!("earlier");
+        value["settings"]["horizon"] = json!({"start":horizon_start,"end":horizon_end});
+        rest_rule(&mut value, 20, 600);
+        another_shift(&mut value, 30, "2026-11-01T11:00:00", "2026-11-01T12:00:00");
+        for (shift, start, end, local_start, local_end, shift_offset) in [
+            (
+                8,
+                source_start,
+                source_end,
+                format!("{date}T23:00:00"),
+                format!("{next}T01:00:00"),
+                offset,
+            ),
+            (
+                30,
+                target_start,
+                target_end,
+                format!("{next}T11:00:00"),
+                format!("{next}T12:00:00"),
+                next_offset,
+            ),
+        ] {
+            value["domain"]["entities"][id(shift)]["startsAt"] =
+                json!({"instant":start,"local":local_start,"offsetSeconds":shift_offset});
+            value["domain"]["entities"][id(shift)]["endsAt"] =
+                json!({"instant":end,"local":local_end,"offsetSeconds":shift_offset});
+        }
+        value["domain"]["entities"][id(8)]["reportingAttribution"] = json!("endLocalDate");
+        for role in ["scope", "afterScope", "beforeScope"] {
+            value["domain"]["rules"][id(20)][role]["weekdays"] = json!(["sunday"]);
+        }
+        let result = run(&value, &[(1, 8), (1, 30)])?;
+        assert_eq!(totals(&result, 20)?, (1, violations));
+        value["domain"]["rules"][id(20)]["minimumMinutes"] = json!(700);
+        rest_evidence(
+            &run(&value, &[(1, 8), (1, 30)])?,
+            20,
+            8,
+            30,
+            700,
+            seconds,
+            0,
+        )?;
+        value["domain"]["entities"][id(8)]["reportingAttribution"] = json!("startLocalDate");
+        assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (0, 0));
+    }
+    Ok(())
+}
+
+#[test]
+fn rest_maximum_minutes_and_extreme_instants_do_not_add_overflowing_endpoints() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, u32::MAX);
+    value["settings"]["horizon"] =
+        json!({"start":"-009000-01-01T00:00:00Z","end":"9001-01-01T00:00:00Z"});
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "-009000-01-01T00:00:00",
+        "-009000-01-02T00:00:00",
+    );
+    another_shift(&mut value, 30, "9000-12-31T20:00:00", "9000-12-31T21:00:00");
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (1, 0));
+    // Near the timestamp ceiling, adding the required minutes to the source end would fail.
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "9000-12-31T18:00:00",
+        "9000-12-31T19:00:00",
+    );
+    let near_end = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&near_end, 20)?, (1, 1));
+    rest_evidence(&near_end, 20, 8, 30, u32::MAX, 3600, 0)?;
+    // A long overlapping interval must retain a negative gap whose total nanoseconds do not
+    // fit i64. Whole seconds and signed subsecond nanoseconds remain exact.
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "-009000-01-01T00:00:00",
+        "9000-12-31T19:00:00.000000001",
+    );
+    times(
+        &mut value["domain"]["entities"][id(30)],
+        "-009000-01-02T00:00:00",
+        "-009000-01-03T00:00:00",
+    );
+    let negative = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&negative, 20)?, (1, 1));
+    let seconds = "-009000-01-02T00:00:00Z"
+        .parse::<jiff::Timestamp>()?
+        .as_second()
+        - "9000-12-31T19:00:00Z"
+            .parse::<jiff::Timestamp>()?
+            .as_second();
+    rest_evidence(&negative, 20, 8, 30, u32::MAX, seconds, -1)?;
+    Ok(())
+}
+
+#[test]
+fn rest_safe_suffix_counts_quadratic_predicates_without_quadratic_work_or_output() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 1);
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(8));
+    let prototype = base()?["domain"]["entities"][id(8)].clone();
+    let mut people = vec![1];
+    for person in 2000..2099 {
+        another_person(&mut value, person);
+        people.push(person);
+    }
+    let mut pairs = Vec::new();
+    for index in 0..800_u32 {
+        let mut shift = prototype.clone();
+        let second = index * 90;
+        let start = format!(
+            "2026-11-01T{:02}:{:02}:{:02}",
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
+        let end_second = second + 30;
+        let end = format!(
+            "2026-11-01T{:02}:{:02}:{:02}",
+            end_second / 3600,
+            end_second / 60 % 60,
+            end_second % 60
+        );
+        shift["id"] = json!(id(1000 + index));
+        times(&mut shift, &start, &end);
+        value["domain"]["entities"][id(1000 + index)] = shift;
+        for person in &people {
+            pairs.push((*person, 1000 + index));
+        }
+    }
+    let result = run(&value, &pairs)?;
+    // Reuse a bounded original shift population across people: 80,000 selected pairs and
+    // 31,960,000 chronological predicates, more than the entire work-step ceiling.
+    assert_eq!(totals(&result, 20)?, (31_960_000, 0));
+    assert_eq!(result.evaluations.len(), 101);
+    Ok(())
+}
+
+#[test]
+fn dense_equal_start_rest_counts_both_roles_with_one_canonical_witness() -> Result {
+    let mut value = base()?;
+    rest_rule(&mut value, 20, 0);
+    let mut pairs = vec![(1, 8)];
+    for index in 1000..1199 {
+        another_shift(
+            &mut value,
+            index,
+            "2026-11-01T08:00:00",
+            "2026-11-01T10:00:00",
+        );
+        pairs.push((1, index));
+    }
+    let result = run(&value, &pairs)?;
+    assert_eq!(totals(&result, 20)?, (39_800, 39_800));
+    rest_evidence(&result, 20, 8, 1000, 0, -7200, 0)?;
+    assert_eq!(result.evaluations.len(), 2);
+    pairs.reverse();
+    assert_eq!(result.evaluations, run(&value, &pairs)?.evaluations);
     Ok(())
 }

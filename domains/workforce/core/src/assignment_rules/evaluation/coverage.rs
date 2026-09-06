@@ -220,10 +220,11 @@ fn check(
         upper: requirement.upper,
         actual: Some(actual),
         interval: None,
+        rest: None,
     };
     summary.predicate(
         actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper),
-        witness,
+        &witness,
         budget,
     )?;
     for (rank, minimum) in requirement.minima.iter().enumerate() {
@@ -246,7 +247,7 @@ fn check(
         witness.lower = Some(u64::from(minimum.required));
         witness.upper = None;
         witness.actual = Some(matching);
-        summary.predicate(matching < u64::from(minimum.required), witness, budget)?;
+        summary.predicate(matching < u64::from(minimum.required), &witness, budget)?;
     }
     Ok(())
 }
