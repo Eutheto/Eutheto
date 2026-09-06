@@ -1,5 +1,7 @@
 use crate::ids::{ShiftId, ShiftTemplateId};
-use crate::model::{AssignmentLock, OccurrenceIdentity, WorkforceEntity, WorkforcePreference, WorkforceRule};
+use crate::model::{
+    AssignmentLock, OccurrenceIdentity, WorkforceEntity, WorkforcePreference, WorkforceRule,
+};
 use eutheto_types::{AssignmentId, EntityId, RuleId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

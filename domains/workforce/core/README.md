@@ -2,13 +2,13 @@
 
 # Workforce `core` boundary
 
-The `eutheto-workforce` workspace crate owns the official Workforce domain implementation. WF-001 currently provides pack-owned UUIDv7 identities, the typed four-map model for current and reserved MVP semantics, generated record/command schemas and editor/AI metadata, bounded document decoding and structural/reference validation, explicit score-policy shape checks, inclusive local planning-date derivation from the host horizon, pure typed CRUD commands with exact inverses, current portable-v1 conversion, and bounded people CSV detection, preview and review rebuilding. It remains **unregistered**: these APIs do not expose Workforce projects through application or CLI dispatch and provide no solver or verifier.
+The `eutheto-workforce` workspace crate owns the official Workforce domain implementation. WF-001 provides pack-owned UUIDv7 identities, the typed four-map model for current and reserved MVP semantics, generated record/command schemas and editor/AI metadata, bounded document decoding and structural/reference validation, explicit score-policy shape checks, pure typed CRUD commands with exact inverses, current portable-v1 conversion, and bounded people CSV detection, preview and review rebuilding. WF-002 adds timezone-aware recurrence, calendar/reporting windows, deterministic regeneration review and atomic occurrence ownership commands. It remains **unregistered**: these APIs do not expose Workforce projects through application or CLI dispatch and provide no solver or verifier.
 
 ## Boundary
 
 It may use the domain API, stable value types, solver-neutral planning IR, and normalized verification contracts. It must not depend on Tauri, Vue, SQLite, credential stores, network providers, OR-Tools, Pumpkin, or backend-native objects.
 
-Recurrence, complete rule semantics, compilation and independent verification follow the ordered Phase05 packages. Production registration requires WF-007 and complete result contracts. No partial `DomainPack` implementation or synthetic solver authority is permitted.
+Complete rule semantics, compilation and independent verification follow the ordered Phase05 packages. Production registration requires WF-007 and complete result contracts. No partial `DomainPack` implementation or synthetic solver authority is permitted.
 
 `validation::decode_document` bounds raw input before typed decoding; `validate_document` also handles an existing host document without changing it. Structural checks include normalized owned-identity uniqueness, expected reference kinds, explicit scope safety, exact external-ID uniqueness, temporal coherence, coverage count ordering, and workload peer/target agreement. Valid-but-contradictory coverage remains editable. Missing score policy is an incomplete draft, not a decoding error. Known later semantics are retained data, not executable capability.
 
@@ -17,6 +17,18 @@ Document limits reuse the shared contract bounds: 16 MiB serialized bytes, depth
 `commands::apply_batch` applies at most 1,000 typed operations on a private working copy. Every prefix must remain structurally valid; deletes never silently cascade references. Updates retain kind, untouched records retain exact JSON, and reversed ordinary command inverses restore original field presence and spelling. Both forward and inverse batches must fit the shared 16 MiB serialized command bound. Returned changes carry record paths and exact before/after values; persistence, revisions and production routing remain host-owned.
 
 `portable::export_portable` and `import_portable` preserve the four raw record maps and declared `nonsemantic.*` extensions under Workforce portable version 1, requiring exactly `official.workforce.portable` at version 1. Import replaces only the explicit host shell's domain and extensions; host identity, metadata, settings and versions remain unchanged and are validated with the resulting document. Unknown semantic requirements, record variants and older/newer Workforce versions fail without a fabricated migration. Depth/safety checks precede recursive serialization or cloning of caller-built payloads. Global portable version 2, internal snapshots and their genuine historical migrations remain host-owned.
+
+## Temporal generation and review
+
+`temporal::resolve_shifts` resolves existing identities without minting new ones. Generated recurrence uses inclusive scenario-zone start dates, weekdays, exclusions and half-open effective dates; its actual local start date must remain in the horizon after resolution. Final-date overnight ends are not clipped. Manual/detached shifts instead use explicit start-instant membership and preserve their exact intervals and fold choices. Detached origins suppress their original occurrences even when edited outside the horizon.
+
+`preview_generation` compares validated before/prospective documents, retaining unresolved known prior timing without inventing instants. It reuses recorded identities, rejects conflicting ownership across both active and dormant ledger/detached entries, and derives only unseen identities under the frozen `occurrence-id-v1` byte contract. It returns compact timing/diff data and at most one ordinary add-occurrence command, bound to the exact prospective document hash. The host must enforce that binding and separately compose reviewed edits under its revision/transaction boundary; this Rust value is not approval custody.
+
+Atomic `add_occurrence_identities`/`remove_occurrence_identities` commands target bounded sets of templates without copying whole templates into changes. `detach_shift`/`reattach_shift` transfer an existing identity between ledger and stored instance, retaining exact raw UUID key/value spelling and ordinary inverses. Dormant transfers are allowed: detaching may activate an edited one-off and reattaching may deactivate it under current recurrence. Callers must review the resulting activity diff.
+
+`resolve_calendar` returns whole windows intersecting an explicit instant query; `reporting_window` finds a unique civil reporting-date owner independently of clock boundaries. Custom periods must remain ordered/nonoverlapping after DST resolution, and ambiguous reporting-date ownership fails rather than double-counting. Explicit gap/fold policies apply throughout. Intervals expose exact signed scheduled and elapsed durations, not rounded minute substitutes.
+
+Temporal vectors are bounded to 42,768 shifts per side, 85,536 diff entries and 32,768 calendar windows; compound identity commands retain the existing per-template/document limits and at most 10,000 template targets. Command changes additionally stop before 85,536 entries or 64 MiB serialized bytes. Cross-field document bounds can lower these ceilings. See the [WF-002 contract](../../../docs/roadmap/05-workforce-core-vertical-slice.md#wf-002-temporal-module-contract) for identity encoding, ownership precedence and complete temporal semantics.
 
 ## People CSV review
 
@@ -32,7 +44,7 @@ Fixed CSV limits are 16 MiB original input, 10,000 data records plus an optional
 
 ## Generated contracts
 
-`schemas/domain-packs/workforce.contract.json` is the source-v3 authoring contract. `just generate` expands its bounded local definitions into the existing runtime schema vocabulary, emits the Rust command identities consumed by dispatch, and produces the internal/portable schema artifacts, twelve command contracts, TypeScript payload types, editor manifest and explicit AI-tool subset. Source version 3 does not change the Workforce internal or portable version 1.
+`schemas/domain-packs/workforce.contract.json` is the source-v3 authoring contract. `just generate` expands its bounded local definitions into the existing runtime schema vocabulary, emits the Rust command identities consumed by dispatch, and produces the internal/portable schema artifacts, command contracts, TypeScript payload types, editor manifest and explicit AI-tool subset. Source version 3 does not change the Workforce internal or portable version 1.
 
 Both document ingress paths and command dispatch reject raw JSON representations outside those schemas before accepting records. Each operation owns its parsed, validated schemas and reuses them across batch prefixes; no global schema cache is used. Accepted records are not normalized, so inverse replay retains their exact spelling.
 

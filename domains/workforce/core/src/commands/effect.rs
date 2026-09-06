@@ -75,13 +75,21 @@ pub(super) struct Changes {
 
 impl Changes {
     pub fn new(capacity: usize) -> Self {
-        Self { records: Vec::with_capacity(capacity), bytes: 2 }
+        Self {
+            records: Vec::with_capacity(capacity),
+            bytes: 2,
+        }
     }
 
     pub fn push(&mut self, change: DomainChange) -> Result {
-        require(self.records.len() < MAX_CHANGES, "/changes", "too many command changes")?;
+        require(
+            self.records.len() < MAX_CHANGES,
+            "/changes",
+            "too many command changes",
+        )?;
         let separator = usize::from(!self.records.is_empty());
-        let remaining = MAX_CHANGE_BYTES.checked_sub(self.bytes + separator)
+        let remaining = MAX_CHANGE_BYTES
+            .checked_sub(self.bytes + separator)
             .ok_or_else(|| invalid("/changes", "command changes exceed byte limit"))?;
         let bytes = bounded_json_size(&change, remaining)?;
         self.bytes += separator + bytes;
@@ -164,4 +172,50 @@ fn target(collection: &Collection, id: impl Serialize) -> Result<Value> {
 
 fn field(name: &str, value: Value) -> Value {
     Value::Object(Map::from_iter([(name.to_owned(), value)]))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn change_count_limit_rejects_without_retaining_the_excess_entry() -> Result {
+        let mut changes = Changes::new(0);
+        for _ in 0..MAX_CHANGES {
+            changes.push(DomainChange {
+                command_id: ADD_ENTITY.to_owned(),
+                value: Value::Null,
+            })?;
+        }
+        assert!(
+            changes
+                .push(DomainChange {
+                    command_id: ADD_ENTITY.to_owned(),
+                    value: Value::Null
+                })
+                .is_err()
+        );
+        assert_eq!(changes.into_records().len(), MAX_CHANGES);
+        Ok(())
+    }
+
+    #[test]
+    fn change_byte_limit_includes_array_framing_and_keeps_accepted_data()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let empty = DomainChange {
+            command_id: ADD_ENTITY.to_owned(),
+            value: Value::String(String::new()),
+        };
+        let content_bytes = MAX_CHANGE_BYTES - 2 - serde_json::to_vec(&empty)?.len();
+        let mut changes = Changes::new(0);
+        changes.push(DomainChange {
+            command_id: ADD_ENTITY.to_owned(),
+            value: Value::String("x".repeat(content_bytes)),
+        })?;
+        assert!(changes.push(empty).is_err());
+        assert_eq!(
+            serde_json::to_vec(&changes.into_records())?.len(),
+            MAX_CHANGE_BYTES
+        );
+        Ok(())
+    }
 }

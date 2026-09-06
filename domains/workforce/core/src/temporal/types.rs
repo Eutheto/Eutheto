@@ -20,26 +20,39 @@ pub struct ResolvedInterval {
 impl ResolvedInterval {
     #[must_use]
     pub fn elapsed_duration(self) -> SignedDuration {
-        self.starts_at.instant.as_timestamp().duration_until(self.ends_at.instant.as_timestamp())
+        self.starts_at
+            .instant
+            .as_timestamp()
+            .duration_until(self.ends_at.instant.as_timestamp())
     }
 
     /// Signed intent, including a negative span across explicitly chosen fold occurrences.
     #[must_use]
     pub fn scheduled_duration(self) -> SignedDuration {
-        self.starts_at.local.as_datetime().duration_until(self.ends_at.local.as_datetime())
+        self.starts_at
+            .local
+            .as_datetime()
+            .duration_until(self.ends_at.local.as_datetime())
     }
 
     /// Touching half-open intervals do not overlap.
     #[must_use]
     pub fn overlaps(self, other: Self) -> bool {
-        self.starts_at.instant < other.ends_at.instant && other.starts_at.instant < self.ends_at.instant
+        self.starts_at.instant < other.ends_at.instant
+            && other.starts_at.instant < self.ends_at.instant
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolvedShiftOrigin {
-    Generated { template_id: ShiftTemplateId, occurrence_date: Date },
-    Detached { template_id: ShiftTemplateId, occurrence_date: Date },
+    Generated {
+        template_id: ShiftTemplateId,
+        occurrence_date: Date,
+    },
+    Detached {
+        template_id: ShiftTemplateId,
+        occurrence_date: Date,
+    },
     Manual,
 }
 
@@ -72,6 +85,7 @@ pub enum TemporalIssueKind {
     OutputLimit,
     CalendarLimit,
     CalendarOverlap,
+    CalendarOrder,
     AmbiguousReportingDate,
     UnknownCalendar,
     InvalidQuery,
@@ -124,7 +138,11 @@ impl std::error::Error for TemporalError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PriorShift {
     Resolved(ResolvedShift),
-    Unresolved { id: ShiftId, origin: ResolvedShiftOrigin, issue: TemporalIssueKind },
+    Unresolved {
+        id: ShiftId,
+        origin: ResolvedShiftOrigin,
+        issue: TemporalIssueKind,
+    },
 }
 
 impl PriorShift {
