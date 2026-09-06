@@ -12,6 +12,7 @@ use eutheto_domain_ir::{DomainEntityId, DomainEntityKindId, DomainEntityRef};
 use eutheto_planning_ir::{
     BoolVariable, BoolVariableId, Constraint, ConstraintRecord, Literal, PlanningConstraintId,
     PlanningIrLimitsV1, ProvenanceId, ProvenanceParameter, ProvenanceRecord, ProvenanceSourceKind,
+    Variable,
 };
 use eutheto_types::{EntityId, PersonId, RuleId, ScenarioDocument};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
@@ -19,10 +20,10 @@ use std::collections::BTreeMap;
 
 // Only the digest bytes vary between these measurement placeholders and real derived IDs.
 // Every identifier is ASCII and every digest has exactly 64 lowercase hexadecimal digits.
-const BOOL_ID: &str =
+pub(super) const BOOL_ID: &str =
     "official.workforce.bool.0000000000000000000000000000000000000000000000000000000000000000";
-const CONSTRAINT_ID: &str = "official.workforce.constraint.0000000000000000000000000000000000000000000000000000000000000000";
-const PROVENANCE_ID: &str = "official.workforce.provenance.0000000000000000000000000000000000000000000000000000000000000000";
+pub(super) const CONSTRAINT_ID: &str = "official.workforce.constraint.0000000000000000000000000000000000000000000000000000000000000000";
+pub(super) const PROVENANCE_ID: &str = "official.workforce.provenance.0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Compile only the unregistered five-family mathematical contribution.
 ///
@@ -40,6 +41,37 @@ pub fn compile_assignment_rules(
     // reserved before the first IR variable is allocated. The dry pass streams literal lists.
     preflight(&analysis.candidates, &plan, &mut budget, limits)?;
     construct(analysis, &plan, &mut budget)
+}
+
+/// Borrow either actual output representation without allocating an intermediate contribution.
+/// Complete construction interleaves each candidate Boolean and its rank integer until the
+/// finished model is canonicalized; source identity always comes from the typed pair.
+#[derive(Clone, Copy)]
+pub(super) enum DecisionVariables<'a> {
+    Contribution(&'a [AssignmentVariable]),
+    Complete {
+        pairs: &'a [AssignmentPair],
+        variables: &'a [Variable],
+    },
+}
+
+impl<'a> DecisionVariables<'a> {
+    fn boolean(self, index: usize) -> Option<&'a BoolVariable> {
+        match self {
+            Self::Contribution(variables) => variables.get(index).map(|value| &value.variable),
+            Self::Complete { variables, .. } => match variables.get(index.checked_mul(2)?)? {
+                Variable::Boolean(value) => Some(value),
+                _ => None,
+            },
+        }
+    }
+
+    fn pair(self, index: usize) -> Option<AssignmentPair> {
+        match self {
+            Self::Contribution(variables) => variables.get(index).map(|value| value.pair),
+            Self::Complete { pairs, .. } => pairs.get(index).copied(),
+        }
+    }
 }
 
 fn construct(
@@ -83,8 +115,14 @@ fn construct(
     }
     for planned in &plan.constraints {
         let parent = parents.get(&planned.rule).ok_or_else(invalid)?.clone();
-        let (record, fact) =
-            compile_constraint(planned, plan, &variables, parent, &mut identities, budget)?;
+        let (record, fact) = compile_constraint(
+            planned,
+            plan,
+            DecisionVariables::Contribution(&variables),
+            parent,
+            &mut identities,
+            budget,
+        )?;
         constraints.push(record);
         provenance.push(fact);
     }
@@ -107,10 +145,10 @@ fn construct(
     })
 }
 
-fn compile_constraint(
+pub(super) fn compile_constraint(
     planned: &PlannedConstraint,
     plan: &Plan,
-    variables: &[AssignmentVariable],
+    variables: DecisionVariables<'_>,
     parent: ProvenanceId,
     identities: &mut PlanningIdentities,
     budget: &mut OperationBudget<'_>,
@@ -120,6 +158,7 @@ fn compile_constraint(
         IdentityKind::Constraint,
         planned,
         plan,
+        variables,
         identities,
         budget,
     )?)
@@ -128,6 +167,7 @@ fn compile_constraint(
         IdentityKind::Provenance,
         planned,
         plan,
+        variables,
         identities,
         budget,
     )?)
@@ -151,15 +191,15 @@ fn compile_constraint(
 fn constraint_body(
     planned: &PlannedConstraint,
     plan: &Plan,
-    variables: &[AssignmentVariable],
+    variables: DecisionVariables<'_>,
     budget: &mut OperationBudget<'_>,
 ) -> Result<Constraint, AssignmentRuleError> {
     let mut literals = Vec::new();
     if !planned.impossible {
         for index in &planned.population {
             budget.step()?;
-            let variable = variables.get(*index).ok_or_else(invalid)?;
-            literals.push(Literal::positive(variable.variable.id.clone()));
+            let variable = variables.boolean(*index).ok_or_else(invalid)?;
+            literals.push(Literal::positive(variable.id.clone()));
         }
     }
     // The Planning IR constructors canonically sort and deduplicate these lists.
@@ -183,9 +223,9 @@ fn constraint_body(
             upper,
         )
         .map_err(|_| invalid()),
-        Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => {
-            Ok(Constraint::at_most_one(literals))
-        }
+        Predicate::Overlap { .. }
+        | Predicate::OverlapClique { .. }
+        | Predicate::MinimumRest { .. } => Ok(Constraint::at_most_one(literals)),
     }
 }
 
@@ -193,6 +233,7 @@ fn derive_predicate(
     kind: IdentityKind,
     planned: &PlannedConstraint,
     plan: &Plan,
+    variables: DecisionVariables<'_>,
     identities: &mut PlanningIdentities,
     budget: &mut OperationBudget<'_>,
 ) -> Result<String, AssignmentRuleError> {
@@ -240,6 +281,27 @@ fn derive_predicate(
             &("no_overlap", planned.rule, person, first, second),
             budget,
         ),
+        Predicate::OverlapClique { person } => {
+            // Measurement and encoding both visit this borrowed canonical member list.
+            budget.steps(
+                count(planned.population.len())?
+                    .checked_mul(2)
+                    .ok_or_else(invalid)?,
+            )?;
+            identities.derive(
+                kind,
+                &(
+                    "no_overlap_clique",
+                    planned.rule,
+                    person,
+                    CliqueShifts {
+                        population: &planned.population,
+                        variables,
+                    },
+                ),
+                budget,
+            )
+        }
         Predicate::MinimumRest {
             person,
             source,
@@ -260,6 +322,27 @@ fn derive_predicate(
     }
 }
 
+// Population indices are in canonical candidate (person, ShiftId) order. Stream
+// the typed Shift IDs without retaining another member vector or provenance list.
+struct CliqueShifts<'a> {
+    population: &'a [usize],
+    variables: DecisionVariables<'a>,
+}
+
+impl Serialize for CliqueShifts<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut sequence = serializer.serialize_seq(Some(self.population.len()))?;
+        for index in self.population {
+            let pair = self
+                .variables
+                .pair(*index)
+                .ok_or_else(|| serde::ser::Error::custom("invalid clique member"))?;
+            sequence.serialize_element(&pair.shift_id)?;
+        }
+        sequence.end()
+    }
+}
+
 fn entity(kind: &str, id: EntityId) -> Result<DomainEntityRef, AssignmentRuleError> {
     Ok(DomainEntityRef {
         kind: DomainEntityKindId::new(format!("official.workforce.{kind}"))
@@ -268,7 +351,7 @@ fn entity(kind: &str, id: EntityId) -> Result<DomainEntityRef, AssignmentRuleErr
     })
 }
 
-fn variable_fact(
+pub(super) fn variable_fact(
     pair: AssignmentPair,
     id: ProvenanceId,
     budget: &mut OperationBudget<'_>,
@@ -290,7 +373,7 @@ fn variable_fact(
     })
 }
 
-fn rule_fact(rule: RuleId, kind: &str, id: ProvenanceId) -> ProvenanceRecord {
+pub(super) fn rule_fact(rule: RuleId, kind: &str, id: ProvenanceId) -> ProvenanceRecord {
     ProvenanceRecord {
         id,
         source_kind: ProvenanceSourceKind::RequiredRule,
@@ -378,6 +461,10 @@ fn constraint_fact(
                 entity("shift", second.as_entity_id())?,
             ],
             "official.workforce.incompatible_overlap",
+        ),
+        Predicate::OverlapClique { person } => (
+            vec![entity("person", EntityId::from_uuid(person.as_uuid()))?],
+            "official.workforce.incompatible_overlap_clique",
         ),
         Predicate::MinimumRest {
             person,
@@ -550,9 +637,9 @@ pub(super) fn preflight(
                     min: u64::from(plan.definitions[definition].minima[minimum].minimum),
                     max: upper,
                 },
-                Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => {
-                    MeasuredBody::AtMostOne { literals }
-                }
+                Predicate::Overlap { .. }
+                | Predicate::OverlapClique { .. }
+                | Predicate::MinimumRest { .. } => MeasuredBody::AtMostOne { literals },
             }
         };
         let record = MeasuredConstraint {
@@ -587,7 +674,7 @@ pub(super) fn preflight(
     budget.check()
 }
 
-fn reserve_fact(
+pub(super) fn reserve_fact(
     record: &ProvenanceRecord,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,
@@ -738,7 +825,7 @@ mod tests {
             super::compile_constraint(
                 planned,
                 &plan,
-                &variables,
+                super::DecisionVariables::Contribution(&variables),
                 parent.id.clone(),
                 &mut identities,
                 &mut budget,

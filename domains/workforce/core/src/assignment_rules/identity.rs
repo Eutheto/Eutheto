@@ -13,6 +13,9 @@ const CONTEXT: &[u8] = b"eutheto/workforce/planning-id/v1\0";
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum IdentityKind {
     Boolean,
+    Integer,
+    ObjectiveTerm,
+    Projection,
     Constraint,
     Provenance,
 }
@@ -21,6 +24,9 @@ impl IdentityKind {
     fn tag(self) -> &'static str {
         match self {
             Self::Boolean => "bool",
+            Self::Integer => "int",
+            Self::ObjectiveTerm => "objective",
+            Self::Projection => "projection",
             Self::Constraint => "constraint",
             Self::Provenance => "provenance",
         }

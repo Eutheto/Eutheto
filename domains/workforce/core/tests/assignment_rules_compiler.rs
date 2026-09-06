@@ -1658,3 +1658,265 @@ fn rest_only_hard_locks_do_not_scan_unrelated_overlap_pairs() -> Result {
     assert!(mixed.validation.issues.is_empty());
     Ok(())
 }
+
+fn overlap_document(intervals: &[(u32, u32)]) -> Result<ScenarioDocument> {
+    let mut value = rest_document(0)?;
+    value.domain.rules.clear();
+    let prototype = entity(&mut value, 8)?.clone();
+    value.domain.entities.remove(&id(7).parse()?);
+    value.domain.entities.remove(&id(8).parse()?);
+    for (index, (start, end)) in intervals.iter().enumerate() {
+        let index = 1_000 + u32::try_from(index)?;
+        let mut shift = prototype.clone();
+        shift["id"] = json!(id(index));
+        utc_times(
+            &mut shift,
+            &format!("2026-11-01T{start:02}:00:00"),
+            &format!("2026-11-01T{end:02}:00:00"),
+        );
+        value.domain.entities.insert(id(index).parse()?, shift);
+    }
+    rule(&mut value, 23, "noOverlap")?;
+    Ok(value)
+}
+
+#[test]
+fn overlap_cliques_match_original_pairs_for_nested_equal_and_touching_intervals() -> Result {
+    for (intervals, expected_cliques) in [
+        (vec![(0, 4), (1, 5), (2, 6)], 1),
+        (vec![(0, 8), (1, 7), (2, 6)], 1),
+        (vec![(0, 2), (0, 4), (0, 3), (2, 4)], 2),
+        (vec![(0, 8), (1, 4), (2, 3), (3, 5), (8, 9)], 2),
+        (vec![(0, 1), (1, 2), (2, 3)], 0),
+    ] {
+        let model = compile(&overlap_document(&intervals)?)?;
+        assert_eq!(model.constraints.len(), expected_cliques);
+        for mask in 0..(1_usize << intervals.len()) {
+            let selected: Vec<_> = (0..intervals.len())
+                .filter(|index| mask & (1 << index) != 0)
+                .map(|index| pair(1, 1_000 + u32::try_from(index)?))
+                .collect::<Result<_>>()?;
+            let original = (0..intervals.len()).all(|first| {
+                (first + 1..intervals.len()).all(|second| {
+                    mask & (1 << first) == 0
+                        || mask & (1 << second) == 0
+                        || intervals[first].1 <= intervals[second].0
+                        || intervals[second].1 <= intervals[first].0
+                })
+            });
+            assert_eq!(
+                allows(&model, &selected)?,
+                original,
+                "{intervals:?}, mask {mask}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn overlap_cliques_preserve_scoped_people_and_pruned_qualifications() -> Result {
+    let mut value = overlap_document(&[(0, 4), (1, 5), (2, 6)])?;
+    let mut other = entity(&mut value, 1)?.clone();
+    other["id"] = json!(id(101));
+    other.as_object_mut().ok_or("person")?.remove("externalId");
+    other["qualificationGrants"] = json!([]);
+    value.domain.entities.insert(id(101).parse()?, other);
+    let mut other_type = entity(&mut value, 4)?.clone();
+    other_type["id"] = json!(id(41));
+    other_type["qualifications"] = json!({"kind":"unconstrained"});
+    value.domain.entities.insert(id(41).parse()?, other_type);
+    entity(&mut value, 1)?["eligibleAssignmentTypeIds"] = json!([id(4), id(41)]);
+    entity(&mut value, 101)?["eligibleAssignmentTypeIds"] = json!([id(4), id(41)]);
+    entity(&mut value, 1_002)?["assignmentTypeId"] = json!(id(41));
+    rule(&mut value, 20, "eligibility")?;
+    let model = compile(&value)?;
+    assert_eq!(model.variables.len(), 4);
+    assert!(allows(&model, &[pair(1, 1_000)?, pair(101, 1_002)?])?);
+    assert!(!allows(&model, &[pair(1, 1_000)?, pair(1, 1_002)?])?);
+    assert!(!allows(&model, &[pair(101, 1_000)?])?);
+
+    value.domain.rules.get_mut(&id(23).parse()?).ok_or("rule")?["scope"]["people"] =
+        json!({"kind":"selected","personIds":[id(101)]});
+    assert!(allows(
+        &compile(&value)?,
+        &[pair(1, 1_000)?, pair(1, 1_001)?, pair(101, 1_002)?]
+    )?);
+    value.domain.rules.get_mut(&id(23).parse()?).ok_or("rule")?["scope"] =
+        json!({"people":{"kind":"all"},"assignmentTypeIds":[id(4)]});
+    let scoped = compile(&value)?;
+    assert!(!allows(&scoped, &[pair(1, 1_000)?, pair(1, 1_001)?])?);
+    assert!(allows(&scoped, &[pair(1, 1_000)?, pair(1, 1_002)?])?);
+    Ok(())
+}
+
+#[test]
+fn mixed_category_waivers_keep_the_non_interval_pairwise_conflicts() -> Result {
+    let mut value = overlap_document(&[(0, 4), (0, 4), (0, 4), (0, 4)])?;
+    for (index, category) in [(41, "ward"), (42, "oncall"), (43, "remote")] {
+        let mut assignment_type = entity(&mut value, 4)?.clone();
+        assignment_type["id"] = json!(id(index));
+        assignment_type["category"] = json!(category);
+        value
+            .domain
+            .entities
+            .insert(id(index).parse()?, assignment_type);
+    }
+    entity(&mut value, 1_001)?["assignmentTypeId"] = json!(id(41));
+    entity(&mut value, 1_002)?["assignmentTypeId"] = json!(id(42));
+    entity(&mut value, 1_003)?["assignmentTypeId"] = json!(id(43));
+    value.domain.rules.get_mut(&id(23).parse()?).ok_or("rule")?["compatibleCategoryPairs"] = json!([
+        {"firstCategory":"clinic","secondCategory":"ward"},
+        {"firstCategory":"oncall","secondCategory":"remote"},
+    ]);
+    let model = compile(&value)?;
+    // Removing these disjoint waiver edges leaves an induced four-cycle, which
+    // is not an interval graph even though all four original intervals coincide.
+    for mask in 0..16_u32 {
+        let selected = (0..4_u32)
+            .filter(|index| mask & (1 << index) != 0)
+            .map(|index| pair(1, 1_000 + index))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            allows(&model, &selected)?,
+            mask < 4 || mask.trailing_zeros() >= 2
+        );
+    }
+    assert!(model.constraints.iter().all(|record| matches!(
+        &record.body, Constraint::AtMostOne { literals } if literals.len() == 2
+    )));
+    // Another rule without the waiver must still forbid the otherwise compatible pair.
+    rule(&mut value, 24, "noOverlap")?;
+    assert!(!allows(
+        &compile(&value)?,
+        &[pair(1, 1_000)?, pair(1, 1_001)?]
+    )?);
+    Ok(())
+}
+
+#[test]
+fn dense_overlap_clique_uses_bounded_provenance_and_exact_output_limits() -> Result {
+    let value = overlap_document(&[(0, 4); 64])?;
+    let mut limits = PlanningIrLimitsV1::DEFAULT;
+    limits.max_constraints = 1;
+    limits.max_refs_per_node = 64;
+    // Decision facts need two entities; the clique never duplicates its 64 members.
+    limits.max_entity_refs_per_record = 2;
+    let model = compile_assignment_rules(&value, &context(limits))?;
+    assert_eq!(
+        (
+            model.estimate.constraints,
+            model.estimate.provenance_records
+        ),
+        (1, 66)
+    );
+    assert_eq!(model.estimate.references, 64 * 3 + 64 + 3);
+    assert!(allows(&model, &[pair(1, 1_063)?])?);
+    assert!(!allows(&model, &[pair(1, 1_000)?, pair(1, 1_063)?])?);
+    let fact = model
+        .provenance
+        .iter()
+        .find(|fact| fact.id == model.constraints[0].provenance)
+        .ok_or("clique fact")?;
+    assert_eq!(fact.entity_refs.len(), 1);
+    assert!(fact.parameters.is_empty());
+    for field in 0..2 {
+        let mut below = limits;
+        if field == 0 {
+            below.max_constraints = 0;
+        } else {
+            below.max_refs_per_node = 63;
+        }
+        assert!(matches!(
+            compile_assignment_rules(&value, &context(below)),
+            Err(AssignmentRuleError::LimitExceeded(_))
+        ));
+    }
+    // Locate cumulative scratch + output boundaries, not just final serialized size.
+    for field in 0..3 {
+        let set = |cap| {
+            let mut limits = limits;
+            match field {
+                0 => limits.max_ir_bytes = cap,
+                1 => limits.max_total_refs = cap,
+                _ => limits.max_provenance_records = cap,
+            }
+            limits
+        };
+        let mut low = 0;
+        let mut high = match field {
+            0 => limits.max_ir_bytes,
+            1 => limits.max_total_refs,
+            _ => limits.max_provenance_records,
+        };
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if compile_assignment_rules(&value, &context(set(middle))).is_ok() {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        assert_eq!(
+            compile_assignment_rules(&value, &context(set(high)))?.constraints,
+            model.constraints
+        );
+        assert!(matches!(
+            compile_assignment_rules(&value, &context(set(high - 1))),
+            Err(AssignmentRuleError::LimitExceeded(_))
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn overlap_clique_identity_tracks_members_people_and_rules_not_names() -> Result {
+    let mut value = overlap_document(&[(0, 4), (1, 5), (2, 6)])?;
+    let original = compile(&value)?;
+    entity(&mut value, 1)?["name"] = json!("Renamed person");
+    let renamed = compile(&value)?;
+    assert_eq!(renamed.constraints, original.constraints);
+    assert_eq!(renamed.provenance, original.provenance);
+    let mut changed = entity(&mut value, 1_002)?.clone();
+    value.domain.entities.remove(&id(1_002).parse()?);
+    changed["id"] = json!(id(1_003));
+    value.domain.entities.insert(id(1_003).parse()?, changed);
+    assert_ne!(
+        compile(&value)?.constraints[0].id,
+        original.constraints[0].id
+    );
+    let mut other = entity(&mut value, 1)?.clone();
+    other["id"] = json!(id(101));
+    other.as_object_mut().ok_or("person")?.remove("externalId");
+    value.domain.entities.insert(id(101).parse()?, other);
+    rule(&mut value, 24, "noOverlap")?;
+    let model = compile(&value)?;
+    assert_eq!(
+        model
+            .constraints
+            .iter()
+            .map(|record| &record.id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        4
+    );
+    assert!(allows(&model, &[pair(1, 1_000)?, pair(101, 1_000)?])?);
+    Ok(())
+}
+
+#[test]
+fn two_member_cliques_retain_existing_pair_identities_and_provenance() -> Result {
+    let mut value = overlap_document(&[(0, 4), (1, 5)])?;
+    let mut other_type = entity(&mut value, 4)?.clone();
+    other_type["id"] = json!(id(41));
+    other_type["category"] = json!("ward");
+    value.domain.entities.insert(id(41).parse()?, other_type);
+    let clique = compile(&value)?;
+    value.domain.rules.get_mut(&id(23).parse()?).ok_or("rule")?["compatibleCategoryPairs"] =
+        json!([{"firstCategory":"clinic","secondCategory":"ward"}]);
+    let pairwise = compile(&value)?;
+    assert_eq!(clique.constraints, pairwise.constraints);
+    assert_eq!(clique.provenance, pairwise.provenance);
+    assert!(!allows(&pairwise, &[pair(1, 1_000)?, pair(1, 1_001)?])?);
+    Ok(())
+}
