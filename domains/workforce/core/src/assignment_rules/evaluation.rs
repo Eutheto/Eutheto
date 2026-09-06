@@ -1,6 +1,7 @@
 //! Independent original-domain predicates. This module never consumes candidate or IR decisions.
 mod coverage;
 mod predicates;
+mod rest;
 
 use super::{
     AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleEvaluation,
@@ -24,13 +25,15 @@ use eutheto_domain_ir::{
 use eutheto_types::{
     CancellationToken, EntityId, PersonId, RuleId, ScenarioDocument, ScenarioSettings,
 };
+use jiff::SignedDuration;
 use std::collections::BTreeMap;
 
 const VIOLATIONS: &str = "official.workforce.fact.violation_count";
 const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
-/// Evaluates the four assignment-rule families and unconditional activity/approved-leave facts.
+/// Evaluates Eligibility, Availability, Coverage, NoOverlap and MinimumRest, plus unconditional
+/// activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
 /// but inadmissible selections remain in the population and yield original-domain violations.
@@ -109,6 +112,9 @@ fn evaluate_prepared(
                     &mut summary,
                     budget,
                 )?;
+            }
+            WorkforceRule::MinimumRest(rule) => {
+                rest::evaluate(input, selected, rule, &mut summary, budget)?;
             }
             _ => {
                 retain_id(&mut obligations.remaining, id, budget)?;
@@ -469,6 +475,13 @@ struct Witness {
     upper: Option<u64>,
     actual: Option<u64>,
     interval: Option<InstantInterval>,
+    rest: Option<RestWitness>,
+}
+
+#[derive(Clone, Copy)]
+struct RestWitness {
+    minimum_minutes: u32,
+    actual: SignedDuration,
 }
 
 impl Witness {
@@ -491,6 +504,7 @@ impl Witness {
             upper: None,
             actual: None,
             interval: None,
+            rest: None,
         }
     }
 
@@ -645,6 +659,38 @@ fn witness_evidence(
             fact(&mut result.observed, key, integer(value)?, budget)?;
         }
     }
+    if let Some(rest) = witness.rest {
+        for (key, shift) in [
+            ("official.workforce.fact.rest_source_shift", witness.shift),
+            (
+                "official.workforce.fact.rest_target_shift",
+                witness.other_shift.ok_or_else(invalid)?,
+            ),
+        ] {
+            let entity = entity_ref("shift", shift.as_entity_id(), budget)?;
+            fact(
+                &mut result.observed,
+                key,
+                VerificationValue::Entity(entity),
+                budget,
+            )?;
+        }
+        fact(
+            &mut result.expected,
+            "official.workforce.fact.required_rest_minutes",
+            VerificationValue::Integer(i64::from(rest.minimum_minutes)),
+            budget,
+        )?;
+        for (key, value) in [
+            ("official.workforce.fact.actual_rest_seconds", rest.actual.as_secs()),
+            (
+                "official.workforce.fact.actual_rest_subsecond_nanoseconds",
+                i64::from(rest.actual.subsec_nanos()),
+            ),
+        ] {
+            fact(&mut result.observed, key, VerificationValue::Integer(value), budget)?;
+        }
+    }
     if let Some(hash) = witness.minimum_hash {
         let hash = blake3::Hash::from_bytes(hash).to_hex();
         text_fact(
@@ -709,15 +755,23 @@ fn entity(
     id: EntityId,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
+    entities.push(entity_ref(kind, id, budget)?);
+    Ok(())
+}
+
+fn entity_ref(
+    kind: &str,
+    id: EntityId,
+    budget: &mut OperationBudget<'_>,
+) -> Result<DomainEntityRef, AssignmentRuleError> {
     budget.step()?;
     // Fixed namespace + UUID representations, independent of submitted names or text.
     budget.reserve(0, 1, 160)?;
-    entities.push(DomainEntityRef {
+    Ok(DomainEntityRef {
         kind: DomainEntityKindId::new(format!("official.workforce.{kind}"))
             .map_err(|_| invalid())?,
         id: DomainEntityId::new(format!("official.workforce.{id}")).map_err(|_| invalid())?,
-    });
-    Ok(())
+    })
 }
 
 fn integer(value: u64) -> Result<VerificationValue, AssignmentRuleError> {
@@ -943,6 +997,213 @@ mod tests {
             assert_eq!(result.observed.len(), 9);
             Ok(())
         })
+    }
+
+    fn rest_witness() -> TestResult<Witness> {
+        let mut witness = Witness::pair(
+            selected_pair()?,
+            entity_id(8)?,
+            "shift",
+            "minimum_rest",
+        );
+        witness.other_shift = Some(support::id(30).parse()?);
+        witness.rest = Some(RestWitness {
+            minimum_minutes: u32::MAX,
+            actual: SignedDuration::new(-7200, -1),
+        });
+        Ok(witness)
+    }
+
+    fn rest_summary_bytes(id: RuleId, checked: i64, violations: i64, nanos: i64) -> TestResult<u64> {
+        let mut bytes = summary_bytes(id, checked, violations)? + 6 * 160;
+        bytes += encoded(&(
+            "official.workforce.fact.witness_reason",
+            "text",
+            "minimum_rest",
+        ))?;
+        for (key, shift) in [
+            ("official.workforce.fact.rest_source_shift", 8),
+            ("official.workforce.fact.rest_target_shift", 30),
+        ] {
+            let entity = DomainEntityRef {
+                kind: DomainEntityKindId::new("official.workforce.shift")?,
+                id: DomainEntityId::new(format!("official.workforce.{}", support::id(shift)))?,
+            };
+            bytes += encoded(&(key, VerificationValue::Entity(entity)))?;
+        }
+        for (key, value) in [
+            ("official.workforce.fact.required_rest_minutes", i64::from(u32::MAX)),
+            ("official.workforce.fact.actual_rest_seconds", -7200),
+            ("official.workforce.fact.actual_rest_subsecond_nanoseconds", nanos),
+        ] {
+            bytes += encoded(&(key, VerificationValue::Integer(value)))?;
+        }
+        Ok(bytes)
+    }
+
+    #[test]
+    fn rest_summary_enforces_exact_nested_fact_and_entity_output_limits() -> TestResult {
+        let id = rule_id(20)?;
+        let witness = rest_witness()?;
+        boundaries((1, 24, rest_summary_bytes(id, 1, 1, -1)?), |budget| {
+            let result = Summary {
+                checked: 1,
+                violations: 1,
+                first: Some(witness),
+            }
+            .finish(id, budget)?;
+            result.validate().map_err(|_| invalid())?;
+            assert!(!result.satisfied);
+            assert_eq!(result.affected_entities.len(), 3);
+            assert_eq!(
+                result.observed.get(&VerificationFactId::new(
+                    "official.workforce.fact.actual_rest_subsecond_nanoseconds"
+                ).map_err(|_| invalid())?),
+                Some(&VerificationValue::Integer(-1)),
+            );
+            Ok(())
+        })
+    }
+
+    fn dense_rest_document(count: u32) -> TestResult<(ScenarioDocument, Vec<AssignmentPair>)> {
+        let mut document = document()?;
+        document.domain.rules.insert(rule_id(20)?, json!({
+            "id":support::id(20), "kind":"minimumRest", "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}}, "afterScope":{"people":{"kind":"all"}},
+            "beforeScope":{"people":{"kind":"all"}}, "minimumMinutes":u32::MAX,
+        }));
+        let prototype = document.domain.entities.get(&entity_id(8)?).ok_or("shift")?.clone();
+        let mut pairs = vec![selected_pair()?];
+        for index in 30..30 + count - 1 {
+            let mut shift = prototype.clone();
+            shift["id"] = json!(support::id(index));
+            document.domain.entities.insert(entity_id(index)?, shift);
+            pairs.push(AssignmentPair {
+                person_id: selected_pair()?.person_id,
+                shift_id: support::id(index).parse()?,
+            });
+        }
+        Ok((document, pairs))
+    }
+
+    #[test]
+    fn rest_role_indices_enforce_exact_bounds_before_retention() -> TestResult {
+        let (document, pairs) = dense_rest_document(2)?;
+        let mut preparation = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(&document, &mut preparation)?;
+        input.validate_selection(&pairs, &mut preparation)?;
+        let selected = Selected::new(&input, &pairs, &mut preparation)?;
+        let Some(WorkforceRule::MinimumRest(rule)) = input.domain.rules.get(&rule_id(20)?) else {
+            return Err("rest rule".into());
+        };
+        boundaries((0, 4, 64), |budget| {
+            let mut summary = Summary::default();
+            rest::evaluate(&input, &selected, rule, &mut summary, budget)?;
+            assert_eq!((summary.checked, summary.violations), (2, 2));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn complete_rest_evaluation_is_atomic_at_exact_aggregate_output_limits() -> TestResult {
+        let (document, pairs) = dense_rest_document(2)?;
+        let bytes = summary_bytes(rule_id(1)?, 2, 0)?
+            + rest_summary_bytes(rule_id(20)?, 2, 2, 0)?
+            + 64 + 32; // Four role references and two handled obligation IDs.
+        for (left, expected) in [
+            ((2, 36, bytes), None),
+            ((1, 36, bytes), Some(AssignmentRuleLimit::Records)),
+            ((2, 35, bytes), Some(AssignmentRuleLimit::References)),
+            ((2, 36, bytes - 1), Some(AssignmentRuleLimit::Bytes)),
+        ] {
+            let mut budget = OperationBudget::evaluation(None);
+            let input = AssignmentInput::new(&document, &mut budget)?;
+            input.validate_selection(&pairs, &mut budget)?;
+            let selected = Selected::new(&input, &pairs, &mut budget)?;
+            leave_output(&mut budget, left)?;
+            let result = evaluate_prepared(&input, &selected, &document.settings, &mut budget);
+            if let Some(limit) = expected {
+                assert_eq!(result, Err(AssignmentRuleError::LimitExceeded(limit)));
+            } else {
+                let (evaluations, obligations) = result?;
+                assert_eq!(evaluations.len(), 2);
+                assert!(!evaluations[1].satisfied);
+                assert_eq!(obligations.handled, [rule_id(1)?, rule_id(20)?]);
+                assert!(obligations.remaining.is_empty());
+                assert_eq!(budget.remaining_output(), (0, 0, 0));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn genuine_token_cancels_inside_dense_rest_pairs_after_validated_setup() -> TestResult {
+        let (document, pairs) = dense_rest_document(65)?;
+        let token = CancellationToken::new();
+        let mut budget = OperationBudget::evaluation(Some(&token));
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        input.validate_selection(&pairs, &mut budget)?;
+        let selected = Selected::new(&input, &pairs, &mut budget)?;
+        let Some(WorkforceRule::MinimumRest(rule)) = input.domain.rules.get(&rule_id(20)?) else {
+            return Err("rest rule".into());
+        };
+        let mut baseline = Summary::default();
+        rest::evaluate(&input, &selected, rule, &mut baseline, &mut budget)?;
+        assert_eq!((baseline.checked, baseline.violations), (4160, 4160));
+        budget.cancel_after_steps(1000)?;
+        let mut partial = Summary::default();
+        assert_eq!(
+            rest::evaluate(&input, &selected, rule, &mut partial, &mut budget),
+            Err(AssignmentRuleError::Cancelled),
+        );
+        assert!(token.is_cancelled());
+        // Scope indexing has finished and actual dense failures occurred before cancellation.
+        assert!((1..4160).contains(&partial.violations));
+        Ok(())
+    }
+
+    #[test]
+    fn rest_dense_phase_preserves_the_cumulative_work_ceiling() -> TestResult {
+        let (document, pairs) = dense_rest_document(65)?;
+        let mut budget = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        input.validate_selection(&pairs, &mut budget)?;
+        let selected = Selected::new(&input, &pairs, &mut budget)?;
+        let Some(WorkforceRule::MinimumRest(rule)) = input.domain.rules.get(&rule_id(20)?) else {
+            return Err("rest rule".into());
+        };
+        budget.steps(super::super::budget::MAX_WORK_STEPS - 100_000)?;
+        let mut summary = Summary::default();
+        let error = loop {
+            match rest::evaluate(&input, &selected, rule, &mut summary, &mut budget) {
+                Ok(()) => {}
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error, AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps));
+        assert!(summary.violations > 4160);
+        Ok(())
+    }
+
+    #[test]
+    fn genuine_token_cancels_during_rest_witness_fact_construction() -> TestResult {
+        let (document, pairs) = dense_rest_document(2)?;
+        let token = CancellationToken::new();
+        let mut budget = OperationBudget::evaluation(Some(&token));
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        input.validate_selection(&pairs, &mut budget)?;
+        let selected = Selected::new(&input, &pairs, &mut budget)?;
+        let Some(WorkforceRule::MinimumRest(rule)) = input.domain.rules.get(&rule_id(20)?) else {
+            return Err("rest rule".into());
+        };
+        let mut summary = Summary::default();
+        rest::evaluate(&input, &selected, rule, &mut summary, &mut budget)?;
+        assert_eq!((summary.checked, summary.violations), (2, 2));
+        // After the role Entity facts, while constructing the signed numeric rest facts.
+        budget.cancel_after_steps(18)?;
+        assert_eq!(summary.finish(rule_id(20)?, &mut budget), Err(AssignmentRuleError::Cancelled));
+        assert!(token.is_cancelled());
+        Ok(())
     }
 
     #[test]

@@ -220,6 +220,7 @@ fn check(
         upper: requirement.upper,
         actual: Some(actual),
         interval: None,
+        rest: None,
     };
     summary.predicate(
         actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper),
