@@ -224,6 +224,32 @@ fn qualification_coverage_fixture() -> Result<Value, Box<dyn Error>> {
 }
 
 #[test]
+fn coverage_and_overlap_mathematical_identities_match_frozen_vectors() -> TestResult {
+    let document: ScenarioDocument = serde_json::from_value(fixture_value()?)?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    // Fixed typed-key vectors: headcount(rule 32, instance/shift 8, 1..=1) and
+    // no_overlap(rule 33, person 1, shifts 8/22), using the v1 domain separator.
+    for (constraint, provenance) in [
+        (
+            "official.workforce.constraint.bf8b31fe7318d39dda1417741c4982815edb68097354db1c91f96a541f13ad46",
+            "official.workforce.provenance.4c4935a84b783193c7da1feedfd50042017551a89a1be23fb34bb298c38b7e8d",
+        ),
+        (
+            "official.workforce.constraint.eeb801ef7bd80fbb48420ec74ce634b5bd3de7cc9fe10652075b1d5613c7dbc1",
+            "official.workforce.provenance.5adf6387fc1669c6d5e259227ec9188d275af4f12e0417fdfecf89ac067bdcdd",
+        ),
+    ] {
+        let record = compiled
+            .constraints
+            .iter()
+            .find(|record| record.id.as_str() == constraint)
+            .ok_or("mathematical identity vector changed")?;
+        assert_eq!(record.provenance.as_str(), provenance);
+    }
+    Ok(())
+}
+
+#[test]
 fn exhaustive_original_domain_and_compiled_mathematics_agree() -> TestResult {
     let base = fixture_value()?;
     let mut touching = base.clone();
@@ -336,7 +362,7 @@ fn original_evaluator_detects_pruning_overlap_and_coverage_mutants() -> TestResu
                 };
             }
             Constraint::CardinalityRange { literals, max, .. } => {
-                *max = u64::try_from(literals.len())?
+                *max = u64::try_from(literals.len())?;
             }
             _ => {}
         }
@@ -354,11 +380,10 @@ fn original_evaluator_detects_headcount_substituted_for_qualification_count() ->
         .map(|item| (item.variable.id.clone(), item.pair))
         .collect();
     for record in &mut mutant.constraints {
-        let literals = match &mut record.body {
-            Constraint::CardinalityRange { literals, .. } | Constraint::ExactlyOne { literals } => {
-                literals
-            }
-            _ => continue,
+        let (Constraint::CardinalityRange { literals, .. } | Constraint::ExactlyOne { literals }) =
+            &mut record.body
+        else {
+            continue;
         };
         let Some(first) = literals.first() else {
             continue;

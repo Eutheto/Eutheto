@@ -573,9 +573,13 @@ fn required_partition_retains_other_active_families_and_only_hard_locks() -> Res
         "2026-11-01T09:00:00Z",
     );
     for (index, state) in [(40, "hard"), (41, "soft"), (42, "unlocked")] {
-        another_shift(&mut value, index + 100, "2026-11-01T08:00:00", "2026-11-01T10:00:00");
-        value["domain"]["lockedAssignments"][id(index)] =
-            json!({"id":id(index),"personId":id(1),"shiftId":id(index + 100),"state":{"kind":state}});
+        another_shift(
+            &mut value,
+            index + 100,
+            "2026-11-01T08:00:00",
+            "2026-11-01T10:00:00",
+        );
+        value["domain"]["lockedAssignments"][id(index)] = json!({"id":id(index),"personId":id(1),"shiftId":id(index + 100),"state":{"kind":state}});
         if state == "soft" {
             value["domain"]["lockedAssignments"][id(index)]["state"]["stabilityWeight"] = json!(1);
         }

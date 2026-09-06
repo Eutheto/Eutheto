@@ -83,7 +83,10 @@ impl<'a> OperationBudget<'a> {
         self.check()?;
         let next = add(self.steps, amount)?;
         #[cfg(test)]
-        if self.cancel_at_step.is_some_and(|threshold| next >= threshold) {
+        if self
+            .cancel_at_step
+            .is_some_and(|threshold| next >= threshold)
+        {
             if let Some(token) = self.cancellation {
                 token.cancel();
             }

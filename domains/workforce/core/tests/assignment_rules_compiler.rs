@@ -67,36 +67,40 @@ fn pair(person: u32, shift: u32) -> Result<AssignmentPair> {
 }
 
 // Observe the emitted Boolean mathematics; never consult the independent evaluator here.
-fn allows(model: &AssignmentRuleCompilation, selected: &[AssignmentPair]) -> bool {
+fn allows(model: &AssignmentRuleCompilation, selected: &[AssignmentPair]) -> Result<bool> {
     if selected
         .iter()
         .any(|pair| !model.variables.iter().any(|entry| entry.pair == *pair))
     {
-        return false;
+        return Ok(false);
     }
     let values: BTreeMap<_, _> = model
         .variables
         .iter()
         .map(|entry| (&entry.variable.id, selected.contains(&entry.pair)))
         .collect();
-    model.constraints.iter().all(|record| {
-        let satisfied = |literal: &eutheto_planning_ir::Literal| {
-            values
-                .get(&literal.variable)
-                .is_some_and(|value| *value == literal.positive)
-        };
-        match &record.body {
-            Constraint::BoolOr { literals } => literals.iter().any(satisfied),
-            Constraint::AtMostOne { literals } => {
-                literals.iter().filter(|literal| satisfied(literal)).count() <= 1
-            }
-            Constraint::CardinalityRange { literals, min, max } => {
-                let count = literals.iter().filter(|literal| satisfied(literal)).count() as u64;
-                *min <= count && count <= *max
-            }
-            _ => panic!("unexpected primitive in four-rule contribution"),
+    for record in &model.constraints {
+        if !record.enforcement.is_empty() {
+            return Err("unexpected enforcement in four-rule contribution".into());
         }
-    })
+        let (literals, min, max) = match &record.body {
+            Constraint::BoolOr { literals } => (literals, 1, u64::MAX),
+            Constraint::AtMostOne { literals } => (literals, 0, 1),
+            Constraint::CardinalityRange { literals, min, max } => (literals, *min, *max),
+            _ => return Err("unexpected primitive in four-rule contribution".into()),
+        };
+        let mut count = 0;
+        for literal in literals {
+            let value = values
+                .get(&literal.variable)
+                .ok_or("undeclared Boolean literal")?;
+            count += u64::from(*value == literal.positive);
+        }
+        if count < min || count > max {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn availability(
@@ -117,7 +121,7 @@ fn eligibility_activation_and_scope_own_both_predicates() -> Result {
     let mut value = document()?;
     entity(&mut value, 1)?["eligibleAssignmentTypeIds"] = json!([]);
     entity(&mut value, 1)?["qualificationGrants"] = json!([]);
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?])?);
     rule(&mut value, 20, "eligibility")?;
     let analysis = analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT)?;
     assert!(analysis.candidates.is_empty());
@@ -138,7 +142,7 @@ fn eligibility_activation_and_scope_own_both_predicates() -> Result {
         .get_mut(&id(20).parse()?)
         .ok_or("missing rule")?["scope"]["people"] =
         json!({"kind":"filter","allTags":["absent"],"anyTags":[]});
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?])?);
     value
         .domain
         .rules
@@ -146,7 +150,7 @@ fn eligibility_activation_and_scope_own_both_predicates() -> Result {
         .ok_or("missing rule")?["active"] = json!(false);
     let result = compile(&value)?;
     assert!(!result.obligations.handled.contains(&id(20).parse()?));
-    assert!(allows(&result, &[pair(1, 7)?]));
+    assert!(allows(&result, &[pair(1, 7)?])?);
     Ok(())
 }
 
@@ -157,7 +161,7 @@ fn adjacent_qualification_renewals_cover_but_nanosecond_gap_and_expiry_do_not() 
     entity(&mut value, 1)?["qualificationGrants"] = json!([
         {"qualificationId":id(11),"expiresAt":"2026-11-01T06:00:00Z"},
         {"qualificationId":id(11),"effectiveFrom":"2026-11-01T06:00:00Z","expiresAt":"2026-11-01T07:30:00Z"}]);
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     entity(&mut value, 1)?["qualificationGrants"][1]["effectiveFrom"] =
         json!("2026-11-01T06:00:00.000000001Z");
     assert!(compile(&value)?.variables.is_empty());
@@ -182,7 +186,7 @@ fn any_qualification_does_not_allow_alternating_partial_credentials() -> Result 
     rule(&mut value, 20, "eligibility")?;
     assert!(compile(&value)?.variables.is_empty());
     entity(&mut value, 1)?["qualificationGrants"][1] = json!({"qualificationId":id(12)});
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?])?);
     Ok(())
 }
 
@@ -220,7 +224,7 @@ fn ordinary_records_are_conjunctive_and_approved_leave_is_unconditional() -> Res
         "2026-11-01T06:00:00Z",
         "2026-11-01T08:00:00Z",
     )?;
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?])?);
     rule(&mut value, 21, "availability")?;
     assert!(compile(&value)?.variables.is_empty());
     value.domain.rules.clear();
@@ -231,7 +235,7 @@ fn ordinary_records_are_conjunctive_and_approved_leave_is_unconditional() -> Res
         "2026-11-01T05:30:00Z",
         "2026-11-01T06:30:00Z",
     )?;
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?])?);
     entity(&mut value, 32)?["availabilityKind"] = json!("approvedTimeOff");
     let result = compile(&value)?;
     assert!(result.variables.is_empty());
@@ -246,7 +250,7 @@ fn ordinary_records_are_conjunctive_and_approved_leave_is_unconditional() -> Res
     entity(&mut value, 32)?["locationIds"] = json!([id(5)]);
     entity(&mut value, 32)?["effectiveRange"] =
         json!({"startDate":"2026-11-02","endDateExclusive":"2026-11-03"});
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?])?);
     Ok(())
 }
 
@@ -266,11 +270,11 @@ fn weekly_window_union_includes_pre_effective_overnight_starts() -> Result {
     entity(&mut value, 30)?["timeWindow"] = json!({"kind":"weekly","windows":[
         {"weekdays":["saturday"],"startTime":"23:00:00","endTime":"02:00:00","endDayOffset":1},
         {"weekdays":["sunday"],"startTime":"02:00:00","endTime":"03:00:00","endDayOffset":0}]});
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     entity(&mut value, 30)?["timeWindow"]["windows"][1]["startTime"] = json!("02:00:00.000000001");
     let result = compile(&value)?;
-    assert!(allows(&result, &[pair(1, 7)?]));
-    assert!(!allows(&result, &[pair(1, 8)?]));
+    assert!(allows(&result, &[pair(1, 7)?])?);
+    assert!(!allows(&result, &[pair(1, 8)?])?);
     Ok(())
 }
 
@@ -370,8 +374,8 @@ fn coverage_normalizes_empty_and_excess_populations_into_valid_primitives() -> R
     ] {
         entity(&mut value, 6)?["coverage"] = coverage;
         let result = compile(&value)?;
-        assert_eq!(allows(&result, &[]), none);
-        assert_eq!(allows(&result, &[pair(1, 7)?]), one);
+        assert_eq!(allows(&result, &[])?, none);
+        assert_eq!(allows(&result, &[pair(1, 7)?])?, one);
         assert_eq!(
             matches!(&result.constraints[0].body, Constraint::BoolOr { literals } if literals.is_empty()),
             false_primitive
@@ -385,9 +389,9 @@ fn coverage_normalizes_empty_and_excess_populations_into_valid_primitives() -> R
         json!({"kind":"filter","allTags":["absent"],"anyTags":[]});
     entity(&mut value, 6)?["coverage"] =
         json!({"kind":"exact","count":0,"qualificationMinimums":[]});
-    assert!(allows(&compile(&value)?, &[]));
+    assert!(allows(&compile(&value)?, &[])?);
     entity(&mut value, 6)?["coverage"]["count"] = json!(1);
-    assert!(!allows(&compile(&value)?, &[]));
+    assert!(!allows(&compile(&value)?, &[])?);
     Ok(())
 }
 
@@ -405,15 +409,15 @@ fn qualification_minima_share_people_but_never_merge_distinct_owners() -> Result
     let minimum = |ids: Vec<String>| json!({"qualifications":{"allQualificationIds":ids,"anyQualificationIds":[]},"minimum":1});
     entity(&mut value, 6)?["coverage"] = json!({"kind":"exact","count":1,"qualificationMinimums":[minimum(vec![id(11)]),minimum(vec![id(12)])]});
     let result = compile(&value)?;
-    assert!(allows(&result, &[pair(1, 7)?]));
+    assert!(allows(&result, &[pair(1, 7)?])?);
     assert_eq!(result.constraints.len(), 3);
     value.domain.entities.insert(id(40).parse()?, json!({"kind":"coverageRequirement","id":id(40),"active":true,"scope":{"kind":"all"},"coverage":{"kind":"exact","count":1,"qualificationMinimums":[minimum(vec![id(11)])]}}));
     let independent = compile(&value)?;
     assert_eq!(independent.constraints.len(), 5);
-    assert!(allows(&independent, &[pair(1, 7)?]));
+    assert!(allows(&independent, &[pair(1, 7)?])?);
     entity(&mut value, 1)?["qualificationGrants"] = json!([{"qualificationId":id(11)}]);
     let missing = compile(&value)?;
-    assert!(!allows(&missing, &[pair(1, 7)?]));
+    assert!(!allows(&missing, &[pair(1, 7)?])?);
     assert!(
         missing
             .validation
@@ -447,18 +451,18 @@ fn inert_preference_and_set_reordering_preserve_mathematics_and_provenance() -> 
 fn overlap_compatibility_is_rule_owned_and_touching_is_not_overlap() -> Result {
     let mut value = document()?;
     rule(&mut value, 23, "noOverlap")?;
-    assert!(!allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(!allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     value
         .domain
         .rules
         .get_mut(&id(23).parse()?)
         .ok_or("missing rule")?["compatibleCategoryPairs"] =
         json!([{"firstCategory":"clinic","secondCategory":"clinic"}]);
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     rule(&mut value, 24, "noOverlap")?;
-    assert!(!allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(!allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     entity(&mut value, 8)?["startsAt"] = json!({"instant":"2026-11-01T06:30:00Z","local":"2026-11-01T01:30:00","offsetSeconds":-18000});
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     Ok(())
 }
 
@@ -482,8 +486,8 @@ fn coverage_intersects_reporting_weekdays_with_local_start_dates() -> Result {
         "coverage":{"kind":"exact","count":1,"qualificationMinimums":[]}}));
     let result = compile(&value)?;
     assert_eq!(result.constraints.len(), 2);
-    assert!(!allows(&result, &[]));
-    assert!(!allows(&result, &[pair(1, 7)?]));
+    assert!(!allows(&result, &[])?);
+    assert!(!allows(&result, &[pair(1, 7)?])?);
     assert!(
         result
             .validation
@@ -746,19 +750,19 @@ fn overlap_requires_both_shifts_to_match_every_filter() -> Result {
         .rules
         .get_mut(&id(23).parse()?)
         .ok_or("missing rule")?["scope"]["assignmentTypeIds"] = json!([id(4)]);
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     value
         .domain
         .rules
         .get_mut(&id(23).parse()?)
         .ok_or("missing rule")?["scope"]["assignmentTypeIds"] = json!([id(4), id(41)]);
-    assert!(!allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(!allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     value
         .domain
         .rules
         .get_mut(&id(23).parse()?)
         .ok_or("missing rule")?["scope"]["categories"] = json!(["clinic"]);
-    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?]));
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
     Ok(())
 }
 
@@ -809,8 +813,8 @@ fn qualification_lower_bound_conflicts_with_an_independent_owner_upper_bound() -
         "coverage":{"kind":"exact","count":0,"qualificationMinimums":[]}}),
     );
     let result = compile(&value)?;
-    assert!(!allows(&result, &[]));
-    assert!(!allows(&result, &[pair(1, 7)?]));
+    assert!(!allows(&result, &[])?);
+    assert!(!allows(&result, &[pair(1, 7)?])?);
     assert!(result.validation.issues.iter().any(|issue| issue.code
         == "official.workforce.qualification_above_headcount"
         && issue.message.contains(&id(6))
@@ -822,12 +826,25 @@ fn amplification_document() -> Result<ScenarioDocument> {
     let mut value = document()?;
     value.domain.entities.remove(&id(6).parse()?);
     let shift = entity(&mut value, 8)?.clone();
-    // One source rule/large leaf list amplified across valid resolved assignments, not
-    // across copied oversized rule records. The raw Cartesian product is only 2,048.
-    for index in 0..2047 {
+    // One large source expression is amplified across a valid 100-person/100-shift graph.
+    for index in 0..99 {
         let mut record = shift.clone();
         record["id"] = json!(id(1000 + index));
-        value.domain.entities.insert(id(1000 + index).parse()?, record);
+        value
+            .domain
+            .entities
+            .insert(id(1000 + index).parse()?, record);
+    }
+    let mut person = entity(&mut value, 1)?.clone();
+    person["tags"] = json!([]);
+    person["teamIds"] = json!([]);
+    person["qualificationGrants"] = json!([]);
+    person.as_object_mut().ok_or("person")?.remove("externalId");
+    value.domain.entities.insert(id(1).parse()?, person.clone());
+    for index in 200..299 {
+        let mut record = person.clone();
+        record["id"] = json!(id(index));
+        value.domain.entities.insert(id(index).parse()?, record);
     }
     rule(&mut value, 20, "eligibility")?;
     Ok(value)
@@ -835,10 +852,12 @@ fn amplification_document() -> Result<ScenarioDocument> {
 
 fn add_leaf_entities(value: &mut ScenarioDocument, kind: &str) -> Result<Vec<String>> {
     let mut ids = Vec::new();
-    for index in 0..10_000 {
+    for index in 0..3_000 {
         let identity = id(100_000 + index);
         let mut record = json!({"kind":kind,"id":identity,"name":"Reference"});
-        if kind == "qualification" { record["description"] = json!(""); }
+        if kind == "qualification" {
+            record["description"] = json!("");
+        }
         value.domain.entities.insert(identity.parse()?, record);
         ids.push(identity);
     }
@@ -853,15 +872,23 @@ fn empty_grants_cannot_bypass_work_limits_for_all_or_any_expression_leaves() -> 
     entity(&mut value, 4)?["qualifications"] = json!({
         "kind":"matches","allQualificationIds":ids,"anyQualificationIds":[],
     });
-    // 2,048 × 10,000 outer leaves exceed the work ceiling even though each leaf
-    // scans zero grants. Without the outer checkpoint this valid operation succeeds.
-    assert_eq!(analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT),
-        Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    // 100 × 100 × 3,000 leaves exceed the work ceiling with zero grants, while
+    // source entity/node limits remain satisfied.
+    assert_eq!(
+        analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT).err(),
+        Some(AssignmentRuleError::LimitExceeded(
+            AssignmentRuleLimit::WorkSteps
+        ))
+    );
     entity(&mut value, 4)?["qualifications"] = json!({
         "kind":"matches","allQualificationIds":[],"anyQualificationIds":ids,
     });
-    assert_eq!(compile_assignment_rules(&value, &context(PlanningIrLimitsV1::DEFAULT)),
-        Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    assert_eq!(
+        compile_assignment_rules(&value, &context(PlanningIrLimitsV1::DEFAULT)).err(),
+        Some(AssignmentRuleError::LimitExceeded(
+            AssignmentRuleLimit::WorkSteps
+        ))
+    );
     Ok(())
 }
 
@@ -870,19 +897,33 @@ fn empty_person_tags_and_teams_cannot_bypass_outer_filter_work_limits() -> Resul
     let mut value = amplification_document()?;
     entity(&mut value, 1)?["tags"] = json!([]);
     entity(&mut value, 1)?["teamIds"] = json!([]);
-    let tags: Vec<_> = (0..10_000).map(|index| format!("tag-{index}")).collect();
+    let tags: Vec<_> = (0..3_000).map(|index| format!("tag-{index}")).collect();
     for field in ["allTags", "anyTags"] {
         let mut people = json!({"kind":"filter","allTags":[],"anyTags":[]});
         people[field] = json!(tags);
-        value.domain.rules.get_mut(&id(20).parse()?).ok_or("missing rule")?["scope"] =
-            json!({"people":people});
-        assert_eq!(analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT),
-            Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+        value
+            .domain
+            .rules
+            .get_mut(&id(20).parse()?)
+            .ok_or("missing rule")?["scope"] = json!({"people":people});
+        assert_eq!(
+            analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT).err(),
+            Some(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::WorkSteps
+            ))
+        );
     }
     let teams = add_leaf_entities(&mut value, "team")?;
-    value.domain.rules.get_mut(&id(20).parse()?).ok_or("missing rule")?["scope"] =
-        json!({"people":{"kind":"all"},"teamIds":teams});
-    assert_eq!(compile_assignment_rules(&value, &context(PlanningIrLimitsV1::DEFAULT)),
-        Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    value
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("missing rule")?["scope"] = json!({"people":{"kind":"all"},"teamIds":teams});
+    assert_eq!(
+        compile_assignment_rules(&value, &context(PlanningIrLimitsV1::DEFAULT)).err(),
+        Some(AssignmentRuleError::LimitExceeded(
+            AssignmentRuleLimit::WorkSteps
+        ))
+    );
     Ok(())
 }

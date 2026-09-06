@@ -12,8 +12,8 @@ use super::{
 use crate::{
     ids::ShiftId,
     model::{
-        ActiveRange, AssignmentPair, Availability, AvailabilityKind, CategoryPair, LockState, Person, Scope,
-        WorkforceEntity, WorkforceRule,
+        ActiveRange, AssignmentPair, Availability, AvailabilityKind, CategoryPair, LockState,
+        Person, Scope, WorkforceEntity, WorkforceRule,
     },
     temporal::ResolvedShift,
 };
@@ -21,7 +21,9 @@ use eutheto_domain_ir::{
     DomainEntityId, DomainEntityKindId, DomainEntityRef, RuleEvaluation, VerificationFactId,
     VerificationValue,
 };
-use eutheto_types::{CancellationToken, EntityId, PersonId, RuleId, ScenarioDocument, ScenarioSettings};
+use eutheto_types::{
+    CancellationToken, EntityId, PersonId, RuleId, ScenarioDocument, ScenarioSettings,
+};
 use std::collections::BTreeMap;
 
 const VIOLATIONS: &str = "official.workforce.fact.violation_count";
@@ -43,12 +45,21 @@ pub fn evaluate_assignment_rules(
 ) -> Result<AssignmentRuleEvaluation, AssignmentRuleError> {
     let mut budget = OperationBudget::evaluation(cancellation);
     budget.check()?;
-    within(count(selected_pairs.len())?, MAX_SELECTED_PAIRS, AssignmentRuleLimit::SelectedPairs)?;
+    within(
+        count(selected_pairs.len())?,
+        MAX_SELECTED_PAIRS,
+        AssignmentRuleLimit::SelectedPairs,
+    )?;
     let input = AssignmentInput::new(document, &mut budget)?;
     input.validate_selection(selected_pairs, &mut budget)?;
     let selected = Selected::new(&input, selected_pairs, &mut budget)?;
-    let (evaluations, obligations) = evaluate_prepared(&input, &selected, &document.settings, &mut budget)?;
-    Ok(AssignmentRuleEvaluation { source_document_hash: input.source_document_hash, evaluations, obligations })
+    let (evaluations, obligations) =
+        evaluate_prepared(&input, &selected, &document.settings, &mut budget)?;
+    Ok(AssignmentRuleEvaluation {
+        source_document_hash: input.source_document_hash,
+        evaluations,
+        obligations,
+    })
 }
 
 // The semantic phase takes only validated original data and the same operation budget. Keeping
@@ -60,12 +71,24 @@ fn evaluate_prepared(
     budget: &mut OperationBudget<'_>,
 ) -> Result<(Vec<RuleEvaluation>, RequiredRulePartition), AssignmentRuleError> {
     let mut evaluations = Vec::new();
-    let mut obligations = RequiredRulePartition { handled: Vec::new(), remaining: Vec::new() };
-    fact_evaluations(input, selected, settings, &mut evaluations, &mut obligations.handled, budget)?;
+    let mut obligations = RequiredRulePartition {
+        handled: Vec::new(),
+        remaining: Vec::new(),
+    };
+    fact_evaluations(
+        input,
+        selected,
+        settings,
+        &mut evaluations,
+        &mut obligations.handled,
+        budget,
+    )?;
     for rule in input.domain.rules.values() {
         budget.step()?;
         let (id, active, scope) = rule.header();
-        if !active { continue; }
+        if !active {
+            continue;
+        }
         let mut summary = Summary::default();
         match rule {
             WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. } => {
@@ -74,8 +97,18 @@ fn evaluate_prepared(
             WorkforceRule::Coverage { .. } => {
                 coverage::evaluate(input, selected, scope, &mut summary, budget)?;
             }
-            WorkforceRule::NoOverlap { compatible_category_pairs, .. } => {
-                overlap(input, selected, scope, compatible_category_pairs, &mut summary, budget)?;
+            WorkforceRule::NoOverlap {
+                compatible_category_pairs,
+                ..
+            } => {
+                overlap(
+                    input,
+                    selected,
+                    scope,
+                    compatible_category_pairs,
+                    &mut summary,
+                    budget,
+                )?;
             }
             _ => {
                 retain_id(&mut obligations.remaining, id, budget)?;
@@ -88,7 +121,11 @@ fn evaluate_prepared(
     for lock in input.domain.locked_assignments.values() {
         budget.step()?;
         if matches!(lock.state, LockState::Hard {}) {
-            retain_id(&mut obligations.remaining, RuleId::from_uuid(lock.id.as_uuid()), budget)?;
+            retain_id(
+                &mut obligations.remaining,
+                RuleId::from_uuid(lock.id.as_uuid()),
+                budget,
+            )?;
         }
     }
     budget.sort_work(obligations.handled.len())?;
@@ -114,17 +151,28 @@ fn fact_evaluations(
         let person = input.person(*person_id).ok_or_else(invalid)?;
         let id = RuleId::from_uuid(person_id.as_uuid());
         retain_id(handled, id, budget)?;
-        let shifts = selected.by_person.get(person_id).map_or(&[][..], Vec::as_slice);
+        let shifts = selected
+            .by_person
+            .get(person_id)
+            .map_or(&[][..], Vec::as_slice);
         evaluations.push(activity(person, shifts, settings, budget)?.finish(id, budget)?);
     }
     for entity in input.domain.entities.values() {
         budget.step()?;
-        let WorkforceEntity::Availability(record) = entity else { continue; };
-        if record.availability_kind != AvailabilityKind::ApprovedTimeOff { continue; }
+        let WorkforceEntity::Availability(record) = entity else {
+            continue;
+        };
+        if record.availability_kind != AvailabilityKind::ApprovedTimeOff {
+            continue;
+        }
         let id = RuleId::from_uuid(record.id.as_entity_id().as_uuid());
         retain_id(handled, id, budget)?;
-        let shifts = selected.by_person.get(&record.person_id).map_or(&[][..], Vec::as_slice);
-        evaluations.push(approved_leave(input, record, shifts, settings, budget)?.finish(id, budget)?);
+        let shifts = selected
+            .by_person
+            .get(&record.person_id)
+            .map_or(&[][..], Vec::as_slice);
+        evaluations
+            .push(approved_leave(input, record, shifts, settings, budget)?.finish(id, budget)?);
     }
     Ok(())
 }
@@ -136,7 +184,9 @@ fn activity(
     budget: &mut OperationBudget<'_>,
 ) -> Result<Summary, AssignmentRuleError> {
     let mut summary = Summary::default();
-    if shifts.is_empty() { return Ok(summary); }
+    if shifts.is_empty() {
+        return Ok(summary);
+    }
     let owner = EntityId::from_uuid(person.id.as_uuid());
     let allowed = match person.active_range {
         ActiveRange::Always {} => None,
@@ -145,17 +195,31 @@ fn activity(
     for shift in shifts {
         budget.step()?;
         let query = predicates::interval(shift);
-        let failed = allowed.is_some_and(|allowed| query.start < allowed.start || query.end > allowed.end);
+        let failed =
+            allowed.is_some_and(|allowed| query.start < allowed.start || query.end > allowed.end);
         let mut witness = Witness::pair(
-            AssignmentPair { person_id: person.id, shift_id: shift.id },
-            owner, "person", "outside_active_range",
+            AssignmentPair {
+                person_id: person.id,
+                shift_id: shift.id,
+            },
+            owner,
+            "person",
+            "outside_active_range",
         );
         if let Some(allowed) = allowed {
             witness.interval = if query.start < allowed.start {
-                Some(InstantInterval { start: query.start, end: query.end.min(allowed.start) })
+                Some(InstantInterval {
+                    start: query.start,
+                    end: query.end.min(allowed.start),
+                })
             } else if query.end > allowed.end {
-                Some(InstantInterval { start: query.start.max(allowed.end), end: query.end })
-            } else { None };
+                Some(InstantInterval {
+                    start: query.start.max(allowed.end),
+                    end: query.end,
+                })
+            } else {
+                None
+            };
         }
         summary.predicate(failed, witness, budget)?;
     }
@@ -192,25 +256,50 @@ fn pair_rule(
     for (person_id, shifts) in &selected.by_person {
         budget.step()?;
         let person = input.person(*person_id).ok_or_else(invalid)?;
-        if !predicates::person_matches(person, scope, budget)? { continue; }
+        if !predicates::person_matches(person, scope, budget)? {
+            continue;
+        }
         for shift in shifts {
             budget.step()?;
             let metadata = input.metadata(shift)?;
-            if !predicates::shift_matches(shift, &metadata, scope, budget)? { continue; }
-            let pair = AssignmentPair { person_id: *person_id, shift_id: shift.id };
+            if !predicates::shift_matches(shift, &metadata, scope, budget)? {
+                continue;
+            }
+            let pair = AssignmentPair {
+                person_id: *person_id,
+                shift_id: shift.id,
+            };
             if matches!(rule, WorkforceRule::Eligibility { .. }) {
                 let allowed = predicates::type_allowed(person, &metadata, budget)?;
-                summary.predicate(!allowed, predicates::pair_witness(input, pair, "assignment_type_not_allowed")?, budget)?;
-                let qualified = predicates::qualified(person, &metadata.assignment_type.qualifications, predicates::interval(shift), budget)?;
-                summary.predicate(!qualified, predicates::pair_witness(input, pair, "qualification_expression")?, budget)?;
+                summary.predicate(
+                    !allowed,
+                    predicates::pair_witness(input, pair, "assignment_type_not_allowed")?,
+                    budget,
+                )?;
+                let qualified = predicates::qualified(
+                    person,
+                    &metadata.assignment_type.qualifications,
+                    predicates::interval(shift),
+                    budget,
+                )?;
+                summary.predicate(
+                    !qualified,
+                    predicates::pair_witness(input, pair, "qualification_expression")?,
+                    budget,
+                )?;
             } else if let Some(records) = input.availability_by_person.get(person_id) {
                 for record_id in records {
                     budget.step()?;
-                    let Some(WorkforceEntity::Availability(record)) = input.domain.entities.get(&record_id.as_entity_id()) else {
+                    let Some(WorkforceEntity::Availability(record)) =
+                        input.domain.entities.get(&record_id.as_entity_id())
+                    else {
                         return Err(invalid());
                     };
-                    if matches!(record.availability_kind, AvailabilityKind::Unavailable | AvailabilityKind::AvailableOnly)
-                        && predicates::availability_matches(record, &metadata, budget)? {
+                    if matches!(
+                        record.availability_kind,
+                        AvailabilityKind::Unavailable | AvailabilityKind::AvailableOnly
+                    ) && predicates::availability_matches(record, &metadata, budget)?
+                    {
                         check_availability(record, shift, settings, &mut summary, budget)?;
                     }
                 }
@@ -235,8 +324,13 @@ fn check_availability(
     };
     let failure = predicates::availability_failure(record, shift, settings, budget)?;
     let mut witness = Witness::pair(
-        AssignmentPair { person_id: record.person_id, shift_id: shift.id },
-        record.id.as_entity_id(), "availability", reason,
+        AssignmentPair {
+            person_id: record.person_id,
+            shift_id: shift.id,
+        },
+        record.id.as_entity_id(),
+        "availability",
+        reason,
     );
     witness.interval = failure;
     summary.predicate(failure.is_some(), witness, budget)
@@ -507,32 +601,74 @@ fn witness_evidence(
     result: &mut RuleEvaluation,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
-    text_fact(&mut result.observed, "official.workforce.fact.witness_reason", witness.reason, budget)?;
+    text_fact(
+        &mut result.observed,
+        "official.workforce.fact.witness_reason",
+        witness.reason,
+        budget,
+    )?;
     if let Some(person) = witness.person {
-        entity(&mut result.affected_entities, "person", EntityId::from_uuid(person.as_uuid()), budget)?;
+        entity(
+            &mut result.affected_entities,
+            "person",
+            EntityId::from_uuid(person.as_uuid()),
+            budget,
+        )?;
     }
-    entity(&mut result.affected_entities, "shift", witness.shift.as_entity_id(), budget)?;
+    entity(
+        &mut result.affected_entities,
+        "shift",
+        witness.shift.as_entity_id(),
+        budget,
+    )?;
     if let Some(shift) = witness.other_shift {
-        entity(&mut result.affected_entities, "shift", shift.as_entity_id(), budget)?;
+        entity(
+            &mut result.affected_entities,
+            "shift",
+            shift.as_entity_id(),
+            budget,
+        )?;
     }
-    entity(&mut result.affected_entities, witness.owner_kind, witness.owner, budget)?;
+    entity(
+        &mut result.affected_entities,
+        witness.owner_kind,
+        witness.owner,
+        budget,
+    )?;
     for (key, value) in [
         ("official.workforce.fact.witness_minimum", witness.lower),
         ("official.workforce.fact.witness_maximum", witness.upper),
         ("official.workforce.fact.witness_count", witness.actual),
     ] {
         budget.step()?;
-        if let Some(value) = value { fact(&mut result.observed, key, integer(value)?, budget)?; }
+        if let Some(value) = value {
+            fact(&mut result.observed, key, integer(value)?, budget)?;
+        }
     }
     if let Some(hash) = witness.minimum_hash {
         let hash = blake3::Hash::from_bytes(hash).to_hex();
-        text_fact(&mut result.observed, "official.workforce.fact.witness_minimum_key", hash.as_str(), budget)?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.witness_minimum_key",
+            hash.as_str(),
+            budget,
+        )?;
     }
     if let Some(interval) = witness.interval {
         // Formatting has a fixed timestamp bound; reserve before creating these strings.
         budget.reserve(0, 2, 128)?;
-        text_fact(&mut result.observed, "official.workforce.fact.witness_start", &interval.start.to_string(), budget)?;
-        text_fact(&mut result.observed, "official.workforce.fact.witness_end", &interval.end.to_string(), budget)?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.witness_start",
+            &interval.start.to_string(),
+            budget,
+        )?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.witness_end",
+            &interval.end.to_string(),
+            budget,
+        )?;
     }
     Ok(())
 }
@@ -608,16 +744,13 @@ fn arithmetic() -> AssignmentRuleError {
     AssignmentRuleError::InvalidConstruction(AssignmentConstructionIssue::ArithmeticOverflow)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde::Serialize;
     use serde_json::json;
 
-    mod support {
-        include!("../../tests/support/mod.rs");
-    }
+    use crate::test_support as support;
 
     type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -654,9 +787,16 @@ mod tests {
             + encoded(&(CHECKED, VerificationValue::Integer(checked)))?)
     }
 
-    fn leave_output(budget: &mut OperationBudget<'_>, left: (u64, u64, u64)) -> Result<(), AssignmentRuleError> {
+    fn leave_output(
+        budget: &mut OperationBudget<'_>,
+        left: (u64, u64, u64),
+    ) -> Result<(), AssignmentRuleError> {
         let remaining = budget.remaining_output();
-        budget.reserve(remaining.0 - left.0, remaining.1 - left.1, remaining.2 - left.2)
+        budget.reserve(
+            remaining.0 - left.0,
+            remaining.1 - left.1,
+            remaining.2 - left.2,
+        )
     }
 
     // Exercise each real builder at all applicable exact boundaries and with one fewer slot/byte.
@@ -675,11 +815,16 @@ mod tests {
             (2, AssignmentRuleLimit::Bytes),
         ] {
             let mut left = [cost.0, cost.1, cost.2];
-            if left[dimension] == 0 { continue; }
+            if left[dimension] == 0 {
+                continue;
+            }
             left[dimension] -= 1;
             let mut budget = OperationBudget::evaluation(None);
             leave_output(&mut budget, (left[0], left[1], left[2]))?;
-            assert_eq!(build(&mut budget), Err(AssignmentRuleError::LimitExceeded(limit)));
+            assert_eq!(
+                build(&mut budget),
+                Err(AssignmentRuleError::LimitExceeded(limit))
+            );
         }
         Ok(())
     }
@@ -699,7 +844,10 @@ mod tests {
         boundaries((0, 2, encoded(&(key, "text", text))?), |budget| {
             let mut facts = BTreeMap::new();
             text_fact(&mut facts, key, text, budget)?;
-            assert_eq!(facts.values().next(), Some(&VerificationValue::Text(text.to_owned())));
+            assert_eq!(
+                facts.values().next(),
+                Some(&VerificationValue::Text(text.to_owned()))
+            );
             Ok(())
         })
     }
@@ -711,7 +859,10 @@ mod tests {
             let mut entities = Vec::new();
             entity(&mut entities, "person", person, budget)?;
             assert_eq!(entities.len(), 1);
-            assert_eq!(entities[0].id.as_str(), format!("official.workforce.{person}"));
+            assert_eq!(
+                entities[0].id.as_str(),
+                format!("official.workforce.{person}")
+            );
             Ok(())
         })?;
         let binding = rule_id(1)?;
@@ -727,7 +878,12 @@ mod tests {
     fn aggregate_summary_enforces_exact_record_item_and_byte_boundaries() -> TestResult {
         let id = rule_id(20)?;
         boundaries((1, 6, summary_bytes(id, 3, 0)?), |budget| {
-            let result = Summary { checked: 3, violations: 0, first: None }.finish(id, budget)?;
+            let result = Summary {
+                checked: 3,
+                violations: 0,
+                first: None,
+            }
+            .finish(id, budget)?;
             result.validate().map_err(|_| invalid())?;
             assert!(result.satisfied);
             assert_eq!(result.observed.len(), 2);
@@ -738,7 +894,12 @@ mod tests {
     #[test]
     fn failing_summary_charges_every_nested_witness_before_retention() -> TestResult {
         let id = rule_id(20)?;
-        let mut witness = Witness::pair(selected_pair()?, entity_id(30)?, "availability", "unavailable");
+        let mut witness = Witness::pair(
+            selected_pair()?,
+            entity_id(30)?,
+            "availability",
+            "unavailable",
+        );
         witness.other_shift = Some(support::id(7).parse()?);
         witness.lower = Some(2);
         witness.upper = Some(4);
@@ -746,11 +907,17 @@ mod tests {
         witness.minimum_hash = Some([0; 32]);
         let start = "2026-11-01T05:30:00Z";
         let end = "2026-11-01T07:30:00Z";
-        witness.interval = Some(InstantInterval { start: start.parse()?, end: end.parse()? });
+        witness.interval = Some(InstantInterval {
+            start: start.parse()?,
+            end: end.parse()?,
+        });
         let mut bytes = summary_bytes(id, 3, 1)? + 4 * 160 + 128;
         for (key, value) in [
             ("official.workforce.fact.witness_reason", witness.reason),
-            ("official.workforce.fact.witness_minimum_key", "0000000000000000000000000000000000000000000000000000000000000000"),
+            (
+                "official.workforce.fact.witness_minimum_key",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
             ("official.workforce.fact.witness_start", start),
             ("official.workforce.fact.witness_end", end),
         ] {
@@ -764,7 +931,12 @@ mod tests {
             bytes += encoded(&(key, VerificationValue::Integer(value)))?;
         }
         boundaries((1, 26, bytes), |budget| {
-            let result = Summary { checked: 3, violations: 1, first: Some(witness) }.finish(id, budget)?;
+            let result = Summary {
+                checked: 3,
+                violations: 1,
+                first: Some(witness),
+            }
+            .finish(id, budget)?;
             result.validate().map_err(|_| invalid())?;
             assert!(!result.satisfied);
             assert_eq!(result.affected_entities.len(), 4);
@@ -774,9 +946,15 @@ mod tests {
     }
 
     #[test]
-    fn complete_semantic_phase_never_returns_an_output_truncated_at_aggregate_limits() -> TestResult {
+    fn complete_semantic_phase_never_returns_an_output_truncated_at_aggregate_limits() -> TestResult
+    {
         let mut document = document()?;
-        let mut person = document.domain.entities.get(&entity_id(1)?).ok_or("person")?.clone();
+        let mut person = document
+            .domain
+            .entities
+            .get(&entity_id(1)?)
+            .ok_or("person")?
+            .clone();
         person["id"] = json!(support::id(30));
         person.as_object_mut().ok_or("person")?.remove("externalId");
         document.domain.entities.insert(entity_id(30)?, person);
@@ -812,18 +990,32 @@ mod tests {
         let mut ids = Vec::new();
         for index in 1000..2000 {
             let id = support::id(index);
-            document.domain.entities.insert(entity_id(index)?, json!({
-                "kind":"qualification", "id":id, "name":"Qualification", "description":""
-            }));
+            document.domain.entities.insert(
+                entity_id(index)?,
+                json!({
+                    "kind":"qualification", "id":id, "name":"Qualification", "description":""
+                }),
+            );
             ids.push(id);
         }
-        document.domain.entities.get_mut(&entity_id(1)?).ok_or("person")?["qualificationGrants"] = json!([]);
-        document.domain.entities.get_mut(&entity_id(4)?).ok_or("type")?["qualifications"] =
+        document
+            .domain
+            .entities
+            .get_mut(&entity_id(1)?)
+            .ok_or("person")?["qualificationGrants"] = json!([]);
+        document
+            .domain
+            .entities
+            .get_mut(&entity_id(4)?)
+            .ok_or("type")?["qualifications"] =
             json!({"kind":"matches","allQualificationIds":ids,"anyQualificationIds":[]});
-        document.domain.rules.insert(rule_id(20)?, json!({
-            "kind":"eligibility","id":support::id(20),"active":true,"strength":"required",
-            "scope":{"people":{"kind":"all"}}
-        }));
+        document.domain.rules.insert(
+            rule_id(20)?,
+            json!({
+                "kind":"eligibility","id":support::id(20),"active":true,"strength":"required",
+                "scope":{"people":{"kind":"all"}}
+            }),
+        );
         let token = CancellationToken::new();
         let mut budget = OperationBudget::evaluation(Some(&token));
         let input = AssignmentInput::new(&document, &mut budget)?;
@@ -847,16 +1039,21 @@ mod tests {
             "weekdays":["sunday"], "startTime":format!("00:{:02}:{:02}", second / 60, second % 60),
             "endTime":"03:00:00", "endDayOffset":0
         })).collect();
-        document.domain.entities.insert(entity_id(30)?, json!({
-            "kind":"availability","id":support::id(30),"personId":support::id(1),
-            "availabilityKind":"availableOnly", "source":"", "note":"",
-            "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
-            "timeWindow":{"kind":"weekly","windows":windows}
-        }));
+        document.domain.entities.insert(
+            entity_id(30)?,
+            json!({
+                "kind":"availability","id":support::id(30),"personId":support::id(1),
+                "availabilityKind":"availableOnly", "source":"", "note":"",
+                "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+                "timeWindow":{"kind":"weekly","windows":windows}
+            }),
+        );
         let token = CancellationToken::new();
         let mut budget = OperationBudget::evaluation(Some(&token));
         let input = AssignmentInput::new(&document, &mut budget)?;
-        let Some(WorkforceEntity::Availability(record)) = input.domain.entities.get(&entity_id(30)?) else {
+        let Some(WorkforceEntity::Availability(record)) =
+            input.domain.entities.get(&entity_id(30)?)
+        else {
             return Err("availability".into());
         };
         let shift = input.shift(selected_pair()?.shift_id).ok_or("shift")?;
@@ -865,8 +1062,10 @@ mod tests {
         assert_eq!((summary.checked, summary.violations), (1, 0));
         let records_before = budget.remaining_output().0;
         budget.cancel_after_steps(100)?;
-        assert_eq!(check_availability(record, shift, &document.settings, &mut summary, &mut budget),
-            Err(AssignmentRuleError::Cancelled));
+        assert_eq!(
+            check_availability(record, shift, &document.settings, &mut summary, &mut budget),
+            Err(AssignmentRuleError::Cancelled)
+        );
         assert!(token.is_cancelled());
         let retained_windows = records_before - budget.remaining_output().0;
         // Cancellation must occur inside expansion, not later at sorting or summary construction.
@@ -881,7 +1080,10 @@ mod tests {
         let document = document()?;
         let mut preparation = OperationBudget::evaluation(None);
         let input = AssignmentInput::new(&document, &mut preparation)?;
-        let mut person = input.person(selected_pair()?.person_id).ok_or("person")?.clone();
+        let mut person = input
+            .person(selected_pair()?.person_id)
+            .ok_or("person")?
+            .clone();
         person.tags.clear();
         person.team_ids.clear();
         let tags: Vec<_> = (0..100).map(|index| format!("tag{index}")).collect();
@@ -895,8 +1097,10 @@ mod tests {
             let token = CancellationToken::new();
             let mut budget = OperationBudget::evaluation(Some(&token));
             budget.cancel_after_steps(32)?;
-            assert_eq!(predicates::person_matches(&person, &scope, &mut budget),
-                Err(AssignmentRuleError::Cancelled));
+            assert_eq!(
+                predicates::person_matches(&person, &scope, &mut budget),
+                Err(AssignmentRuleError::Cancelled)
+            );
             assert!(token.is_cancelled());
         }
         Ok(())
@@ -905,26 +1109,44 @@ mod tests {
     #[test]
     fn active_empty_tag_populations_cannot_bypass_the_operation_work_ceiling() -> TestResult {
         let mut document = document()?;
-        let mut prototype = document.domain.entities.get(&entity_id(1)?).ok_or("person")?.clone();
+        let mut prototype = document
+            .domain
+            .entities
+            .get(&entity_id(1)?)
+            .ok_or("person")?
+            .clone();
         prototype["tags"] = json!([]);
-        prototype.as_object_mut().ok_or("person")?.remove("externalId");
-        document.domain.entities.insert(entity_id(1)?, prototype.clone());
+        prototype
+            .as_object_mut()
+            .ok_or("person")?
+            .remove("externalId");
+        document
+            .domain
+            .entities
+            .insert(entity_id(1)?, prototype.clone());
         let mut selected = vec![selected_pair()?];
-        for index in 1000..1099 {
+        for index in 1000..1899 {
             let mut person = prototype.clone();
             person["id"] = json!(support::id(index));
             document.domain.entities.insert(entity_id(index)?, person);
-            selected.push(AssignmentPair { person_id: support::id(index).parse()?, shift_id: selected_pair()?.shift_id });
+            selected.push(AssignmentPair {
+                person_id: support::id(index).parse()?,
+                shift_id: selected_pair()?.shift_id,
+            });
         }
-        let tags: Vec<_> = (0..3000).map(|index| format!("tag{index:04}")).collect();
-        for index in 2000..2100 {
+        let tags: Vec<_> = (0..2500).map(|index| format!("tag{index:04}")).collect();
+        for index in 2000..2010 {
             document.domain.rules.insert(rule_id(index)?, json!({
                 "id":support::id(index),"kind":"eligibility","active":true,"strength":"required",
                 "scope":{"people":{"kind":"filter","allTags":tags,"anyTags":[]}}
             }));
         }
-        assert_eq!(evaluate_assignment_rules(&document, &selected, None),
-            Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+        assert_eq!(
+            evaluate_assignment_rules(&document, &selected, None),
+            Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::WorkSteps
+            ))
+        );
         Ok(())
     }
 }

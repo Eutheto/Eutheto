@@ -5,8 +5,10 @@ use super::super::{
 };
 use crate::{
     ids::QualificationId,
-    model::{ActiveRange, Availability, CategoryPair, Coverage, Person, PersonSelection,
-        QualificationExpression, Scope, ShiftScope},
+    model::{
+        ActiveRange, Availability, CategoryPair, Coverage, Person, PersonSelection,
+        QualificationExpression, Scope, ShiftScope,
+    },
     temporal::{ResolvedShift, weekday},
 };
 use eutheto_types::ScenarioSettings;

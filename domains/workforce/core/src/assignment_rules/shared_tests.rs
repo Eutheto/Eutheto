@@ -39,7 +39,10 @@ fn availability(start: &str, end: &str, window: Value) -> Result<Availability> {
         "effectiveRange":{"startDate":start,"endDateExclusive":end},
         "source":"test", "note":""
     });
-    record.as_object_mut().ok_or("availability record")?.insert("timeWindow".to_owned(), window);
+    record
+        .as_object_mut()
+        .ok_or("availability record")?
+        .insert("timeWindow".to_owned(), window);
     Ok(serde_json::from_value(record)?)
 }
 
@@ -337,5 +340,87 @@ fn selection_identity_rejection_does_not_depend_on_active_authored_rules() -> Re
             matches!(result, Err(AssignmentRuleError::InvalidSelection { kind, .. }) if kind == expected)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn dormant_recurrence_indexes_obey_aggregate_retention_limits() -> Result {
+    let mut document = support::fixture()?;
+    document.domain.entities.remove(&support::id(8).parse()?);
+    document.domain.locked_assignments.clear();
+    let template = document
+        .domain
+        .entities
+        .get_mut(&support::id(6).parse()?)
+        .ok_or("missing template")?;
+    template["recurrence"]["excludedDates"] = json!(
+        (1..=10)
+            .map(|day| format!("2026-11-{day:02}"))
+            .collect::<Vec<_>>()
+    );
+    let domain = crate::validation::validate_document(&document)?;
+    // One occurrence owner and eleven auxiliary keys, even though no shift is emitted.
+    let exact = PlanningIrLimitsV1 {
+        max_provenance_records: 12,
+        max_total_refs: 13,
+        max_ir_bytes: 304,
+        ..PlanningIrLimitsV1::DEFAULT
+    };
+    let resolve = |limits| {
+        let mut budget = OperationBudget::analysis(None, limits);
+        crate::temporal::resolve_validated_shifts(&domain, &document.settings, &mut |step| {
+            budget.resolution_step(step)
+        })
+    };
+    assert!(resolve(exact)?.is_empty());
+    for (limits, kind) in [
+        (
+            PlanningIrLimitsV1 {
+                max_provenance_records: 11,
+                ..exact
+            },
+            AssignmentRuleLimit::Records,
+        ),
+        (
+            PlanningIrLimitsV1 {
+                max_total_refs: 12,
+                ..exact
+            },
+            AssignmentRuleLimit::References,
+        ),
+        (
+            PlanningIrLimitsV1 {
+                max_ir_bytes: 303,
+                ..exact
+            },
+            AssignmentRuleLimit::Bytes,
+        ),
+    ] {
+        assert_eq!(
+            resolve(limits),
+            Err(AssignmentRuleError::LimitExceeded(kind))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn weekly_expansion_observes_real_cancellation_inside_date_iteration() -> Result {
+    let record = availability(
+        "2026-11-01",
+        "2026-11-02",
+        json!({
+            "kind":"weekly", "windows":[{"weekdays":["friday"], "startTime":"08:00:00",
+            "endTime":"10:00:00", "endDayOffset":255}]
+        }),
+    )?;
+    let settings = settings("UTC")?;
+    let shift = interval("2026-11-01T08:00:00Z", "2026-11-01T10:00:00Z")?;
+    let token = CancellationToken::new();
+    let mut budget = OperationBudget::evaluation(Some(&token));
+    budget.cancel_after_steps(5)?;
+    let result = availability_intervals(&record, shift, &settings, &mut budget);
+    assert!(matches!(result, Err(AssignmentRuleError::Cancelled)));
+    assert!(token.is_cancelled());
     Ok(())
 }
