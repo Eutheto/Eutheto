@@ -32,8 +32,41 @@ struct GeneratedCommandSchema {
 
 impl WorkforceSchemas {
     pub fn load() -> Result<Self> {
-        let mut generated: GeneratedSchemas =
-            serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON).map_err(|_| generated_error())?;
+        Self::from_generated(read_generated()?)
+    }
+
+    /// CSV can validate raw mapped fields before an unresolved row has a person identity.
+    /// Other operations do not allocate these extra field validators.
+    pub fn load_with_person_fields() -> Result<(Self, BTreeMap<String, ValidatedContractSchema>)> {
+        let generated = read_generated()?;
+        let variants = generated
+            .internal_schema
+            .pointer("/properties/entities/additionalProperties/oneOf")
+            .and_then(Value::as_array)
+            .ok_or_else(generated_error)?;
+        let properties = variants
+            .iter()
+            .find(|schema| {
+                schema
+                    .pointer("/properties/kind/const")
+                    .and_then(Value::as_str)
+                    == Some("person")
+            })
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .ok_or_else(generated_error)?;
+        let fields = properties
+            .iter()
+            .map(|(key, schema)| {
+                ValidatedContractSchema::new(schema.clone())
+                    .map(|schema| (key.clone(), schema))
+                    .map_err(|_| generated_error())
+            })
+            .collect::<Result<_>>()?;
+        Ok((Self::from_generated(generated)?, fields))
+    }
+
+    fn from_generated(mut generated: GeneratedSchemas) -> Result<Self> {
         let mut commands = BTreeMap::new();
         for command in generated.commands {
             let schema = ValidatedContractSchema::new(command.payload_schema)
@@ -58,6 +91,10 @@ impl WorkforceSchemas {
             .validate(&envelope.payload, ContractJsonLimits::DEFAULT)
             .map_err(|_| invalid("/payload", "invalid Workforce command JSON shape"))
     }
+}
+
+fn read_generated() -> Result<GeneratedSchemas> {
+    serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON).map_err(|_| generated_error())
 }
 
 fn record_schema(internal: &mut Value, map: &str) -> Result<ValidatedContractSchema> {

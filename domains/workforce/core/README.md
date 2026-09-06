@@ -2,13 +2,13 @@
 
 # Workforce `core` boundary
 
-The `eutheto-workforce` workspace crate owns the official Workforce domain implementation. WF-001 currently provides pack-owned UUIDv7 identities, the typed four-map model for current and reserved MVP semantics, generated record/command schemas and editor/AI metadata, bounded document decoding and structural/reference validation, explicit score-policy shape checks, inclusive local planning-date derivation from the host horizon, pure typed CRUD commands with exact inverses, and current portable-v1 conversion. It remains **unregistered**: these APIs do not expose Workforce projects through application or CLI dispatch and provide no solver or verifier.
+The `eutheto-workforce` workspace crate owns the official Workforce domain implementation. WF-001 currently provides pack-owned UUIDv7 identities, the typed four-map model for current and reserved MVP semantics, generated record/command schemas and editor/AI metadata, bounded document decoding and structural/reference validation, explicit score-policy shape checks, inclusive local planning-date derivation from the host horizon, pure typed CRUD commands with exact inverses, current portable-v1 conversion, and bounded people CSV detection, preview and review rebuilding. It remains **unregistered**: these APIs do not expose Workforce projects through application or CLI dispatch and provide no solver or verifier.
 
 ## Boundary
 
 It may use the domain API, stable value types, solver-neutral planning IR, and normalized verification contracts. It must not depend on Tauri, Vue, SQLite, credential stores, network providers, OR-Tools, Pumpkin, or backend-native objects.
 
-Bounded CSV review remains WF-001 work. Recurrence, complete rule semantics, compilation and independent verification follow the ordered Phase05 packages. Production registration requires WF-007 and complete result contracts. No partial `DomainPack` implementation or synthetic solver authority is permitted.
+Recurrence, complete rule semantics, compilation and independent verification follow the ordered Phase05 packages. Production registration requires WF-007 and complete result contracts. No partial `DomainPack` implementation or synthetic solver authority is permitted.
 
 `validation::decode_document` bounds raw input before typed decoding; `validate_document` also handles an existing host document without changing it. Structural checks include normalized owned-identity uniqueness, expected reference kinds, explicit scope safety, exact external-ID uniqueness, temporal coherence, coverage count ordering, and workload peer/target agreement. Valid-but-contradictory coverage remains editable. Missing score policy is an incomplete draft, not a decoding error. Known later semantics are retained data, not executable capability.
 
@@ -17,6 +17,18 @@ Document limits reuse the shared contract bounds: 16 MiB serialized bytes, depth
 `commands::apply_batch` applies at most 1,000 typed operations on a private working copy. Every prefix must remain structurally valid; deletes never silently cascade references. Updates retain kind, untouched records retain exact JSON, and reversed ordinary command inverses restore original field presence and spelling. Both forward and inverse batches must fit the shared 16 MiB serialized command bound. Returned changes carry record paths and exact before/after values; persistence, revisions and production routing remain host-owned.
 
 `portable::export_portable` and `import_portable` preserve the four raw record maps and declared `nonsemantic.*` extensions under Workforce portable version 1, requiring exactly `official.workforce.portable` at version 1. Import replaces only the explicit host shell's domain and extensions; host identity, metadata, settings and versions remain unchanged and are validated with the resulting document. Unknown semantic requirements, record variants and older/newer Workforce versions fail without a fabricated migration. Depth/safety checks precede recursive serialization or cloning of caller-built payloads. Global portable version 2, internal snapshots and their genuine historical migrations remain host-owned.
+
+## People CSV review
+
+`people_csv::detect_people_csv` reports comma, semicolon and tab candidates without choosing a delimiter or header. It retains at most two sample records per candidate, with UTF-8-safe 64-byte cell prefixes. The pinned `csv-core` parser supplies CSV quoting semantics; original bytes are independently checked for UTF-8, unsupported encodings and binary controls before quote removal can conceal them. One initial UTF-8 BOM may be stripped for parsing, but every original byte remains part of the source digest.
+
+`preview_people_csv` consumes a caller-supplied stream, explicit column/blank policy, explicit creation defaults, reference mappings and row decisions. Header names are not identity. Only exact existing external IDs auto-match; missing, changed or similar IDs require an explicit Add, Update or Skip decision. Add uses a caller-supplied unused UUIDv7 `PersonId` and may omit an external ID. Duplicate person or external-ID targets block approval until all but one conflicting row are explicitly skipped. Text is not trimmed or case-folded. Structured cells retain raw JSON until generated field-schema and reference-kind validation; complete unchanged records retain their exact JSON spelling.
+
+Rejected rows carry bounded logical record numbers and reason codes, not echoed source cells or parser exceptions. They never enter the proposed ordinary command batch. Unresolved/conflicting rows block the batch and review artifact. A reviewable batch is checked through the same structurally valid-prefix command path as ordinary edits; a no-change review still binds its source and rejected rows. Cancellation is checked during reads, between rows, between command prefixes and before returning approval.
+
+`decode_people_csv_review` rejects oversized, deep, unsafe, duplicate-member, unknown-version and alternate typed JSON representations. `rebuild_review` requires an independently retained approval digest and freshly recomputes against the actual current scenario, revision and source stream. The binding includes original source bytes, scenario content, parser/limit versions, mapping, decisions, accepted commands and rejected rows. Neither API supplies approval custody, a revision lock or durable apply: those remain host-owned WF-007 responsibilities.
+
+Fixed CSV limits are 16 MiB original input, 10,000 data records plus an optional header, 64 columns, 16 KiB per decoded cell, 256 KiB per decoded record, 1,000 mutations, and 200 rejected rows within 64 KiB. Mapping and decisions are each capped at 1 MiB; review artifacts at 2 MiB; previews at 16 MiB; detection output at 64 KiB. Shared document, command and portable-JSON bounds also apply, so combinations may reach an aggregate limit before an individual ceiling.
 
 ## Generated contracts
 

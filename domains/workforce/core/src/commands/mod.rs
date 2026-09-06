@@ -14,7 +14,7 @@ use crate::validation::{
 use eutheto_domain_api::{
     DomainBatchCommand, DomainMutation, DomainPackError, MAX_DOMAIN_BATCH_COMMANDS,
 };
-use eutheto_types::ScenarioDocument;
+use eutheto_types::{CancellationToken, ScenarioDocument};
 use serde_json::Value;
 
 /// Applies typed record operations atomically to an owned working document.
@@ -31,9 +31,27 @@ pub fn apply_batch(
     document: &ScenarioDocument,
     batch: &DomainBatchCommand,
 ) -> Result<DomainMutation> {
+    apply_batch_inner(document, batch, None)
+}
+
+pub(crate) fn apply_batch_cancellable(
+    document: &ScenarioDocument,
+    batch: &DomainBatchCommand,
+    cancellation: &CancellationToken,
+) -> Result<DomainMutation> {
+    apply_batch_inner(document, batch, Some(cancellation))
+}
+
+fn apply_batch_inner(
+    document: &ScenarioDocument,
+    batch: &DomainBatchCommand,
+    cancellation: Option<&CancellationToken>,
+) -> Result<DomainMutation> {
+    check_cancellation(cancellation)?;
     validate_batch(batch)?;
     let schemas = WorkforceSchemas::load()?;
     validate_document_with_schemas(document, &schemas)?;
+    check_cancellation(cancellation)?;
     let mut working = document.clone();
     let mut results = Vec::with_capacity(batch.commands.len());
     let mut changes = Vec::with_capacity(batch.commands.len());
@@ -45,6 +63,7 @@ pub fn apply_batch(
         commands: Vec::with_capacity(batch.commands.len()),
     };
     for envelope in &batch.commands {
+        check_cancellation(cancellation)?;
         schemas.validate_payload(envelope)?;
         let effect = dispatch::apply_one(&mut working, envelope)?;
         validate_document_with_schemas(&working, &schemas)?;
@@ -56,12 +75,21 @@ pub fn apply_batch(
     // Before-records come from the bounded original document or an earlier bounded input
     // record. The constructed inverse is bounded by their sum; require replayability too.
     inverse.validate_bounds()?;
+    check_cancellation(cancellation)?;
     Ok(DomainMutation {
         document: working,
         results,
         changes,
         inverse,
     })
+}
+
+fn check_cancellation(cancellation: Option<&CancellationToken>) -> Result {
+    if cancellation.is_some_and(CancellationToken::is_cancelled) {
+        Err(DomainPackError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_batch(batch: &DomainBatchCommand) -> Result {

@@ -134,7 +134,7 @@ pub struct PeopleCsvMapping {
     pub columns: Vec<ColumnMapping>,
     pub new_person_defaults: NewPersonDefaults,
     /// Exact user-declared tokens only. UUID-shaped keys cannot shadow direct stable IDs.
-    pub reference_tokens: BTreeMap<String, EntityId>,
+    pub reference_mappings: BTreeMap<String, EntityId>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -298,6 +298,7 @@ pub struct RejectedRow {
     pub code: RowRejectionCode,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct CsvRecord<'a> {
     pub number: u32,
     pub cells: &'a [&'a str],
