@@ -178,6 +178,12 @@ impl<'a> OperationBudget<'a> {
         )
     }
 
+    /// Charge the measured complete model alongside analysis/diagnostics and scratch.
+    /// Call once after full IR preflight, before allocating its output graph.
+    pub fn reserve_ir_retention(&mut self) -> Result<(), AssignmentRuleError> {
+        self.reserve(self.ir.records, self.ir.items, self.ir.bytes)
+    }
+
     pub fn variable_limit(&self) -> u64 {
         self.limits
             .max_variables

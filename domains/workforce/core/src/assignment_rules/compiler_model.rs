@@ -157,7 +157,8 @@ fn check_metadata(
         {
             return Err(AssignmentRuleError::ReservedSemanticMetadata(reserved));
         }
-        if count(key.len())? > limits.max_id_bytes
+        if value.is_empty()
+            || count(key.len())? > limits.max_id_bytes
             || count(value.len())? > limits.max_metadata_text_bytes
         {
             return Err(AssignmentRuleError::InvalidSemanticMetadata);

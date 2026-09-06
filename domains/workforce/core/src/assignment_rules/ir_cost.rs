@@ -61,18 +61,22 @@ fn levels(length: u64) -> u64 {
     u64::from(u64::BITS - length.leading_zeros())
 }
 
-// std's B-trees search at most eleven keys per node. Binary tree height is a
-// conservative height bound; account separately for every lookup/insertion requested.
-fn tree_work(
+// Rust 1.97.1 alloc/collections/btree/node.rs: B=6, maximum11 keys/node,
+// minimum5 keys/nonroot. A tree with h node levels needs >=2*6^(h-1)-1 keys.
+// Thus 1+floor(log6((n+1)/2)) bounds levels; no floating-point rounding.
+pub(super) fn tree_work(
     budget: &mut OperationBudget<'_>,
     operations: u64,
     length: u64,
     key_units: u64,
 ) -> Result<(), AssignmentRuleError> {
-    budget.steps(mul(
-        operations,
-        mul(11, mul(levels(length).max(1), key_units.max(1))?)?,
-    )?)
+    let mut quotient = add(length, 1)? / 2;
+    let mut height = 1;
+    while quotient >= 6 {
+        quotient /= 6;
+        height += 1;
+    }
+    budget.steps(mul(operations, mul(11, mul(height, key_units.max(1))?)?)?)
 }
 
 fn sorted<T>(

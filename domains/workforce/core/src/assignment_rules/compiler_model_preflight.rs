@@ -110,6 +110,7 @@ pub(super) fn prepare(
         limits,
     )?;
     preflight_ranks(analysis, ranks, limits, budget)?;
+    budget.reserve_ir_retention()?;
     budget.check()?;
     Ok(Header {
         upper_bound,

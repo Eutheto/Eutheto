@@ -6,10 +6,11 @@
 mod workforce_fixture;
 
 use eutheto_domain_api::CompileContext;
+use eutheto_domain_ir::AssignmentValue;
 use eutheto_planning_ir::{
     BoolVariableId, CompilerId, Constraint, Literal, ObjectivePlan, PLANNING_IR_SCHEMA_VERSION,
     PROJECTION_SCHEMA_VERSION, PlanningIrLimitsV1, PlanningMetadata, PlanningProblem, Variable,
-    feature_usage, summarize,
+    canonical_ir_hash, feature_usage, project_candidate, summarize,
 };
 use eutheto_solver_api::{
     BackendSolveResult, BackendTerminationReason, BoundedBackendOutput, ProgressSink,
@@ -26,7 +27,8 @@ use eutheto_types::{
 };
 use eutheto_workforce::{
     assignment_rules::{
-        AssignmentRuleCompilation, compile_assignment_rules, evaluate_assignment_rules,
+        AssignmentRuleCompilation, compile_assignment_rules, compile_workforce,
+        evaluate_assignment_rules,
     },
     model::AssignmentPair,
 };
@@ -849,4 +851,193 @@ fn directional_rest_identities_match_frozen_vectors() -> TestResult {
         assert_eq!(record.provenance.as_str(), provenance);
     }
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> TestResult {
+    let mut value = rest_fixture()?;
+    // Exactly two source people, one unavailable for the first shift. The nine-hour,
+    // fifty-nine-minute gap is below the required ten hours, so person 1 cannot take both.
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(21));
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let mut compile_context = context();
+    compile_context.scenario_revision = 17;
+    let compiled = compile_workforce(&document, &compile_context)?;
+    let model_hash = canonical_ir_hash(&compiled.problem, PlanningIrLimitsV1::DEFAULT)?;
+    let summary = summarize(&compiled.problem, PlanningIrLimitsV1::DEFAULT)?;
+    let result = solve_with_real_worker(compiled.problem.clone()).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    assert_eq!(result.candidates.len(), 1);
+    let candidate = &result.candidates[0];
+    assert_eq!(
+        candidate
+            .objective
+            .as_ref()
+            .ok_or("missing backend rank evidence")?
+            .objective_values,
+        vec![5]
+    );
+    let solution_id = id(500).parse()?;
+    // The generic projection is the reference result for the domain-specific projector.
+    let solution = project_candidate(
+        &compiled.problem,
+        &candidate.values,
+        solution_id,
+        PlanningIrLimitsV1::DEFAULT,
+    )?;
+    let workforce_solution = eutheto_workforce::assignment_rules::project_workforce_candidate(
+        &compiled.problem,
+        &candidate.values,
+        solution_id,
+        PlanningIrLimitsV1::DEFAULT,
+    )?;
+    assert_eq!(workforce_solution, solution);
+    let structural = eutheto_verify::validate_structure(
+        &compiled.problem,
+        &model_hash,
+        &candidate.values,
+        solution_id,
+        &workforce_solution,
+    )
+    .map_err(|failure| failure.code)?;
+    assert_eq!(structural.assignment_count, 3);
+    assert_eq!(solution.scenario_id, document.scenario_id);
+    assert_eq!(solution.scenario_revision, 17);
+    assert_complete_workforce_pairs(&document, &solution)?;
+    // Source-universe ranks are [1,2,3,4], including rejected (20,8), hence 1+4.
+    // These are backend/model evidence, not independently accepted Workforce scores.
+    let [level] = compiled.problem.objectives.levels.as_slice() else {
+        return Err("expected one rank objective".into());
+    };
+    assert_eq!((level.lower_bound, level.upper_bound), (0, 7));
+    let mut evaluated_rank = 0;
+    for term in &level.terms {
+        evaluated_rank += term.expression.constant;
+        for coefficient in &term.expression.terms {
+            evaluated_rank += coefficient.coefficient
+                * candidate
+                    .values
+                    .integers
+                    .get(&coefficient.variable)
+                    .ok_or("missing rank integer")?;
+        }
+    }
+    assert_eq!(evaluated_rank, 5);
+
+    assert_complete_projection_mutations(
+        &compiled.problem,
+        &model_hash,
+        &candidate.values,
+        &solution,
+    );
+    eprintln!(
+        "WF006 unregistered worker evidence: rank=5 bounds=[0,7] selected=(1,8),(20,22), model_hash={model_hash}, summary={summary:?}"
+    );
+
+    value["domain"]["entities"][id(20)]["eligibleAssignmentTypeIds"] = json!([]);
+    let impossible = serde_json::from_value(value)?;
+    let impossible = compile_workforce(&impossible, &compile_context)?;
+    let result = solve_with_real_worker(impossible.problem).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+fn assert_complete_workforce_pairs(
+    document: &ScenarioDocument,
+    solution: &eutheto_domain_ir::NormalizedSolution,
+) -> TestResult {
+    let mut selected = BTreeSet::new();
+    let mut observed = BTreeMap::new();
+    for assignment in &solution.assignments {
+        let (person, shift) = assignment
+            .entity
+            .id
+            .as_str()
+            .split_once('.')
+            .ok_or("pair encoding")?;
+        let pair = AssignmentPair {
+            person_id: person.parse()?,
+            shift_id: shift.parse()?,
+        };
+        let AssignmentValue::Boolean(chosen) = assignment.value else {
+            return Err("rank auxiliaries or absent values leaked into assignments".into());
+        };
+        assert_eq!(
+            assignment.entity.kind.as_str(),
+            "official.workforce.assignment"
+        );
+        assert_eq!(
+            assignment.id.as_str(),
+            format!(
+                "official.workforce.assignment.{}.{}",
+                pair.person_id, pair.shift_id
+            )
+        );
+        observed.insert(pair, chosen);
+        if chosen {
+            selected.insert(pair);
+        }
+    }
+    assert_eq!(
+        observed,
+        BTreeMap::from([
+            (pair(1, 8)?, true),
+            (pair(1, 22)?, false),
+            (pair(20, 22)?, true),
+        ])
+    );
+    assert_eq!(selected, BTreeSet::from([pair(1, 8)?, pair(20, 22)?]));
+    assert!(original_accepts(
+        document,
+        &selected.into_iter().collect::<Vec<_>>()
+    )?);
+    Ok(())
+}
+
+fn assert_complete_projection_mutations(
+    problem: &PlanningProblem,
+    model_hash: &str,
+    values: &eutheto_planning_ir::CandidateValues,
+    solution: &eutheto_domain_ir::NormalizedSolution,
+) {
+    let solution_id = solution.solution_id;
+    let mut omitted_false = solution.clone();
+    omitted_false
+        .assignments
+        .retain(|assignment| assignment.value != AssignmentValue::Boolean(false));
+    assert!(
+        eutheto_verify::validate_structure(
+            problem,
+            model_hash,
+            values,
+            solution_id,
+            &omitted_false,
+        )
+        .is_err()
+    );
+    let mut stale = solution.clone();
+    stale.scenario_revision -= 1;
+    assert!(
+        eutheto_verify::validate_structure(problem, model_hash, values, solution_id, &stale,)
+            .is_err()
+    );
+    for variable in values.booleans.keys() {
+        let mut missing = values.clone();
+        missing.booleans.remove(variable);
+        assert!(
+            project_candidate(problem, &missing, solution_id, PlanningIrLimitsV1::DEFAULT,)
+                .is_err()
+        );
+    }
 }
