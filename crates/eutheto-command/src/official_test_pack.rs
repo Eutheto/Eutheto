@@ -1,15 +1,14 @@
 use crate::generated_official_test_pack_contract::{
-    OFFICIAL_TEST_COMMAND_IDS, OFFICIAL_TEST_PACK_CONTRACT_JSON, OFFICIAL_TEST_PACK_ID,
-    OFFICIAL_TEST_PACK_VERSION,
+    CONFIGURE_ENTITY, OFFICIAL_TEST_COMMAND_IDS, OFFICIAL_TEST_PACK_CONTRACT_JSON,
+    OFFICIAL_TEST_PACK_ID, OFFICIAL_TEST_PACK_VERSION,
 };
 use eutheto_domain_api::{
     AiToolDescriptor, CommandDescriptor, CompileContext, ContractJsonLimits,
     CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand,
     DomainCapability, DomainCatalog, DomainChange, DomainMutation, DomainPack,
     DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
-    DomainValidationReport, KindDescriptor, LicenseMetadata, LocalizedText, PortableImportContext,
-    SchemaVersionDescriptor, ScoreDescriptor, ShareResultOptions, TransferDescriptor,
-    validate_contract_value,
+    DomainValidationReport, LicenseMetadata, LocalizedText, PortableImportContext,
+    SchemaVersionDescriptor, ShareResultOptions, validate_contract_value,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
@@ -41,7 +40,6 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
-const CONFIGURE_ENTITY: &str = "official.test.configure_entity";
 const PORTABLE_CAPABILITY: &str = "official.test.portable";
 const HISTORICAL_PORTABLE_CAPABILITY_V1: &str = "official.test.portable-v1";
 const ENTITY_KIND: &str = "official.test.entity";
@@ -53,11 +51,12 @@ const SCORE_CATEGORY: &str = "official.test.score.target-total";
 struct GeneratedContract {
     schema_version: u32,
     pack: GeneratedPack,
-    commands: Vec<GeneratedCommand>,
+    commands: Vec<CommandDescriptor>,
+    internal_schema: Value,
     portable_schema: Value,
     share_result_schema: Value,
     ai_tools: Vec<GeneratedAiTool>,
-    ui_manifest: GeneratedUiManifest,
+    ui_manifest: DomainUiManifest,
 }
 
 #[derive(Deserialize)]
@@ -72,44 +71,10 @@ struct GeneratedPack {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GeneratedCommand {
-    id: String,
-    title: LocalizedText,
-    description: LocalizedText,
-    risk: eutheto_domain_api::CommandRisk,
-    reversibility: eutheto_domain_api::CommandReversibility,
-    ai_grouping_allowed: bool,
-    payload_schema: Value,
-    result_schema: Value,
-    change_schema: Value,
-    valid_examples: Vec<Value>,
-    invalid_examples: Vec<Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GeneratedAiTool {
     command_id: String,
     name: String,
     description: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GeneratedUiManifest {
-    setup_steps: Vec<GeneratedUiItem>,
-    entity_kinds: Vec<GeneratedUiItem>,
-    rule_kinds: Vec<GeneratedUiItem>,
-    result_views: Vec<GeneratedUiItem>,
-    importers: Vec<GeneratedUiItem>,
-    exporters: Vec<GeneratedUiItem>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GeneratedUiItem {
-    id: String,
-    title_key: String,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -964,22 +929,23 @@ fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
     let GeneratedContract {
         pack,
         commands,
+        internal_schema,
         portable_schema,
         share_result_schema,
         ai_tools,
         ui_manifest,
         ..
     } = generated;
-    let commands = command_descriptors(commands);
     let ai_tools = ai_tool_descriptors(ai_tools, &commands)?;
     Ok(DomainCatalog {
         pack_id: PackId::new(OFFICIAL_TEST_PACK_ID).map_err(contract)?,
         scenario_schema_version: pack.latest_schema_version,
+        internal_schema,
         portable_schema,
         share_result_schema,
         commands,
         ai_tools,
-        ui: domain_ui_manifest(ui_manifest),
+        ui: ui_manifest,
     })
 }
 
@@ -989,7 +955,7 @@ fn validate_generated_contract(generated: &GeneratedContract) -> Result<(), Doma
         .iter()
         .map(|item| item.id.as_str())
         .collect();
-    if generated.schema_version == 1
+    if generated.schema_version == 3
         && generated.pack.id == OFFICIAL_TEST_PACK_ID
         && generated.pack.pack_version == OFFICIAL_TEST_PACK_VERSION
         && generated.pack.latest_schema_version == 1
@@ -1003,25 +969,6 @@ fn validate_generated_contract(generated: &GeneratedContract) -> Result<(), Doma
             "generated official-test constants".to_owned(),
         ))
     }
-}
-
-fn command_descriptors(commands: Vec<GeneratedCommand>) -> Vec<CommandDescriptor> {
-    commands
-        .into_iter()
-        .map(|command| CommandDescriptor {
-            id: command.id,
-            title: command.title,
-            description: command.description,
-            risk: command.risk,
-            reversibility: command.reversibility,
-            ai_grouping_allowed: command.ai_grouping_allowed,
-            payload_schema: command.payload_schema,
-            result_schema: command.result_schema,
-            change_schema: command.change_schema,
-            valid_examples: command.valid_examples,
-            invalid_examples: command.invalid_examples,
-        })
-        .collect()
 }
 
 fn ai_tool_descriptors(
@@ -1044,88 +991,6 @@ fn ai_tool_descriptors(
             })
         })
         .collect()
-}
-
-fn domain_ui_manifest(ui: GeneratedUiManifest) -> DomainUiManifest {
-    DomainUiManifest {
-        setup_steps: ui
-            .setup_steps
-            .into_iter()
-            .map(|item| ui_kind(item, "Configure a synthetic entity."))
-            .collect(),
-        entity_kinds: ui
-            .entity_kinds
-            .into_iter()
-            .map(|item| ui_kind(item, "Synthetic Boolean/integer entity."))
-            .collect(),
-        rule_kinds: ui
-            .rule_kinds
-            .into_iter()
-            .map(|item| ui_kind(item, "Enabled iff target is positive."))
-            .collect(),
-        goal_kinds: vec![kind(
-            "official.test.goal.target",
-            "official.test.goal.target.title",
-            "Minimize target",
-            "Minimize the bounded target total.",
-        )],
-        score_kinds: vec![ScoreDescriptor {
-            id: SCORE_CATEGORY.to_owned(),
-            title: text("official.test.score.target_total.title", "Target total"),
-            minimize: true,
-        }],
-        provenance_kinds: vec![kind(
-            "official.test.provenance.required-target",
-            "official.test.provenance.required_target.title",
-            "Required target",
-            "Traces the synthetic enabled/target relation.",
-        )],
-        result_views: ui
-            .result_views
-            .into_iter()
-            .map(|item| ui_kind(item, "Synthetic result summary."))
-            .collect(),
-        importers: ui
-            .importers
-            .into_iter()
-            .map(|item| transfer(item, "Import portable test data"))
-            .collect(),
-        exporters: ui
-            .exporters
-            .into_iter()
-            .map(|item| transfer(item, "Export portable test data"))
-            .collect(),
-    }
-}
-
-fn ui_kind(item: GeneratedUiItem, description: &str) -> KindDescriptor {
-    KindDescriptor {
-        id: item.id,
-        title: LocalizedText {
-            key: item.title_key,
-            default_text: "Synthetic test contract".to_owned(),
-        },
-        description: text("official.test.ui.description", description),
-    }
-}
-
-fn transfer(item: GeneratedUiItem, title: &str) -> TransferDescriptor {
-    TransferDescriptor {
-        id: item.id,
-        title: LocalizedText {
-            key: item.title_key,
-            default_text: title.to_owned(),
-        },
-        schema_version: 1,
-    }
-}
-
-fn kind(id: &str, key: &str, title: &str, description: &str) -> KindDescriptor {
-    KindDescriptor {
-        id: id.to_owned(),
-        title: text(key, title),
-        description: text(&format!("{key}.description"), description),
-    }
 }
 
 fn text(key: &str, default_text: &str) -> LocalizedText {

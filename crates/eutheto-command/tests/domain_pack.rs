@@ -1,4 +1,4 @@
-use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack, official_registry};
+use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
 use eutheto_domain_api::{
     CompileContext, ContractJsonLimits, CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION,
     DomainBatchCommand, DomainPack, DomainPackError, DomainPackRegistry, DomainShareResult,
@@ -187,48 +187,54 @@ fn registry_rejects_duplicates_and_missing_metadata() -> Result<(), Box<dyn Erro
 }
 
 #[test]
-fn catalog_consumes_generated_examples_and_is_complete() -> Result<(), Box<dyn Error>> {
-    let registry = official_registry()?;
-    let descriptors: Vec<_> = registry.descriptors().collect();
-    assert_eq!(descriptors.len(), 1);
-    assert!(descriptors[0].synthetic_test_only);
-    assert!(descriptors[0].scenario_versions.supports(1));
-    assert!(!descriptors[0].scenario_versions.supports(2));
-    let catalog = registry
-        .catalog(&PackId::new(OFFICIAL_TEST_PACK_ID)?)
-        .ok_or("registered catalog is required")?;
+fn catalog_rejects_internal_schemas_incompatible_with_domain_storage() -> Result<(), Box<dyn Error>>
+{
+    let catalog = OfficialTestPack.catalog()?;
     catalog.validate()?;
-    assert_eq!(catalog.commands.len(), 1);
-    assert_eq!(catalog.commands[0].id, COMMAND_ID);
-    assert_eq!(
-        catalog.ai_tools[0].input_schema,
-        catalog.commands[0].payload_schema
-    );
-    assert!(!catalog.ui.setup_steps.is_empty());
-    assert!(!catalog.ui.entity_kinds.is_empty());
-    assert!(!catalog.ui.rule_kinds.is_empty());
-    assert!(!catalog.ui.goal_kinds.is_empty());
-    assert!(!catalog.ui.score_kinds.is_empty());
-    assert!(!catalog.ui.provenance_kinds.is_empty());
-    assert!(!catalog.ui.result_views.is_empty());
-    assert!(!catalog.ui.importers.is_empty());
-    assert!(!catalog.ui.exporters.is_empty());
-    for example in &catalog.commands[0].valid_examples {
-        validate_contract_value(
-            &catalog.commands[0].payload_schema,
-            example,
-            ContractJsonLimits::DEFAULT,
-        )?;
-    }
-    for example in &catalog.commands[0].invalid_examples {
-        assert!(
-            validate_contract_value(
-                &catalog.commands[0].payload_schema,
-                example,
-                ContractJsonLimits::DEFAULT,
-            )
-            .is_err()
-        );
+    validate_contract_value(
+        &catalog.internal_schema,
+        &serde_json::to_value(document()?.domain)?,
+        ContractJsonLimits::DEFAULT,
+    )?;
+
+    let mut missing_map = catalog.internal_schema.clone();
+    missing_map["properties"]
+        .as_object_mut()
+        .ok_or("schema properties must be an object")?
+        .remove("lockedAssignments");
+    missing_map["required"]
+        .as_array_mut()
+        .ok_or("schema required must be an array")?
+        .retain(|field| field.as_str() != Some("lockedAssignments"));
+    let mut array_map = catalog.internal_schema.clone();
+    array_map["properties"]["entities"] = json!({"type": "array"});
+    let mut unrestricted_records = catalog.internal_schema.clone();
+    unrestricted_records["properties"]["entities"]["additionalProperties"] = json!(true);
+    let mut array_records = catalog.internal_schema.clone();
+    array_records["properties"]["entities"]["additionalProperties"] = json!({"type": "array"});
+    let mut overridden_record = catalog.internal_schema.clone();
+    overridden_record["properties"]["entities"]["properties"] =
+        json!({"00000000-0000-7000-8000-000000000001": {"type": "array"}});
+    let mut host_field = catalog.internal_schema.clone();
+    host_field["properties"]["schemaVersion"] = json!({"const": 1});
+    host_field["required"]
+        .as_array_mut()
+        .ok_or("schema required must be an array")?
+        .push(json!("schemaVersion"));
+    for schema in [
+        missing_map,
+        array_map,
+        unrestricted_records,
+        array_records,
+        overridden_record,
+        host_field,
+    ] {
+        let mut incompatible = catalog.clone();
+        incompatible.internal_schema = schema;
+        assert!(matches!(
+            incompatible.validate(),
+            Err(DomainPackError::CatalogMismatch(_))
+        ));
     }
     Ok(())
 }

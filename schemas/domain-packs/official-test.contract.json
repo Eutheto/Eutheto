@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "pack": {
     "id": "official.test",
     "packVersion": "0.1.0",
@@ -83,6 +83,30 @@
       ]
     }
   ],
+  "internalSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["entities", "rules", "preferences", "lockedAssignments"],
+    "properties": {
+      "entities": {
+        "type": "object",
+        "additionalProperties": { "type": "object" }
+      },
+      "rules": {
+        "type": "object",
+        "additionalProperties": { "type": "object" }
+      },
+      "preferences": {
+        "type": "object",
+        "additionalProperties": { "type": "object" }
+      },
+      "lockedAssignments": {
+        "type": "object",
+        "additionalProperties": { "type": "object" }
+      }
+    }
+  },
   "portableSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -163,37 +187,109 @@
     "setupSteps": [
       {
         "id": "official.test.setup.entity",
-        "titleKey": "official.test.setup.entity.title"
+        "title": {
+          "key": "official.test.setup.entity.title",
+          "defaultText": "Synthetic test contract"
+        },
+        "description": {
+          "key": "official.test.ui.description",
+          "defaultText": "Configure a synthetic entity."
+        }
       }
     ],
     "entityKinds": [
       {
         "id": "official.test.entity",
-        "titleKey": "official.test.entity.title"
+        "title": {
+          "key": "official.test.entity.title",
+          "defaultText": "Synthetic test contract"
+        },
+        "description": {
+          "key": "official.test.ui.description",
+          "defaultText": "Synthetic Boolean/integer entity."
+        }
       }
     ],
     "ruleKinds": [
       {
         "id": "official.test.required-target",
-        "titleKey": "official.test.rule.required_target.title"
+        "title": {
+          "key": "official.test.rule.required_target.title",
+          "defaultText": "Synthetic test contract"
+        },
+        "description": {
+          "key": "official.test.ui.description",
+          "defaultText": "Enabled iff target is positive."
+        }
+      }
+    ],
+    "goalKinds": [
+      {
+        "id": "official.test.goal.target",
+        "title": {
+          "key": "official.test.goal.target.title",
+          "defaultText": "Minimize target"
+        },
+        "description": {
+          "key": "official.test.goal.target.title.description",
+          "defaultText": "Minimize the bounded target total."
+        }
+      }
+    ],
+    "scoreKinds": [
+      {
+        "id": "official.test.score.target-total",
+        "title": {
+          "key": "official.test.score.target_total.title",
+          "defaultText": "Target total"
+        },
+        "minimize": true
+      }
+    ],
+    "provenanceKinds": [
+      {
+        "id": "official.test.provenance.required-target",
+        "title": {
+          "key": "official.test.provenance.required_target.title",
+          "defaultText": "Required target"
+        },
+        "description": {
+          "key": "official.test.provenance.required_target.title.description",
+          "defaultText": "Traces the synthetic enabled/target relation."
+        }
       }
     ],
     "resultViews": [
       {
         "id": "official.test.result.summary",
-        "titleKey": "official.test.result.summary.title"
+        "title": {
+          "key": "official.test.result.summary.title",
+          "defaultText": "Synthetic test contract"
+        },
+        "description": {
+          "key": "official.test.ui.description",
+          "defaultText": "Synthetic result summary."
+        }
       }
     ],
     "importers": [
       {
         "id": "official.test.import.portable-v2",
-        "titleKey": "official.test.import.title"
+        "title": {
+          "key": "official.test.import.title",
+          "defaultText": "Import portable test data"
+        },
+        "schemaVersion": 1
       }
     ],
     "exporters": [
       {
         "id": "official.test.export.portable-v2",
-        "titleKey": "official.test.export.title"
+        "title": {
+          "key": "official.test.export.title",
+          "defaultText": "Export portable test data"
+        },
+        "schemaVersion": 1
       }
     ]
   }

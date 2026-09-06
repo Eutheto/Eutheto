@@ -132,6 +132,13 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-workforce",
+      "version": "0.1.0",
+      "path": "domains/workforce/core",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "xtask",
       "version": "0.1.0",
       "path": "xtask",

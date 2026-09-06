@@ -1,0 +1,7106 @@
+{
+  "schemaVersion": 3,
+  "pack": {
+    "id": "official.workforce",
+    "packVersion": "0.1.0",
+    "latestSchemaVersion": 1,
+    "portableSchemaVersion": 1
+  },
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "UInt8": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "UInt16": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "UInt32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "PositiveMinutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "Weight": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "Revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "DisplayText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "Note": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "Token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "TemporalText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384
+    },
+    "Weekday": {
+      "oneOf": [
+        {
+          "const": "monday"
+        },
+        {
+          "const": "tuesday"
+        },
+        {
+          "const": "wednesday"
+        },
+        {
+          "const": "thursday"
+        },
+        {
+          "const": "friday"
+        },
+        {
+          "const": "saturday"
+        },
+        {
+          "const": "sunday"
+        }
+      ]
+    },
+    "WindowMembership": {
+      "oneOf": [
+        {
+          "const": "reportingDate"
+        },
+        {
+          "const": "startInstant"
+        },
+        {
+          "const": "intersection"
+        }
+      ]
+    },
+    "PreferencePriority": {
+      "oneOf": [
+        {
+          "const": "low"
+        },
+        {
+          "const": "normal"
+        },
+        {
+          "const": "high"
+        },
+        {
+          "const": "veryHigh"
+        }
+      ]
+    },
+    "DateRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endDateExclusive",
+        "startDate"
+      ],
+      "properties": {
+        "startDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endDateExclusive": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "AlwaysActive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "always"
+        }
+      }
+    },
+    "DateRangeActive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endDateExclusive",
+        "kind",
+        "startDate"
+      ],
+      "properties": {
+        "kind": {
+          "const": "dateRange"
+        },
+        "startDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endDateExclusive": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "ActiveRange": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AlwaysActive"
+        },
+        {
+          "$ref": "#/$defs/DateRangeActive"
+        }
+      ]
+    },
+    "AllSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "all"
+        }
+      }
+    },
+    "SelectedPeople": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "personIds"
+      ],
+      "properties": {
+        "kind": {
+          "const": "selected"
+        },
+        "personIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "PeopleFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allTags",
+        "anyTags",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "filter"
+        },
+        "allTags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "anyTags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "PersonSelection": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AllSelection"
+        },
+        {
+          "$ref": "#/$defs/SelectedPeople"
+        },
+        {
+          "$ref": "#/$defs/PeopleFilter"
+        }
+      ]
+    },
+    "Scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "people"
+      ],
+      "properties": {
+        "people": {
+          "$ref": "#/$defs/PersonSelection"
+        },
+        "teamIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "assignmentTypeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Token"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "weekdays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Weekday"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "locationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "PeerGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "people"
+      ],
+      "properties": {
+        "people": {
+          "$ref": "#/$defs/PersonSelection"
+        },
+        "teamIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        }
+      }
+    },
+    "SelectedShifts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "shiftIds"
+      ],
+      "properties": {
+        "kind": {
+          "const": "selected"
+        },
+        "shiftIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "ShiftFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "filter"
+        },
+        "assignmentTypeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "startDateRange": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "locationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "ShiftScope": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AllSelection"
+        },
+        {
+          "$ref": "#/$defs/SelectedShifts"
+        },
+        {
+          "$ref": "#/$defs/ShiftFilter"
+        }
+      ]
+    },
+    "LocalInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endsAt",
+        "startsAt"
+      ],
+      "properties": {
+        "startsAt": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "DayPeriod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "startTime"
+      ],
+      "properties": {
+        "kind": {
+          "const": "day"
+        },
+        "startTime": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "WeekPeriod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchorDate",
+        "kind",
+        "startTime"
+      ],
+      "properties": {
+        "kind": {
+          "const": "week"
+        },
+        "anchorDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "startTime": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "PayPeriod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchorDate",
+        "kind",
+        "lengthDays",
+        "startTime"
+      ],
+      "properties": {
+        "kind": {
+          "const": "payPeriod"
+        },
+        "anchorDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "startTime": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "lengthDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "CustomPeriod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intervals",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "custom"
+        },
+        "intervals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LocalInterval"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        }
+      }
+    },
+    "CalendarPeriod": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DayPeriod"
+        },
+        {
+          "$ref": "#/$defs/WeekPeriod"
+        },
+        {
+          "$ref": "#/$defs/PayPeriod"
+        },
+        {
+          "$ref": "#/$defs/CustomPeriod"
+        }
+      ]
+    },
+    "Recurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effectiveRange",
+        "excludedDates",
+        "weekdays"
+      ],
+      "properties": {
+        "weekdays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Weekday"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        },
+        "effectiveRange": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "excludedDates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TemporalText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "LocalWindowTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endDayOffset",
+        "endTime",
+        "kind",
+        "startTime"
+      ],
+      "properties": {
+        "kind": {
+          "const": "localWindow"
+        },
+        "startTime": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endTime": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endDayOffset": {
+          "$ref": "#/$defs/UInt8"
+        }
+      }
+    },
+    "ElapsedTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "durationMinutes",
+        "kind",
+        "startTime"
+      ],
+      "properties": {
+        "kind": {
+          "const": "elapsedDuration"
+        },
+        "startTime": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "durationMinutes": {
+          "$ref": "#/$defs/PositiveMinutes"
+        }
+      }
+    },
+    "ShiftTiming": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LocalWindowTiming"
+        },
+        {
+          "$ref": "#/$defs/ElapsedTiming"
+        }
+      ]
+    },
+    "ReportingAttribution": {
+      "oneOf": [
+        {
+          "const": "startLocalDate"
+        },
+        {
+          "const": "endLocalDate"
+        }
+      ]
+    },
+    "ManualOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "manual"
+        }
+      }
+    },
+    "DetachedOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "occurrenceDate",
+        "templateId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "detached"
+        },
+        "templateId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "occurrenceDate": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "ShiftOrigin": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ManualOrigin"
+        },
+        {
+          "$ref": "#/$defs/DetachedOrigin"
+        }
+      ]
+    },
+    "WeeklyWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endDayOffset",
+        "endTime",
+        "startTime",
+        "weekdays"
+      ],
+      "properties": {
+        "weekdays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Weekday"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        },
+        "startTime": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endTime": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endDayOffset": {
+          "$ref": "#/$defs/UInt8"
+        }
+      }
+    },
+    "InstantWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endsAt",
+        "kind",
+        "startsAt"
+      ],
+      "properties": {
+        "kind": {
+          "const": "instant"
+        },
+        "startsAt": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "WeeklyTimeWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "windows"
+      ],
+      "properties": {
+        "kind": {
+          "const": "weekly"
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeeklyWindow"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        }
+      }
+    },
+    "TimeWindow": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/InstantWindow"
+        },
+        {
+          "$ref": "#/$defs/WeeklyTimeWindow"
+        }
+      ]
+    },
+    "CalendarWorkWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calendarId",
+        "kind",
+        "membership"
+      ],
+      "properties": {
+        "kind": {
+          "const": "calendar"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "membership": {
+          "$ref": "#/$defs/WindowMembership"
+        }
+      }
+    },
+    "RollingWorkWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "durationMinutes",
+        "kind",
+        "membership"
+      ],
+      "properties": {
+        "kind": {
+          "const": "rolling"
+        },
+        "durationMinutes": {
+          "$ref": "#/$defs/PositiveMinutes"
+        },
+        "membership": {
+          "$ref": "#/$defs/WindowMembership"
+        }
+      }
+    },
+    "WorkWindow": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CalendarWorkWindow"
+        },
+        {
+          "$ref": "#/$defs/RollingWorkWindow"
+        }
+      ]
+    },
+    "ResolvedLocalTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instant",
+        "local",
+        "offsetSeconds"
+      ],
+      "properties": {
+        "instant": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "local": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "offsetSeconds": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      }
+    },
+    "WorkloadWeight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "denominator",
+        "numerator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/Weight"
+        },
+        "denominator": {
+          "$ref": "#/$defs/Weight"
+        }
+      }
+    },
+    "WorkloadTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucketId",
+        "calendarId",
+        "membership",
+        "target"
+      ],
+      "properties": {
+        "bucketId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "membership": {
+          "$ref": "#/$defs/WindowMembership"
+        },
+        "target": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "PersonDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "color": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 7,
+          "pattern": "^#"
+        },
+        "avatarInitials": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        }
+      }
+    },
+    "QualificationGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "qualificationId"
+      ],
+      "properties": {
+        "qualificationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "effectiveFrom": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "Person": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activeRange",
+        "eligibleAssignmentTypeIds",
+        "id",
+        "kind",
+        "name",
+        "qualificationGrants",
+        "tags",
+        "teamIds",
+        "workloadWeight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "person"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "externalId": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "activeRange": {
+          "$ref": "#/$defs/ActiveRange"
+        },
+        "qualificationGrants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QualificationGrant"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "eligibleAssignmentTypeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "homeLocationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "workloadWeight": {
+          "$ref": "#/$defs/WorkloadWeight"
+        },
+        "workloadTarget": {
+          "$ref": "#/$defs/WorkloadTarget"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "teamIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "display": {
+          "$ref": "#/$defs/PersonDisplay"
+        }
+      }
+    },
+    "Qualification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "id",
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "const": "qualification"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "description": {
+          "$ref": "#/$defs/Note"
+        }
+      }
+    },
+    "Team": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "const": "team"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        }
+      }
+    },
+    "LocationTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "locationId",
+        "minutes"
+      ],
+      "properties": {
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "minutes": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "Location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "transitions"
+      ],
+      "properties": {
+        "kind": {
+          "const": "location"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LocationTransition"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "WorkloadBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "measurement",
+        "name",
+        "overlappingContribution"
+      ],
+      "properties": {
+        "kind": {
+          "const": "workloadBucket"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "measurement": {
+          "oneOf": [
+            {
+              "const": "assignmentCount"
+            },
+            {
+              "const": "elapsedMinutes"
+            },
+            {
+              "const": "scheduledMinutes"
+            }
+          ]
+        },
+        "overlappingContribution": {
+          "oneOf": [
+            {
+              "const": "sum"
+            },
+            {
+              "const": "union"
+            }
+          ]
+        }
+      }
+    },
+    "Calendar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "period"
+      ],
+      "properties": {
+        "kind": {
+          "const": "calendar"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "period": {
+          "$ref": "#/$defs/CalendarPeriod"
+        }
+      }
+    },
+    "QualificationMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allQualificationIds",
+        "anyQualificationIds"
+      ],
+      "properties": {
+        "allQualificationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "anyQualificationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "UnconstrainedQualifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "unconstrained"
+        }
+      }
+    },
+    "MatchedQualifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allQualificationIds",
+        "anyQualificationIds",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "matches"
+        },
+        "allQualificationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "anyQualificationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "QualificationExpression": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UnconstrainedQualifications"
+        },
+        {
+          "$ref": "#/$defs/MatchedQualifications"
+        }
+      ]
+    },
+    "NoLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "none"
+        }
+      }
+    },
+    "OptionalLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "optional"
+        }
+      }
+    },
+    "RequiredLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "required"
+        }
+      }
+    },
+    "FixedLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "locationId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "fixed"
+        },
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "LocationBehavior": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NoLocation"
+        },
+        {
+          "$ref": "#/$defs/OptionalLocation"
+        },
+        {
+          "$ref": "#/$defs/RequiredLocation"
+        },
+        {
+          "$ref": "#/$defs/FixedLocation"
+        }
+      ]
+    },
+    "AssignmentType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "defaultDurationMinutes",
+        "id",
+        "kind",
+        "locationBehavior",
+        "name",
+        "qualifications",
+        "timeBehavior",
+        "workloadBucketIds"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assignmentType"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "category": {
+          "$ref": "#/$defs/Token"
+        },
+        "timeBehavior": {
+          "oneOf": [
+            {
+              "const": "localWallClock"
+            },
+            {
+              "const": "elapsed"
+            }
+          ]
+        },
+        "defaultDurationMinutes": {
+          "$ref": "#/$defs/PositiveMinutes"
+        },
+        "qualifications": {
+          "$ref": "#/$defs/QualificationExpression"
+        },
+        "locationBehavior": {
+          "$ref": "#/$defs/LocationBehavior"
+        },
+        "workloadBucketIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "QualificationMinimum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum",
+        "qualifications"
+      ],
+      "properties": {
+        "qualifications": {
+          "$ref": "#/$defs/QualificationMatch"
+        },
+        "minimum": {
+          "$ref": "#/$defs/UInt16"
+        }
+      }
+    },
+    "ExactCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "kind",
+        "qualificationMinimums"
+      ],
+      "properties": {
+        "kind": {
+          "const": "exact"
+        },
+        "count": {
+          "$ref": "#/$defs/UInt16"
+        },
+        "qualificationMinimums": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QualificationMinimum"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "AtLeastCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "minimum",
+        "qualificationMinimums"
+      ],
+      "properties": {
+        "kind": {
+          "const": "atLeast"
+        },
+        "minimum": {
+          "$ref": "#/$defs/UInt16"
+        },
+        "preferredCount": {
+          "$ref": "#/$defs/UInt16"
+        },
+        "maximumCount": {
+          "$ref": "#/$defs/UInt16"
+        },
+        "qualificationMinimums": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QualificationMinimum"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "Coverage": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ExactCoverage"
+        },
+        {
+          "$ref": "#/$defs/AtLeastCoverage"
+        }
+      ]
+    },
+    "OccurrenceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "localStartDate"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "localStartDate": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "ShiftTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeId",
+        "coverage",
+        "id",
+        "kind",
+        "name",
+        "occurrenceIdentities",
+        "recurrence",
+        "reportingAttribution",
+        "tags",
+        "timing"
+      ],
+      "properties": {
+        "kind": {
+          "const": "shiftTemplate"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "recurrence": {
+          "$ref": "#/$defs/Recurrence"
+        },
+        "timing": {
+          "$ref": "#/$defs/ShiftTiming"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "reportingAttribution": {
+          "$ref": "#/$defs/ReportingAttribution"
+        },
+        "occurrenceIdentities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/OccurrenceIdentity"
+          }
+        }
+      }
+    },
+    "ShiftInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeId",
+        "coverage",
+        "endsAt",
+        "id",
+        "kind",
+        "origin",
+        "reportingAttribution",
+        "startsAt",
+        "tags"
+      ],
+      "properties": {
+        "kind": {
+          "const": "shiftInstance"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "reportingAttribution": {
+          "$ref": "#/$defs/ReportingAttribution"
+        },
+        "origin": {
+          "$ref": "#/$defs/ShiftOrigin"
+        }
+      }
+    },
+    "CoverageRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "coverage",
+        "id",
+        "kind",
+        "scope"
+      ],
+      "properties": {
+        "kind": {
+          "const": "coverageRequirement"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/ShiftScope"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        }
+      }
+    },
+    "Availability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "availabilityKind",
+        "effectiveRange",
+        "id",
+        "kind",
+        "note",
+        "personId",
+        "source",
+        "timeWindow"
+      ],
+      "properties": {
+        "kind": {
+          "const": "availability"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "availabilityKind": {
+          "oneOf": [
+            {
+              "const": "unavailable"
+            },
+            {
+              "const": "availableOnly"
+            },
+            {
+              "const": "approvedTimeOff"
+            },
+            {
+              "const": "requestedTimeOff"
+            }
+          ]
+        },
+        "timeWindow": {
+          "$ref": "#/$defs/TimeWindow"
+        },
+        "effectiveRange": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "assignmentTypeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        },
+        "locationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 1,
+          "maxItems": 10000
+        },
+        "source": {
+          "$ref": "#/$defs/Note"
+        },
+        "note": {
+          "$ref": "#/$defs/Note"
+        }
+      }
+    },
+    "AssignmentPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "personId",
+        "shiftId"
+      ],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "BaseSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignments",
+        "id",
+        "kind",
+        "sourceRevision",
+        "sourceSolutionId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "baseSchedule"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "sourceSolutionId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "assignments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssignmentPair"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "HardLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "hard"
+        }
+      }
+    },
+    "SoftLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stabilityWeight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "soft"
+        },
+        "stabilityWeight": {
+          "$ref": "#/$defs/Weight"
+        }
+      }
+    },
+    "Unlocked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "unlocked"
+        }
+      }
+    },
+    "LockState": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HardLock"
+        },
+        {
+          "$ref": "#/$defs/SoftLock"
+        },
+        {
+          "$ref": "#/$defs/Unlocked"
+        }
+      ]
+    },
+    "AssignmentLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "personId",
+        "shiftId",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "state": {
+          "$ref": "#/$defs/LockState"
+        }
+      }
+    },
+    "ScoreLevel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "levelKey"
+      ],
+      "properties": {
+        "levelKey": {
+          "$ref": "#/$defs/Token"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText"
+        }
+      }
+    },
+    "PriorityMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "levelKey",
+        "priority",
+        "scale"
+      ],
+      "properties": {
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "levelKey": {
+          "$ref": "#/$defs/Token"
+        },
+        "scale": {
+          "$ref": "#/$defs/Weight"
+        }
+      }
+    },
+    "PersonTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "personId",
+        "target"
+      ],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "target": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "ExplicitTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "targets"
+      ],
+      "properties": {
+        "kind": {
+          "const": "explicit"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PersonTarget"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "PersonTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "personTargets"
+        }
+      }
+    },
+    "WeightedEqualShare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "weightedEqualShare"
+        }
+      }
+    },
+    "WorkloadTargetMode": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ExplicitTargets"
+        },
+        {
+          "$ref": "#/$defs/PersonTargets"
+        },
+        {
+          "$ref": "#/$defs/WeightedEqualShare"
+        }
+      ]
+    },
+    "PenaltyBreakpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fromDeviation",
+        "slope"
+      ],
+      "properties": {
+        "fromDeviation": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "slope": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "AbsolutePenalty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "absolute"
+        }
+      }
+    },
+    "PiecewisePenalty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "breakpoints",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "piecewise"
+        },
+        "breakpoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PenaltyBreakpoint"
+          },
+          "minItems": 1,
+          "maxItems": 32
+        }
+      }
+    },
+    "DeviationPenalty": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AbsolutePenalty"
+        },
+        {
+          "$ref": "#/$defs/PiecewisePenalty"
+        }
+      ]
+    },
+    "WorkloadPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucketId",
+        "calendarId",
+        "id",
+        "membership",
+        "peerGroup",
+        "penalty",
+        "targetMode"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "bucketId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "membership": {
+          "$ref": "#/$defs/WindowMembership"
+        },
+        "peerGroup": {
+          "$ref": "#/$defs/PeerGroup"
+        },
+        "targetMode": {
+          "$ref": "#/$defs/WorkloadTargetMode"
+        },
+        "penalty": {
+          "$ref": "#/$defs/DeviationPenalty"
+        }
+      }
+    },
+    "ScorePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "levels",
+        "priorityMapping",
+        "profileKey",
+        "tieBreak",
+        "workloadPolicies"
+      ],
+      "properties": {
+        "kind": {
+          "const": "scorePolicy"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "profileKey": {
+          "$ref": "#/$defs/Token"
+        },
+        "levels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScoreLevel"
+          },
+          "minItems": 1,
+          "maxItems": 15
+        },
+        "priorityMapping": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PriorityMapping"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "workloadPolicies": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkloadPolicy"
+          }
+        },
+        "tieBreak": {
+          "const": "stableAssignmentRank"
+        }
+      }
+    },
+    "Entity": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Person"
+        },
+        {
+          "$ref": "#/$defs/Qualification"
+        },
+        {
+          "$ref": "#/$defs/Team"
+        },
+        {
+          "$ref": "#/$defs/Location"
+        },
+        {
+          "$ref": "#/$defs/WorkloadBucket"
+        },
+        {
+          "$ref": "#/$defs/Calendar"
+        },
+        {
+          "$ref": "#/$defs/AssignmentType"
+        },
+        {
+          "$ref": "#/$defs/ShiftTemplate"
+        },
+        {
+          "$ref": "#/$defs/ShiftInstance"
+        },
+        {
+          "$ref": "#/$defs/Availability"
+        },
+        {
+          "$ref": "#/$defs/CoverageRequirement"
+        },
+        {
+          "$ref": "#/$defs/BaseSchedule"
+        },
+        {
+          "$ref": "#/$defs/ScorePolicy"
+        }
+      ]
+    },
+    "CategoryPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firstCategory",
+        "secondCategory"
+      ],
+      "properties": {
+        "firstCategory": {
+          "$ref": "#/$defs/Token"
+        },
+        "secondCategory": {
+          "$ref": "#/$defs/Token"
+        }
+      }
+    },
+    "WorkedDays": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "workedDays"
+        }
+      }
+    },
+    "ConsecutiveAssignments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "breakMinutes",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assignments"
+        },
+        "breakMinutes": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "ConsecutiveMode": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WorkedDays"
+        },
+        {
+          "$ref": "#/$defs/ConsecutiveAssignments"
+        }
+      ]
+    },
+    "PairingMode": {
+      "oneOf": [
+        {
+          "const": "sameShift"
+        },
+        {
+          "const": "overlappingShifts"
+        }
+      ]
+    },
+    "EligibilityRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "eligibility"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      }
+    },
+    "AvailabilityRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "availability"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      }
+    },
+    "CoverageRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "coverage"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      }
+    },
+    "NoOverlapRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "compatibleCategoryPairs",
+        "id",
+        "kind",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "noOverlap"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "compatibleCategoryPairs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CategoryPair"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "MinimumRestRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "afterScope",
+        "beforeScope",
+        "id",
+        "kind",
+        "minimumMinutes",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "minimumRest"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "afterScope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "beforeScope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "minimumMinutes": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "MaximumHoursRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "bucketId",
+        "id",
+        "kind",
+        "maximumMinutes",
+        "scope",
+        "strength",
+        "window"
+      ],
+      "properties": {
+        "kind": {
+          "const": "maximumHours"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "bucketId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "window": {
+          "$ref": "#/$defs/WorkWindow"
+        },
+        "maximumMinutes": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "MaximumConsecutiveRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "maximum",
+        "mode",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "maximumConsecutive"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "mode": {
+          "$ref": "#/$defs/ConsecutiveMode"
+        },
+        "maximum": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "MaximumAssignmentCountRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "calendarId",
+        "id",
+        "kind",
+        "maximum",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "maximumAssignmentCount"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "maximum": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "RequiredSkillMixRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "qualificationMinimums",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "requiredSkillMix"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "qualificationMinimums": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QualificationMinimum"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "FixedAssignmentRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "personId",
+        "scope",
+        "shiftId",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "fixedAssignment"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "MutualAssignmentRestrictionRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "mode",
+        "personIds",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mutualAssignmentRestriction"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "personIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "mode": {
+          "$ref": "#/$defs/PairingMode"
+        }
+      }
+    },
+    "TransitionTimeRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "locationIds",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "transitionTime"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "locationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "Rule": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/EligibilityRule"
+        },
+        {
+          "$ref": "#/$defs/AvailabilityRule"
+        },
+        {
+          "$ref": "#/$defs/CoverageRule"
+        },
+        {
+          "$ref": "#/$defs/NoOverlapRule"
+        },
+        {
+          "$ref": "#/$defs/MinimumRestRule"
+        },
+        {
+          "$ref": "#/$defs/MaximumHoursRule"
+        },
+        {
+          "$ref": "#/$defs/MaximumConsecutiveRule"
+        },
+        {
+          "$ref": "#/$defs/MaximumAssignmentCountRule"
+        },
+        {
+          "$ref": "#/$defs/RequiredSkillMixRule"
+        },
+        {
+          "$ref": "#/$defs/FixedAssignmentRule"
+        },
+        {
+          "$ref": "#/$defs/MutualAssignmentRestrictionRule"
+        },
+        {
+          "$ref": "#/$defs/TransitionTimeRule"
+        }
+      ]
+    },
+    "PreferenceDirection": {
+      "oneOf": [
+        {
+          "const": "prefer"
+        },
+        {
+          "const": "avoid"
+        }
+      ]
+    },
+    "GroupDirection": {
+      "oneOf": [
+        {
+          "const": "together"
+        },
+        {
+          "const": "separate"
+        }
+      ]
+    },
+    "ReportingDays": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "reportingDays"
+        }
+      }
+    },
+    "Weekends": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calendarId",
+        "kind",
+        "weekdays"
+      ],
+      "properties": {
+        "kind": {
+          "const": "weekends"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "weekdays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Weekday"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "ConsecutiveWorkMode": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ReportingDays"
+        },
+        {
+          "$ref": "#/$defs/Weekends"
+        }
+      ]
+    },
+    "AdjacencyMode": {
+      "oneOf": [
+        {
+          "const": "before"
+        },
+        {
+          "const": "after"
+        },
+        {
+          "const": "either"
+        }
+      ]
+    },
+    "TimePreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "direction",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "timeWindow",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "time"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "direction": {
+          "$ref": "#/$defs/PreferenceDirection"
+        },
+        "timeWindow": {
+          "$ref": "#/$defs/TimeWindow"
+        }
+      }
+    },
+    "AssignmentTypePreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "assignmentTypeIds",
+        "direction",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assignmentType"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "direction": {
+          "$ref": "#/$defs/PreferenceDirection"
+        },
+        "assignmentTypeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "LocationPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "direction",
+        "id",
+        "kind",
+        "locationIds",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "location"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "direction": {
+          "$ref": "#/$defs/PreferenceDirection"
+        },
+        "locationIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "RequestedTimeOffPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "availabilityIds",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "requestedTimeOff"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "availabilityIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "AssignmentTargetPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "calendarId",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "targetCount",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assignmentTarget"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "targetCount": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "WorkloadBalancePreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "weight",
+        "workloadPolicyId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "workloadBalance"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "workloadPolicyId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "ConsecutiveWorkPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "assignmentTypeIds",
+        "id",
+        "kind",
+        "mode",
+        "priority",
+        "scope",
+        "threshold",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "consecutiveWork"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "mode": {
+          "$ref": "#/$defs/ConsecutiveWorkMode"
+        },
+        "assignmentTypeIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "threshold": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "AdjacencyPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "baseScheduleId",
+        "direction",
+        "id",
+        "kind",
+        "maximumGapMinutes",
+        "mode",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "adjacency"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "direction": {
+          "$ref": "#/$defs/PreferenceDirection"
+        },
+        "baseScheduleId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "maximumGapMinutes": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "mode": {
+          "$ref": "#/$defs/AdjacencyMode"
+        }
+      }
+    },
+    "BaseStabilityPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "baseScheduleId",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "baseStability"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "baseScheduleId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "TogetherSeparatePreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "direction",
+        "id",
+        "kind",
+        "mode",
+        "personIds",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "togetherSeparate"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "direction": {
+          "$ref": "#/$defs/GroupDirection"
+        },
+        "personIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "mode": {
+          "$ref": "#/$defs/PairingMode"
+        }
+      }
+    },
+    "PreferredCoveragePreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "coverageRequirementIds",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "preferredCoverage"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "coverageRequirementIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      }
+    },
+    "Preference": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/TimePreference"
+        },
+        {
+          "$ref": "#/$defs/AssignmentTypePreference"
+        },
+        {
+          "$ref": "#/$defs/LocationPreference"
+        },
+        {
+          "$ref": "#/$defs/RequestedTimeOffPreference"
+        },
+        {
+          "$ref": "#/$defs/AssignmentTargetPreference"
+        },
+        {
+          "$ref": "#/$defs/WorkloadBalancePreference"
+        },
+        {
+          "$ref": "#/$defs/ConsecutiveWorkPreference"
+        },
+        {
+          "$ref": "#/$defs/AdjacencyPreference"
+        },
+        {
+          "$ref": "#/$defs/BaseStabilityPreference"
+        },
+        {
+          "$ref": "#/$defs/TogetherSeparatePreference"
+        },
+        {
+          "$ref": "#/$defs/PreferredCoveragePreference"
+        }
+      ]
+    },
+    "Domain": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entities",
+        "lockedAssignments",
+        "preferences",
+        "rules"
+      ],
+      "properties": {
+        "entities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Entity"
+          }
+        },
+        "rules": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Rule"
+          }
+        },
+        "preferences": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Preference"
+          }
+        },
+        "lockedAssignments": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AssignmentLock"
+          }
+        }
+      }
+    },
+    "Portable": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entities",
+        "extensions",
+        "lockedAssignments",
+        "preferences",
+        "rules",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "entities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Entity"
+          }
+        },
+        "rules": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Rule"
+          }
+        },
+        "preferences": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Preference"
+          }
+        },
+        "lockedAssignments": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AssignmentLock"
+          }
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      }
+    },
+    "EntityPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity"
+      ],
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/Entity"
+        }
+      }
+    },
+    "EntityTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityId"
+      ],
+      "properties": {
+        "entityId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "RulePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/Rule"
+        }
+      }
+    },
+    "RuleTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleId"
+      ],
+      "properties": {
+        "ruleId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "PreferencePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preference"
+      ],
+      "properties": {
+        "preference": {
+          "$ref": "#/$defs/Preference"
+        }
+      }
+    },
+    "PreferenceTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferenceId"
+      ],
+      "properties": {
+        "preferenceId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "AssignmentLockPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lock"
+      ],
+      "properties": {
+        "lock": {
+          "$ref": "#/$defs/AssignmentLock"
+        }
+      }
+    },
+    "AssignmentLockTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentId"
+      ],
+      "properties": {
+        "assignmentId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    }
+  },
+  "commands": [
+    {
+      "id": "official.workforce.add_entity",
+      "title": {
+        "key": "official.workforce.add_entity.title",
+        "defaultText": "Add entity"
+      },
+      "description": {
+        "key": "official.workforce.add_entity.description",
+        "defaultText": "Add one typed Workforce entity, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$ref": "#/$defs/EntityPayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/EntityTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "entity": {
+            "kind": "person",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional person",
+            "activeRange": {
+              "kind": "always"
+            },
+            "qualificationGrants": [
+              {
+                "qualificationId": "018f7b40-a000-7000-8000-00000000000b"
+              }
+            ],
+            "eligibleAssignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "tags": [],
+            "teamIds": []
+          }
+        },
+        {
+          "entity": {
+            "kind": "qualification",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional qualification",
+            "description": ""
+          }
+        },
+        {
+          "entity": {
+            "kind": "team",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional team"
+          }
+        },
+        {
+          "entity": {
+            "kind": "location",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "South",
+            "transitions": [
+              {
+                "locationId": "018f7b40-a000-7000-8000-000000000005",
+                "minutes": 30
+              }
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "workloadBucket",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Elapsed hours",
+            "measurement": "elapsedMinutes",
+            "overlappingContribution": "union"
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "day",
+              "startTime": "00:00:00"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "elapsed",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "matches",
+              "allQualificationIds": [
+                "018f7b40-a000-7000-8000-00000000000b"
+              ],
+              "anyQualificationIds": []
+            },
+            "locationBehavior": {
+              "kind": "required"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftTemplate",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Sunday clinic",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "recurrence": {
+              "weekdays": [
+                "sunday"
+              ],
+              "effectiveRange": {
+                "startDate": "2026-11-01",
+                "endDateExclusive": "2026-12-01"
+              },
+              "excludedDates": []
+            },
+            "timing": {
+              "kind": "elapsedDuration",
+              "startTime": "01:30:00",
+              "durationMinutes": 60
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "occurrenceIdentities": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "localStartDate": "2026-11-01"
+              }
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftInstance",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "startsAt": {
+              "instant": "2026-11-01T05:30:00Z",
+              "local": "2026-11-01T01:30:00",
+              "offsetSeconds": -14400
+            },
+            "endsAt": {
+              "instant": "2026-11-01T07:30:00Z",
+              "local": "2026-11-01T02:30:00",
+              "offsetSeconds": -18000
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "origin": {
+              "kind": "manual"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "availability",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "availabilityKind": "requestedTimeOff",
+            "timeWindow": {
+              "kind": "instant",
+              "startsAt": "2026-11-01T09:00:00Z",
+              "endsAt": "2026-11-01T10:00:00Z"
+            },
+            "effectiveRange": {
+              "startDate": "2026-11-01",
+              "endDateExclusive": "2026-12-01"
+            },
+            "source": "Reviewed request",
+            "note": "Literal punctuation: `shift`, ${review}, and r#\"tag\"#."
+          }
+        },
+        {
+          "entity": {
+            "kind": "coverageRequirement",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "active": true,
+            "scope": {
+              "kind": "all"
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "baseSchedule",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "sourceSolutionId": "018f7b40-a000-7000-8000-000000000032",
+            "sourceRevision": 0,
+            "assignments": [
+              {
+                "personId": "018f7b40-a000-7000-8000-000000000001",
+                "shiftId": "018f7b40-a000-7000-8000-000000000008"
+              }
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {},
+            "tieBreak": "stableAssignmentRank"
+          }
+        },
+        {
+          "entity": {
+            "kind": "person",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional person",
+            "activeRange": {
+              "kind": "dateRange",
+              "startDate": "2026-11-01",
+              "endDateExclusive": "2026-12-01"
+            },
+            "qualificationGrants": [
+              {
+                "qualificationId": "018f7b40-a000-7000-8000-00000000000b",
+                "effectiveFrom": "2026-10-01T00:00:00Z",
+                "expiresAt": "2027-01-01T00:00:00Z"
+              }
+            ],
+            "eligibleAssignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "tags": [],
+            "teamIds": [],
+            "externalId": "staff-20",
+            "homeLocationId": "018f7b40-a000-7000-8000-000000000005",
+            "workloadTarget": {
+              "bucketId": "018f7b40-a000-7000-8000-000000000003",
+              "calendarId": "018f7b40-a000-7000-8000-000000000002",
+              "membership": "reportingDate",
+              "target": 120
+            },
+            "display": {
+              "color": "#123abc",
+              "avatarInitials": "RP"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "week",
+              "anchorDate": "2026-11-02",
+              "startTime": "00:00:00"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "payPeriod",
+              "anchorDate": "2026-11-02",
+              "startTime": "06:00:00",
+              "lengthDays": 14
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "custom",
+              "intervals": [
+                {
+                  "startsAt": "2026-11-01T00:00:00",
+                  "endsAt": "2026-11-02T00:00:00"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "localWallClock",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "unconstrained"
+            },
+            "locationBehavior": {
+              "kind": "none"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "localWallClock",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "unconstrained"
+            },
+            "locationBehavior": {
+              "kind": "optional"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "localWallClock",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "unconstrained"
+            },
+            "locationBehavior": {
+              "kind": "fixed",
+              "locationId": "018f7b40-a000-7000-8000-000000000005"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftTemplate",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Sunday clinic",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "recurrence": {
+              "weekdays": [
+                "sunday"
+              ],
+              "effectiveRange": {
+                "startDate": "2026-11-01",
+                "endDateExclusive": "2026-12-01"
+              },
+              "excludedDates": []
+            },
+            "timing": {
+              "kind": "localWindow",
+              "startTime": "22:00:00",
+              "endTime": "06:00:00",
+              "endDayOffset": 1
+            },
+            "coverage": {
+              "kind": "atLeast",
+              "minimum": 1,
+              "preferredCount": 2,
+              "maximumCount": 3,
+              "qualificationMinimums": [
+                {
+                  "qualifications": {
+                    "allQualificationIds": [
+                      "018f7b40-a000-7000-8000-00000000000b"
+                    ],
+                    "anyQualificationIds": []
+                  },
+                  "minimum": 1
+                }
+              ]
+            },
+            "tags": [],
+            "reportingAttribution": "endLocalDate",
+            "occurrenceIdentities": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "localStartDate": "2026-11-01"
+              }
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftInstance",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "startsAt": {
+              "instant": "2026-11-08T06:30:00Z",
+              "local": "2026-11-08T01:30:00",
+              "offsetSeconds": -18000
+            },
+            "endsAt": {
+              "instant": "2026-11-08T07:30:00Z",
+              "local": "2026-11-08T02:30:00",
+              "offsetSeconds": -18000
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "origin": {
+              "kind": "detached",
+              "templateId": "018f7b40-a000-7000-8000-000000000006",
+              "occurrenceDate": "2026-11-08"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "availability",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "availabilityKind": "approvedTimeOff",
+            "timeWindow": {
+              "kind": "weekly",
+              "windows": [
+                {
+                  "weekdays": [
+                    "monday"
+                  ],
+                  "startTime": "09:00:00",
+                  "endTime": "17:00:00",
+                  "endDayOffset": 0
+                }
+              ]
+            },
+            "effectiveRange": {
+              "startDate": "2026-11-01",
+              "endDateExclusive": "2026-12-01"
+            },
+            "source": "Reviewed request",
+            "note": "",
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "locationIds": [
+              "018f7b40-a000-7000-8000-000000000005"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "coverageRequirement",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "active": true,
+            "scope": {
+              "kind": "selected",
+              "shiftIds": [
+                "018f7b40-a000-7000-8000-000000000008"
+              ]
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "coverageRequirement",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "active": true,
+            "scope": {
+              "kind": "filter",
+              "assignmentTypeIds": [
+                "018f7b40-a000-7000-8000-000000000004"
+              ],
+              "locationIds": [
+                "018f7b40-a000-7000-8000-000000000005"
+              ],
+              "startDateRange": {
+                "startDate": "2026-11-01",
+                "endDateExclusive": "2026-12-01"
+              }
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "bucketId": "018f7b40-a000-7000-8000-000000000003",
+                "calendarId": "018f7b40-a000-7000-8000-000000000002",
+                "membership": "reportingDate",
+                "peerGroup": {
+                  "people": {
+                    "kind": "all"
+                  }
+                },
+                "targetMode": {
+                  "kind": "explicit",
+                  "targets": [
+                    {
+                      "personId": "018f7b40-a000-7000-8000-000000000001",
+                      "target": 120
+                    }
+                  ]
+                },
+                "penalty": {
+                  "kind": "piecewise",
+                  "breakpoints": [
+                    {
+                      "fromDeviation": 0,
+                      "slope": 2
+                    },
+                    {
+                      "fromDeviation": 10,
+                      "slope": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "tieBreak": "stableAssignmentRank"
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "bucketId": "018f7b40-a000-7000-8000-000000000003",
+                "calendarId": "018f7b40-a000-7000-8000-000000000002",
+                "membership": "reportingDate",
+                "peerGroup": {
+                  "people": {
+                    "kind": "all"
+                  }
+                },
+                "targetMode": {
+                  "kind": "personTargets"
+                },
+                "penalty": {
+                  "kind": "absolute"
+                }
+              }
+            },
+            "tieBreak": "stableAssignmentRank"
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "bucketId": "018f7b40-a000-7000-8000-000000000003",
+                "calendarId": "018f7b40-a000-7000-8000-000000000002",
+                "membership": "reportingDate",
+                "peerGroup": {
+                  "people": {
+                    "kind": "all"
+                  }
+                },
+                "targetMode": {
+                  "kind": "weightedEqualShare"
+                },
+                "penalty": {
+                  "kind": "absolute"
+                }
+              }
+            },
+            "tieBreak": "stableAssignmentRank"
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "entity": null
+        },
+        {
+          "entity": {
+            "kind": "person",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional person",
+            "activeRange": {
+              "kind": "always"
+            },
+            "qualificationGrants": [
+              {
+                "qualificationId": "018f7b40-a000-7000-8000-00000000000b"
+              }
+            ],
+            "eligibleAssignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "tags": [],
+            "teamIds": [],
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.add_lock",
+      "title": {
+        "key": "official.workforce.add_lock.title",
+        "defaultText": "Add assignment lock"
+      },
+      "description": {
+        "key": "official.workforce.add_lock.description",
+        "defaultText": "Add one typed Workforce assignment lock, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "$ref": "#/$defs/AssignmentLockPayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/AssignmentLockTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/lockedAssignments/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "hard"
+            }
+          }
+        },
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "soft",
+              "stabilityWeight": 2
+            }
+          }
+        },
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "unlocked"
+            }
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "lock": null
+        },
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "hard"
+            },
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.add_preference",
+      "title": {
+        "key": "official.workforce.add_preference.title",
+        "defaultText": "Add Preference"
+      },
+      "description": {
+        "key": "official.workforce.add_preference.description",
+        "defaultText": "Add one typed Workforce Preference, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$ref": "#/$defs/PreferencePayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/PreferenceTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/preferences/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "preference": {
+            "kind": "time",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "timeWindow": {
+              "kind": "instant",
+              "startsAt": "2026-11-01T09:00:00Z",
+              "endsAt": "2026-11-01T10:00:00Z"
+            }
+          }
+        },
+        {
+          "preference": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "prefer",
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "location",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "prefer",
+            "locationIds": [
+              "018f7b40-a000-7000-8000-000000000005"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "requestedTimeOff",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "availabilityIds": [
+              "018f7b40-a000-7000-8000-000000000014"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "assignmentTarget",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "calendarId": "018f7b40-a000-7000-8000-000000000002",
+            "targetCount": 1
+          }
+        },
+        {
+          "preference": {
+            "kind": "workloadBalance",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "workloadPolicyId": "018f7b40-a000-7000-8000-00000000000a"
+          }
+        },
+        {
+          "preference": {
+            "kind": "consecutiveWork",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "mode": {
+              "kind": "reportingDays"
+            },
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "threshold": 3
+          }
+        },
+        {
+          "preference": {
+            "kind": "adjacency",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "baseScheduleId": "018f7b40-a000-7000-8000-000000000014",
+            "maximumGapMinutes": 60,
+            "mode": "either"
+          }
+        },
+        {
+          "preference": {
+            "kind": "baseStability",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "baseScheduleId": "018f7b40-a000-7000-8000-000000000014"
+          }
+        },
+        {
+          "preference": {
+            "kind": "togetherSeparate",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "together",
+            "personIds": [
+              "018f7b40-a000-7000-8000-000000000001"
+            ],
+            "mode": "sameShift"
+          }
+        },
+        {
+          "preference": {
+            "kind": "preferredCoverage",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "coverageRequirementIds": [
+              "018f7b40-a000-7000-8000-000000000014"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "time",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "timeWindow": {
+              "kind": "weekly",
+              "windows": [
+                {
+                  "weekdays": [
+                    "monday"
+                  ],
+                  "startTime": "09:00:00",
+                  "endTime": "17:00:00",
+                  "endDayOffset": 0
+                }
+              ]
+            }
+          }
+        },
+        {
+          "preference": {
+            "kind": "consecutiveWork",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "mode": {
+              "kind": "weekends",
+              "calendarId": "018f7b40-a000-7000-8000-000000000014",
+              "weekdays": [
+                "saturday",
+                "sunday"
+              ]
+            },
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "threshold": 3
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "preference": null
+        },
+        {
+          "preference": {
+            "kind": "time",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "timeWindow": {
+              "kind": "instant",
+              "startsAt": "2026-11-01T09:00:00Z",
+              "endsAt": "2026-11-01T10:00:00Z"
+            },
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.add_rule",
+      "title": {
+        "key": "official.workforce.add_rule.title",
+        "defaultText": "Add Required rule"
+      },
+      "description": {
+        "key": "official.workforce.add_rule.description",
+        "defaultText": "Add one typed Workforce Required rule, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$ref": "#/$defs/RulePayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/RuleTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/rules/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "availability",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "coverage",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "noOverlap",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "compatibleCategoryPairs": [
+              {
+                "firstCategory": "call",
+                "secondCategory": "clinic"
+              }
+            ]
+          }
+        },
+        {
+          "rule": {
+            "kind": "minimumRest",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "afterScope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "beforeScope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "minimumMinutes": 600
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumHours",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "bucketId": "018f7b40-a000-7000-8000-000000000003",
+            "window": {
+              "kind": "calendar",
+              "calendarId": "018f7b40-a000-7000-8000-000000000002",
+              "membership": "reportingDate"
+            },
+            "maximumMinutes": 480
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumConsecutive",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "mode": {
+              "kind": "workedDays"
+            },
+            "maximum": 5
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumAssignmentCount",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "calendarId": "018f7b40-a000-7000-8000-000000000002",
+            "maximum": 1
+          }
+        },
+        {
+          "rule": {
+            "kind": "requiredSkillMix",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "qualificationMinimums": [
+              {
+                "qualifications": {
+                  "allQualificationIds": [
+                    "018f7b40-a000-7000-8000-00000000000b"
+                  ],
+                  "anyQualificationIds": []
+                },
+                "minimum": 1
+              }
+            ]
+          }
+        },
+        {
+          "rule": {
+            "kind": "fixedAssignment",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008"
+          }
+        },
+        {
+          "rule": {
+            "kind": "mutualAssignmentRestriction",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "personIds": [
+              "018f7b40-a000-7000-8000-000000000001"
+            ],
+            "mode": "sameShift"
+          }
+        },
+        {
+          "rule": {
+            "kind": "transitionTime",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "locationIds": [
+              "018f7b40-a000-7000-8000-000000000005"
+            ]
+          }
+        },
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "selected",
+                "personIds": [
+                  "018f7b40-a000-7000-8000-000000000001"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "filter",
+                "allTags": [
+                  "night"
+                ],
+                "anyTags": []
+              },
+              "assignmentTypeIds": [
+                "018f7b40-a000-7000-8000-000000000004"
+              ],
+              "categories": [
+                "clinic"
+              ],
+              "weekdays": [
+                "sunday"
+              ],
+              "locationIds": [
+                "018f7b40-a000-7000-8000-000000000005"
+              ]
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumHours",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "bucketId": "018f7b40-a000-7000-8000-000000000003",
+            "window": {
+              "kind": "rolling",
+              "durationMinutes": 1440,
+              "membership": "intersection"
+            },
+            "maximumMinutes": 480
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumConsecutive",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "mode": {
+              "kind": "assignments",
+              "breakMinutes": 600
+            },
+            "maximum": 5
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "rule": null
+        },
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.remove_entity",
+      "title": {
+        "key": "official.workforce.remove_entity.title",
+        "defaultText": "Remove entity"
+      },
+      "description": {
+        "key": "official.workforce.remove_entity.description",
+        "defaultText": "Remove one Workforce entity only when remaining references stay valid; retain an exact inverse."
+      },
+      "risk": "destructiveMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "$ref": "#/$defs/EntityTarget"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/EntityTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "entityId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ],
+      "invalidExamples": [
+        {
+          "entityId": "not-a-uuid"
+        },
+        {
+          "entityId": null
+        },
+        {
+          "entityId": "018f7b40-a000-7000-8000-000000000014",
+          "unexpected": true
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.remove_lock",
+      "title": {
+        "key": "official.workforce.remove_lock.title",
+        "defaultText": "Remove assignment lock"
+      },
+      "description": {
+        "key": "official.workforce.remove_lock.description",
+        "defaultText": "Remove one Workforce assignment lock only when remaining references stay valid; retain an exact inverse."
+      },
+      "risk": "destructiveMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "$ref": "#/$defs/AssignmentLockTarget"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/AssignmentLockTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/lockedAssignments/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "assignmentId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ],
+      "invalidExamples": [
+        {
+          "assignmentId": "not-a-uuid"
+        },
+        {
+          "assignmentId": null
+        },
+        {
+          "assignmentId": "018f7b40-a000-7000-8000-000000000014",
+          "unexpected": true
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.remove_preference",
+      "title": {
+        "key": "official.workforce.remove_preference.title",
+        "defaultText": "Remove Preference"
+      },
+      "description": {
+        "key": "official.workforce.remove_preference.description",
+        "defaultText": "Remove one Workforce Preference only when remaining references stay valid; retain an exact inverse."
+      },
+      "risk": "destructiveMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "$ref": "#/$defs/PreferenceTarget"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/PreferenceTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/preferences/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "preferenceId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ],
+      "invalidExamples": [
+        {
+          "preferenceId": "not-a-uuid"
+        },
+        {
+          "preferenceId": null
+        },
+        {
+          "preferenceId": "018f7b40-a000-7000-8000-000000000014",
+          "unexpected": true
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.remove_rule",
+      "title": {
+        "key": "official.workforce.remove_rule.title",
+        "defaultText": "Remove Required rule"
+      },
+      "description": {
+        "key": "official.workforce.remove_rule.description",
+        "defaultText": "Remove one Workforce Required rule only when remaining references stay valid; retain an exact inverse."
+      },
+      "risk": "destructiveMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "$ref": "#/$defs/RuleTarget"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/RuleTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/rules/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "ruleId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ],
+      "invalidExamples": [
+        {
+          "ruleId": "not-a-uuid"
+        },
+        {
+          "ruleId": null
+        },
+        {
+          "ruleId": "018f7b40-a000-7000-8000-000000000014",
+          "unexpected": true
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.update_entity",
+      "title": {
+        "key": "official.workforce.update_entity.title",
+        "defaultText": "Update entity"
+      },
+      "description": {
+        "key": "official.workforce.update_entity.description",
+        "defaultText": "Replace one typed Workforce entity, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$ref": "#/$defs/EntityPayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/EntityTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "entity": {
+            "kind": "person",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional person",
+            "activeRange": {
+              "kind": "always"
+            },
+            "qualificationGrants": [
+              {
+                "qualificationId": "018f7b40-a000-7000-8000-00000000000b"
+              }
+            ],
+            "eligibleAssignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "tags": [],
+            "teamIds": []
+          }
+        },
+        {
+          "entity": {
+            "kind": "qualification",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional qualification",
+            "description": ""
+          }
+        },
+        {
+          "entity": {
+            "kind": "team",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional team"
+          }
+        },
+        {
+          "entity": {
+            "kind": "location",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "South",
+            "transitions": [
+              {
+                "locationId": "018f7b40-a000-7000-8000-000000000005",
+                "minutes": 30
+              }
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "workloadBucket",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Elapsed hours",
+            "measurement": "elapsedMinutes",
+            "overlappingContribution": "union"
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "day",
+              "startTime": "00:00:00"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "elapsed",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "matches",
+              "allQualificationIds": [
+                "018f7b40-a000-7000-8000-00000000000b"
+              ],
+              "anyQualificationIds": []
+            },
+            "locationBehavior": {
+              "kind": "required"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftTemplate",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Sunday clinic",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "recurrence": {
+              "weekdays": [
+                "sunday"
+              ],
+              "effectiveRange": {
+                "startDate": "2026-11-01",
+                "endDateExclusive": "2026-12-01"
+              },
+              "excludedDates": []
+            },
+            "timing": {
+              "kind": "elapsedDuration",
+              "startTime": "01:30:00",
+              "durationMinutes": 60
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "occurrenceIdentities": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "localStartDate": "2026-11-01"
+              }
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftInstance",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "startsAt": {
+              "instant": "2026-11-01T05:30:00Z",
+              "local": "2026-11-01T01:30:00",
+              "offsetSeconds": -14400
+            },
+            "endsAt": {
+              "instant": "2026-11-01T07:30:00Z",
+              "local": "2026-11-01T02:30:00",
+              "offsetSeconds": -18000
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "origin": {
+              "kind": "manual"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "availability",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "availabilityKind": "requestedTimeOff",
+            "timeWindow": {
+              "kind": "instant",
+              "startsAt": "2026-11-01T09:00:00Z",
+              "endsAt": "2026-11-01T10:00:00Z"
+            },
+            "effectiveRange": {
+              "startDate": "2026-11-01",
+              "endDateExclusive": "2026-12-01"
+            },
+            "source": "Reviewed request",
+            "note": ""
+          }
+        },
+        {
+          "entity": {
+            "kind": "coverageRequirement",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "active": true,
+            "scope": {
+              "kind": "all"
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "baseSchedule",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "sourceSolutionId": "018f7b40-a000-7000-8000-000000000032",
+            "sourceRevision": 0,
+            "assignments": [
+              {
+                "personId": "018f7b40-a000-7000-8000-000000000001",
+                "shiftId": "018f7b40-a000-7000-8000-000000000008"
+              }
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {},
+            "tieBreak": "stableAssignmentRank"
+          }
+        },
+        {
+          "entity": {
+            "kind": "person",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional person",
+            "activeRange": {
+              "kind": "dateRange",
+              "startDate": "2026-11-01",
+              "endDateExclusive": "2026-12-01"
+            },
+            "qualificationGrants": [
+              {
+                "qualificationId": "018f7b40-a000-7000-8000-00000000000b",
+                "effectiveFrom": "2026-10-01T00:00:00Z",
+                "expiresAt": "2027-01-01T00:00:00Z"
+              }
+            ],
+            "eligibleAssignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "tags": [],
+            "teamIds": [],
+            "externalId": "staff-20",
+            "homeLocationId": "018f7b40-a000-7000-8000-000000000005",
+            "workloadTarget": {
+              "bucketId": "018f7b40-a000-7000-8000-000000000003",
+              "calendarId": "018f7b40-a000-7000-8000-000000000002",
+              "membership": "reportingDate",
+              "target": 120
+            },
+            "display": {
+              "color": "#123abc",
+              "avatarInitials": "RP"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "week",
+              "anchorDate": "2026-11-02",
+              "startTime": "00:00:00"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "payPeriod",
+              "anchorDate": "2026-11-02",
+              "startTime": "06:00:00",
+              "lengthDays": 14
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "calendar",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Reporting days",
+            "period": {
+              "kind": "custom",
+              "intervals": [
+                {
+                  "startsAt": "2026-11-01T00:00:00",
+                  "endsAt": "2026-11-02T00:00:00"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "localWallClock",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "unconstrained"
+            },
+            "locationBehavior": {
+              "kind": "none"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "localWallClock",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "unconstrained"
+            },
+            "locationBehavior": {
+              "kind": "optional"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional clinic",
+            "category": "clinic",
+            "timeBehavior": "localWallClock",
+            "defaultDurationMinutes": 60,
+            "qualifications": {
+              "kind": "unconstrained"
+            },
+            "locationBehavior": {
+              "kind": "fixed",
+              "locationId": "018f7b40-a000-7000-8000-000000000005"
+            },
+            "workloadBucketIds": [
+              "018f7b40-a000-7000-8000-000000000003"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftTemplate",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Sunday clinic",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "recurrence": {
+              "weekdays": [
+                "sunday"
+              ],
+              "effectiveRange": {
+                "startDate": "2026-11-01",
+                "endDateExclusive": "2026-12-01"
+              },
+              "excludedDates": []
+            },
+            "timing": {
+              "kind": "localWindow",
+              "startTime": "22:00:00",
+              "endTime": "06:00:00",
+              "endDayOffset": 1
+            },
+            "coverage": {
+              "kind": "atLeast",
+              "minimum": 1,
+              "preferredCount": 2,
+              "maximumCount": 3,
+              "qualificationMinimums": [
+                {
+                  "qualifications": {
+                    "allQualificationIds": [
+                      "018f7b40-a000-7000-8000-00000000000b"
+                    ],
+                    "anyQualificationIds": []
+                  },
+                  "minimum": 1
+                }
+              ]
+            },
+            "tags": [],
+            "reportingAttribution": "endLocalDate",
+            "occurrenceIdentities": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "localStartDate": "2026-11-01"
+              }
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "shiftInstance",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "startsAt": {
+              "instant": "2026-11-08T06:30:00Z",
+              "local": "2026-11-08T01:30:00",
+              "offsetSeconds": -18000
+            },
+            "endsAt": {
+              "instant": "2026-11-08T07:30:00Z",
+              "local": "2026-11-08T02:30:00",
+              "offsetSeconds": -18000
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "origin": {
+              "kind": "detached",
+              "templateId": "018f7b40-a000-7000-8000-000000000006",
+              "occurrenceDate": "2026-11-08"
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "availability",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "availabilityKind": "approvedTimeOff",
+            "timeWindow": {
+              "kind": "weekly",
+              "windows": [
+                {
+                  "weekdays": [
+                    "monday"
+                  ],
+                  "startTime": "09:00:00",
+                  "endTime": "17:00:00",
+                  "endDayOffset": 0
+                }
+              ]
+            },
+            "effectiveRange": {
+              "startDate": "2026-11-01",
+              "endDateExclusive": "2026-12-01"
+            },
+            "source": "Reviewed request",
+            "note": "",
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "locationIds": [
+              "018f7b40-a000-7000-8000-000000000005"
+            ]
+          }
+        },
+        {
+          "entity": {
+            "kind": "coverageRequirement",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "active": true,
+            "scope": {
+              "kind": "selected",
+              "shiftIds": [
+                "018f7b40-a000-7000-8000-000000000008"
+              ]
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "coverageRequirement",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "active": true,
+            "scope": {
+              "kind": "filter",
+              "assignmentTypeIds": [
+                "018f7b40-a000-7000-8000-000000000004"
+              ],
+              "locationIds": [
+                "018f7b40-a000-7000-8000-000000000005"
+              ],
+              "startDateRange": {
+                "startDate": "2026-11-01",
+                "endDateExclusive": "2026-12-01"
+              }
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            }
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "bucketId": "018f7b40-a000-7000-8000-000000000003",
+                "calendarId": "018f7b40-a000-7000-8000-000000000002",
+                "membership": "reportingDate",
+                "peerGroup": {
+                  "people": {
+                    "kind": "all"
+                  }
+                },
+                "targetMode": {
+                  "kind": "explicit",
+                  "targets": [
+                    {
+                      "personId": "018f7b40-a000-7000-8000-000000000001",
+                      "target": 120
+                    }
+                  ]
+                },
+                "penalty": {
+                  "kind": "piecewise",
+                  "breakpoints": [
+                    {
+                      "fromDeviation": 0,
+                      "slope": 2
+                    },
+                    {
+                      "fromDeviation": 10,
+                      "slope": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "tieBreak": "stableAssignmentRank"
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "bucketId": "018f7b40-a000-7000-8000-000000000003",
+                "calendarId": "018f7b40-a000-7000-8000-000000000002",
+                "membership": "reportingDate",
+                "peerGroup": {
+                  "people": {
+                    "kind": "all"
+                  }
+                },
+                "targetMode": {
+                  "kind": "personTargets"
+                },
+                "penalty": {
+                  "kind": "absolute"
+                }
+              }
+            },
+            "tieBreak": "stableAssignmentRank"
+          }
+        },
+        {
+          "entity": {
+            "kind": "scorePolicy",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "profileKey": "clinic",
+            "levels": [
+              {
+                "levelKey": "preferences",
+                "label": "Preferences"
+              }
+            ],
+            "priorityMapping": [
+              {
+                "priority": "low",
+                "levelKey": "preferences",
+                "scale": 1
+              },
+              {
+                "priority": "normal",
+                "levelKey": "preferences",
+                "scale": 10
+              },
+              {
+                "priority": "high",
+                "levelKey": "preferences",
+                "scale": 100
+              },
+              {
+                "priority": "veryHigh",
+                "levelKey": "preferences",
+                "scale": 1000
+              }
+            ],
+            "workloadPolicies": {
+              "018f7b40-a000-7000-8000-000000000015": {
+                "id": "018f7b40-a000-7000-8000-000000000015",
+                "bucketId": "018f7b40-a000-7000-8000-000000000003",
+                "calendarId": "018f7b40-a000-7000-8000-000000000002",
+                "membership": "reportingDate",
+                "peerGroup": {
+                  "people": {
+                    "kind": "all"
+                  }
+                },
+                "targetMode": {
+                  "kind": "weightedEqualShare"
+                },
+                "penalty": {
+                  "kind": "absolute"
+                }
+              }
+            },
+            "tieBreak": "stableAssignmentRank"
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "entity": null
+        },
+        {
+          "entity": {
+            "kind": "person",
+            "id": "018f7b40-a000-7000-8000-000000000014",
+            "name": "Additional person",
+            "activeRange": {
+              "kind": "always"
+            },
+            "qualificationGrants": [
+              {
+                "qualificationId": "018f7b40-a000-7000-8000-00000000000b"
+              }
+            ],
+            "eligibleAssignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "tags": [],
+            "teamIds": [],
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.update_lock",
+      "title": {
+        "key": "official.workforce.update_lock.title",
+        "defaultText": "Update assignment lock"
+      },
+      "description": {
+        "key": "official.workforce.update_lock.description",
+        "defaultText": "Replace one typed Workforce assignment lock, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "$ref": "#/$defs/AssignmentLockPayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/AssignmentLockTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/lockedAssignments/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "hard"
+            }
+          }
+        },
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "soft",
+              "stabilityWeight": 2
+            }
+          }
+        },
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "unlocked"
+            }
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "lock": null
+        },
+        {
+          "lock": {
+            "id": "018f7b40-a000-7000-8000-00000000003c",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "state": {
+              "kind": "hard"
+            },
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.update_preference",
+      "title": {
+        "key": "official.workforce.update_preference.title",
+        "defaultText": "Update Preference"
+      },
+      "description": {
+        "key": "official.workforce.update_preference.description",
+        "defaultText": "Replace one typed Workforce Preference, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$ref": "#/$defs/PreferencePayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/PreferenceTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/preferences/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "preference": {
+            "kind": "time",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "timeWindow": {
+              "kind": "instant",
+              "startsAt": "2026-11-01T09:00:00Z",
+              "endsAt": "2026-11-01T10:00:00Z"
+            }
+          }
+        },
+        {
+          "preference": {
+            "kind": "assignmentType",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "prefer",
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "location",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "prefer",
+            "locationIds": [
+              "018f7b40-a000-7000-8000-000000000005"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "requestedTimeOff",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "availabilityIds": [
+              "018f7b40-a000-7000-8000-000000000014"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "assignmentTarget",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "calendarId": "018f7b40-a000-7000-8000-000000000002",
+            "targetCount": 1
+          }
+        },
+        {
+          "preference": {
+            "kind": "workloadBalance",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "workloadPolicyId": "018f7b40-a000-7000-8000-00000000000a"
+          }
+        },
+        {
+          "preference": {
+            "kind": "consecutiveWork",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "mode": {
+              "kind": "reportingDays"
+            },
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "threshold": 3
+          }
+        },
+        {
+          "preference": {
+            "kind": "adjacency",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "baseScheduleId": "018f7b40-a000-7000-8000-000000000014",
+            "maximumGapMinutes": 60,
+            "mode": "either"
+          }
+        },
+        {
+          "preference": {
+            "kind": "baseStability",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "baseScheduleId": "018f7b40-a000-7000-8000-000000000014"
+          }
+        },
+        {
+          "preference": {
+            "kind": "togetherSeparate",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "together",
+            "personIds": [
+              "018f7b40-a000-7000-8000-000000000001"
+            ],
+            "mode": "sameShift"
+          }
+        },
+        {
+          "preference": {
+            "kind": "preferredCoverage",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "coverageRequirementIds": [
+              "018f7b40-a000-7000-8000-000000000014"
+            ]
+          }
+        },
+        {
+          "preference": {
+            "kind": "time",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "timeWindow": {
+              "kind": "weekly",
+              "windows": [
+                {
+                  "weekdays": [
+                    "monday"
+                  ],
+                  "startTime": "09:00:00",
+                  "endTime": "17:00:00",
+                  "endDayOffset": 0
+                }
+              ]
+            }
+          }
+        },
+        {
+          "preference": {
+            "kind": "consecutiveWork",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "mode": {
+              "kind": "weekends",
+              "calendarId": "018f7b40-a000-7000-8000-000000000014",
+              "weekdays": [
+                "saturday",
+                "sunday"
+              ]
+            },
+            "assignmentTypeIds": [
+              "018f7b40-a000-7000-8000-000000000004"
+            ],
+            "threshold": 3
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "preference": null
+        },
+        {
+          "preference": {
+            "kind": "time",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "direction": "avoid",
+            "timeWindow": {
+              "kind": "instant",
+              "startsAt": "2026-11-01T09:00:00Z",
+              "endsAt": "2026-11-01T10:00:00Z"
+            },
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.update_rule",
+      "title": {
+        "key": "official.workforce.update_rule.title",
+        "defaultText": "Update Required rule"
+      },
+      "description": {
+        "key": "official.workforce.update_rule.description",
+        "defaultText": "Replace one typed Workforce Required rule, validate the resulting state and retain an exact inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$ref": "#/$defs/RulePayload"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/RuleTarget"
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/rules/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "availability",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "coverage",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "noOverlap",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "compatibleCategoryPairs": [
+              {
+                "firstCategory": "call",
+                "secondCategory": "clinic"
+              }
+            ]
+          }
+        },
+        {
+          "rule": {
+            "kind": "minimumRest",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "afterScope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "beforeScope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "minimumMinutes": 600
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumHours",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "bucketId": "018f7b40-a000-7000-8000-000000000003",
+            "window": {
+              "kind": "calendar",
+              "calendarId": "018f7b40-a000-7000-8000-000000000002",
+              "membership": "reportingDate"
+            },
+            "maximumMinutes": 480
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumConsecutive",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "mode": {
+              "kind": "workedDays"
+            },
+            "maximum": 5
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumAssignmentCount",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "calendarId": "018f7b40-a000-7000-8000-000000000002",
+            "maximum": 1
+          }
+        },
+        {
+          "rule": {
+            "kind": "requiredSkillMix",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "qualificationMinimums": [
+              {
+                "qualifications": {
+                  "allQualificationIds": [
+                    "018f7b40-a000-7000-8000-00000000000b"
+                  ],
+                  "anyQualificationIds": []
+                },
+                "minimum": 1
+              }
+            ]
+          }
+        },
+        {
+          "rule": {
+            "kind": "fixedAssignment",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008"
+          }
+        },
+        {
+          "rule": {
+            "kind": "mutualAssignmentRestriction",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "personIds": [
+              "018f7b40-a000-7000-8000-000000000001"
+            ],
+            "mode": "sameShift"
+          }
+        },
+        {
+          "rule": {
+            "kind": "transitionTime",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "locationIds": [
+              "018f7b40-a000-7000-8000-000000000005"
+            ]
+          }
+        },
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "selected",
+                "personIds": [
+                  "018f7b40-a000-7000-8000-000000000001"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "filter",
+                "allTags": [
+                  "night"
+                ],
+                "anyTags": []
+              },
+              "assignmentTypeIds": [
+                "018f7b40-a000-7000-8000-000000000004"
+              ],
+              "categories": [
+                "clinic"
+              ],
+              "weekdays": [
+                "sunday"
+              ],
+              "locationIds": [
+                "018f7b40-a000-7000-8000-000000000005"
+              ]
+            }
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumHours",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "bucketId": "018f7b40-a000-7000-8000-000000000003",
+            "window": {
+              "kind": "rolling",
+              "durationMinutes": 1440,
+              "membership": "intersection"
+            },
+            "maximumMinutes": 480
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumConsecutive",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "mode": {
+              "kind": "assignments",
+              "breakMinutes": 600
+            },
+            "maximum": 5
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "rule": null
+        },
+        {
+          "rule": {
+            "kind": "eligibility",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "unexpected": true
+          }
+        }
+      ]
+    }
+  ],
+  "internalSchema": {
+    "$ref": "#/$defs/Domain"
+  },
+  "portableSchema": {
+    "$ref": "#/$defs/Portable"
+  },
+  "aiTools": [
+    {
+      "commandId": "official.workforce.add_entity",
+      "name": "workforce_add_entity",
+      "description": "Propose the typed add entity command for explicit review; validation and mutation remain Rust-owned."
+    },
+    {
+      "commandId": "official.workforce.add_preference",
+      "name": "workforce_add_preference",
+      "description": "Propose the typed add preference command for explicit review; validation and mutation remain Rust-owned."
+    },
+    {
+      "commandId": "official.workforce.add_rule",
+      "name": "workforce_add_rule",
+      "description": "Propose the typed add rule command for explicit review; validation and mutation remain Rust-owned."
+    },
+    {
+      "commandId": "official.workforce.update_entity",
+      "name": "workforce_update_entity",
+      "description": "Propose the typed update entity command for explicit review; validation and mutation remain Rust-owned."
+    },
+    {
+      "commandId": "official.workforce.update_preference",
+      "name": "workforce_update_preference",
+      "description": "Propose the typed update preference command for explicit review; validation and mutation remain Rust-owned."
+    },
+    {
+      "commandId": "official.workforce.update_rule",
+      "name": "workforce_update_rule",
+      "description": "Propose the typed update rule command for explicit review; validation and mutation remain Rust-owned."
+    }
+  ],
+  "uiManifest": {
+    "setupSteps": [
+      {
+        "id": "official.workforce.setup.data",
+        "title": {
+          "key": "official.workforce.setup.data.title",
+          "defaultText": "Workforce data"
+        },
+        "description": {
+          "key": "official.workforce.setup.data.description",
+          "defaultText": "Typed Workforce records and explicit planning policy; this metadata does not register an application setup flow."
+        }
+      }
+    ],
+    "entityKinds": [
+      {
+        "id": "official.workforce.entity.assignment-type",
+        "title": {
+          "key": "official.workforce.entity.assignment-type.title",
+          "defaultText": "Assignment types"
+        },
+        "description": {
+          "key": "official.workforce.entity.assignment-type.description",
+          "defaultText": "Stored assignment types data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.availability",
+        "title": {
+          "key": "official.workforce.entity.availability.title",
+          "defaultText": "Availability and time off"
+        },
+        "description": {
+          "key": "official.workforce.entity.availability.description",
+          "defaultText": "Stored availability and time off data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.base-schedule",
+        "title": {
+          "key": "official.workforce.entity.base-schedule.title",
+          "defaultText": "Base schedule references"
+        },
+        "description": {
+          "key": "official.workforce.entity.base-schedule.description",
+          "defaultText": "Stored base schedule references data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.calendar",
+        "title": {
+          "key": "official.workforce.entity.calendar.title",
+          "defaultText": "Work calendars"
+        },
+        "description": {
+          "key": "official.workforce.entity.calendar.description",
+          "defaultText": "Stored work calendars data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.coverage-requirement",
+        "title": {
+          "key": "official.workforce.entity.coverage-requirement.title",
+          "defaultText": "Coverage requirements"
+        },
+        "description": {
+          "key": "official.workforce.entity.coverage-requirement.description",
+          "defaultText": "Stored coverage requirements data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.location",
+        "title": {
+          "key": "official.workforce.entity.location.title",
+          "defaultText": "Locations"
+        },
+        "description": {
+          "key": "official.workforce.entity.location.description",
+          "defaultText": "Stored locations data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.person",
+        "title": {
+          "key": "official.workforce.entity.person.title",
+          "defaultText": "People"
+        },
+        "description": {
+          "key": "official.workforce.entity.person.description",
+          "defaultText": "Stored people data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.qualification",
+        "title": {
+          "key": "official.workforce.entity.qualification.title",
+          "defaultText": "Qualifications"
+        },
+        "description": {
+          "key": "official.workforce.entity.qualification.description",
+          "defaultText": "Stored qualifications data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.score-policy",
+        "title": {
+          "key": "official.workforce.entity.score-policy.title",
+          "defaultText": "Explicit score policy"
+        },
+        "description": {
+          "key": "official.workforce.entity.score-policy.description",
+          "defaultText": "Stored explicit score policy data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.shift-instance",
+        "title": {
+          "key": "official.workforce.entity.shift-instance.title",
+          "defaultText": "Stored shifts"
+        },
+        "description": {
+          "key": "official.workforce.entity.shift-instance.description",
+          "defaultText": "Stored stored shifts data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.shift-template",
+        "title": {
+          "key": "official.workforce.entity.shift-template.title",
+          "defaultText": "Recurring shift templates"
+        },
+        "description": {
+          "key": "official.workforce.entity.shift-template.description",
+          "defaultText": "Stored recurring shift templates data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.team",
+        "title": {
+          "key": "official.workforce.entity.team.title",
+          "defaultText": "Teams"
+        },
+        "description": {
+          "key": "official.workforce.entity.team.description",
+          "defaultText": "Stored teams data with stable identities and structural validation."
+        }
+      },
+      {
+        "id": "official.workforce.entity.workload-bucket",
+        "title": {
+          "key": "official.workforce.entity.workload-bucket.title",
+          "defaultText": "Workload measures"
+        },
+        "description": {
+          "key": "official.workforce.entity.workload-bucket.description",
+          "defaultText": "Stored workload measures data with stable identities and structural validation."
+        }
+      }
+    ],
+    "ruleKinds": [
+      {
+        "id": "official.workforce.rule.availability",
+        "title": {
+          "key": "official.workforce.rule.availability.title",
+          "defaultText": "Availability"
+        },
+        "description": {
+          "key": "official.workforce.rule.availability.description",
+          "defaultText": "Editable Required rule data for availability; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.coverage",
+        "title": {
+          "key": "official.workforce.rule.coverage.title",
+          "defaultText": "Coverage"
+        },
+        "description": {
+          "key": "official.workforce.rule.coverage.description",
+          "defaultText": "Editable Required rule data for coverage; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.eligibility",
+        "title": {
+          "key": "official.workforce.rule.eligibility.title",
+          "defaultText": "Eligibility"
+        },
+        "description": {
+          "key": "official.workforce.rule.eligibility.description",
+          "defaultText": "Editable Required rule data for eligibility; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.fixed-assignment",
+        "title": {
+          "key": "official.workforce.rule.fixed-assignment.title",
+          "defaultText": "Fixed assignments"
+        },
+        "description": {
+          "key": "official.workforce.rule.fixed-assignment.description",
+          "defaultText": "Editable Required rule data for fixed assignments; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.maximum-assignment-count",
+        "title": {
+          "key": "official.workforce.rule.maximum-assignment-count.title",
+          "defaultText": "Maximum assignment count"
+        },
+        "description": {
+          "key": "official.workforce.rule.maximum-assignment-count.description",
+          "defaultText": "Editable Required rule data for maximum assignment count; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.maximum-consecutive",
+        "title": {
+          "key": "official.workforce.rule.maximum-consecutive.title",
+          "defaultText": "Maximum consecutive work"
+        },
+        "description": {
+          "key": "official.workforce.rule.maximum-consecutive.description",
+          "defaultText": "Editable Required rule data for maximum consecutive work; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.maximum-hours",
+        "title": {
+          "key": "official.workforce.rule.maximum-hours.title",
+          "defaultText": "Maximum hours"
+        },
+        "description": {
+          "key": "official.workforce.rule.maximum-hours.description",
+          "defaultText": "Editable Required rule data for maximum hours; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.minimum-rest",
+        "title": {
+          "key": "official.workforce.rule.minimum-rest.title",
+          "defaultText": "Minimum rest"
+        },
+        "description": {
+          "key": "official.workforce.rule.minimum-rest.description",
+          "defaultText": "Editable Required rule data for minimum rest; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.mutual-assignment-restriction",
+        "title": {
+          "key": "official.workforce.rule.mutual-assignment-restriction.title",
+          "defaultText": "Assignment restrictions"
+        },
+        "description": {
+          "key": "official.workforce.rule.mutual-assignment-restriction.description",
+          "defaultText": "Editable Required rule data for assignment restrictions; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.no-overlap",
+        "title": {
+          "key": "official.workforce.rule.no-overlap.title",
+          "defaultText": "No overlap"
+        },
+        "description": {
+          "key": "official.workforce.rule.no-overlap.description",
+          "defaultText": "Editable Required rule data for no overlap; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.required-skill-mix",
+        "title": {
+          "key": "official.workforce.rule.required-skill-mix.title",
+          "defaultText": "Required qualification mix"
+        },
+        "description": {
+          "key": "official.workforce.rule.required-skill-mix.description",
+          "defaultText": "Editable Required rule data for required qualification mix; stored shape does not imply solve support."
+        }
+      },
+      {
+        "id": "official.workforce.rule.transition-time",
+        "title": {
+          "key": "official.workforce.rule.transition-time.title",
+          "defaultText": "Transition time"
+        },
+        "description": {
+          "key": "official.workforce.rule.transition-time.description",
+          "defaultText": "Editable Required rule data for transition time; stored shape does not imply solve support."
+        }
+      }
+    ],
+    "goalKinds": [
+      {
+        "id": "official.workforce.preference.adjacency",
+        "title": {
+          "key": "official.workforce.preference.adjacency.title",
+          "defaultText": "Adjacency preferences"
+        },
+        "description": {
+          "key": "official.workforce.preference.adjacency.description",
+          "defaultText": "Editable Preference data for adjacency preferences; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.assignment-target",
+        "title": {
+          "key": "official.workforce.preference.assignment-target.title",
+          "defaultText": "Assignment-count targets"
+        },
+        "description": {
+          "key": "official.workforce.preference.assignment-target.description",
+          "defaultText": "Editable Preference data for assignment-count targets; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.assignment-type",
+        "title": {
+          "key": "official.workforce.preference.assignment-type.title",
+          "defaultText": "Assignment type preferences"
+        },
+        "description": {
+          "key": "official.workforce.preference.assignment-type.description",
+          "defaultText": "Editable Preference data for assignment type preferences; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.base-stability",
+        "title": {
+          "key": "official.workforce.preference.base-stability.title",
+          "defaultText": "Base-schedule stability"
+        },
+        "description": {
+          "key": "official.workforce.preference.base-stability.description",
+          "defaultText": "Editable Preference data for base-schedule stability; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.consecutive-work",
+        "title": {
+          "key": "official.workforce.preference.consecutive-work.title",
+          "defaultText": "Consecutive-work preferences"
+        },
+        "description": {
+          "key": "official.workforce.preference.consecutive-work.description",
+          "defaultText": "Editable Preference data for consecutive-work preferences; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.location",
+        "title": {
+          "key": "official.workforce.preference.location.title",
+          "defaultText": "Location preferences"
+        },
+        "description": {
+          "key": "official.workforce.preference.location.description",
+          "defaultText": "Editable Preference data for location preferences; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.preferred-coverage",
+        "title": {
+          "key": "official.workforce.preference.preferred-coverage.title",
+          "defaultText": "Above-minimum coverage"
+        },
+        "description": {
+          "key": "official.workforce.preference.preferred-coverage.description",
+          "defaultText": "Editable Preference data for above-minimum coverage; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.requested-time-off",
+        "title": {
+          "key": "official.workforce.preference.requested-time-off.title",
+          "defaultText": "Requested time off"
+        },
+        "description": {
+          "key": "official.workforce.preference.requested-time-off.description",
+          "defaultText": "Editable Preference data for requested time off; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.time",
+        "title": {
+          "key": "official.workforce.preference.time.title",
+          "defaultText": "Time preferences"
+        },
+        "description": {
+          "key": "official.workforce.preference.time.description",
+          "defaultText": "Editable Preference data for time preferences; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.together-separate",
+        "title": {
+          "key": "official.workforce.preference.together-separate.title",
+          "defaultText": "Together or separate"
+        },
+        "description": {
+          "key": "official.workforce.preference.together-separate.description",
+          "defaultText": "Editable Preference data for together or separate; stored shape does not imply objective evaluation."
+        }
+      },
+      {
+        "id": "official.workforce.preference.workload-balance",
+        "title": {
+          "key": "official.workforce.preference.workload-balance.title",
+          "defaultText": "Workload balance"
+        },
+        "description": {
+          "key": "official.workforce.preference.workload-balance.description",
+          "defaultText": "Editable Preference data for workload balance; stored shape does not imply objective evaluation."
+        }
+      }
+    ],
+    "scoreKinds": [],
+    "provenanceKinds": [],
+    "resultViews": [],
+    "importers": [],
+    "exporters": []
+  }
+}

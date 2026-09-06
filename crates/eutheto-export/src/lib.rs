@@ -15,9 +15,10 @@ use eutheto_types::{
     PortableAsset, PortableDomainDocument, PortableJsonLimits, PortableProjectMetadata, Revision,
     Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument,
     ScenarioFormat, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
-    SemanticCapability, extract_asset_references, extract_result_dependency, extract_result_id,
+    SemanticCapability, collect_scenario_owned_uuids, collect_self_declared_uuids,
+    extract_asset_references, extract_result_dependency, extract_result_id,
     extract_scenario_references, validate_nonsecret_portable_json,
-    validate_nonsecret_portable_json_bytes,
+    validate_nonsecret_portable_json_bytes, validate_scenario_owned_uuid_uniqueness,
 };
 use image::{ImageFormat, ImageReader, Limits as ImageLimits};
 use serde::de::{IgnoredAny, MapAccess, Visitor};
@@ -284,178 +285,13 @@ pub struct Checksums {
     pub files: BTreeMap<String, String>,
 }
 
-/// Collects every identity owned by a scenario revision.
-///
-/// Includes the scenario ID, all four typed domain-map keys, and recursively
-/// self-declared UUID-keyed objects whose `id` equals their containing key in
-/// domain records, semantic extensions, and both nonsemantic extension layers.
-#[must_use]
-pub fn collect_scenario_owned_uuids(scenario: &ScenarioSnapshotV1) -> BTreeSet<Uuid> {
-    let mut identities = BTreeSet::from([scenario.document.scenario_id.as_uuid()]);
-    identities.extend(
-        scenario
-            .document
-            .domain
-            .entities
-            .keys()
-            .map(|id| id.as_uuid())
-            .chain(scenario.document.domain.rules.keys().map(|id| id.as_uuid()))
-            .chain(
-                scenario
-                    .document
-                    .domain
-                    .preferences
-                    .keys()
-                    .map(|id| id.as_uuid()),
-            )
-            .chain(
-                scenario
-                    .document
-                    .domain
-                    .locked_assignments
-                    .keys()
-                    .map(|id| id.as_uuid()),
-            ),
-    );
-    for record in scenario
-        .document
-        .domain
-        .entities
-        .values()
-        .chain(scenario.document.domain.rules.values())
-        .chain(scenario.document.domain.preferences.values())
-        .chain(scenario.document.domain.locked_assignments.values())
-        .chain(scenario.semantic_extensions.values())
-        .chain(scenario.document.extensions.values())
-        .chain(scenario.extensions.values())
-    {
-        collect_self_declared_uuids_into(record, &mut identities);
-    }
-    identities
-}
-
-/// Collects recursively self-declared UUID-keyed objects whose `id` equals
-/// their containing key.
-#[must_use]
-pub fn collect_self_declared_uuids(value: &Value) -> BTreeSet<Uuid> {
-    let mut identities = BTreeSet::new();
-    collect_self_declared_uuids_into(value, &mut identities);
-    identities
-}
-
-fn collect_self_declared_uuids_into(value: &Value, identities: &mut BTreeSet<Uuid>) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_self_declared_uuids_into(value, identities);
-            }
-        }
-        Value::Object(values) => {
-            for (key, value) in values {
-                if let Ok(identity) = Uuid::parse_str(key)
-                    && value.get("id").and_then(Value::as_str) == Some(key.as_str())
-                {
-                    identities.insert(identity);
-                }
-                collect_self_declared_uuids_into(value, identities);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-
-/// Rejects duplicate conceptual identity definitions within one portable
-/// scenario revision.
-///
-/// # Errors
-///
-/// Returns [`ExportError::InvalidModel`] when an identity occurs more than once
-/// across the scenario root, typed domain-map keys, or recursively
-/// self-declared UUID-keyed objects.
-pub fn validate_scenario_owned_uuid_uniqueness(
-    scenario: &ScenarioSnapshotV1,
-) -> Result<(), ExportError> {
-    fn insert(seen: &mut BTreeSet<Uuid>, identity: Uuid) -> Result<(), ExportError> {
-        if !seen.insert(identity) {
-            return Err(ExportError::InvalidModel(format!(
-                "owned identity {identity} is defined more than once in one scenario revision"
-            )));
-        }
-        Ok(())
-    }
-
-    fn visit(value: &Value, seen: &mut BTreeSet<Uuid>) -> Result<(), ExportError> {
-        match value {
-            Value::Array(values) => {
-                for value in values {
-                    visit(value, seen)?;
-                }
-            }
-            Value::Object(values) => {
-                for (key, value) in values {
-                    if let Ok(identity) = Uuid::parse_str(key)
-                        && value.get("id").and_then(Value::as_str) == Some(key.as_str())
-                    {
-                        insert(seen, identity)?;
-                    }
-                    visit(value, seen)?;
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-        Ok(())
-    }
-
-    let mut seen = BTreeSet::new();
-    insert(&mut seen, scenario.document.scenario_id.as_uuid())?;
-    for identity in scenario
-        .document
-        .domain
-        .entities
-        .keys()
-        .map(|id| id.as_uuid())
-        .chain(scenario.document.domain.rules.keys().map(|id| id.as_uuid()))
-        .chain(
-            scenario
-                .document
-                .domain
-                .preferences
-                .keys()
-                .map(|id| id.as_uuid()),
-        )
-        .chain(
-            scenario
-                .document
-                .domain
-                .locked_assignments
-                .keys()
-                .map(|id| id.as_uuid()),
-        )
-    {
-        insert(&mut seen, identity)?;
-    }
-    for value in scenario
-        .document
-        .domain
-        .entities
-        .values()
-        .chain(scenario.document.domain.rules.values())
-        .chain(scenario.document.domain.preferences.values())
-        .chain(scenario.document.domain.locked_assignments.values())
-        .chain(scenario.semantic_extensions.values())
-        .chain(scenario.document.extensions.values())
-        .chain(scenario.extensions.values())
-    {
-        visit(value, &mut seen)?;
-    }
-    Ok(())
-}
 fn validate_owned_identity_families<'a>(
     scenarios: impl IntoIterator<Item = &'a ScenarioSnapshotV1>,
 ) -> Result<(), ExportError> {
     let mut owners = BTreeMap::new();
     for scenario in scenarios {
-        validate_scenario_owned_uuid_uniqueness(scenario)?;
+        validate_scenario_owned_uuid_uniqueness(scenario)
+            .map_err(|error| ExportError::InvalidModel(error.to_string()))?;
         let scenario_id = scenario.document.scenario_id;
         for identity in collect_scenario_owned_uuids(scenario) {
             if let Some(owner) = owners.insert(identity, scenario_id)

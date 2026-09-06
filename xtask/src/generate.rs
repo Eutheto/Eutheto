@@ -336,6 +336,7 @@ export interface DomainKindDescriptorDto {
 export interface DomainCatalogDto {
   readonly packId: string;
   readonly scenarioSchemaVersion: number;
+  readonly internalSchema: JsonValue;
   readonly portableSchema: JsonValue;
   readonly shareResultSchema: JsonValue;
   readonly commands: readonly DomainCommandDescriptorDto[];
@@ -2024,6 +2025,10 @@ fn generated_rust_command_catalog() -> String {
 pub fn generate(repo_root: &Path) -> Result<()> {
     let generated_files = all_generated_files(repo_root)?;
     crate::protocol_generate::remove_obsolete(repo_root, &generated_files)?;
+    for obsolete in crate::phase02_generate::unexpected_files(repo_root, &generated_files)? {
+        fs::remove_file(repo_root.join(&obsolete))
+            .with_context(|| format!("failed to remove obsolete generated pack file {obsolete}"))?;
+    }
     for (relative_path, contents) in &generated_files {
         let path = repo_root.join(relative_path);
         let parent = path
@@ -2045,6 +2050,12 @@ pub fn generate(repo_root: &Path) -> Result<()> {
 pub fn check(repo_root: &Path) -> Result<()> {
     let generated_files = all_generated_files(repo_root)?;
     crate::protocol_generate::reject_unexpected(repo_root, &generated_files)?;
+    let unexpected = crate::phase02_generate::unexpected_files(repo_root, &generated_files)?;
+    ensure!(
+        unexpected.is_empty(),
+        "generated pack inventory contains unowned files: {}",
+        unexpected.join(", ")
+    );
     let mut drifted = Vec::new();
 
     for (relative_path, expected) in &generated_files {
@@ -2082,7 +2093,7 @@ fn all_generated_files(repo_root: &Path) -> Result<Vec<crate::protocol_generate:
         .map(|(path, contents)| (path.to_owned(), contents.into_bytes()))
         .collect::<Vec<_>>();
     files.extend(
-        crate::phase02_generate::generated_files()?
+        crate::phase02_generate::generated_files(repo_root)?
             .into_iter()
             .map(|(path, contents)| (path.to_owned(), contents.into_bytes())),
     );

@@ -100,6 +100,39 @@ pub struct ScenarioDomain {
     pub locked_assignments: BTreeMap<AssignmentId, Value>,
 }
 
+impl ScenarioDomain {
+    /// Checks the fixed host-owned shape of a pack's internal JSON Schema.
+    ///
+    /// Record schemas and keyword validity remain the pack catalog's responsibility.
+    #[must_use]
+    pub fn has_schema_shape(schema: &Value) -> bool {
+        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+            return false;
+        };
+        let Some(required) = schema.get("required").and_then(Value::as_array) else {
+            return false;
+        };
+        let fields = ["entities", "rules", "preferences", "lockedAssignments"];
+        schema.get("type").and_then(Value::as_str) == Some("object")
+            && schema.get("additionalProperties").and_then(Value::as_bool) == Some(false)
+            && properties.len() == fields.len()
+            && required.len() == fields.len()
+            && fields.iter().all(|field| {
+                let Some(map) = properties.get(*field) else {
+                    return false;
+                };
+                map.get("type").and_then(Value::as_str) == Some("object")
+                    && map.get("properties").is_none()
+                    && map
+                        .get("additionalProperties")
+                        .and_then(|record| record.get("type"))
+                        .and_then(Value::as_str)
+                        == Some("object")
+                    && required.iter().any(|item| item.as_str() == Some(*field))
+            })
+    }
+}
+
 /// Strict version-1 scenario envelope.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1244,6 +1277,58 @@ mod tests {
                 "aliased identities in {section} must not overwrite records"
             );
         }
+    }
+
+    #[test]
+    fn document_owned_uuids_reject_cross_map_collisions() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut document: ScenarioDocument = serde_json::from_value(scenario_json())?;
+        let identity = "018f47f2-e880-7000-8000-000000000002".parse()?;
+        document.domain.rules.insert(
+            crate::RuleId::from_uuid(identity),
+            json!({"name": "conflicting rule"}),
+        );
+        assert_eq!(
+            crate::validate_document_owned_uuid_uniqueness(&document),
+            Err(crate::OwnedIdentityError {
+                duplicate_uuid: identity
+            }),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn document_owned_uuids_collect_and_reject_nested_collisions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document: ScenarioDocument = serde_json::from_value(scenario_json())?;
+        let entity_id = "018f47f2-e880-7000-8000-000000000002".parse()?;
+        let nested_id = "018f47f2-e880-7000-8000-000000000003".parse::<uuid::Uuid>()?;
+        let definition = json!({
+            (nested_id.to_string()): {"id": nested_id},
+        });
+        document.domain.entities.insert(
+            crate::EntityId::from_uuid(entity_id),
+            json!({"children": [definition.clone()]}),
+        );
+        crate::validate_document_owned_uuid_uniqueness(&document)?;
+        assert_eq!(
+            crate::collect_document_owned_uuids(&document),
+            std::collections::BTreeSet::from([
+                document.scenario_id.as_uuid(),
+                entity_id,
+                nested_id,
+            ]),
+        );
+        document
+            .extensions
+            .insert("vendor.owned".to_owned(), json!({"children": [definition]}));
+        assert_eq!(
+            crate::validate_document_owned_uuid_uniqueness(&document),
+            Err(crate::OwnedIdentityError {
+                duplicate_uuid: nested_id
+            }),
+        );
+        Ok(())
     }
 
     #[test]

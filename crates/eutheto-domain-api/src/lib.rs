@@ -5,7 +5,10 @@
 
 mod schema;
 
-pub use schema::{ContractJsonLimits, validate_contract_schema, validate_contract_value};
+pub use schema::{
+    ContractJsonLimits, ValidatedContractSchema, bounded_json_size, validate_contract_schema,
+    validate_contract_value,
+};
 
 use eutheto_domain_ir::{
     AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
@@ -205,6 +208,8 @@ pub struct AiToolDescriptor {
 pub struct DomainCatalog {
     pub pack_id: PackId,
     pub scenario_schema_version: u32,
+    /// Pack-owned four-map document schema; versioned by `scenario_schema_version`.
+    pub internal_schema: Value,
     pub portable_schema: Value,
     pub share_result_schema: Value,
     pub commands: Vec<CommandDescriptor>,
@@ -218,6 +223,12 @@ impl DomainCatalog {
     /// # Errors
     /// Returns a stable contract error for the first inconsistency.
     pub fn validate(&self) -> Result<(), DomainPackError> {
+        validate_schema_complete(&self.internal_schema, "internalSchema")?;
+        if !eutheto_types::ScenarioDomain::has_schema_shape(&self.internal_schema) {
+            return Err(DomainPackError::CatalogMismatch(
+                "internalSchema must describe the four ScenarioDomain maps".to_owned(),
+            ));
+        }
         validate_schema_complete(&self.portable_schema, "portableSchema")?;
         validate_schema_complete(&self.share_result_schema, "shareResultSchema")?;
         unique_ids(
@@ -297,7 +308,14 @@ impl DomainCatalog {
 }
 
 impl DomainUiManifest {
-    fn validate(&self) -> Result<(), DomainPackError> {
+    /// Validates identities, ordering and localized metadata without claiming pack registration.
+    ///
+    /// Empty groups are permitted here; the caller enforces its implementation-stage contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first invalid identity, ordering, text or transfer version.
+    pub fn validate(&self) -> Result<(), DomainPackError> {
         validate_kind_group(&self.setup_steps, "setup steps")?;
         validate_kind_group(&self.entity_kinds, "entity kinds")?;
         validate_kind_group(&self.rule_kinds, "rule kinds")?;
@@ -386,22 +404,18 @@ impl DomainBatchCommand {
         for command in &self.commands {
             validate_id(&command.command_type, "command")?;
         }
-        let bytes = serde_json::to_vec(self).map_err(|error| DomainPackError::InvalidPayload {
-            path: "/".to_owned(),
-            message: error.to_string(),
-        })?;
-        let serialized_size =
-            u64::try_from(bytes.len()).map_err(|error| DomainPackError::InvalidPayload {
+        let limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES).map_err(|error| {
+            DomainPackError::InvalidPayload {
                 path: "/".to_owned(),
                 message: error.to_string(),
-            })?;
-        if serialized_size > MAX_SCENARIO_DOCUMENT_BYTES {
-            return Err(DomainPackError::InvalidPayload {
+            }
+        })?;
+        bounded_json_size(self, limit)
+            .map(|_| ())
+            .map_err(|_| DomainPackError::InvalidPayload {
                 path: "/".to_owned(),
                 message: "batch serialized size exceeds scenario limit".to_owned(),
-            });
-        }
-        Ok(())
+            })
     }
 }
 

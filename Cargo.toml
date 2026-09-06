@@ -17,6 +17,7 @@ members = [
   "crates/eutheto-export",
   "crates/eutheto-import",
   "crates/eutheto-cli",
+  "domains/workforce/core",
   "apps/desktop/src-tauri",
   "benchmarks/runner",
   "xtask",

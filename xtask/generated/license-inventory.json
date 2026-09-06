@@ -801,6 +801,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "csv-core",
+      "version": "0.1.13",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "ctor",
       "version": "0.8.0",
       "kind": "dependency",
@@ -1338,6 +1350,14 @@
       "kind": "workspace",
       "licenseConcluded": "Apache-2.0",
       "source": "crates/eutheto-verify"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-workforce",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "domains/workforce/core"
     },
     {
       "ecosystem": "cargo",

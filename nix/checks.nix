@@ -104,6 +104,7 @@
         "crates/eutheto-export",
         "crates/eutheto-import",
         "crates/eutheto-cli",
+        "domains/workforce/core",
         "apps/desktop/src-tauri",
         "benchmarks/runner",
         "xtask",
@@ -283,7 +284,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 19 and
+      (.workspace_members | length) == 20 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -303,6 +304,7 @@
         "eutheto-store",
         "eutheto-types",
         "eutheto-verify",
+        "eutheto-workforce",
         "xtask"
       ] | sort)
     ' "$TMPDIR/cargo-metadata.json" > /dev/null
