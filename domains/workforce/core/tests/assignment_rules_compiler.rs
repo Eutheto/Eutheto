@@ -927,3 +927,400 @@ fn empty_person_tags_and_teams_cannot_bypass_outer_filter_work_limits() -> Resul
     );
     Ok(())
 }
+
+fn rest_rule(value: &mut ScenarioDocument, minutes: u32) -> Result {
+    value.domain.rules.insert(id(24).parse()?, json!({
+        "kind":"minimumRest","id":id(24),"active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},"afterScope":{"people":{"kind":"all"}},
+        "beforeScope":{"people":{"kind":"all"}},"minimumMinutes":minutes,
+    }));
+    Ok(())
+}
+
+fn rest_binding(value: &mut ScenarioDocument) -> Result<&mut Value> {
+    value.domain.rules.get_mut(&id(24).parse()?).ok_or_else(|| "rest rule".into())
+}
+
+fn utc_times(shift: &mut Value, start: &str, end: &str) {
+    shift["startsAt"] = json!({"instant":format!("{start}Z"),"local":start,"offsetSeconds":0});
+    shift["endsAt"] = json!({"instant":format!("{end}Z"),"local":end,"offsetSeconds":0});
+}
+
+fn rest_document(minutes: u32) -> Result<ScenarioDocument> {
+    let mut value = serde_json::to_value(document()?)?;
+    value["settings"]["timeZone"] = json!("UTC");
+    value["settings"]["horizon"] = json!({"start":"2026-11-01T00:00:00Z","end":"2026-11-03T00:00:00Z"});
+    value["domain"]["entities"].as_object_mut().ok_or("entities")?.remove(&id(6));
+    let mut value: ScenarioDocument = serde_json::from_value(value)?;
+    utc_times(entity(&mut value, 8)?, "2026-11-01T10:00:00", "2026-11-01T12:00:00");
+    let mut source = entity(&mut value, 8)?.clone();
+    source["id"] = json!(id(7));
+    utc_times(&mut source, "2026-11-01T00:00:00", "2026-11-01T01:00:00");
+    value.domain.entities.insert(id(7).parse()?, source);
+    rest_rule(&mut value, minutes)?;
+    Ok(value)
+}
+
+#[test]
+fn minimum_rest_exact_nanoseconds_zero_overlap_and_extreme_minutes() -> Result {
+    for (start, minutes, permitted) in [
+        ("2026-11-01T10:59:59.999999999", 600, false),
+        ("2026-11-01T11:00:00", 600, true),
+        ("2026-11-01T11:00:00.000000001", 600, true),
+        ("2026-11-01T00:59:59.999999999", 0, false),
+        ("2026-11-01T01:00:00", 0, true),
+        ("2026-11-01T11:00:00", u32::MAX, false),
+    ] {
+        let mut value = rest_document(minutes)?;
+        utc_times(entity(&mut value, 8)?, start, "2026-11-01T12:00:00");
+        let result = compile(&value)?;
+        assert_eq!(allows(&result, &[pair(1, 7)?, pair(1, 8)?])?, permitted);
+        assert_eq!(result.estimate.constraints, u64::from(!permitted));
+        assert_eq!(result.estimate.variables, 2);
+        assert!(result.rejections.is_empty());
+        assert!(result.obligations.handled.contains(&id(24).parse()?));
+        assert!(!result.obligations.remaining.contains(&id(24).parse()?));
+    }
+    // Near both supported timestamp extremes, adding the maximum required duration
+    // to an endpoint would overflow. The signed elapsed comparison stays defined.
+    for date in ["-009999-12-30", "9999-12-30"] {
+        let mut value = serde_json::to_value(rest_document(u32::MAX)?)?;
+        value["settings"]["horizon"] = json!({
+            "start":format!("{date}T00:00:00Z"),"end":format!("{date}T23:00:00Z"),
+        });
+        for (shift, start, end) in [(7, "00:00:00", "01:00:00"), (8, "10:00:00", "12:00:00")] {
+            utc_times(&mut value["domain"]["entities"][id(shift)],
+                &format!("{date}T{start}"), &format!("{date}T{end}"));
+        }
+        assert!(!allows(&compile(&serde_json::from_value(value)?)?, &[pair(1, 7)?, pair(1, 8)?])?);
+    }
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_direction_equal_starts_and_input_order_preserve_roles() -> Result {
+    let mut value = rest_document(600)?;
+    let mut target_type = entity(&mut value, 4)?.clone();
+    target_type["id"] = json!(id(41));
+    value.domain.entities.insert(id(41).parse()?, target_type);
+    entity(&mut value, 8)?["assignmentTypeId"] = json!(id(41));
+    rest_binding(&mut value)?["afterScope"]["assignmentTypeIds"] = json!([id(4)]);
+    rest_binding(&mut value)?["beforeScope"]["assignmentTypeIds"] = json!([id(41)]);
+    let baseline = compile(&value)?;
+    assert!(!allows(&baseline, &[pair(1, 7)?, pair(1, 8)?])?);
+    let mut reordered: Value = serde_json::to_value(&value)?;
+    let entries = reordered["domain"]["entities"].as_object_mut().ok_or("entities")?;
+    let reverse: Vec<_> = entries.iter().rev().map(|(key, value)| (key.clone(), value.clone())).collect();
+    entries.clear();
+    entries.extend(reverse);
+    let reordered = compile(&serde_json::from_value(reordered)?)?;
+    assert_eq!(baseline.constraints, reordered.constraints);
+    assert_eq!(baseline.provenance, reordered.provenance);
+    rest_binding(&mut value)?["afterScope"]["assignmentTypeIds"] = json!([id(41)]);
+    rest_binding(&mut value)?["beforeScope"]["assignmentTypeIds"] = json!([id(4)]);
+    assert!(allows(&compile(&value)?, &[pair(1, 7)?, pair(1, 8)?])?);
+    utc_times(entity(&mut value, 8)?, "2026-11-01T00:00:00", "2026-11-01T12:00:00");
+    // Higher-UUID source at the same start must still see its lower-UUID target.
+    let reverse_role = compile(&value)?;
+    assert_eq!(reverse_role.constraints.len(), 1);
+    assert!(!allows(&reverse_role, &[pair(1, 7)?, pair(1, 8)?])?);
+    rest_binding(&mut value)?["afterScope"]["assignmentTypeIds"] = json!([id(4)]);
+    rest_binding(&mut value)?["beforeScope"]["assignmentTypeIds"] = json!([id(41)]);
+    let forward_role = compile(&value)?;
+    assert_eq!(forward_role.constraints.len(), 1);
+    assert_ne!(reverse_role.constraints[0].id, forward_role.constraints[0].id);
+    rest_binding(&mut value)?["afterScope"] = json!({"people":{"kind":"all"}});
+    rest_binding(&mut value)?["beforeScope"] = json!({"people":{"kind":"all"}});
+    let both = compile(&value)?;
+    assert_eq!(both.constraints.len(), 2);
+    assert_ne!(both.constraints[0].id, both.constraints[1].id);
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_all_pairs_survive_an_intervening_unrelated_assignment() -> Result {
+    let mut value = rest_document(600)?;
+    let mut intervening = entity(&mut value, 8)?.clone();
+    intervening["id"] = json!(id(30));
+    utc_times(&mut intervening, "2026-11-01T02:00:00", "2026-11-01T03:00:00");
+    value.domain.entities.insert(id(30).parse()?, intervening);
+    utc_times(entity(&mut value, 7)?, "2026-11-01T00:00:00", "2026-11-01T10:00:00");
+    utc_times(entity(&mut value, 8)?, "2026-11-01T18:00:00", "2026-11-01T19:00:00");
+    let result = compile(&value)?;
+    assert!(!allows(&result, &[pair(1, 7)?, pair(1, 8)?])?);
+    assert!(allows(&result, &[pair(1, 30)?, pair(1, 8)?])?);
+    assert!(!allows(&result, &[pair(1, 7)?, pair(1, 30)?, pair(1, 8)?])?);
+    assert_eq!(result.constraints.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_intersects_every_common_and_directional_scope_filter() -> Result {
+    let mut base = rest_document(1440)?;
+    let mut other = entity(&mut base, 4)?.clone();
+    other["id"] = json!(id(41));
+    other["category"] = json!("other");
+    base.domain.entities.insert(id(41).parse()?, other);
+    base.domain.entities.insert(id(42).parse()?, json!({"kind":"location","id":id(42),"name":"South","transitions":[]}));
+    for index in [43, 44] {
+        base.domain.entities.insert(id(index).parse()?, json!({"kind":"team","id":id(index),"name":"Team"}));
+    }
+    entity(&mut base, 1)?["teamIds"] = json!([id(43)]);
+    entity(&mut base, 8)?["assignmentTypeId"] = json!(id(41));
+    entity(&mut base, 8)?["locationId"] = json!(id(42));
+    utc_times(entity(&mut base, 8)?, "2026-11-02T00:00:00", "2026-11-02T01:00:00");
+    let selected = [pair(1, 7)?, pair(1, 8)?];
+    for scope in ["scope", "afterScope", "beforeScope"] {
+        let target = scope == "beforeScope";
+        for (field, positive, negative) in [
+            ("people", json!({"kind":"selected","personIds":[id(1)]}), json!({"kind":"filter","allTags":["absent"],"anyTags":[]})),
+            ("teamIds", json!([id(43)]), json!([id(44)])),
+            ("assignmentTypeIds", if scope == "scope" { json!([id(4),id(41)]) } else { json!([id(if target {41} else {4})]) },
+                json!([id(if target {4} else {41})])),
+            ("categories", if scope == "scope" { json!(["clinic","other"]) } else if target { json!(["other"]) } else { json!(["clinic"]) },
+                if target { json!(["clinic"]) } else { json!(["other"]) }),
+            ("weekdays", if scope == "scope" { json!(["sunday","monday"]) } else if target { json!(["monday"]) } else { json!(["sunday"]) },
+                if target { json!(["sunday"]) } else { json!(["monday"]) }),
+            ("locationIds", if scope == "scope" { json!([id(5),id(42)]) } else { json!([id(if target {42} else {5})]) },
+                json!([id(if target {5} else {42})])),
+        ] {
+            let mut value = base.clone();
+            rest_binding(&mut value)?[scope][field] = positive;
+            assert!(!allows(&compile(&value)?, &selected)?, "{scope}/{field}");
+            rest_binding(&mut value)?[scope][field] = negative;
+            let result = compile(&value)?;
+            assert!(allows(&result, &selected)?, "{scope}/{field}");
+            assert!(result.constraints.is_empty());
+            assert!(result.obligations.handled.contains(&id(24).parse()?));
+        }
+    }
+    rest_binding(&mut base)?["active"] = json!(false);
+    let inactive = compile(&base)?;
+    assert!(inactive.constraints.is_empty());
+    assert!(!inactive.obligations.handled.contains(&id(24).parse()?));
+    assert!(!inactive.obligations.remaining.contains(&id(24).parse()?));
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_uses_elapsed_overnight_spring_and_fall_gaps() -> Result {
+    for (date, next, source_end, end_local, end_offset, target_start, target_local, target_offset, allowed) in [
+        ("2026-03-08", "2026-03-09", "2026-03-08T05:00:00Z", "2026-03-08T00:00:00", -18000,
+            "2026-03-08T14:00:00Z", "2026-03-08T10:00:00", -14400, false),
+        ("2026-11-01", "2026-11-02", "2026-11-01T04:00:00Z", "2026-11-01T00:00:00", -14400,
+            "2026-11-01T15:00:00Z", "2026-11-01T10:00:00", -18000, true),
+    ] {
+        let mut value = serde_json::to_value(rest_document(600)?)?;
+        value["settings"]["timeZone"] = json!("America/New_York");
+        value["settings"]["horizon"] = json!({"start":format!("{date}T00:00:00Z"),"end":format!("{next}T00:00:00Z")});
+        let source = &mut value["domain"]["entities"][id(7)];
+        let start: jiff::Timestamp = source_end.parse()?;
+        let start = start.checked_sub(jiff::SignedDuration::from_hours(1))?.to_zoned(jiff::tz::TimeZone::get("America/New_York")?);
+        source["startsAt"] = json!({"instant":start.timestamp().to_string(),"local":start.datetime().to_string(),"offsetSeconds":start.offset().seconds()});
+        source["endsAt"] = json!({"instant":source_end,"local":end_local,"offsetSeconds":end_offset});
+        source["reportingAttribution"] = json!("endLocalDate");
+        let target = &mut value["domain"]["entities"][id(8)];
+        target["startsAt"] = json!({"instant":target_start,"local":target_local,"offsetSeconds":target_offset});
+        let end: jiff::Timestamp = target_start.parse()?;
+        let end = end.checked_add(jiff::SignedDuration::from_hours(1))?.to_zoned(jiff::tz::TimeZone::get("America/New_York")?);
+        target["endsAt"] = json!({"instant":end.timestamp().to_string(),"local":end.datetime().to_string(),"offsetSeconds":end.offset().seconds()});
+        value["domain"]["rules"][id(24)]["afterScope"]["weekdays"] = json!(["sunday"]);
+        assert_eq!(allows(&compile(&serde_json::from_value(value)?)?, &[pair(1, 7)?, pair(1, 8)?])?, allowed);
+    }
+    Ok(())
+}
+
+fn rest_locks(value: &mut ScenarioDocument) -> Result {
+    for (lock, shift) in [(50, 7), (51, 8)] {
+        value.domain.locked_assignments.insert(id(lock).parse()?, json!({
+            "id":id(lock),"personId":id(1),"shiftId":id(shift),"state":{"kind":"hard"},
+        }));
+    }
+    Ok(())
+}
+
+fn has_rest_lock_finding(result: &AssignmentRuleCompilation) -> bool {
+    result.validation.issues.iter().any(|issue| issue.code == "official.workforce.hard_lock_minimum_rest")
+}
+
+#[test]
+fn minimum_rest_hard_lock_readiness_respects_scopes_activation_and_chronology() -> Result {
+    let mut value = rest_document(600)?;
+    rest_locks(&mut value)?;
+    let positive = compile(&value)?;
+    assert!(has_rest_lock_finding(&positive));
+    let issue = positive.validation.issues.iter().find(|issue| issue.code == "official.workforce.hard_lock_minimum_rest").ok_or("rest finding")?;
+    assert_eq!(issue.severity, eutheto_types::ValidationSeverity::Error);
+    assert_eq!(issue.field_path, Some(format!("domain.lockedAssignments.{}", id(50))));
+    assert_eq!(issue.resource, Some(eutheto_types::ResourceRef::Assignment(id(50).parse()?)));
+    assert!([id(50), id(51), id(24)].iter().all(|id| issue.message.contains(id)));
+    for scope in ["scope", "afterScope", "beforeScope"] {
+        let mut excluded = value.clone();
+        rest_binding(&mut excluded)?[scope]["people"] = json!({"kind":"filter","allTags":["absent"],"anyTags":[]});
+        assert!(!has_rest_lock_finding(&compile(&excluded)?));
+    }
+    let mut inactive = value.clone();
+    rest_binding(&mut inactive)?["active"] = json!(false);
+    assert!(!has_rest_lock_finding(&compile(&inactive)?));
+    let mut other = entity(&mut value, 4)?.clone();
+    other["id"] = json!(id(41));
+    value.domain.entities.insert(id(41).parse()?, other);
+    entity(&mut value, 8)?["assignmentTypeId"] = json!(id(41));
+    rest_binding(&mut value)?["afterScope"]["assignmentTypeIds"] = json!([id(41)]);
+    rest_binding(&mut value)?["beforeScope"]["assignmentTypeIds"] = json!([id(4)]);
+    assert!(!has_rest_lock_finding(&compile(&value)?));
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_lock_findings_include_compatible_overlap_and_rejected_resolved_pairs() -> Result {
+    let mut value = rest_document(0)?;
+    utc_times(entity(&mut value, 8)?, "2026-11-01T00:30:00", "2026-11-01T02:00:00");
+    rule(&mut value, 23, "noOverlap")?;
+    value.domain.rules.get_mut(&id(23).parse()?).ok_or("overlap rule")?["compatibleCategoryPairs"] =
+        json!([{"firstCategory":"clinic","secondCategory":"clinic"}]);
+    rest_locks(&mut value)?;
+    let overlap = compile(&value)?;
+    assert!(has_rest_lock_finding(&overlap));
+    assert!(!overlap.validation.issues.iter().any(|issue| issue.code == "official.workforce.hard_lock_overlap"));
+    rule(&mut value, 21, "availability")?;
+    availability(&mut value, 30, "unavailable", "2026-11-01T00:00:00Z", "2026-11-01T00:15:00Z")?;
+    let rejected = compile(&value)?;
+    assert!(has_rest_lock_finding(&rejected));
+    assert!(rejected.validation.issues.iter().any(|issue| issue.code == "official.workforce.hard_lock_rejected_pair"));
+    assert_eq!(rejected.estimate.variables, 1);
+    for state in [json!({"kind":"soft","stabilityWeight":1}), json!({"kind":"unlocked"})] {
+        let mut mixed = value.clone();
+        mixed.domain.locked_assignments.get_mut(&id(50).parse()?).ok_or("lock")?["state"] = state;
+        assert!(!has_rest_lock_finding(&compile(&mixed)?));
+    }
+    let mut unresolved = document()?;
+    rest_rule(&mut unresolved, 600)?;
+    rest_locks(&mut unresolved)?;
+    entity(&mut unresolved, 6)?["recurrence"]["excludedDates"] = json!(["2026-11-01"]);
+    let unresolved = compile(&unresolved)?;
+    assert!(!has_rest_lock_finding(&unresolved));
+    assert!(unresolved.validation.issues.iter().any(|issue| issue.code == "official.workforce.hard_lock_unresolved_shift"));
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_exact_estimates_typed_provenance_and_caller_limits() -> Result {
+    let value = rest_document(600)?;
+    let result = compile(&value)?;
+    assert_eq!((result.estimate.variables, result.estimate.constraints, result.estimate.provenance_records, result.estimate.references), (2, 1, 4, 16));
+    let fact = result.provenance.iter().find(|fact| fact.id == result.constraints[0].provenance).ok_or("rest fact")?;
+    assert_eq!(fact.message_key, "official.workforce.minimum_rest");
+    assert_eq!((fact.entity_refs.len(), fact.parameters.len()), (3, 3));
+    let source = serde_json::to_value(&fact.parameters["source_shift"])?;
+    let target = serde_json::to_value(&fact.parameters["target_shift"])?;
+    assert!(source.to_string().contains(&id(7)));
+    assert!(target.to_string().contains(&id(8)));
+    assert_eq!(fact.parameters["minimum_minutes"], eutheto_planning_ir::ProvenanceParameter::Integer(600));
+    let parent = result.provenance.iter().find(|record| Some(&record.id) == fact.parent.as_ref()).ok_or("parent")?;
+    assert_eq!(parent.message_key, "official.workforce.minimum_rest");
+    for (field, exact) in [(0, 1), (1, 3), (2, 3), (3, 600)] {
+        let limits = |cap| {
+            let mut limits = PlanningIrLimitsV1::DEFAULT;
+            match field {
+                0 => limits.max_constraints = cap,
+                1 => limits.max_parameters_per_record = cap,
+                2 => limits.max_entity_refs_per_record = cap,
+                _ => limits.max_abs_value = cap as i64,
+            }
+            limits
+        };
+        assert_eq!(compile_assignment_rules(&value, &context(limits(exact)))?.constraints, result.constraints);
+        assert!(matches!(compile_assignment_rules(&value, &context(limits(exact - 1))), Err(AssignmentRuleError::LimitExceeded(_))));
+    }
+    // Aggregate ceilings include cumulative temporary storage as well as exact IR output.
+    // Find the true operation boundary rather than incorrectly using final model bytes alone.
+    for field in 0..3 {
+        let limits = |cap| {
+            let mut limits = PlanningIrLimitsV1::DEFAULT;
+            match field {
+                0 => limits.max_ir_bytes = cap,
+                1 => limits.max_total_refs = cap,
+                _ => limits.max_provenance_records = cap,
+            }
+            limits
+        };
+        let mut low = 0;
+        let mut high = match field {
+            0 => PlanningIrLimitsV1::DEFAULT.max_ir_bytes,
+            1 => PlanningIrLimitsV1::DEFAULT.max_total_refs,
+            _ => PlanningIrLimitsV1::DEFAULT.max_provenance_records,
+        };
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if compile_assignment_rules(&value, &context(limits(middle))).is_ok() { high = middle; } else { low = middle; }
+        }
+        assert_eq!(compile_assignment_rules(&value, &context(limits(high)))?.constraints, result.constraints);
+        assert!(matches!(compile_assignment_rules(&value, &context(limits(high - 1))), Err(AssignmentRuleError::LimitExceeded(_))));
+    }
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_dense_equal_starts_retain_both_directions_at_exact_constraint_limit() -> Result {
+    let mut value = rest_document(0)?;
+    value.domain.entities.remove(&id(7).parse()?);
+    let shift = entity(&mut value, 8)?.clone();
+    for index in 1_000..1_031 {
+        let mut record = shift.clone();
+        record["id"] = json!(id(index));
+        value.domain.entities.insert(id(index).parse()?, record);
+    }
+    let mut limits = PlanningIrLimitsV1::DEFAULT;
+    limits.max_constraints = 32 * 31;
+    let result = compile_assignment_rules(&value, &context(limits))?;
+    assert_eq!(result.estimate.constraints, 32 * 31);
+    assert_eq!(result.estimate.references, 32 * 3 + 32 * 31 * 10);
+    assert!(!allows(&result, &[pair(1, 8)?, pair(1, 1_000)?])?);
+    limits.max_constraints -= 1;
+    assert_eq!(compile_assignment_rules(&value, &context(limits)).err(),
+        Some(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::Constraints)));
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_large_safe_suffix_does_not_scan_the_cartesian_population() -> Result {
+    let mut value = rest_document(0)?;
+    let shift = entity(&mut value, 8)?.clone();
+    value.domain.entities.remove(&id(7).parse()?);
+    value.domain.entities.remove(&id(8).parse()?);
+    let origin: jiff::Timestamp = "2026-11-01T00:00:00Z".parse()?;
+    // A naive all-safe pair scan exceeds the fixed 20-million work ceiling.
+    // The chronological threshold window emits no edges and remains comfortably bounded.
+    for index in 0..6_500_u32 {
+        let mut record = shift.clone();
+        record["id"] = json!(id(1_000 + index));
+        let start = origin.checked_add(jiff::SignedDuration::from_secs(i64::from(index) * 2))?
+            .to_zoned(jiff::tz::TimeZone::UTC).datetime().to_string();
+        let end = origin.checked_add(jiff::SignedDuration::from_secs(i64::from(index) * 2 + 1))?
+            .to_zoned(jiff::tz::TimeZone::UTC).datetime().to_string();
+        utc_times(&mut record, &start, &end);
+        value.domain.entities.insert(id(1_000 + index).parse()?, record);
+    }
+    let result = compile(&value)?;
+    assert_eq!(result.estimate.variables, 6_500);
+    assert_eq!(result.estimate.constraints, 0);
+    assert!(allows(&result, &[pair(1, 1_000)?, pair(1, 7_499)?])?);
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_extreme_signed_gaps_do_not_overflow_total_nanoseconds() -> Result {
+    let mut value = serde_json::to_value(rest_document(u32::MAX)?)?;
+    value["settings"]["horizon"] = json!({
+        "start":"-009999-12-30T00:00:00Z","end":"9999-12-30T23:00:00Z",
+    });
+    utc_times(&mut value["domain"]["entities"][id(7)], "-009999-12-30T00:00:00", "-009999-12-30T01:00:00");
+    utc_times(&mut value["domain"]["entities"][id(8)], "9999-12-30T10:00:00", "9999-12-30T12:00:00");
+    assert!(allows(&compile(&serde_json::from_value(value.clone())?)?, &[pair(1, 7)?, pair(1, 8)?])?);
+    value["domain"]["rules"][id(24)]["minimumMinutes"] = json!(0);
+    utc_times(&mut value["domain"]["entities"][id(7)], "-009999-12-30T00:00:00", "9999-12-30T11:00:00");
+    utc_times(&mut value["domain"]["entities"][id(8)], "-009998-12-30T10:00:00", "-009998-12-30T12:00:00");
+    assert!(!allows(&compile(&serde_json::from_value(value)?)?, &[pair(1, 7)?, pair(1, 8)?])?);
+    Ok(())
+}

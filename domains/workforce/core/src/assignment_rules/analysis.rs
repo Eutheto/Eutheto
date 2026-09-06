@@ -1,6 +1,9 @@
 #[path = "compiler_support.rs"]
 pub(super) mod support;
 
+#[path = "compiler_rest.rs"]
+mod rest;
+
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     AssignmentRuleLimit, InstantInterval, PairRejection, RejectionCause, RequiredRulePartition,
@@ -60,6 +63,12 @@ pub(super) enum Predicate {
         person: PersonId,
         first: ShiftId,
         second: ShiftId,
+    },
+    MinimumRest {
+        person: PersonId,
+        source: ShiftId,
+        target: ShiftId,
+        minimum_minutes: u32,
     },
 }
 
@@ -432,6 +441,7 @@ fn obligations(
                 | WorkforceRule::Availability { .. }
                 | WorkforceRule::Coverage { .. }
                 | WorkforceRule::NoOverlap { .. }
+                | WorkforceRule::MinimumRest(_)
         ) {
             result.handled.push(id);
         } else {
@@ -531,6 +541,14 @@ fn plan(
                     budget,
                 )?;
             }
+            WorkforceRule::MinimumRest(rest) => rest::RestRule {
+                id,
+                scope,
+                after_scope: &rest.after_scope,
+                before_scope: &rest.before_scope,
+                minimum_minutes: rest.minimum_minutes,
+            }
+            .plan(input, &result.candidates, &mut plan, budget)?,
             _ => {}
         }
     }
@@ -922,6 +940,7 @@ pub(super) fn predicate_shape(
             (2, add(1, count(key.all.len() + key.any.len())?)?)
         }
         Predicate::Overlap { .. } => (3, 0),
+        Predicate::MinimumRest { .. } => (3, 3),
     })
 }
 
@@ -938,13 +957,11 @@ fn append(
     )?;
     if let Entry::Vacant(entry) = plan.parents.entry(constraint.rule) {
         budget.reserve(1, 1, 64)?;
-        entry.insert(
-            if matches!(constraint.predicate, Predicate::Overlap { .. }) {
-                "no_overlap"
-            } else {
-                "coverage"
-            },
-        );
+        entry.insert(match constraint.predicate {
+            Predicate::Overlap { .. } => "no_overlap",
+            Predicate::MinimumRest { .. } => "minimum_rest",
+            Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
+        });
     }
     budget.reserve(1, 4, 128)?;
     plan.constraints.push(constraint);
@@ -961,7 +978,7 @@ fn coverage_bound_findings(
         budget.step()?;
         let shift = match constraint.predicate {
             Predicate::Headcount { shift, .. } | Predicate::Qualification { shift, .. } => shift,
-            Predicate::Overlap { .. } => continue,
+            Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => continue,
         };
         budget.reserve(1, 2, 24)?;
         by_shift.entry(shift).or_default().push(constraint);
@@ -981,7 +998,7 @@ fn coverage_bound_findings(
                     u64::from(plan.definitions[definition].minima[minimum].minimum),
                     "qualification_above_headcount",
                 ),
-                Predicate::Overlap { .. } => continue,
+                Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => continue,
             };
             for upper in &predicates {
                 budget.step()?;
@@ -1128,6 +1145,7 @@ fn hard_lock_findings(
         )
     });
     locked_overlap_findings(input, &locks, &mut result.validation, budget)?;
+    rest::locked_rest_findings(input, &locks, &mut result.validation, budget)?;
     locked_coverage_findings(input, &pairs, plan, &mut result.validation, budget)
 }
 

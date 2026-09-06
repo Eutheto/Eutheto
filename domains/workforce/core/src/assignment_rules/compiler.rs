@@ -24,7 +24,7 @@ const BOOL_ID: &str =
 const CONSTRAINT_ID: &str = "official.workforce.constraint.0000000000000000000000000000000000000000000000000000000000000000";
 const PROVENANCE_ID: &str = "official.workforce.provenance.0000000000000000000000000000000000000000000000000000000000000000";
 
-/// Compile only the unregistered four-rule mathematical contribution.
+/// Compile only the unregistered five-family mathematical contribution.
 ///
 /// # Errors
 /// Returns structural, temporal, cancellation, finite-work and bounded-output failures atomically.
@@ -183,7 +183,9 @@ fn constraint_body(
             upper,
         )
         .map_err(|_| invalid()),
-        Predicate::Overlap { .. } => Ok(Constraint::at_most_one(literals)),
+        Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => {
+            Ok(Constraint::at_most_one(literals))
+        }
     }
 }
 
@@ -236,6 +238,16 @@ fn derive_predicate(
         } => identities.derive(
             kind,
             &("no_overlap", planned.rule, person, first, second),
+            budget,
+        ),
+        Predicate::MinimumRest {
+            person,
+            source,
+            target,
+            minimum_minutes,
+        } => identities.derive(
+            kind,
+            &("minimum_rest", planned.rule, person, source, target, minimum_minutes),
             budget,
         ),
     }
@@ -360,6 +372,25 @@ fn constraint_fact(
             ],
             "official.workforce.incompatible_overlap",
         ),
+        Predicate::MinimumRest {
+            person,
+            source,
+            target,
+            minimum_minutes,
+        } => {
+            let source = entity("shift", source.as_entity_id())?;
+            let target = entity("shift", target.as_entity_id())?;
+            parameters.insert("source_shift".to_owned(), ProvenanceParameter::Entity(source.clone()));
+            parameters.insert("target_shift".to_owned(), ProvenanceParameter::Entity(target.clone()));
+            parameters.insert(
+                "minimum_minutes".to_owned(),
+                ProvenanceParameter::Integer(i64::from(minimum_minutes)),
+            );
+            (
+                vec![entity("person", EntityId::from_uuid(person.as_uuid()))?, source, target],
+                "official.workforce.minimum_rest",
+            )
+        }
     };
     budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
@@ -494,7 +525,9 @@ pub(super) fn preflight(
                     min: u64::from(plan.definitions[definition].minima[minimum].minimum),
                     max: upper,
                 },
-                Predicate::Overlap { .. } => MeasuredBody::AtMostOne { literals },
+                Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => {
+                    MeasuredBody::AtMostOne { literals }
+                }
             }
         };
         let record = MeasuredConstraint {
@@ -627,6 +660,42 @@ mod tests {
             construct(analysis, &plan, &mut budget),
             Err(AssignmentRuleError::Cancelled)
         );
+        assert!(token.is_cancelled());
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_during_rest_constraint_construction_returns_no_record()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.settings.overlap_policy = eutheto_types::OverlapPolicy::Earlier;
+        document.domain.rules.insert(id(24).parse()?, json!({
+            "kind":"minimumRest","id":id(24),"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}},"afterScope":{"people":{"kind":"all"}},
+            "beforeScope":{"people":{"kind":"all"}},"minimumMinutes":600,
+        }));
+        let token = CancellationToken::new();
+        let limits = PlanningIrLimitsV1::DEFAULT;
+        let mut budget = OperationBudget::analysis(Some(&token), limits);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
+        preflight(&analysis.candidates, &plan, &mut budget, limits)?;
+        let pairs = analysis.candidates.clone();
+        let complete = construct(analysis, &plan, &mut budget)?;
+        let variables = pairs.iter().map(|pair| {
+            complete.variables.iter().find(|entry| entry.pair == *pair).cloned().ok_or("variable")
+        }).collect::<Result<Vec<_>, _>>()?;
+        let parent = complete.provenance.iter().find(|fact| fact.parent.is_none()
+            && fact.message_key == "official.workforce.minimum_rest").ok_or("rest parent")?;
+        let planned = plan.constraints.first().ok_or("rest conflict")?;
+        let mut identities = super::PlanningIdentities::default();
+        // Arming after setup/preflight and immediately before constructing a rest record
+        // guarantees cancellation cannot be supplied by decoding or unary planning.
+        budget.cancel_after_steps(3)?;
+        assert_eq!(super::compile_constraint(
+            planned, &plan, &variables, parent.id.clone(), &mut identities, &mut budget,
+        ), Err(AssignmentRuleError::Cancelled));
         assert!(token.is_cancelled());
         Ok(())
     }
