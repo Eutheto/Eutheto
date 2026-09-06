@@ -32,7 +32,7 @@ const VIOLATIONS: &str = "official.workforce.fact.violation_count";
 const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
-/// Evaluates Eligibility, Availability, Coverage, NoOverlap and MinimumRest, plus unconditional
+/// Evaluates Eligibility, Availability, Coverage, `NoOverlap` and `MinimumRest`, plus unconditional
 /// activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
@@ -227,7 +227,7 @@ fn activity(
                 None
             };
         }
-        summary.predicate(failed, witness, budget)?;
+        summary.predicate(failed, &witness, budget)?;
     }
     Ok(summary)
 }
@@ -279,7 +279,7 @@ fn pair_rule(
                 let allowed = predicates::type_allowed(person, &metadata, budget)?;
                 summary.predicate(
                     !allowed,
-                    predicates::pair_witness(input, pair, "assignment_type_not_allowed")?,
+                    &predicates::pair_witness(input, pair, "assignment_type_not_allowed")?,
                     budget,
                 )?;
                 let qualified = predicates::qualified(
@@ -290,7 +290,7 @@ fn pair_rule(
                 )?;
                 summary.predicate(
                     !qualified,
-                    predicates::pair_witness(input, pair, "qualification_expression")?,
+                    &predicates::pair_witness(input, pair, "qualification_expression")?,
                     budget,
                 )?;
             } else if let Some(records) = input.availability_by_person.get(person_id) {
@@ -339,7 +339,7 @@ fn check_availability(
         reason,
     );
     witness.interval = failure;
-    summary.predicate(failure.is_some(), witness, budget)
+    summary.predicate(failure.is_some(), &witness, budget)
 }
 
 struct Selected<'a> {
@@ -453,7 +453,7 @@ fn overlap(
                     witness.other_shift = Some(second);
                     witness.interval =
                         predicates::interval(left).intersection(predicates::interval(right));
-                    summary.failure(witness)?;
+                    summary.failure(&witness)?;
                 }
             }
         }
@@ -538,7 +538,7 @@ impl Summary {
     fn predicate(
         &mut self,
         failed: bool,
-        witness: Witness,
+        witness: &Witness,
         budget: &mut OperationBudget<'_>,
     ) -> Result<(), AssignmentRuleError> {
         budget.step()?;
@@ -549,14 +549,14 @@ impl Summary {
         Ok(())
     }
 
-    fn failure(&mut self, witness: Witness) -> Result<(), AssignmentRuleError> {
+    fn failure(&mut self, witness: &Witness) -> Result<(), AssignmentRuleError> {
         self.violations = add(self.violations, 1)?;
         if self
             .first
             .as_ref()
             .is_none_or(|first| witness.precedes(first))
         {
-            self.first = Some(witness);
+            self.first = Some(*witness);
         }
         Ok(())
     }
@@ -596,7 +596,7 @@ impl Summary {
             integer(self.checked)?,
             budget,
         )?;
-        if let Some(witness) = self.first {
+        if let Some(witness) = &self.first {
             witness_evidence(witness, &mut result, budget)?;
         }
         budget.sort_work(result.affected_entities.len())?;
@@ -611,7 +611,7 @@ impl Summary {
 }
 
 fn witness_evidence(
-    witness: Witness,
+    witness: &Witness,
     result: &mut RuleEvaluation,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
@@ -660,44 +660,7 @@ fn witness_evidence(
         }
     }
     if let Some(rest) = witness.rest {
-        for (key, shift) in [
-            ("official.workforce.fact.rest_source_shift", witness.shift),
-            (
-                "official.workforce.fact.rest_target_shift",
-                witness.other_shift.ok_or_else(invalid)?,
-            ),
-        ] {
-            let entity = entity_ref("shift", shift.as_entity_id(), budget)?;
-            fact(
-                &mut result.observed,
-                key,
-                VerificationValue::Entity(entity),
-                budget,
-            )?;
-        }
-        fact(
-            &mut result.expected,
-            "official.workforce.fact.required_rest_minutes",
-            VerificationValue::Integer(i64::from(rest.minimum_minutes)),
-            budget,
-        )?;
-        for (key, value) in [
-            (
-                "official.workforce.fact.actual_rest_seconds",
-                rest.actual.as_secs(),
-            ),
-            (
-                "official.workforce.fact.actual_rest_subsecond_nanoseconds",
-                i64::from(rest.actual.subsec_nanos()),
-            ),
-        ] {
-            fact(
-                &mut result.observed,
-                key,
-                VerificationValue::Integer(value),
-                budget,
-            )?;
-        }
+        rest_evidence(witness, rest, result, budget)?;
     }
     if let Some(hash) = witness.minimum_hash {
         let hash = blake3::Hash::from_bytes(hash).to_hex();
@@ -723,6 +686,45 @@ fn witness_evidence(
             &interval.end.to_string(),
             budget,
         )?;
+    }
+    Ok(())
+}
+
+fn rest_evidence(
+    witness: &Witness,
+    rest: RestWitness,
+    result: &mut RuleEvaluation,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    for (key, shift) in [
+        ("official.workforce.fact.rest_source_shift", witness.shift),
+        (
+            "official.workforce.fact.rest_target_shift",
+            witness.other_shift.ok_or_else(invalid)?,
+        ),
+    ] {
+        let entity = entity_ref("shift", shift.as_entity_id(), budget)?;
+        fact(
+            &mut result.observed,
+            key,
+            VerificationValue::Entity(entity),
+            budget,
+        )?;
+    }
+    fact(
+        &mut result.expected,
+        "official.workforce.fact.required_rest_minutes",
+        VerificationValue::Integer(i64::from(rest.minimum_minutes)),
+        budget,
+    )?;
+    for (key, value) in [
+        ("official.workforce.fact.actual_rest_seconds", rest.actual.as_secs()),
+        (
+            "official.workforce.fact.actual_rest_subsecond_nanoseconds",
+            i64::from(rest.actual.subsec_nanos()),
+        ),
+    ] {
+        fact(&mut result.observed, key, VerificationValue::Integer(value), budget)?;
     }
     Ok(())
 }

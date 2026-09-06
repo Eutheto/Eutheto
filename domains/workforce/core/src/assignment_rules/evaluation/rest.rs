@@ -92,7 +92,7 @@ pub(super) fn evaluate(
                     minimum_minutes: rule.minimum_minutes,
                     actual,
                 });
-                summary.failure(witness)?;
+                summary.failure(&witness)?;
             }
         }
     }
