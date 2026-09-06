@@ -1206,6 +1206,7 @@ dependencies = [
  "csv-core",
  "eutheto-domain-api",
  "eutheto-domain-ir",
+ "eutheto-planning-ir",
  "eutheto-types",
  "jiff",
  "serde",

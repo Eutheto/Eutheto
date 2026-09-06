@@ -22,13 +22,28 @@ pub(super) struct OccurrenceOwner {
 
 pub(super) type Owners = BTreeMap<(ShiftTemplateId, Date), OccurrenceOwner>;
 
+/// Logical work and fixed-size retention boundaries for a validated resolution.
+/// Public temporal callers check cancellation; rule operations also charge their budget.
+#[derive(Clone, Copy)]
+pub(crate) enum ResolutionStep {
+    Inspect,
+    RetainOwner,
+    RetainSpec,
+    RetainShift,
+}
+
 /// The caller has already validated global identity and template/date uniqueness.
-pub(super) fn owners(domain: &WorkforceDomainV1) -> Owners {
+pub(super) fn owners<E>(
+    domain: &WorkforceDomainV1,
+    checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
+) -> Result<Owners, E> {
     let mut owners = BTreeMap::new();
     for entity in domain.entities.values() {
+        checkpoint(ResolutionStep::Inspect)?;
         match entity {
             WorkforceEntity::ShiftTemplate(template) => {
                 for occurrence in template.occurrence_identities.values() {
+                    checkpoint(ResolutionStep::RetainOwner)?;
                     owners.insert(
                         (template.id, occurrence.local_start_date),
                         OccurrenceOwner {
@@ -44,6 +59,7 @@ pub(super) fn owners(domain: &WorkforceDomainV1) -> Owners {
                     occurrence_date,
                 } = shift.origin
                 {
+                    checkpoint(ResolutionStep::RetainOwner)?;
                     owners.insert(
                         (template_id, occurrence_date),
                         OccurrenceOwner {
@@ -56,7 +72,7 @@ pub(super) fn owners(domain: &WorkforceDomainV1) -> Owners {
             _ => {}
         }
     }
-    owners
+    Ok(owners)
 }
 
 #[derive(Clone, Copy)]
@@ -164,7 +180,7 @@ fn contains_start(settings: &ScenarioSettings, interval: ResolvedInterval) -> bo
         && interval.starts_at.instant < settings.horizon.end
 }
 
-fn weekday(date: Date) -> Weekday {
+pub(crate) fn weekday(date: Date) -> Weekday {
     match date.weekday() {
         jiff::civil::Weekday::Monday => Weekday::Monday,
         jiff::civil::Weekday::Tuesday => Weekday::Tuesday,
@@ -231,28 +247,36 @@ pub(super) fn collect_prior_specs<'a>(
 
 /// Enumerates only active definitions/intents, keeping metadata borrowed once from the model.
 /// Missing identity is allowed here solely so review can propose an ordinary reconciliation.
-pub(super) fn collect_specs<'a>(
+pub(super) fn collect_specs<'a, E: From<TemporalError>>(
     domain: &'a WorkforceDomainV1,
     settings: &ScenarioSettings,
     owners: &Owners,
-    cancellation: &CancellationToken,
-) -> Result<Vec<ShiftSpec<'a>>, TemporalError> {
-    let dates = planning_dates(settings)?;
+    checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
+) -> Result<Vec<ShiftSpec<'a>>, E> {
+    let dates = planning_dates(settings).map_err(TemporalError::from)?;
     let mut specs = Vec::new();
     let mut generated = 0;
     for entity in domain.entities.values() {
-        check_cancelled(cancellation)?;
+        checkpoint(ResolutionStep::Inspect)?;
         match entity {
             WorkforceEntity::ShiftTemplate(template) => {
                 let recurrence = &template.recurrence;
                 let mut date = dates.first_date.max(recurrence.effective_range.start_date);
-                let weekdays: BTreeSet<_> = recurrence.weekdays.iter().copied().collect();
-                let excluded: BTreeSet<_> = recurrence.excluded_dates.iter().copied().collect();
+                let mut weekdays = BTreeSet::new();
+                for weekday in &recurrence.weekdays {
+                    checkpoint(ResolutionStep::Inspect)?;
+                    weekdays.insert(*weekday);
+                }
+                let mut excluded = BTreeSet::new();
+                for date in &recurrence.excluded_dates {
+                    checkpoint(ResolutionStep::Inspect)?;
+                    excluded.insert(*date);
+                }
                 let mut count = 0;
                 while date <= dates.last_date
                     && date < recurrence.effective_range.end_date_exclusive
                 {
-                    check_cancelled(cancellation)?;
+                    checkpoint(ResolutionStep::Inspect)?;
                     let owner = owners.get(&(template.id, date));
                     if weekdays.contains(&weekday(date))
                         && !excluded.contains(&date)
@@ -265,8 +289,10 @@ pub(super) fn collect_specs<'a>(
                                 TemporalIssueKind::OccurrenceLimit,
                                 Some(template.id.as_entity_id()),
                                 Some(date),
-                            ));
+                            )
+                            .into());
                         }
+                        checkpoint(ResolutionStep::RetainSpec)?;
                         push_spec(
                             &mut specs,
                             ShiftSpec::Generated {
@@ -296,6 +322,7 @@ pub(super) fn collect_specs<'a>(
                     ends_at: shift.ends_at,
                 };
                 if contains_start(settings, interval) {
+                    checkpoint(ResolutionStep::RetainSpec)?;
                     push_spec(&mut specs, ShiftSpec::Stored(shift))?;
                 }
             }
@@ -324,15 +351,29 @@ pub fn resolve_shifts(
 ) -> Result<Vec<ResolvedShift>, TemporalError> {
     check_cancelled(cancellation)?;
     let domain = validate_document(document)?;
-    let dates = planning_dates(&document.settings)?;
-    let owners = owners(&domain);
-    let specs = collect_specs(&domain, &document.settings, &owners, cancellation)?;
-    let mut resolved = Vec::with_capacity(specs.len());
+    resolve_validated_shifts(&domain, &document.settings, &mut |_| {
+        check_cancelled(cancellation)
+    })
+}
+
+/// Reuses a previously validated model without decoding or manufacturing cancellation state.
+pub(crate) fn resolve_validated_shifts<E: From<TemporalError>>(
+    domain: &WorkforceDomainV1,
+    settings: &ScenarioSettings,
+    checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
+) -> Result<Vec<ResolvedShift>, E> {
+    checkpoint(ResolutionStep::Inspect)?;
+    let dates = planning_dates(settings).map_err(TemporalError::from)?;
+    let owners = owners(domain, checkpoint)?;
+    let specs = collect_specs(domain, settings, &owners, checkpoint)?;
+    let mut resolved = Vec::new();
     for spec in specs {
-        check_cancelled(cancellation)?;
-        resolved.push(spec.resolve(&document.settings, dates)?);
+        checkpoint(ResolutionStep::Inspect)?;
+        let shift = spec.resolve(settings, dates)?;
+        checkpoint(ResolutionStep::RetainShift)?;
+        resolved.push(shift);
     }
     resolved.sort_unstable_by_key(|shift| (shift.interval.starts_at.instant, shift.id));
-    check_cancelled(cancellation)?;
+    checkpoint(ResolutionStep::Inspect)?;
     Ok(resolved)
 }

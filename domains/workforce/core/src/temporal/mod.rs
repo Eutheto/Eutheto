@@ -4,8 +4,10 @@
 mod calendar;
 mod generation;
 mod review;
+pub(crate) use calendar::potentially_intersects;
 pub use calendar::{reporting_window, resolve_calendar};
 pub use generation::resolve_shifts;
+pub(crate) use generation::{ResolutionStep, resolve_validated_shifts, weekday};
 pub use review::preview_generation;
 
 mod types;
