@@ -1,5 +1,5 @@
 use crate::validation::common::{Result, invalid, require};
-use eutheto_domain_api::DomainChange;
+use eutheto_domain_api::{DomainChange, bounded_json_size};
 use eutheto_types::DomainCommandEnvelope;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -61,8 +61,37 @@ pub(super) enum Operation<'a> {
 
 pub(super) struct Effect {
     pub result: Value,
-    pub change: DomainChange,
     pub inverse: DomainCommandEnvelope,
+}
+
+const MAX_CHANGES: usize = 85_536;
+const MAX_CHANGE_BYTES: usize = 64 * 1024 * 1024;
+
+/// One batch-owned buffer. Compound commands cannot amplify small payloads without bounds.
+pub(super) struct Changes {
+    records: Vec<DomainChange>,
+    bytes: usize,
+}
+
+impl Changes {
+    pub fn new(capacity: usize) -> Self {
+        Self { records: Vec::with_capacity(capacity), bytes: 2 }
+    }
+
+    pub fn push(&mut self, change: DomainChange) -> Result {
+        require(self.records.len() < MAX_CHANGES, "/changes", "too many command changes")?;
+        let separator = usize::from(!self.records.is_empty());
+        let remaining = MAX_CHANGE_BYTES.checked_sub(self.bytes + separator)
+            .ok_or_else(|| invalid("/changes", "command changes exceed byte limit"))?;
+        let bytes = bounded_json_size(&change, remaining)?;
+        self.bytes += separator + bytes;
+        self.records.push(change);
+        Ok(())
+    }
+
+    pub fn into_records(self) -> Vec<DomainChange> {
+        self.records
+    }
 }
 
 /// Edits only the addressed raw record. The caller validates typed payload and resulting state.
@@ -72,6 +101,7 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
     id: K,
     operation: Operation<'_>,
     collection: &Collection,
+    changes: &mut Changes,
 ) -> Result<Effect> {
     let path = format!("/domain/{}/{id}", collection.map);
     let previous = records.get(&id);
@@ -113,12 +143,12 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
         ("before".to_owned(), before.unwrap_or(Value::Null)),
         ("after".to_owned(), after.unwrap_or(Value::Null)),
     ]));
+    changes.push(DomainChange {
+        command_id: command_id.to_owned(),
+        value: change,
+    })?;
     Ok(Effect {
         result: target(collection, id)?,
-        change: DomainChange {
-            command_id: command_id.to_owned(),
-            value: change,
-        },
         inverse: DomainCommandEnvelope {
             command_type: inverse_type.to_owned(),
             payload: inverse_payload,

@@ -54,7 +54,7 @@ fn apply_batch_inner(
     check_cancellation(cancellation)?;
     let mut working = document.clone();
     let mut results = Vec::with_capacity(batch.commands.len());
-    let mut changes = Vec::with_capacity(batch.commands.len());
+    let mut changes = effect::Changes::new(batch.commands.len());
     let mut inverse = DomainBatchCommand {
         schema_version: batch.schema_version,
         pack_id: batch.pack_id.clone(),
@@ -65,10 +65,9 @@ fn apply_batch_inner(
     for envelope in &batch.commands {
         check_cancellation(cancellation)?;
         schemas.validate_payload(envelope)?;
-        let effect = dispatch::apply_one(&mut working, envelope)?;
+        let effect = dispatch::apply_one(&mut working, envelope, &mut changes, cancellation)?;
         validate_document_with_schemas(&working, &schemas)?;
         results.push(effect.result);
-        changes.push(effect.change);
         inverse.commands.push(effect.inverse);
     }
     inverse.commands.reverse();
@@ -79,7 +78,7 @@ fn apply_batch_inner(
     Ok(DomainMutation {
         document: working,
         results,
-        changes,
+        changes: changes.into_records(),
         inverse,
     })
 }

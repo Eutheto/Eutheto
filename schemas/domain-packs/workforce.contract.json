@@ -4225,6 +4225,110 @@
       ]
     },
     {
+      "id": "official.workforce.add_occurrence_identities",
+      "title": {
+        "key": "official.workforce.add_occurrence_identities.title",
+        "defaultText": "Record recurring shift identities"
+      },
+      "description": {
+        "key": "official.workforce.add_occurrence_identities.description",
+        "defaultText": "Add bounded occurrence definitions across templates atomically without replacing template fields; retain one exact ordinary inverse."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "templates"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "occurrenceIdentities",
+                "templateId"
+              ],
+              "properties": {
+                "templateId": {
+                  "$ref": "#/$defs/Uuid"
+                },
+                "occurrenceIdentities": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/OccurrenceIdentity"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "resultSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "occurrenceCount",
+          "templateCount"
+        ],
+        "properties": {
+          "occurrenceCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32768
+          },
+          "templateCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        }
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "templates": [
+            {
+              "templateId": "018f7b40-a000-7000-8000-000000000006",
+              "occurrenceIdentities": {
+                "018f7b40-a000-7000-8000-000000000015": {
+                  "id": "018f7b40-a000-7000-8000-000000000015",
+                  "localStartDate": "2026-11-08"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "invalidExamples": [
+        {
+          "templates": []
+        }
+      ]
+    },
+    {
       "id": "official.workforce.add_preference",
       "title": {
         "key": "official.workforce.add_preference.title",
@@ -4887,6 +4991,212 @@
       ]
     },
     {
+      "id": "official.workforce.detach_shift",
+      "title": {
+        "key": "official.workforce.detach_shift.title",
+        "defaultText": "Detach a recurring shift"
+      },
+      "description": {
+        "key": "official.workforce.detach_shift.description",
+        "defaultText": "Move an owned occurrence identity into the supplied one-off shift, including an explicitly edited interval. Inactive definitions may become active stored shifts; review the generation diff."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instance",
+          "templateId"
+        ],
+        "properties": {
+          "templateId": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "instance": {
+            "$ref": "#/$defs/ShiftInstance"
+          }
+        }
+      },
+      "resultSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "occurrenceDate",
+          "owner",
+          "shiftId",
+          "templateId"
+        ],
+        "properties": {
+          "templateId": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "shiftId": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "occurrenceDate": {
+            "$ref": "#/$defs/TemporalText"
+          },
+          "owner": {
+            "oneOf": [
+              { "const": "stored" },
+              { "const": "template" }
+            ]
+          }
+        }
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "templateId": "018f7b40-a000-7000-8000-000000000006",
+          "instance": {
+            "kind": "shiftInstance",
+            "id": "018f7b40-a000-7000-8000-000000000007",
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "locationId": "018f7b40-a000-7000-8000-000000000005",
+            "startsAt": {
+              "instant": "2026-11-01T05:30:00Z",
+              "local": "2026-11-01T01:30:00",
+              "offsetSeconds": -14400
+            },
+            "endsAt": {
+              "instant": "2026-11-01T07:30:00Z",
+              "local": "2026-11-01T02:30:00",
+              "offsetSeconds": -18000
+            },
+            "coverage": {
+              "kind": "exact",
+              "count": 1,
+              "qualificationMinimums": []
+            },
+            "tags": [],
+            "reportingAttribution": "startLocalDate",
+            "origin": {
+              "kind": "detached",
+              "templateId": "018f7b40-a000-7000-8000-000000000006",
+              "occurrenceDate": "2026-11-01"
+            }
+          }
+        }
+      ],
+      "invalidExamples": [
+        {
+          "templateId": "018f7b40-a000-7000-8000-000000000006"
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.reattach_shift",
+      "title": {
+        "key": "official.workforce.reattach_shift.title",
+        "defaultText": "Return a shift to its template"
+      },
+      "description": {
+        "key": "official.workforce.reattach_shift.description",
+        "defaultText": "Remove a stored one-off and return its identity to the template. Current recurrence may leave it inactive; review the generation diff before applying."
+      },
+      "risk": "destructiveMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "occurrenceIdentities",
+          "templateId"
+        ],
+        "properties": {
+          "templateId": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "occurrenceIdentities": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/OccurrenceIdentity"
+            }
+          }
+        }
+      },
+      "resultSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "occurrenceDate",
+          "owner",
+          "shiftId",
+          "templateId"
+        ],
+        "properties": {
+          "templateId": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "shiftId": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "occurrenceDate": {
+            "$ref": "#/$defs/TemporalText"
+          },
+          "owner": {
+            "oneOf": [
+              { "const": "stored" },
+              { "const": "template" }
+            ]
+          }
+        }
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "templateId": "018f7b40-a000-7000-8000-000000000006",
+          "occurrenceIdentities": {
+            "018f7b40-a000-7000-8000-000000000007": {
+              "id": "018f7b40-a000-7000-8000-000000000007",
+              "localStartDate": "2026-11-01"
+            }
+          }
+        }
+      ],
+      "invalidExamples": [
+        {
+          "templateId": "018f7b40-a000-7000-8000-000000000006",
+          "occurrenceIdentities": []
+        }
+      ]
+    },
+    {
       "id": "official.workforce.remove_entity",
       "title": {
         "key": "official.workforce.remove_entity.title",
@@ -4991,6 +5301,109 @@
         {
           "assignmentId": "018f7b40-a000-7000-8000-000000000014",
           "unexpected": true
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.remove_occurrence_identities",
+      "title": {
+        "key": "official.workforce.remove_occurrence_identities.title",
+        "defaultText": "Remove recurring shift identities"
+      },
+      "description": {
+        "key": "official.workforce.remove_occurrence_identities.description",
+        "defaultText": "Remove bounded unreferenced occurrence definitions atomically; exact raw definitions are retained in the ordinary inverse."
+      },
+      "risk": "destructiveMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": false,
+      "payloadSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "templates"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "shiftIds",
+                "templateId"
+              ],
+              "properties": {
+                "templateId": {
+                  "$ref": "#/$defs/Uuid"
+                },
+                "shiftIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 4096,
+                  "items": {
+                    "$ref": "#/$defs/Uuid"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "resultSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "occurrenceCount",
+          "templateCount"
+        ],
+        "properties": {
+          "occurrenceCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32768
+          },
+          "templateCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        }
+      },
+      "changeSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "after",
+          "before",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "templates": [
+            {
+              "templateId": "018f7b40-a000-7000-8000-000000000006",
+              "shiftIds": [
+                "018f7b40-a000-7000-8000-000000000007"
+              ]
+            }
+          ]
+        }
+      ],
+      "invalidExamples": [
+        {
+          "templates": []
         }
       ]
     },

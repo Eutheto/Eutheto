@@ -442,6 +442,12 @@ impl LocalWallTime {
         value.parse().map(Self)
     }
 
+    /// Wraps an already valid Jiff civil date-time without formatting or reparsing.
+    #[must_use]
+    pub const fn from_datetime(value: DateTime) -> Self {
+        Self(value)
+    }
+
     /// Returns the Jiff civil date-time.
     #[must_use]
     pub const fn as_datetime(self) -> DateTime {
