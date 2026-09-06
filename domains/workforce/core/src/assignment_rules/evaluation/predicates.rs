@@ -57,10 +57,12 @@ pub(super) fn person_matches(
         PersonSelection::Filter { all_tags, any_tags } => {
             let mut all = true;
             for tag in all_tags {
+                budget.step()?;
                 all &= contains(&person.tags, tag, budget)?;
             }
             let mut any = any_tags.is_empty();
             for tag in any_tags {
+                budget.step()?;
                 any |= contains(&person.tags, tag, budget)?;
             }
             all && any
@@ -72,6 +74,7 @@ pub(super) fn person_matches(
     if let Some(teams) = &scope.team_ids {
         let mut matched = false;
         for team in teams {
+            budget.step()?;
             matched |= contains(&person.team_ids, team, budget)?;
         }
         if !matched {

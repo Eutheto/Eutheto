@@ -10,11 +10,11 @@ use crate::{
     temporal::ResolvedShift,
 };
 use eutheto_types::{EntityId, PersonId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 struct Minimum {
     expression: QualificationMatch,
-    minimum: u16,
+    required: u16,
     hash: [u8; 32],
 }
 
@@ -57,7 +57,7 @@ fn requirement<'a>(
             qualification_minimums,
         ),
     };
-    let mut keys = BTreeMap::<(Vec<QualificationId>, Vec<QualificationId>, u16), ()>::new();
+    let mut keys = BTreeSet::<(Vec<QualificationId>, Vec<QualificationId>, u16)>::new();
     for minimum in minima {
         budget.step()?;
         let expression = &minimum.qualifications;
@@ -67,8 +67,8 @@ fn requirement<'a>(
         )?;
         let bytes = budget.measure(&(expression, minimum.minimum))?;
         budget.reserve(1, items, bytes)?;
-        super::sort_work(expression.all_qualification_ids.len(), budget)?;
-        super::sort_work(expression.any_qualification_ids.len(), budget)?;
+        budget.sort_work(expression.all_qualification_ids.len())?;
+        budget.sort_work(expression.any_qualification_ids.len())?;
         budget.steps(items)?;
         let mut all = expression.all_qualification_ids.clone();
         let mut any = expression.any_qualification_ids.clone();
@@ -76,10 +76,10 @@ fn requirement<'a>(
         all.dedup();
         any.sort_unstable();
         any.dedup();
-        keys.insert((all, any, minimum.minimum), ());
+        keys.insert((all, any, minimum.minimum));
     }
     let mut canonical = Vec::new();
-    for ((all_qualification_ids, any_qualification_ids, minimum), ()) in keys {
+    for (all_qualification_ids, any_qualification_ids, minimum) in keys {
         budget.step()?;
         let mut hash = blake3::Hasher::new();
         serde_json::to_writer(
@@ -93,7 +93,7 @@ fn requirement<'a>(
                 all_qualification_ids,
                 any_qualification_ids,
             },
-            minimum,
+            required: minimum,
             hash: *hash.finalize().as_bytes(),
         });
     }
@@ -243,10 +243,10 @@ fn check(
         witness.reason = "coverage_qualification_minimum";
         witness.minimum_rank = count(rank)?;
         witness.minimum_hash = Some(minimum.hash);
-        witness.lower = Some(u64::from(minimum.minimum));
+        witness.lower = Some(u64::from(minimum.required));
         witness.upper = None;
         witness.actual = Some(matching);
-        summary.predicate(matching < u64::from(minimum.minimum), witness, budget)?;
+        summary.predicate(matching < u64::from(minimum.required), witness, budget)?;
     }
     Ok(())
 }
