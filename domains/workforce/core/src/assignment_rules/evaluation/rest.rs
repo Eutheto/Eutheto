@@ -67,9 +67,12 @@ pub(super) fn evaluate(
                 if source.id == target.id {
                     continue;
                 }
-                let actual = source.interval.ends_at.instant.as_timestamp().duration_until(
-                    target.interval.starts_at.instant.as_timestamp(),
-                );
+                let actual = source
+                    .interval
+                    .ends_at
+                    .instant
+                    .as_timestamp()
+                    .duration_until(target.interval.starts_at.instant.as_timestamp());
                 // Every later target is safe for this source. Count that suffix above in
                 // checked arithmetic rather than walking quadratic numbers of passing pairs.
                 if actual >= required {

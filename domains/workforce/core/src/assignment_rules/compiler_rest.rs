@@ -46,23 +46,33 @@ impl RestRule<'_> {
                     break;
                 }
                 if matches {
-                    roles.push(position, input.shift(pair.shift_id).ok_or_else(invalid)?, input, self, budget)?;
+                    roles.push(
+                        position,
+                        input.shift(pair.shift_id).ok_or_else(invalid)?,
+                        input,
+                        self,
+                        budget,
+                    )?;
                 }
                 position += 1;
             }
             roles.conflicts(self.minimum_minutes, budget, |source, target, _, budget| {
                 budget.reserve(0, 2, 16)?;
-                append(plan, PlannedConstraint {
-                    rule: self.id,
-                    predicate: Predicate::MinimumRest {
-                        person: *person_id,
-                        source: source.1.id,
-                        target: target.1.id,
-                        minimum_minutes: self.minimum_minutes,
+                append(
+                    plan,
+                    PlannedConstraint {
+                        rule: self.id,
+                        predicate: Predicate::MinimumRest {
+                            person: *person_id,
+                            source: source.1.id,
+                            target: target.1.id,
+                            minimum_minutes: self.minimum_minutes,
+                        },
+                        population: vec![source.0, target.0],
+                        impossible: false,
                     },
-                    population: vec![source.0, target.0],
-                    impossible: false,
-                }, budget)
+                    budget,
+                )
             })?;
         }
         Ok(())
@@ -116,7 +126,9 @@ impl<'a> Roles<'a> {
     ) -> Result<(), AssignmentRuleError> {
         for population in [&mut self.sources, &mut self.targets] {
             budget.sort_work(population.len())?;
-            population.sort_unstable_by_key(|(index, shift)| (shift.interval.starts_at.instant, shift.id, *index));
+            population.sort_unstable_by_key(|(index, shift)| {
+                (shift.interval.starts_at.instant, shift.id, *index)
+            });
         }
         // u32 minutes times sixty fits i64. Compare signed durations, not a potentially
         // overflowing end + threshold timestamp or rounded wall-clock minutes.
@@ -136,7 +148,12 @@ impl<'a> Roles<'a> {
                 if source.1.id == target.1.id {
                     continue;
                 }
-                let elapsed = source.1.interval.ends_at.instant.as_timestamp()
+                let elapsed = source
+                    .1
+                    .interval
+                    .ends_at
+                    .instant
+                    .as_timestamp()
                     .duration_until(target.1.interval.starts_at.instant.as_timestamp());
                 if elapsed >= required {
                     break;
@@ -156,7 +173,9 @@ pub(super) fn locked_rest_findings(
 ) -> Result<(), AssignmentRuleError> {
     for rule in input.domain.rules.values() {
         budget.step()?;
-        let WorkforceRule::MinimumRest(value) = rule else { continue; };
+        let WorkforceRule::MinimumRest(value) = rule else {
+            continue;
+        };
         if !value.active {
             continue;
         }
@@ -221,7 +240,12 @@ mod tests {
         let mut document = fixture()?;
         document.domain.locked_assignments.clear();
         document.domain.entities.remove(&id(6).parse()?);
-        let shift = document.domain.entities.get(&id(8).parse()?).ok_or("shift")?.clone();
+        let shift = document
+            .domain
+            .entities
+            .get(&id(8).parse()?)
+            .ok_or("shift")?
+            .clone();
         for index in 1_000..1_032 {
             let mut record = shift.clone();
             record["id"] = json!(id(index));
@@ -232,15 +256,20 @@ mod tests {
         let input = AssignmentInput::new(&document, &mut budget)?;
         let scope: Scope = serde_json::from_value(json!({"people":{"kind":"all"}}))?;
         let rule = RestRule {
-            id: id(24).parse()?, scope: &scope, after_scope: &scope,
-            before_scope: &scope, minimum_minutes: 600,
+            id: id(24).parse()?,
+            scope: &scope,
+            after_scope: &scope,
+            before_scope: &scope,
+            minimum_minutes: 600,
         };
         let mut roles = Roles::default();
         for (index, shift) in input.shifts.iter().enumerate() {
             roles.push(index, shift, &input, &rule, &mut budget)?;
         }
         let mut plan = Plan {
-            definitions: Vec::new(), constraints: Vec::new(), parents: Default::default(),
+            definitions: Vec::new(),
+            constraints: Vec::new(),
+            parents: Default::default(),
         };
         let mut entered = false;
         let result = roles.conflicts(600, &mut budget, |source, target, _, budget| {
@@ -251,14 +280,21 @@ mod tests {
                 budget.cancel_after_steps(128)?;
             }
             budget.reserve(0, 2, 16)?;
-            append(&mut plan, PlannedConstraint {
-                rule: rule.id,
-                predicate: Predicate::MinimumRest {
-                    person: id(1).parse().map_err(|_| invalid())?,
-                    source: source.1.id, target: target.1.id, minimum_minutes: 600,
+            append(
+                &mut plan,
+                PlannedConstraint {
+                    rule: rule.id,
+                    predicate: Predicate::MinimumRest {
+                        person: id(1).parse().map_err(|_| invalid())?,
+                        source: source.1.id,
+                        target: target.1.id,
+                        minimum_minutes: 600,
+                    },
+                    population: vec![source.0, target.0],
+                    impossible: false,
                 },
-                population: vec![source.0, target.0], impossible: false,
-            }, budget)
+                budget,
+            )
         });
         assert_eq!(result, Err(AssignmentRuleError::Cancelled));
         assert!(entered && token.is_cancelled());

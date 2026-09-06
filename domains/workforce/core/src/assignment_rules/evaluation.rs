@@ -682,13 +682,21 @@ fn witness_evidence(
             budget,
         )?;
         for (key, value) in [
-            ("official.workforce.fact.actual_rest_seconds", rest.actual.as_secs()),
+            (
+                "official.workforce.fact.actual_rest_seconds",
+                rest.actual.as_secs(),
+            ),
             (
                 "official.workforce.fact.actual_rest_subsecond_nanoseconds",
                 i64::from(rest.actual.subsec_nanos()),
             ),
         ] {
-            fact(&mut result.observed, key, VerificationValue::Integer(value), budget)?;
+            fact(
+                &mut result.observed,
+                key,
+                VerificationValue::Integer(value),
+                budget,
+            )?;
         }
     }
     if let Some(hash) = witness.minimum_hash {
@@ -1000,12 +1008,7 @@ mod tests {
     }
 
     fn rest_witness() -> TestResult<Witness> {
-        let mut witness = Witness::pair(
-            selected_pair()?,
-            entity_id(8)?,
-            "shift",
-            "minimum_rest",
-        );
+        let mut witness = Witness::pair(selected_pair()?, entity_id(8)?, "shift", "minimum_rest");
         witness.other_shift = Some(support::id(30).parse()?);
         witness.rest = Some(RestWitness {
             minimum_minutes: u32::MAX,
@@ -1014,7 +1017,12 @@ mod tests {
         Ok(witness)
     }
 
-    fn rest_summary_bytes(id: RuleId, checked: i64, violations: i64, nanos: i64) -> TestResult<u64> {
+    fn rest_summary_bytes(
+        id: RuleId,
+        checked: i64,
+        violations: i64,
+        nanos: i64,
+    ) -> TestResult<u64> {
         let mut bytes = summary_bytes(id, checked, violations)? + 6 * 160;
         bytes += encoded(&(
             "official.workforce.fact.witness_reason",
@@ -1032,9 +1040,15 @@ mod tests {
             bytes += encoded(&(key, VerificationValue::Entity(entity)))?;
         }
         for (key, value) in [
-            ("official.workforce.fact.required_rest_minutes", i64::from(u32::MAX)),
+            (
+                "official.workforce.fact.required_rest_minutes",
+                i64::from(u32::MAX),
+            ),
             ("official.workforce.fact.actual_rest_seconds", -7200),
-            ("official.workforce.fact.actual_rest_subsecond_nanoseconds", nanos),
+            (
+                "official.workforce.fact.actual_rest_subsecond_nanoseconds",
+                nanos,
+            ),
         ] {
             bytes += encoded(&(key, VerificationValue::Integer(value)))?;
         }
@@ -1056,9 +1070,12 @@ mod tests {
             assert!(!result.satisfied);
             assert_eq!(result.affected_entities.len(), 3);
             assert_eq!(
-                result.observed.get(&VerificationFactId::new(
-                    "official.workforce.fact.actual_rest_subsecond_nanoseconds"
-                ).map_err(|_| invalid())?),
+                result.observed.get(
+                    &VerificationFactId::new(
+                        "official.workforce.fact.actual_rest_subsecond_nanoseconds"
+                    )
+                    .map_err(|_| invalid())?
+                ),
                 Some(&VerificationValue::Integer(-1)),
             );
             Ok(())
@@ -1067,12 +1084,20 @@ mod tests {
 
     fn dense_rest_document(count: u32) -> TestResult<(ScenarioDocument, Vec<AssignmentPair>)> {
         let mut document = document()?;
-        document.domain.rules.insert(rule_id(20)?, json!({
-            "id":support::id(20), "kind":"minimumRest", "active":true, "strength":"required",
-            "scope":{"people":{"kind":"all"}}, "afterScope":{"people":{"kind":"all"}},
-            "beforeScope":{"people":{"kind":"all"}}, "minimumMinutes":u32::MAX,
-        }));
-        let prototype = document.domain.entities.get(&entity_id(8)?).ok_or("shift")?.clone();
+        document.domain.rules.insert(
+            rule_id(20)?,
+            json!({
+                "id":support::id(20), "kind":"minimumRest", "active":true, "strength":"required",
+                "scope":{"people":{"kind":"all"}}, "afterScope":{"people":{"kind":"all"}},
+                "beforeScope":{"people":{"kind":"all"}}, "minimumMinutes":u32::MAX,
+            }),
+        );
+        let prototype = document
+            .domain
+            .entities
+            .get(&entity_id(8)?)
+            .ok_or("shift")?
+            .clone();
         let mut pairs = vec![selected_pair()?];
         for index in 30..30 + count - 1 {
             let mut shift = prototype.clone();
@@ -1109,7 +1134,8 @@ mod tests {
         let (document, pairs) = dense_rest_document(2)?;
         let bytes = summary_bytes(rule_id(1)?, 2, 0)?
             + rest_summary_bytes(rule_id(20)?, 2, 2, 0)?
-            + 64 + 32; // Four role references and two handled obligation IDs.
+            + 64
+            + 32; // Four role references and two handled obligation IDs.
         for (left, expected) in [
             ((2, 36, bytes), None),
             ((1, 36, bytes), Some(AssignmentRuleLimit::Records)),
@@ -1180,7 +1206,10 @@ mod tests {
                 Err(error) => break error,
             }
         };
-        assert_eq!(error, AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps));
+        assert_eq!(
+            error,
+            AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)
+        );
         assert!(summary.violations > 4160);
         Ok(())
     }
@@ -1201,7 +1230,10 @@ mod tests {
         assert_eq!((summary.checked, summary.violations), (2, 2));
         // After the role Entity facts, while constructing the signed numeric rest facts.
         budget.cancel_after_steps(18)?;
-        assert_eq!(summary.finish(rule_id(20)?, &mut budget), Err(AssignmentRuleError::Cancelled));
+        assert_eq!(
+            summary.finish(rule_id(20)?, &mut budget),
+            Err(AssignmentRuleError::Cancelled)
+        );
         assert!(token.is_cancelled());
         Ok(())
     }

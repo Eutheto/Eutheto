@@ -247,7 +247,14 @@ fn derive_predicate(
             minimum_minutes,
         } => identities.derive(
             kind,
-            &("minimum_rest", planned.rule, person, source, target, minimum_minutes),
+            &(
+                "minimum_rest",
+                planned.rule,
+                person,
+                source,
+                target,
+                minimum_minutes,
+            ),
             budget,
         ),
     }
@@ -380,14 +387,24 @@ fn constraint_fact(
         } => {
             let source = entity("shift", source.as_entity_id())?;
             let target = entity("shift", target.as_entity_id())?;
-            parameters.insert("source_shift".to_owned(), ProvenanceParameter::Entity(source.clone()));
-            parameters.insert("target_shift".to_owned(), ProvenanceParameter::Entity(target.clone()));
+            parameters.insert(
+                "source_shift".to_owned(),
+                ProvenanceParameter::Entity(source.clone()),
+            );
+            parameters.insert(
+                "target_shift".to_owned(),
+                ProvenanceParameter::Entity(target.clone()),
+            );
             parameters.insert(
                 "minimum_minutes".to_owned(),
                 ProvenanceParameter::Integer(i64::from(minimum_minutes)),
             );
             (
-                vec![entity("person", EntityId::from_uuid(person.as_uuid()))?, source, target],
+                vec![
+                    entity("person", EntityId::from_uuid(person.as_uuid()))?,
+                    source,
+                    target,
+                ],
                 "official.workforce.minimum_rest",
             )
         }
@@ -670,11 +687,14 @@ mod tests {
         let mut document = fixture()?;
         document.domain.locked_assignments.clear();
         document.settings.overlap_policy = eutheto_types::OverlapPolicy::Earlier;
-        document.domain.rules.insert(id(24).parse()?, json!({
-            "kind":"minimumRest","id":id(24),"active":true,"strength":"required",
-            "scope":{"people":{"kind":"all"}},"afterScope":{"people":{"kind":"all"}},
-            "beforeScope":{"people":{"kind":"all"}},"minimumMinutes":600,
-        }));
+        document.domain.rules.insert(
+            id(24).parse()?,
+            json!({
+                "kind":"minimumRest","id":id(24),"active":true,"strength":"required",
+                "scope":{"people":{"kind":"all"}},"afterScope":{"people":{"kind":"all"}},
+                "beforeScope":{"people":{"kind":"all"}},"minimumMinutes":600,
+            }),
+        );
         let token = CancellationToken::new();
         let limits = PlanningIrLimitsV1::DEFAULT;
         let mut budget = OperationBudget::analysis(Some(&token), limits);
@@ -683,19 +703,40 @@ mod tests {
         preflight(&analysis.candidates, &plan, &mut budget, limits)?;
         let pairs = analysis.candidates.clone();
         let complete = construct(analysis, &plan, &mut budget)?;
-        let variables = pairs.iter().map(|pair| {
-            complete.variables.iter().find(|entry| entry.pair == *pair).cloned().ok_or("variable")
-        }).collect::<Result<Vec<_>, _>>()?;
-        let parent = complete.provenance.iter().find(|fact| fact.parent.is_none()
-            && fact.message_key == "official.workforce.minimum_rest").ok_or("rest parent")?;
+        let variables = pairs
+            .iter()
+            .map(|pair| {
+                complete
+                    .variables
+                    .iter()
+                    .find(|entry| entry.pair == *pair)
+                    .cloned()
+                    .ok_or("variable")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let parent = complete
+            .provenance
+            .iter()
+            .find(|fact| {
+                fact.parent.is_none() && fact.message_key == "official.workforce.minimum_rest"
+            })
+            .ok_or("rest parent")?;
         let planned = plan.constraints.first().ok_or("rest conflict")?;
         let mut identities = super::PlanningIdentities::default();
         // Arming after setup/preflight and immediately before constructing a rest record
         // guarantees cancellation cannot be supplied by decoding or unary planning.
         budget.cancel_after_steps(3)?;
-        assert_eq!(super::compile_constraint(
-            planned, &plan, &variables, parent.id.clone(), &mut identities, &mut budget,
-        ), Err(AssignmentRuleError::Cancelled));
+        assert_eq!(
+            super::compile_constraint(
+                planned,
+                &plan,
+                &variables,
+                parent.id.clone(),
+                &mut identities,
+                &mut budget,
+            ),
+            Err(AssignmentRuleError::Cancelled)
+        );
         assert!(token.is_cancelled());
         Ok(())
     }

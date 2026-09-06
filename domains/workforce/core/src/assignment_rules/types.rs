@@ -101,7 +101,7 @@ pub struct AssignmentVariable {
     pub variable: BoolVariable,
 }
 
-/// Mathematics for the four assignment rule families, not a complete `PlanningProblem`.
+/// Mathematics for supported assignment-rule families, not a complete `PlanningProblem`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssignmentRuleCompilation {
     pub source_document_hash: String,
