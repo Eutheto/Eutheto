@@ -44,14 +44,15 @@ pub fn preview_generation(
     serde_json::to_writer(&mut hasher, prospective)
         .map_err(|_| invalid("document", "cannot hash prospective document"))?;
     let prospective_hash = *hasher.finalize().as_bytes();
-    let before_owners = generation::owners(&before_domain);
-    let prospective_owners = generation::owners(&prospective_domain);
+    let mut checkpoint = |_| check_cancelled(cancellation);
+    let before_owners = generation::owners(&before_domain, &mut checkpoint)?;
+    let prospective_owners = generation::owners(&prospective_domain, &mut checkpoint)?;
     check_identity_continuity(&before_owners, &prospective_owners, cancellation)?;
     let candidates = generation::collect_specs(
         &prospective_domain,
         &prospective.settings,
         &prospective_owners,
-        cancellation,
+        &mut checkpoint,
     )?;
     let reconciliation = build_reconciliation(
         before,
@@ -73,8 +74,8 @@ pub fn preview_generation(
         generation::collect_specs(
             after_domain,
             &prospective.settings,
-            &generation::owners(after_domain),
-            cancellation,
+            &generation::owners(after_domain, &mut checkpoint)?,
+            &mut checkpoint,
         )?
     } else {
         candidates

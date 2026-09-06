@@ -29,6 +29,9 @@ uuid = "=1.26.0"
 
 [dev-dependencies]
 dirs = "=6.0.0"
+eutheto-solver-ortools = { path = "../eutheto-solver-ortools" }
+eutheto-workforce = { path = "../../domains/workforce/core" }
+sha2 = "=0.10.9"
 tempfile = "=3.27.0"
 tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "sync"] }
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }

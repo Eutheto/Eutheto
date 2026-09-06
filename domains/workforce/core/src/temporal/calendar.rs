@@ -8,7 +8,8 @@ use crate::{
     validation::validate_document,
 };
 use eutheto_types::{
-    CancellationToken, Horizon, ScenarioDocument, ScenarioSettings, TimeResolutionFailureKind,
+    CancellationToken, EntityId, Horizon, ScenarioDocument, ScenarioSettings,
+    TimeResolutionFailureKind,
 };
 use jiff::{
     SignedDuration, Span,
@@ -84,7 +85,7 @@ pub fn resolve_calendar(
         // Earlier/later here bound *possible* instants, not a resolution policy.
         // This avoids rejecting unrelated DST boundaries outside the query. Every
         // retained endpoint is resolved below solely by the explicit host policies.
-        if potentially_intersects(start, end, &zone, range, calendar_id)? {
+        if potentially_intersects(start, end, &zone, range, calendar_id.into())? {
             let window = CalendarWindow {
                 calendar_id,
                 interval: resolve_interval(start, end, &document.settings, calendar_id.into())?,
@@ -233,22 +234,28 @@ fn overflow(id: WorkCalendarId, date: Option<Date>) -> TemporalError {
     issue(TemporalIssueKind::DateOverflow, Some(id.into()), date)
 }
 
-fn potentially_intersects(
+pub(crate) fn potentially_intersects(
     start: DateTime,
     end: DateTime,
     zone: &TimeZone,
     range: Horizon,
-    id: WorkCalendarId,
+    id: EntityId,
 ) -> Result<bool, TemporalError> {
     let earliest_start = zone
         .to_ambiguous_zoned(start)
         .earlier()
-        .map_err(|_| overflow(id, Some(start.date())))?
+        .map_err(|_| {
+            issue(
+                TemporalIssueKind::DateOverflow,
+                Some(id),
+                Some(start.date()),
+            )
+        })?
         .timestamp();
     let latest_end = zone
         .to_ambiguous_zoned(end)
         .later()
-        .map_err(|_| overflow(id, Some(end.date())))?
+        .map_err(|_| issue(TemporalIssueKind::DateOverflow, Some(id), Some(end.date())))?
         .timestamp();
     Ok(earliest_start < range.end.as_timestamp() && range.start.as_timestamp() < latest_end)
 }

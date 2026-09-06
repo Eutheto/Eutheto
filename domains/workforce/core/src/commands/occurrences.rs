@@ -442,12 +442,9 @@ fn reattach(
 }
 
 #[cfg(test)]
-#[path = "../../tests/support/mod.rs"]
-mod test_support;
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
 
     #[test]
     fn cancellation_rejects_each_atomic_command_without_changes()
