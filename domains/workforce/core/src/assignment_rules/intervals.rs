@@ -91,20 +91,7 @@ pub(super) fn availability_intervals(
         TimeWindow::Weekly { windows } => {
             for window in windows {
                 budget.step()?;
-                // Resolved endpoints equal intended civil time minus an offset within these
-                // bounds, even for compatible gap movement and whole-day transitions.
-                let first = Offset::UTC
-                    .to_datetime(query.start.as_timestamp())
-                    .checked_add(Span::new().seconds(i64::from(Offset::MIN.seconds())))
-                    .map_err(|_| overflow(owner, None))?
-                    .date()
-                    .checked_sub(Span::new().days(i64::from(window.end_day_offset)))
-                    .map_err(|_| overflow(owner, None))?;
-                let last = Offset::UTC
-                    .to_datetime(query.end.as_timestamp())
-                    .checked_add(Span::new().seconds(i64::from(Offset::MAX.seconds())))
-                    .map_err(|_| overflow(owner, None))?
-                    .date();
+                let (first, last) = weekly_start_bounds(query, window.end_day_offset, owner)?;
                 let mut date = first;
                 loop {
                     budget.step()?;
@@ -145,6 +132,7 @@ pub(super) fn availability_intervals(
             }
         }
     }
+    budget.sort_work(intervals.len())?;
     intervals.sort_unstable();
     intervals.dedup();
     budget.check()?;
@@ -152,6 +140,28 @@ pub(super) fn availability_intervals(
         query: Some(query),
         intervals,
     })
+}
+
+/// Resolved endpoints equal intended civil time minus an offset within these bounds,
+/// including compatible gap movement and whole-day transitions.
+fn weekly_start_bounds(
+    query: InstantInterval,
+    end_day_offset: u8,
+    owner: EntityId,
+) -> Result<(Date, Date), AssignmentRuleError> {
+    let first = Offset::UTC
+        .to_datetime(query.start.as_timestamp())
+        .checked_add(Span::new().seconds(i64::from(Offset::MIN.seconds())))
+        .map_err(|_| overflow(owner, None))?
+        .date()
+        .checked_sub(Span::new().days(i64::from(end_day_offset)))
+        .map_err(|_| overflow(owner, None))?;
+    let last = Offset::UTC
+        .to_datetime(query.end.as_timestamp())
+        .checked_add(Span::new().seconds(i64::from(Offset::MAX.seconds())))
+        .map_err(|_| overflow(owner, None))?
+        .date();
+    Ok((first, last))
 }
 
 fn retain_interval(

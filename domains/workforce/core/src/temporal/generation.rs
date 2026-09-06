@@ -27,6 +27,8 @@ pub(super) type Owners = BTreeMap<(ShiftTemplateId, Date), OccurrenceOwner>;
 #[derive(Clone, Copy)]
 pub(crate) enum ResolutionStep {
     Inspect,
+    RetainRecurrenceKey,
+    Sort(usize),
     RetainOwner,
     RetainSpec,
     RetainShift,
@@ -264,12 +266,12 @@ pub(super) fn collect_specs<'a, E: From<TemporalError>>(
                 let mut date = dates.first_date.max(recurrence.effective_range.start_date);
                 let mut weekdays = BTreeSet::new();
                 for weekday in &recurrence.weekdays {
-                    checkpoint(ResolutionStep::Inspect)?;
+                    checkpoint(ResolutionStep::RetainRecurrenceKey)?;
                     weekdays.insert(*weekday);
                 }
                 let mut excluded = BTreeSet::new();
                 for date in &recurrence.excluded_dates {
-                    checkpoint(ResolutionStep::Inspect)?;
+                    checkpoint(ResolutionStep::RetainRecurrenceKey)?;
                     excluded.insert(*date);
                 }
                 let mut count = 0;
@@ -373,6 +375,7 @@ pub(crate) fn resolve_validated_shifts<E: From<TemporalError>>(
         checkpoint(ResolutionStep::RetainShift)?;
         resolved.push(shift);
     }
+    checkpoint(ResolutionStep::Sort(resolved.len()))?;
     resolved.sort_unstable_by_key(|shift| (shift.interval.starts_at.instant, shift.id));
     checkpoint(ResolutionStep::Inspect)?;
     Ok(resolved)

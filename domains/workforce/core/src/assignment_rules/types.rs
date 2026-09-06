@@ -101,7 +101,7 @@ pub struct AssignmentVariable {
     pub variable: BoolVariable,
 }
 
-/// Mathematics for the four assignment rule families, not a complete PlanningProblem.
+/// Mathematics for the four assignment rule families, not a complete `PlanningProblem`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssignmentRuleCompilation {
     pub source_document_hash: String,
@@ -114,7 +114,7 @@ pub struct AssignmentRuleCompilation {
     pub obligations: RequiredRulePartition,
 }
 
-/// One aggregate evaluation per handled binding, not a VerificationReport or score.
+/// One aggregate evaluation per handled binding, not a `VerificationReport` or score.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssignmentRuleEvaluation {
     pub source_document_hash: String,

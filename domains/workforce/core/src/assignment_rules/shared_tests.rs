@@ -1,5 +1,4 @@
-#[path = "../../tests/support/mod.rs"]
-mod support;
+use crate::test_support as support;
 
 use super::{
     AssignmentRuleError, AssignmentRuleLimit, InstantInterval,
@@ -35,11 +34,13 @@ fn settings(zone: &str) -> Result<ScenarioSettings> {
 }
 
 fn availability(start: &str, end: &str, window: Value) -> Result<Availability> {
-    Ok(serde_json::from_value(json!({
+    let mut record = json!({
         "id":support::id(42), "personId":support::id(1), "availabilityKind":"availableOnly",
-        "timeWindow":window, "effectiveRange":{"startDate":start,"endDateExclusive":end},
+        "effectiveRange":{"startDate":start,"endDateExclusive":end},
         "source":"test", "note":""
-    }))?)
+    });
+    record.as_object_mut().ok_or("availability record")?.insert("timeWindow".to_owned(), window);
+    Ok(serde_json::from_value(record)?)
 }
 
 #[test]

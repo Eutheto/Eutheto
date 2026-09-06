@@ -12,3 +12,7 @@ pub mod people_csv;
 pub mod portable;
 pub mod temporal;
 pub mod validation;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

@@ -30,6 +30,8 @@ pub(super) struct OperationBudget<'a> {
     max_records: u64,
     max_items: u64,
     max_bytes: u64,
+    #[cfg(test)]
+    cancel_at_step: Option<u64>,
 }
 
 impl<'a> OperationBudget<'a> {
@@ -53,6 +55,8 @@ impl<'a> OperationBudget<'a> {
             max_bytes: limits
                 .max_ir_bytes
                 .min(PlanningIrLimitsV1::DEFAULT.max_ir_bytes),
+            #[cfg(test)]
+            cancel_at_step: None,
         }
     }
 
@@ -78,6 +82,13 @@ impl<'a> OperationBudget<'a> {
     pub fn steps(&mut self, amount: u64) -> Result<(), AssignmentRuleError> {
         self.check()?;
         let next = add(self.steps, amount)?;
+        #[cfg(test)]
+        if self.cancel_at_step.is_some_and(|threshold| next >= threshold) {
+            if let Some(token) = self.cancellation {
+                token.cancel();
+            }
+            self.check()?;
+        }
         within(next, MAX_WORK_STEPS, AssignmentRuleLimit::WorkSteps)?;
         self.steps = next;
         Ok(())
@@ -85,6 +96,34 @@ impl<'a> OperationBudget<'a> {
 
     pub fn step(&mut self) -> Result<(), AssignmentRuleError> {
         self.steps(1)
+    }
+
+    pub fn sort_work(&mut self, length: usize) -> Result<(), AssignmentRuleError> {
+        let count = count(length)?;
+        let levels = u64::from(u64::BITS - count.leading_zeros());
+        self.steps(count.checked_mul(levels).ok_or_else(arithmetic)?)
+    }
+
+    /// Deterministic test actor: cancel the real caller token at a later local checkpoint.
+    /// Tests arm this only after entering the operation phase they exercise.
+    #[cfg(test)]
+    pub fn cancel_after_steps(&mut self, additional: u64) -> Result<(), AssignmentRuleError> {
+        if self.cancellation.is_none() {
+            return Err(AssignmentRuleError::InvalidConstruction(
+                AssignmentConstructionIssue::InvalidRecord,
+            ));
+        }
+        self.cancel_at_step = Some(add(self.steps, additional)?);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn remaining_output(&self) -> (u64, u64, u64) {
+        (
+            self.max_records - self.retained.records,
+            self.max_items - self.retained.items,
+            self.max_bytes - self.retained.bytes,
+        )
     }
 
     /// Reserve before allocating owned records or variable-length fields. Counters are cumulative,
@@ -200,6 +239,8 @@ impl<'a> OperationBudget<'a> {
         self.step()?;
         match event {
             ResolutionStep::Inspect => Ok(()),
+            ResolutionStep::RetainRecurrenceKey => self.reserve(1, 1, 16),
+            ResolutionStep::Sort(length) => self.sort_work(length),
             // Conservative fixed logical-payload bounds, not Rust layout/RSS estimates.
             ResolutionStep::RetainOwner | ResolutionStep::RetainSpec => self.reserve(1, 2, 128),
             ResolutionStep::RetainShift => self.reserve(1, 3, 512),

@@ -44,7 +44,6 @@ pub(super) struct ShiftMetadata<'a> {
     pub assignment_type: &'a AssignmentType,
     pub location_id: Option<LocationId>,
     pub coverage: &'a Coverage,
-    pub tags: &'a [String],
 }
 
 impl AssignmentInput {
@@ -103,8 +102,10 @@ impl AssignmentInput {
                 _ => {}
             }
         }
+        budget.sort_work(people.len())?;
         people.sort_unstable();
         for records in availability_by_person.values_mut() {
+            budget.sort_work(records.len())?;
             records.sort_unstable();
         }
         budget.reserve(1, 0, 64)?;
@@ -151,7 +152,7 @@ impl AssignmentInput {
         &self,
         shift: &ResolvedShift,
     ) -> Result<ShiftMetadata<'_>, AssignmentRuleError> {
-        let (definition, assignment_type_id, location_id, coverage, tags) = match shift.origin {
+        let (definition, assignment_type_id, location_id, coverage) = match shift.origin {
             ResolvedShiftOrigin::Generated { template_id, .. } => {
                 let Some(WorkforceEntity::ShiftTemplate(template)) =
                     self.domain.entities.get(&template_id.as_entity_id())
@@ -163,7 +164,6 @@ impl AssignmentInput {
                     template.assignment_type_id,
                     template.location_id,
                     &template.coverage,
-                    template.tags.as_slice(),
                 )
             }
             ResolvedShiftOrigin::Detached { .. } | ResolvedShiftOrigin::Manual => {
@@ -177,7 +177,6 @@ impl AssignmentInput {
                     instance.assignment_type_id,
                     instance.location_id,
                     &instance.coverage,
-                    instance.tags.as_slice(),
                 )
             }
         };
@@ -186,7 +185,6 @@ impl AssignmentInput {
             assignment_type: self.assignment_type(assignment_type_id)?,
             location_id,
             coverage,
-            tags,
         })
     }
 

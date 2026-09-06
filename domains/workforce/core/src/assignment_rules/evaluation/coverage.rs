@@ -1,9 +1,9 @@
-use super::{Selected, Summary, Witness, invalid, predicates};
 use super::super::{
     AssignmentRuleError,
     budget::{OperationBudget, add, count},
     input::AssignmentInput,
 };
+use super::{Selected, Summary, Witness, invalid, predicates};
 use crate::{
     ids::QualificationId,
     model::{Coverage, QualificationMatch, Scope, ShiftScope, WorkforceEntity},
@@ -28,18 +28,43 @@ struct Requirement<'a> {
 }
 
 // Normalize source sets once per definition, never once per selected person or occurrence.
-fn requirement<'a>(owner: EntityId, owner_kind: &'static str, scope: Option<&'a ShiftScope>, coverage: &Coverage, budget: &mut OperationBudget<'_>) -> Result<Requirement<'a>, AssignmentRuleError> {
+fn requirement<'a>(
+    owner: EntityId,
+    owner_kind: &'static str,
+    scope: Option<&'a ShiftScope>,
+    coverage: &Coverage,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Requirement<'a>, AssignmentRuleError> {
     budget.step()?;
     budget.reserve(1, 1, 64)?;
     let (lower, upper, minima) = match coverage {
-        Coverage::Exact { count, qualification_minimums } => (u64::from(*count), Some(u64::from(*count)), qualification_minimums),
-        Coverage::AtLeast { minimum, maximum_count, qualification_minimums, .. } => (u64::from(*minimum), maximum_count.map(u64::from), qualification_minimums),
+        Coverage::Exact {
+            count,
+            qualification_minimums,
+        } => (
+            u64::from(*count),
+            Some(u64::from(*count)),
+            qualification_minimums,
+        ),
+        Coverage::AtLeast {
+            minimum,
+            maximum_count,
+            qualification_minimums,
+            ..
+        } => (
+            u64::from(*minimum),
+            maximum_count.map(u64::from),
+            qualification_minimums,
+        ),
     };
     let mut keys = BTreeMap::<(Vec<QualificationId>, Vec<QualificationId>, u16), ()>::new();
     for minimum in minima {
         budget.step()?;
         let expression = &minimum.qualifications;
-        let items = add(count(expression.all_qualification_ids.len())?, count(expression.any_qualification_ids.len())?)?;
+        let items = add(
+            count(expression.all_qualification_ids.len())?,
+            count(expression.any_qualification_ids.len())?,
+        )?;
         let bytes = budget.measure(&(expression, minimum.minimum))?;
         budget.reserve(1, items, bytes)?;
         super::sort_work(expression.all_qualification_ids.len(), budget)?;
@@ -57,31 +82,75 @@ fn requirement<'a>(owner: EntityId, owner_kind: &'static str, scope: Option<&'a 
     for ((all_qualification_ids, any_qualification_ids, minimum), ()) in keys {
         budget.step()?;
         let mut hash = blake3::Hasher::new();
-        serde_json::to_writer(&mut hash, &(&all_qualification_ids, &any_qualification_ids, minimum)).map_err(|_| invalid())?;
+        serde_json::to_writer(
+            &mut hash,
+            &(&all_qualification_ids, &any_qualification_ids, minimum),
+        )
+        .map_err(|_| invalid())?;
         budget.reserve(0, 1, 32)?;
         canonical.push(Minimum {
-            expression: QualificationMatch { all_qualification_ids, any_qualification_ids },
+            expression: QualificationMatch {
+                all_qualification_ids,
+                any_qualification_ids,
+            },
             minimum,
             hash: *hash.finalize().as_bytes(),
         });
     }
-    Ok(Requirement { owner, owner_kind, scope, lower, upper, minima: canonical })
+    Ok(Requirement {
+        owner,
+        owner_kind,
+        scope,
+        lower,
+        upper,
+        minima: canonical,
+    })
 }
 
-pub(super) fn evaluate(input: &AssignmentInput, selected: &Selected<'_>, scope: &Scope, summary: &mut Summary, budget: &mut OperationBudget<'_>) -> Result<(), AssignmentRuleError> {
+pub(super) fn evaluate(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
+    summary: &mut Summary,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
     let mut embedded = BTreeMap::new();
     let mut standalone = Vec::new();
     for entity in input.domain.entities.values() {
         budget.step()?;
         match entity {
             WorkforceEntity::ShiftTemplate(value) => {
-                embedded.insert(value.id.as_entity_id(), requirement(value.id.as_entity_id(), "shift_template", None, &value.coverage, budget)?);
+                embedded.insert(
+                    value.id.as_entity_id(),
+                    requirement(
+                        value.id.as_entity_id(),
+                        "shift_template",
+                        None,
+                        &value.coverage,
+                        budget,
+                    )?,
+                );
             }
             WorkforceEntity::ShiftInstance(value) => {
-                embedded.insert(value.id.as_entity_id(), requirement(value.id.as_entity_id(), "shift", None, &value.coverage, budget)?);
+                embedded.insert(
+                    value.id.as_entity_id(),
+                    requirement(
+                        value.id.as_entity_id(),
+                        "shift_instance",
+                        None,
+                        &value.coverage,
+                        budget,
+                    )?,
+                );
             }
             WorkforceEntity::CoverageRequirement(value) if value.active => {
-                standalone.push(requirement(value.id.as_entity_id(), "coverage_requirement", Some(&value.scope), &value.coverage, budget)?);
+                standalone.push(requirement(
+                    value.id.as_entity_id(),
+                    "coverage_requirement",
+                    Some(&value.scope),
+                    &value.coverage,
+                    budget,
+                )?);
             }
             _ => {}
         }
@@ -89,7 +158,9 @@ pub(super) fn evaluate(input: &AssignmentInput, selected: &Selected<'_>, scope: 
     for shift in &input.shifts {
         budget.step()?;
         let metadata = input.metadata(shift)?;
-        if !predicates::shift_matches(shift, &metadata, scope, budget)? { continue; }
+        if !predicates::shift_matches(shift, &metadata, scope, budget)? {
+            continue;
+        }
         let mut population = Vec::new();
         if let Some(people) = selected.by_shift.get(&shift.id) {
             for person_id in people {
@@ -101,10 +172,24 @@ pub(super) fn evaluate(input: &AssignmentInput, selected: &Selected<'_>, scope: 
                 }
             }
         }
-        check(input, embedded.get(&metadata.definition.entity_id()).ok_or_else(invalid)?, shift, &population, summary, budget)?;
+        check(
+            input,
+            embedded
+                .get(&metadata.definition.entity_id())
+                .ok_or_else(invalid)?,
+            shift,
+            &population,
+            summary,
+            budget,
+        )?;
         for requirement in &standalone {
             budget.step()?;
-            if predicates::requirement_matches(requirement.scope.ok_or_else(invalid)?, shift, &metadata, budget)? {
+            if predicates::requirement_matches(
+                requirement.scope.ok_or_else(invalid)?,
+                shift,
+                &metadata,
+                budget,
+            )? {
                 check(input, requirement, shift, &population, summary, budget)?;
             }
         }
@@ -112,22 +197,46 @@ pub(super) fn evaluate(input: &AssignmentInput, selected: &Selected<'_>, scope: 
     Ok(())
 }
 
-fn check(input: &AssignmentInput, requirement: &Requirement<'_>, shift: &ResolvedShift, population: &[PersonId], summary: &mut Summary, budget: &mut OperationBudget<'_>) -> Result<(), AssignmentRuleError> {
+fn check(
+    input: &AssignmentInput,
+    requirement: &Requirement<'_>,
+    shift: &ResolvedShift,
+    population: &[PersonId],
+    summary: &mut Summary,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
     budget.step()?;
     let actual = count(population.len())?;
     let mut witness = Witness {
-        person: None, shift: shift.id, other_shift: None, owner: requirement.owner,
-        owner_kind: requirement.owner_kind, reason: "coverage_headcount", minimum_rank: 0,
-        minimum_hash: None, lower: Some(requirement.lower), upper: requirement.upper,
-        actual: Some(actual), interval: None,
+        person: None,
+        shift: shift.id,
+        other_shift: None,
+        owner: requirement.owner,
+        owner_kind: requirement.owner_kind,
+        reason: "coverage_headcount",
+        minimum_rank: 0,
+        minimum_hash: None,
+        lower: Some(requirement.lower),
+        upper: requirement.upper,
+        actual: Some(actual),
+        interval: None,
     };
-    summary.predicate(actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper), witness, budget)?;
+    summary.predicate(
+        actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper),
+        witness,
+        budget,
+    )?;
     for (rank, minimum) in requirement.minima.iter().enumerate() {
         budget.step()?;
         let mut matching = 0;
         for person_id in population {
             budget.step()?;
-            if predicates::qualification_match(input.person(*person_id).ok_or_else(invalid)?, &minimum.expression, predicates::interval(shift), budget)? {
+            if predicates::qualification_match(
+                input.person(*person_id).ok_or_else(invalid)?,
+                &minimum.expression,
+                predicates::interval(shift),
+                budget,
+            )? {
                 matching = add(matching, 1)?;
             }
         }
