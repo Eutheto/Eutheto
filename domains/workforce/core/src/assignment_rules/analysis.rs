@@ -4,6 +4,9 @@ pub(super) mod support;
 #[path = "compiler_rest.rs"]
 mod rest;
 
+#[path = "compiler_overlap.rs"]
+mod overlap;
+
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     AssignmentRuleLimit, InstantInterval, PairRejection, RejectionCause, RequiredRulePartition,
@@ -63,6 +66,9 @@ pub(super) enum Predicate {
         person: PersonId,
         first: ShiftId,
         second: ShiftId,
+    },
+    OverlapClique {
+        person: PersonId,
     },
     MinimumRest {
         person: PersonId,
@@ -420,6 +426,17 @@ fn reject(
     Ok(())
 }
 
+pub(super) fn supported_rule(rule: &WorkforceRule) -> bool {
+    matches!(
+        rule,
+        WorkforceRule::Eligibility { .. }
+            | WorkforceRule::Availability { .. }
+            | WorkforceRule::Coverage { .. }
+            | WorkforceRule::NoOverlap { .. }
+            | WorkforceRule::MinimumRest(_)
+    )
+}
+
 fn obligations(
     input: &AssignmentInput,
     budget: &mut OperationBudget<'_>,
@@ -435,14 +452,7 @@ fn obligations(
             continue;
         }
         budget.reserve(0, 1, 16)?;
-        if matches!(
-            rule,
-            WorkforceRule::Eligibility { .. }
-                | WorkforceRule::Availability { .. }
-                | WorkforceRule::Coverage { .. }
-                | WorkforceRule::NoOverlap { .. }
-                | WorkforceRule::MinimumRest(_)
-        ) {
+        if supported_rule(rule) {
             result.handled.push(id);
         } else {
             result.remaining.push(id);
@@ -760,14 +770,15 @@ fn coverage_owners<'a>(
     Ok(owners)
 }
 
-fn scoped_chronological(
+fn scoped_candidates(
     input: &AssignmentInput,
     candidates: &[AssignmentPair],
     person: PersonId,
     scope: &Scope,
     budget: &mut OperationBudget<'_>,
 ) -> Result<Vec<usize>, AssignmentRuleError> {
-    let mut chronological = Vec::new();
+    let mut scoped = Vec::new();
+    budget.steps(u64::from(usize::BITS - candidates.len().leading_zeros()))?;
     let start = candidates.partition_point(|pair| pair.person_id < person);
     for (offset, pair) in candidates[start..].iter().enumerate() {
         budget.step()?;
@@ -777,20 +788,10 @@ fn scoped_chronological(
         let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
         if shift_scope(scope, shift, &input.metadata(shift)?, budget)? {
             budget.reserve(0, 1, 8)?;
-            chronological.push(start + offset);
+            scoped.push(start + offset);
         }
     }
-    budget.sort_work(chronological.len())?;
-    chronological.sort_unstable_by_key(|index| {
-        let pair = candidates[*index];
-        (
-            input
-                .shift(pair.shift_id)
-                .map(|shift| shift.interval.starts_at.instant),
-            pair.shift_id,
-        )
-    });
-    Ok(chronological)
+    Ok(scoped)
 }
 
 fn plan_overlap(
@@ -808,7 +809,29 @@ fn plan_overlap(
         if !person_scope(scope, person, budget)? {
             continue;
         }
-        let chronological = scoped_chronological(input, candidates, *person_id, scope, budget)?;
+        let mut chronological = scoped_candidates(input, candidates, *person_id, scope, budget)?;
+        if compatibility.is_empty() {
+            overlap::plan_cliques(
+                input,
+                candidates,
+                &chronological,
+                plan,
+                rule,
+                *person_id,
+                budget,
+            )?;
+            continue;
+        }
+        budget.sort_work(chronological.len())?;
+        chronological.sort_unstable_by_key(|index| {
+            let pair = candidates[*index];
+            (
+                input
+                    .shift(pair.shift_id)
+                    .map(|shift| shift.interval.starts_at.instant),
+                pair.shift_id,
+            )
+        });
         for (position, first_index) in chronological.iter().enumerate() {
             budget.step()?;
             let first = input
@@ -940,6 +963,7 @@ pub(super) fn predicate_shape(
             (2, add(1, count(key.all.len() + key.any.len())?)?)
         }
         Predicate::Overlap { .. } => (3, 0),
+        Predicate::OverlapClique { .. } => (1, 0),
         Predicate::MinimumRest { .. } => (3, 3),
     })
 }
@@ -958,7 +982,7 @@ fn append(
     if let Entry::Vacant(entry) = plan.parents.entry(constraint.rule) {
         budget.reserve(1, 1, 64)?;
         entry.insert(match constraint.predicate {
-            Predicate::Overlap { .. } => "no_overlap",
+            Predicate::Overlap { .. } | Predicate::OverlapClique { .. } => "no_overlap",
             Predicate::MinimumRest { .. } => "minimum_rest",
             Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
         });
@@ -978,7 +1002,9 @@ fn coverage_bound_findings(
         budget.step()?;
         let shift = match constraint.predicate {
             Predicate::Headcount { shift, .. } | Predicate::Qualification { shift, .. } => shift,
-            Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => continue,
+            Predicate::Overlap { .. }
+            | Predicate::OverlapClique { .. }
+            | Predicate::MinimumRest { .. } => continue,
         };
         budget.reserve(1, 2, 24)?;
         by_shift.entry(shift).or_default().push(constraint);
@@ -998,7 +1024,9 @@ fn coverage_bound_findings(
                     u64::from(plan.definitions[definition].minima[minimum].minimum),
                     "qualification_above_headcount",
                 ),
-                Predicate::Overlap { .. } | Predicate::MinimumRest { .. } => continue,
+                Predicate::Overlap { .. }
+                | Predicate::OverlapClique { .. }
+                | Predicate::MinimumRest { .. } => continue,
             };
             for upper in &predicates {
                 budget.step()?;

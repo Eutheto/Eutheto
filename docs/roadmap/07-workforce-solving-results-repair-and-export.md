@@ -110,6 +110,30 @@ Named alternatives map to recorded objective profiles, not labels alone:
 
 Run profiles sequentially in the MVP, verify every candidate, compare authoritative score vectors and visual diffs, and suppress alternatives that differ only through arbitrary tie-breaking without meaningful metric change.
 
+### Practitioner scheduling clarifications
+
+**Status: requirements clarification approved; practitioner answers pending.** These distinctions supplement the baseline catalogs above; they are not implemented capabilities, new schema variants, approved policy defaults, or permission to move Phase 07 production behavior into Phase 05. Resolve them before claiming that the complete Workforce MVP supports the corresponding clinic-and-call workflow. An unanswered question never becomes an implicit default.
+
+| Requirement to resolve | Existing boundary and required distinction | Decisions needed before implementation |
+|---|---|---|
+| Required workload and assignment totals | Maximum-hour/count rules and preferred targets do not express every minimum, exact, or ranged requirement. A quota derived incidentally from coverage and other totals is not a substitute for an independently authored requirement. | Determine which totals are Required versus preferred, their scope and period, permitted deviation, credited call/clinic/leave/administrative work, breaks, overtime, pay-period anchor, overnight attribution, and scheduled versus elapsed/DST accounting. Workload accounting does not add a payroll/vendor adapter. |
+| Distinct weekends worked | Assignment/hour counts, distinct weekends touched, consecutive weekends, and completely free weekends are separate measures. The current workload measurement vocabulary and consecutive-weekend preference do not by themselves establish all these behaviors. | Define weekend boundaries and membership, what makes a weekend worked, count/participation targets or caps, eligible peer groups, equal versus contract-weighted shares, separate day/night/undesirable-shift burdens, and whether imbalance carries across rotations. |
+| Work and time-off grouping | Adjacency to a base schedule is not general grouping of newly selected assignments. Avoiding consecutive nights does not specify desirable work blocks or uninterrupted time off. | Define worked/reporting days, isolated work, block boundaries and gap units, desired or maximum block lengths, whether short work interrupts time off, horizon-edge context, and priority relative to recovery and other preferences. |
+| Optional split-clinic arrangements | Predefined shorter shifts are different from selecting a linked alternative between one full session and multiple partial sessions. Supporting the former does not establish automatic choice of the latter. | Determine whether splitting is required or optional, who may form a pair, ordering and handover, whether the optimizer selects the date, frequency limits per person/pair/rotation, and whether other sessions must remain whole. Confirm exclusive alternatives and continuous coverage without double-counting workload. |
+| Combined practitioner acceptance case | Generic clinic fixtures and isolated rule tests do not prove the agreed combination of periods, coverage, restrictions, preferences, and repair works end to end. | Agree a synthetic scenario and expected semantic outcomes after the relevant answers are recorded. Include operator-visible totals and tradeoffs, infeasible and time-limited outcomes, boundary behavior, repair, and required existing export views. |
+
+Collect clarification in this priority order:
+
+1. **Validity:** consistent fictional roster references and eligibility; exact coverage/start/end times and holiday exceptions; contractual totals and credited work; pay-period and overnight/DST attribution; directional clinic/call and call/call recovery, continuous-duty limits, and consecutive-work restrictions; fixed assignments and independent quotas versus current practice.
+2. **Tradeoffs:** weekend definition, distinct participation, fairness population and equal/weighted sharing; free/consecutive weekends and carryover; good/bad work-block examples; split-session alternatives; person-specific priorities and which compromises require explicit approval.
+3. **Operation:** leave and vacancies, authorized relief/overtime and non-negotiable requirements; protected assignments and repair costs measured in shifts versus affected people; prior/next-rotation context; required schedule, personal, period-total, burden and exception views, using the existing MVP export scope.
+
+Record each disposition here as a confirmed requirement with explicit semantics and acceptance criteria, or as explicitly not applicable with rationale. Maintainer approval is required for any scope change; silence or an unresolved answer cannot justify dropping a confirmed requirement or claiming complete workflow support. Answers are practitioner evidence, not legal/compliance certification or universal defaults. Until resolved, keep applicable implementation blocked while continuing independent, already-defined work.
+
+**Ownership and cutover:** WF-004 owns confirmed Required semantics; WF-005 owns confirmed preference/fairness semantics; WF-006/WF-007 own compilation, independent evaluation, authoritative metrics and score; UI-006, REPAIR-001, EXPORT-001 and acceptance hardening expose and prove the resulting behavior. Reuse these work-package IDs and existing abstractions. Choose the smallest typed domain extension only after the relevant decisions; reconcile schemas, real migration impact, generated commands/editors, backend capabilities, compatibility and fixtures together under the existing rule checklist. Do not reinterpret an existing field/tag or invent a universal rule language.
+
+**Privacy:** no supplied practitioner roster, real initials, organization/location, dated title, source schedule, identity mapping, or identifying notes enter repository fixtures, documentation, snapshots, or CI artifacts. Initials replacement alone is insufficient. Construct deliberately synthetic identities, dates, assignments and distinctive personal patterns while preserving the confirmed scheduling semantics; review the combination for recognizability before committing it. Store only the non-identifying decisions and synthetic evidence, not a reconstructable copy of the source example.
+
 ### Compilation and model construction
 
 For each statically feasible person/shift pair, create `x[person, shift] ∈ {0,1}`. Do not allocate variables for impossible pairs after eligibility/static-availability preprocessing, but retain rejection provenance for explanations.
@@ -310,6 +334,8 @@ The JSON envelope uses the `eutheto` API namespace, command, `ok`, normalized st
 9. **EXPORT-001 — Portable/workforce output and shared report suite:** workforce current/historical portable round trips; separate editable-backup/result/diagnostic gates; accepted-only Share Result builder; privacy-exact preview; reusable offline-safe view components; one-file `file://` HTML; safe inert embedding and restrictive CSP; direct PDF/print; assignments/summary CSV; ICS; CLI JSON; atomic generation and deterministic/security/browser/accessibility fixtures.
 10. **Acceptance hardening:** all workforce fixtures, warm/cold whole-pipeline benchmarks, target/regression evidence, large-grid profiling, task-based usability scripts, docs and generated contracts.
 
+The [practitioner scheduling clarifications](#practitioner-scheduling-clarifications) are decision gates within these packages, not a new phase or permission to skip existing catalog entries. Resolve each affected gate before implementing or enabling its semantics; unrelated completed prerequisites remain usable.
+
 ## Tests and acceptance fixtures
 
 Checked-in minimum corpus:
@@ -322,11 +348,14 @@ Checked-in minimum corpus:
 6. **Provably infeasible:** insufficient eligible coverage with mapped sufficient conflict.
 7. **DST transition:** overnight work across both spring and fall transitions.
 8. **Large benchmark:** configurable 100+ people and thousands of candidate assignments.
+9. **Synthetic practitioner workflow:** after clarification, combine the confirmed clinic/call, pay-period, weekend, grouping and split-session requirements from the [decision ledger](#practitioner-scheduling-clarifications). Use no real or merely relabeled source schedule.
 
 For every fixture assert domain validation, expected normalized status, independent verification, required-rule outcomes, score invariants, stable explanation keys, import/export preservation, and revision/hash identity. Add valid, invalid, edge, empty-scope, period-boundary, lock-conflict, cancellation, stale-result, and resource-limit cases per rule. Differential exhaustive small models compare compiler results with the independent evaluator; intentional mutation proves detection.
 Evidence fixtures distinguish fixed-other-assignment conflicts from globally feasible rescheduling, a short-budget unresolved run from proven infeasibility, and changed objective policies from comparable score deltas. Deterministic UI/CLI renders these distinctions without AI; conversational experiments and hypothetical entities remain in Phase-13 Branch K rather than expanding Phase 07's bounded comparison scope.
 Performance assertions use the versioned benchmark manifests and record raw distributions/artifacts rather than one best run. Tests cover sub-threshold no-flicker behavior, longer truthful progress, one parent deadline across fallback/diagnostics, first-incumbent versus first-verified-feasible ordering, immediate accepted-result availability, optional-explanation delay/failure, cancellation latency, event/announcement caps, UI long tasks, and the calibrated small/typical/stress thresholds.
 Export tests prove that unverified/rejected/no-solution runs cannot produce assignment/result/solution-derived outputs, while valid editable scenario/full backup and bounded diagnostic/infeasibility output remain available before acceptance. Workforce portable current/historical round trips preserve every rule/reference/time meaning; unknown semantics fail and declared nonsemantic extensions preserve.
+
+The synthetic practitioner case jointly optimizes clinic and call even when views separate them. Independently check every confirmed Required total and restriction, report period/burden metrics and preference tradeoffs, and exercise fixed work plus a repair. Include boundary and infeasible cases sensitive to hour/count granularity, distinct-weekend versus shift counting, new-work versus base adjacency, and exclusive split-session coverage where those requirements are confirmed. Aggregate hours balance alone does not prove a feasible assignment; resource exhaustion is not infeasibility. Freeze explicit reviewed policies and semantic expectations, not an arbitrary exact roster. Missing practitioner answers cannot be replaced by invented passing expectations.
 
 Share/report tests prove the preview payload exactly equals the rendered Share Result fields; sensitive/source-only fields default absent; malicious names/notes cannot inject markup/script/navigation; one HTML file opens from `file://` with no server/storage and zero required network requests; principal views/filter/search/expansion plus keyboard/focus/screen-reader operation work; graphical content has list/table parity; source edits cannot alter a generated report; print/PDF preserve readable grayscale/page context/provenance; generation cancellation/failure removes staging; supported-browser and large-report responsiveness gates pass.
 
@@ -355,6 +384,7 @@ Pause and write an ADR if a rule cannot be independently verified, a backend nee
 Phase 07 is complete only when:
 
 - all thirteen Required rules and all eleven preference categories satisfy the rule checklist and domain-rule definition of done;
+- every practitioner clarification above has an explicit reviewed disposition, every confirmed requirement satisfies the same rule-completion discipline, and the synthetic combined workflow has acceptance evidence; no unresolved decision is presented as supported behavior;
 - every workforce fixture passes validation, expected status, independent verification, scoring, explanations, and accepted-solution export checks;
 - repair preserves every hard lock and minimizes changes according to the recorded score policy;
 - results accurately distinguish optimal, feasible, infeasible, cancelled, and time/resource-limited outcomes;

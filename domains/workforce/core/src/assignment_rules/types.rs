@@ -5,8 +5,8 @@ use crate::{
 };
 use eutheto_domain_api::{DomainPackError, DomainValidationReport};
 use eutheto_domain_ir::RuleEvaluation;
-use eutheto_planning_ir::{BoolVariable, ConstraintRecord, ProvenanceRecord};
-use eutheto_types::{Rfc3339Timestamp, RuleId, ValidationIssue, ValidationSeverity};
+use eutheto_planning_ir::{BoolVariable, ConstraintRecord, PlanningProblem, ProvenanceRecord};
+use eutheto_types::{AssignmentId, Rfc3339Timestamp, RuleId, ValidationIssue, ValidationSeverity};
 use std::fmt;
 
 /// An operation-local half-open instant interval, not another stored time format.
@@ -114,6 +114,25 @@ pub struct AssignmentRuleCompilation {
     pub obligations: RequiredRulePartition,
 }
 
+/// Complete supported mathematics with source-bound diagnostics that have no live IR root.
+/// This artifact is unregistered and does not establish authoritative solution acceptance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkforceCompilation {
+    pub problem: PlanningProblem,
+    pub source_document_hash: String,
+    pub rejections: Vec<PairRejection>,
+    pub validation: DomainValidationReport,
+}
+
+/// An active authored obligation that complete compilation cannot silently omit.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum UnsupportedWorkforceObligation {
+    RequiredRule(RuleId),
+    Preference(RuleId),
+    HardLock(AssignmentId),
+    SoftLock(AssignmentId),
+}
+
 /// One aggregate evaluation per handled binding, not a `VerificationReport` or score.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssignmentRuleEvaluation {
@@ -165,6 +184,10 @@ pub enum AssignmentRuleError {
     },
     LimitExceeded(AssignmentRuleLimit),
     InvalidConstruction(AssignmentConstructionIssue),
+    MissingScorePolicy,
+    UnsupportedObligation(UnsupportedWorkforceObligation),
+    ReservedSemanticMetadata(&'static str),
+    InvalidSemanticMetadata,
     Cancelled,
 }
 
@@ -176,6 +199,10 @@ impl AssignmentRuleError {
             Self::InvalidDocument(_) => "official.workforce.invalid_document",
             Self::Temporal(_) => "official.workforce.temporal_review",
             Self::Cancelled => "official.workforce.cancelled",
+            Self::MissingScorePolicy => "official.workforce.compile.missing_score_policy",
+            Self::UnsupportedObligation(_) => "official.workforce.compile.unsupported_obligation",
+            Self::ReservedSemanticMetadata(_) => "official.workforce.compile.reserved_metadata",
+            Self::InvalidSemanticMetadata => "official.workforce.compile.invalid_metadata",
             Self::InvalidSelection { kind, .. } => match kind {
                 SelectionIssueKind::DuplicatePair => "official.workforce.selection.duplicate_pair",
                 SelectionIssueKind::MissingPerson => "official.workforce.selection.missing_person",

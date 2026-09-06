@@ -156,9 +156,9 @@ worker-build-desktop:
 worker-smoke executable resource_root manifest_sha256:
     cargo xtask solver smoke --executable "{{ executable }}" --resource-root "{{ resource_root }}" --manifest-sha256 "{{ manifest_sha256 }}"
 
-# Prove assignment and minimum-rest rules against EUTHETO_TEST_ORTOOLS_ARTIFACT; no fallback.
+# Prove rule contributions and complete Workforce compilation/projection against the approved worker.
 workforce-rule-worker-test:
-    cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_solves_and_rejects_ -- --ignored
+    cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_ -- --ignored
 
 # Run the real Phase-01 CLI status command.
 cli:

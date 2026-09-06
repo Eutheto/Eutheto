@@ -129,6 +129,11 @@ impl<'a> OperationBudget<'a> {
         )
     }
 
+    #[cfg(test)]
+    pub fn reserved_ir_bytes(&self) -> u64 {
+        self.ir.bytes
+    }
+
     /// Reserve before allocating owned records or variable-length fields. Counters are cumulative,
     /// conservatively including temporary structural records; releasing a value does not refill them.
     pub fn reserve(
@@ -171,6 +176,12 @@ impl<'a> OperationBudget<'a> {
             self.limits.max_total_refs.min(defaults.max_total_refs),
             self.limits.max_ir_bytes.min(defaults.max_ir_bytes),
         )
+    }
+
+    /// Charge the measured complete model alongside analysis/diagnostics and scratch.
+    /// Call once after full IR preflight, before allocating its output graph.
+    pub fn reserve_ir_retention(&mut self) -> Result<(), AssignmentRuleError> {
+        self.reserve(self.ir.records, self.ir.items, self.ir.bytes)
     }
 
     pub fn variable_limit(&self) -> u64 {
@@ -249,6 +260,68 @@ impl<'a> OperationBudget<'a> {
             ResolutionStep::RetainShift => self.reserve(1, 3, 512),
         }
     }
+}
+
+/// Complete compilation and projection never expand the supported generic-operation ceilings.
+pub(super) fn effective_limits(
+    limits: PlanningIrLimitsV1,
+) -> Result<PlanningIrLimitsV1, AssignmentRuleError> {
+    if limits.max_abs_coefficient < 0 || limits.max_abs_value < 0 {
+        return Err(AssignmentRuleError::LimitExceeded(
+            AssignmentRuleLimit::PerRecord,
+        ));
+    }
+    let defaults = PlanningIrLimitsV1::DEFAULT;
+    Ok(PlanningIrLimitsV1 {
+        max_ir_bytes: limits.max_ir_bytes.min(defaults.max_ir_bytes),
+        max_variables: limits.max_variables.min(defaults.max_variables),
+        max_constraints: limits.max_constraints.min(defaults.max_constraints),
+        max_assumptions: limits.max_assumptions.min(defaults.max_assumptions),
+        max_objective_levels: limits
+            .max_objective_levels
+            .min(defaults.max_objective_levels),
+        max_objective_terms: limits.max_objective_terms.min(defaults.max_objective_terms),
+        max_provenance_records: limits
+            .max_provenance_records
+            .min(defaults.max_provenance_records),
+        max_provenance_depth: limits
+            .max_provenance_depth
+            .min(defaults.max_provenance_depth),
+        max_parameters_per_record: limits
+            .max_parameters_per_record
+            .min(defaults.max_parameters_per_record),
+        max_parameter_text_bytes: limits
+            .max_parameter_text_bytes
+            .min(defaults.max_parameter_text_bytes),
+        max_entity_refs_per_record: limits
+            .max_entity_refs_per_record
+            .min(defaults.max_entity_refs_per_record),
+        max_projections: limits.max_projections.min(defaults.max_projections),
+        max_projection_expression_depth: limits
+            .max_projection_expression_depth
+            .min(defaults.max_projection_expression_depth),
+        max_domain_ranges: limits.max_domain_ranges.min(defaults.max_domain_ranges),
+        max_refs_per_node: limits.max_refs_per_node.min(defaults.max_refs_per_node),
+        max_total_refs: limits.max_total_refs.min(defaults.max_total_refs),
+        max_table_rows: limits.max_table_rows.min(defaults.max_table_rows),
+        max_table_arity: limits.max_table_arity.min(defaults.max_table_arity),
+        max_table_cells: limits.max_table_cells.min(defaults.max_table_cells),
+        max_intervals_per_global: limits
+            .max_intervals_per_global
+            .min(defaults.max_intervals_per_global),
+        max_enforcement_literals: limits
+            .max_enforcement_literals
+            .min(defaults.max_enforcement_literals),
+        max_tags: limits.max_tags.min(defaults.max_tags),
+        max_component_nodes: limits.max_component_nodes.min(defaults.max_component_nodes),
+        max_component_edges: limits.max_component_edges.min(defaults.max_component_edges),
+        max_id_bytes: limits.max_id_bytes.min(defaults.max_id_bytes),
+        max_metadata_text_bytes: limits
+            .max_metadata_text_bytes
+            .min(defaults.max_metadata_text_bytes),
+        max_abs_coefficient: limits.max_abs_coefficient.min(defaults.max_abs_coefficient),
+        max_abs_value: limits.max_abs_value.min(defaults.max_abs_value),
+    })
 }
 
 pub(super) fn count(value: usize) -> Result<u64, AssignmentRuleError> {
