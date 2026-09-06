@@ -233,6 +233,7 @@ mod tests {
     use eutheto_planning_ir::PlanningIrLimitsV1;
     use eutheto_types::CancellationToken;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn cancellation_inside_rest_conflict_window_uses_the_real_token()
@@ -267,9 +268,7 @@ mod tests {
             roles.push(index, shift, &input, &rule, &mut budget)?;
         }
         let mut plan = Plan {
-            definitions: Vec::new(),
-            constraints: Vec::new(),
-            parents: Default::default(),
+            definitions: Vec::new(), constraints: Vec::new(), parents: BTreeMap::new(),
         };
         let mut entered = false;
         let result = roles.conflicts(600, &mut budget, |source, target, _, budget| {

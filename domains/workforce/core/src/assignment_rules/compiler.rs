@@ -6,14 +6,14 @@ use super::{
     identity::{IdentityKind, PlanningIdentities},
     input::AssignmentInput,
 };
-use crate::model::AssignmentPair;
+use crate::{ids::ShiftId, model::AssignmentPair};
 use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::{DomainEntityId, DomainEntityKindId, DomainEntityRef};
 use eutheto_planning_ir::{
     BoolVariable, BoolVariableId, Constraint, ConstraintRecord, Literal, PlanningConstraintId,
     PlanningIrLimitsV1, ProvenanceId, ProvenanceParameter, ProvenanceRecord, ProvenanceSourceKind,
 };
-use eutheto_types::{EntityId, RuleId, ScenarioDocument};
+use eutheto_types::{EntityId, PersonId, RuleId, ScenarioDocument};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 use std::collections::BTreeMap;
 
@@ -384,30 +384,10 @@ fn constraint_fact(
             source,
             target,
             minimum_minutes,
-        } => {
-            let source = entity("shift", source.as_entity_id())?;
-            let target = entity("shift", target.as_entity_id())?;
-            parameters.insert(
-                "source_shift".to_owned(),
-                ProvenanceParameter::Entity(source.clone()),
-            );
-            parameters.insert(
-                "target_shift".to_owned(),
-                ProvenanceParameter::Entity(target.clone()),
-            );
-            parameters.insert(
-                "minimum_minutes".to_owned(),
-                ProvenanceParameter::Integer(i64::from(minimum_minutes)),
-            );
-            (
-                vec![
-                    entity("person", EntityId::from_uuid(person.as_uuid()))?,
-                    source,
-                    target,
-                ],
-                "official.workforce.minimum_rest",
-            )
-        }
+        } => (
+            minimum_rest_payload(person, source, target, minimum_minutes, &mut parameters)?,
+            "official.workforce.minimum_rest",
+        ),
     };
     budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
@@ -420,6 +400,34 @@ fn constraint_fact(
         parameters,
         parent: Some(parent),
     })
+}
+
+fn minimum_rest_payload(
+    person: PersonId,
+    source: ShiftId,
+    target: ShiftId,
+    minimum_minutes: u32,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    let source = entity("shift", source.as_entity_id())?;
+    let target = entity("shift", target.as_entity_id())?;
+    parameters.insert(
+        "source_shift".to_owned(),
+        ProvenanceParameter::Entity(source.clone()),
+    );
+    parameters.insert(
+        "target_shift".to_owned(),
+        ProvenanceParameter::Entity(target.clone()),
+    );
+    parameters.insert(
+        "minimum_minutes".to_owned(),
+        ProvenanceParameter::Integer(i64::from(minimum_minutes)),
+    );
+    Ok(vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        source,
+        target,
+    ])
 }
 
 fn integer(value: u64) -> Result<ProvenanceParameter, AssignmentRuleError> {

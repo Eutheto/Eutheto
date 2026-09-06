@@ -996,12 +996,12 @@ fn minimum_rest_exact_nanoseconds_zero_overlap_and_extreme_minutes() -> Result {
         assert!(result.obligations.handled.contains(&id(24).parse()?));
         assert!(!result.obligations.remaining.contains(&id(24).parse()?));
     }
-    // Near both supported timestamp extremes, adding the maximum required duration
-    // to an endpoint would overflow. The signed elapsed comparison stays defined.
-    for date in ["-009999-12-30", "9999-12-30"] {
+    // Extreme valid dates retain exact comparisons. Adding the maximum required
+    // duration to the late positive endpoint would exceed Jiff's timestamp range.
+    for (date, next) in [("-009000-12-30", "-009000-12-31"), ("9000-12-30", "9000-12-31")] {
         let mut value = serde_json::to_value(rest_document(u32::MAX)?)?;
         value["settings"]["horizon"] = json!({
-            "start":format!("{date}T00:00:00Z"),"end":format!("{date}T23:00:00Z"),
+            "start":format!("{date}T00:00:00Z"),"end":format!("{next}T00:00:00Z"),
         });
         for (shift, start, end) in [(7, "00:00:00", "01:00:00"), (8, "10:00:00", "12:00:00")] {
             utc_times(
@@ -1204,44 +1204,16 @@ fn minimum_rest_intersects_every_common_and_directional_scope_filter() -> Result
 
 #[test]
 fn minimum_rest_uses_elapsed_overnight_spring_and_fall_gaps() -> Result {
-    for (
-        date,
-        next,
-        source_end,
-        end_local,
-        end_offset,
-        target_start,
-        target_local,
-        target_offset,
-        allowed,
-    ) in [
-        (
-            "2026-03-08",
-            "2026-03-09",
-            "2026-03-08T05:00:00Z",
-            "2026-03-08T00:00:00",
-            -18000,
-            "2026-03-08T14:00:00Z",
-            "2026-03-08T10:00:00",
-            -14400,
-            false,
-        ),
-        (
-            "2026-11-01",
-            "2026-11-02",
-            "2026-11-01T04:00:00Z",
-            "2026-11-01T00:00:00",
-            -14400,
-            "2026-11-01T15:00:00Z",
-            "2026-11-01T10:00:00",
-            -18000,
-            true,
-        ),
+    for (horizon_start, horizon_end, source_end, end_local, end_offset, target_start, target_local, target_offset, allowed) in [
+        ("2026-03-07T05:00:00Z", "2026-03-09T04:00:00Z", "2026-03-08T05:00:00Z", "2026-03-08T00:00:00", -18000,
+            "2026-03-08T14:00:00Z", "2026-03-08T10:00:00", -14400, false),
+        ("2026-10-31T04:00:00Z", "2026-11-02T05:00:00Z", "2026-11-01T04:00:00Z", "2026-11-01T00:00:00", -14400,
+            "2026-11-01T15:00:00Z", "2026-11-01T10:00:00", -18000, true),
     ] {
         let mut value = serde_json::to_value(rest_document(600)?)?;
         value["settings"]["timeZone"] = json!("America/New_York");
-        value["settings"]["horizon"] =
-            json!({"start":format!("{date}T00:00:00Z"),"end":format!("{next}T00:00:00Z")});
+        // Scenario-zone midnight boundaries include the source's prior-day start.
+        value["settings"]["horizon"] = json!({"start":horizon_start,"end":horizon_end});
         let source = &mut value["domain"]["entities"][id(7)];
         let start: jiff::Timestamp = source_end.parse()?;
         let start = start
@@ -1531,10 +1503,17 @@ fn minimum_rest_large_safe_suffix_does_not_scan_the_cartesian_population() -> Re
     let shift = entity(&mut value, 8)?.clone();
     value.domain.entities.remove(&id(7).parse()?);
     value.domain.entities.remove(&id(8).parse()?);
+    let mut person = entity(&mut value, 1)?.clone();
+    person.as_object_mut().ok_or("person")?.remove("externalId");
+    for index in 200..217 {
+        let mut record = person.clone();
+        record["id"] = json!(id(index));
+        value.domain.entities.insert(id(index).parse()?, record);
+    }
     let origin: jiff::Timestamp = "2026-11-01T00:00:00Z".parse()?;
-    // A naive all-safe pair scan exceeds the fixed 20-million work ceiling.
-    // The chronological threshold window emits no edges and remains comfortably bounded.
-    for index in 0..6_500_u32 {
+    // Eighteen people each have 1,500 safe shifts: 20,236,500 applicable pairs
+    // exceed the fixed work ceiling for a naive scan, without oversized input JSON.
+    for index in 0..1_500_u32 {
         let mut record = shift.clone();
         record["id"] = json!(id(1_000 + index));
         let start = origin
@@ -1554,9 +1533,9 @@ fn minimum_rest_large_safe_suffix_does_not_scan_the_cartesian_population() -> Re
             .insert(id(1_000 + index).parse()?, record);
     }
     let result = compile(&value)?;
-    assert_eq!(result.estimate.variables, 6_500);
+    assert_eq!(result.estimate.variables, 18 * 1_500);
     assert_eq!(result.estimate.constraints, 0);
-    assert!(allows(&result, &[pair(1, 1_000)?, pair(1, 7_499)?])?);
+    assert!(allows(&result, &[pair(1, 1_000)?, pair(1, 2_499)?])?);
     Ok(())
 }
 
@@ -1564,36 +1543,14 @@ fn minimum_rest_large_safe_suffix_does_not_scan_the_cartesian_population() -> Re
 fn minimum_rest_extreme_signed_gaps_do_not_overflow_total_nanoseconds() -> Result {
     let mut value = serde_json::to_value(rest_document(u32::MAX)?)?;
     value["settings"]["horizon"] = json!({
-        "start":"-009999-12-30T00:00:00Z","end":"9999-12-30T23:00:00Z",
+        "start":"-009000-12-30T00:00:00Z","end":"9000-12-31T00:00:00Z",
     });
-    utc_times(
-        &mut value["domain"]["entities"][id(7)],
-        "-009999-12-30T00:00:00",
-        "-009999-12-30T01:00:00",
-    );
-    utc_times(
-        &mut value["domain"]["entities"][id(8)],
-        "9999-12-30T10:00:00",
-        "9999-12-30T12:00:00",
-    );
-    assert!(allows(
-        &compile(&serde_json::from_value(value.clone())?)?,
-        &[pair(1, 7)?, pair(1, 8)?]
-    )?);
+    utc_times(&mut value["domain"]["entities"][id(7)], "-009000-12-30T00:00:00", "-009000-12-30T01:00:00");
+    utc_times(&mut value["domain"]["entities"][id(8)], "9000-12-30T10:00:00", "9000-12-30T12:00:00");
+    assert!(allows(&compile(&serde_json::from_value(value.clone())?)?, &[pair(1, 7)?, pair(1, 8)?])?);
     value["domain"]["rules"][id(24)]["minimumMinutes"] = json!(0);
-    utc_times(
-        &mut value["domain"]["entities"][id(7)],
-        "-009999-12-30T00:00:00",
-        "9999-12-30T11:00:00",
-    );
-    utc_times(
-        &mut value["domain"]["entities"][id(8)],
-        "-009998-12-30T10:00:00",
-        "-009998-12-30T12:00:00",
-    );
-    assert!(!allows(
-        &compile(&serde_json::from_value(value)?)?,
-        &[pair(1, 7)?, pair(1, 8)?]
-    )?);
+    utc_times(&mut value["domain"]["entities"][id(7)], "-009000-12-30T00:00:00", "9000-12-30T11:00:00");
+    utc_times(&mut value["domain"]["entities"][id(8)], "-008999-12-30T10:00:00", "-008999-12-30T12:00:00");
+    assert!(!allows(&compile(&serde_json::from_value(value)?)?, &[pair(1, 7)?, pair(1, 8)?])?);
     Ok(())
 }
