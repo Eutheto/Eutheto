@@ -21,7 +21,7 @@ pub use scoring::*;
 pub use time::*;
 
 /// Missing fields use `None`; a present field must contain a real value, not null.
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de>,

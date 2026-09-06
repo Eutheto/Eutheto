@@ -7,5 +7,6 @@ pub mod commands;
 pub mod generated_workforce_pack_contract;
 pub mod ids;
 pub mod model;
+pub mod people_csv;
 pub mod portable;
 pub mod validation;
