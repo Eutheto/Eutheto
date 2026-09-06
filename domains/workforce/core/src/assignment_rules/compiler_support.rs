@@ -5,7 +5,8 @@ use super::super::{
 };
 use crate::{
     ids::QualificationId,
-    model::*,
+    model::{ActiveRange, Availability, CategoryPair, Coverage, Person, PersonSelection,
+        QualificationExpression, Scope, ShiftScope},
     temporal::{ResolvedShift, weekday},
 };
 use eutheto_types::ScenarioSettings;
@@ -44,9 +45,11 @@ pub(super) fn person_scope(
             let mut all = true;
             let mut any = any_tags.is_empty();
             for tag in all_tags {
+                budget.step()?;
                 all &= contains(&person.tags, tag, budget)?;
             }
             for tag in any_tags {
+                budget.step()?;
                 any |= contains(&person.tags, tag, budget)?;
             }
             all && any
@@ -55,6 +58,7 @@ pub(super) fn person_scope(
     let mut team = scope.team_ids.is_none();
     if let Some(ids) = &scope.team_ids {
         for id in ids {
+            budget.step()?;
             team |= contains(&person.team_ids, id, budget)?;
         }
     }
@@ -173,9 +177,11 @@ pub(super) fn qualification_match(
     let mut all_match = true;
     let mut any_match = any.is_empty();
     for id in all {
+        budget.step()?;
         all_match &= qualification(person, *id, query, budget)?;
     }
     for id in any {
+        budget.step()?;
         any_match |= qualification(person, *id, query, budget)?;
     }
     Ok(all_match && any_match)
@@ -320,13 +326,19 @@ pub(super) fn canonical_minima(
             minimum: value.minimum,
             identity: String::new(),
         };
+        budget.sort_work(key.all.len())?;
         key.all.sort_unstable();
+        budget.steps(count(key.all.len())?)?;
         key.all.dedup();
+        budget.sort_work(key.any.len())?;
         key.any.sort_unstable();
+        budget.steps(count(key.any.len())?)?;
         key.any.dedup();
         result.push(key);
     }
+    budget.sort_work(result.len())?;
     result.sort_unstable();
+    budget.steps(count(result.len())?)?;
     result.dedup();
     for key in &mut result {
         budget.step()?;

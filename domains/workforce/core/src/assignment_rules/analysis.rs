@@ -3,12 +3,17 @@ pub(super) mod support;
 
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
-    AssignmentRuleLimit, PairRejection, RejectionCause, RequiredRulePartition,
+    AssignmentRuleLimit, InstantInterval, PairRejection, RejectionCause, RequiredRulePartition,
     budget::{MAX_INSPECTED_PAIRS, OperationBudget, add, count, within},
-    input::{AssignmentInput, ShiftDefinition},
+    input::{AssignmentInput, ShiftDefinition, ShiftMetadata},
     intervals::availability_intervals,
 };
-use crate::{ids::ShiftId, model::*};
+use crate::{
+    ids::ShiftId,
+    model::{AssignmentLock, AssignmentPair, Availability, AvailabilityKind, CategoryPair, Coverage,
+        LockState, Person, Scope, WorkforceEntity, WorkforceRule},
+    temporal::ResolvedShift,
+};
 use eutheto_domain_api::DomainValidationReport;
 use eutheto_planning_ir::PlanningIrLimitsV1;
 use eutheto_types::{
@@ -16,8 +21,12 @@ use eutheto_types::{
     ValidationSeverity,
 };
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
-use support::*;
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use support::{
+    MinimumKey, active_interval, availability_scope, bounds, canonical_minima, expression,
+    incompatible, interval, invalid, outside, person_scope, qualification_match, requirement_scope,
+    shift_scope, uncovered,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(super) struct Owner {
@@ -94,12 +103,7 @@ pub(super) fn prepare(
         .ok_or(AssignmentRuleError::InvalidConstruction(
             AssignmentConstructionIssue::ArithmeticOverflow,
         ))?;
-    within(
-        raw,
-        MAX_INSPECTED_PAIRS,
-        AssignmentRuleLimit::InspectedPairs,
-    )?;
-    let obligations = obligations(input, budget)?;
+    within(raw, MAX_INSPECTED_PAIRS, AssignmentRuleLimit::InspectedPairs)?;
     let mut result = AssignmentAnalysis {
         source_document_hash: String::new(),
         candidates: Vec::new(),
@@ -109,183 +113,182 @@ pub(super) fn prepare(
             ..AssignmentModelEstimate::default()
         },
         validation: DomainValidationReport::default(),
-        obligations,
+        obligations: obligations(input, budget)?,
     };
     for id in &input.people {
         budget.step()?;
         let person = input.person(*id).ok_or_else(invalid)?;
         let active = active_interval(person, &document.settings)?;
         for shift in &input.shifts {
-            budget.step()?;
-            let pair = AssignmentPair {
-                person_id: *id,
-                shift_id: shift.id,
+            let context = PairContext {
+                document, input, person, shift,
+                metadata: input.metadata(shift)?,
+                pair: AssignmentPair { person_id: *id, shift_id: shift.id },
             };
-            let query = interval(shift);
-            let metadata = input.metadata(shift)?;
-            let mut activity_ok = true;
-            let mut type_ok = true;
-            let mut qualifications_ok = true;
-            let mut availability_ok = true;
-            if let Some(allowed) = active {
-                if let Some(outside) = outside(query, allowed) {
-                    activity_ok = false;
-                    reject(
-                        &mut result,
-                        pair,
-                        RuleId::from_uuid(id.as_uuid()),
-                        RejectionCause::OutsideActiveRange { allowed, outside },
-                        budget,
-                    )?;
-                }
-            }
-            for rule in input.domain.rules.values() {
-                budget.step()?;
-                let (binding, active, scope) = rule.header();
-                if !active
-                    || !matches!(
-                        rule,
-                        WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. }
-                    )
-                {
-                    continue;
-                }
-                if !person_scope(scope, person, budget)?
-                    || !shift_scope(scope, shift, &metadata, budget)?
-                {
-                    continue;
-                }
-                match rule {
-                    WorkforceRule::Eligibility { .. } => {
-                        budget.steps(count(person.eligible_assignment_type_ids.len())?)?;
-                        if !person
-                            .eligible_assignment_type_ids
-                            .contains(&metadata.assignment_type.id)
-                        {
-                            type_ok = false;
-                            reject(
-                                &mut result,
-                                pair,
-                                binding,
-                                RejectionCause::AssignmentTypeNotAllowed {
-                                    assignment_type_id: metadata.assignment_type.id,
-                                },
-                                budget,
-                            )?;
-                        }
-                        if !expression(
-                            person,
-                            &metadata.assignment_type.qualifications,
-                            query,
-                            budget,
-                        )? {
-                            qualifications_ok = false;
-                            reject(
-                                &mut result,
-                                pair,
-                                binding,
-                                RejectionCause::QualificationExpression {
-                                    assignment_type_id: metadata.assignment_type.id,
-                                },
-                                budget,
-                            )?;
-                        }
-                    }
-                    WorkforceRule::Availability { .. } => {
-                        if let Some(records) = input.availability_by_person.get(id) {
-                            for availability_id in records {
-                                budget.step()?;
-                                let Some(WorkforceEntity::Availability(record)) =
-                                    input.domain.entities.get(&availability_id.as_entity_id())
-                                else {
-                                    return Err(invalid());
-                                };
-                                if !matches!(
-                                    record.availability_kind,
-                                    AvailabilityKind::Unavailable | AvailabilityKind::AvailableOnly
-                                ) || !availability_scope(record, &metadata, budget)?
-                                {
-                                    continue;
-                                }
-                                if let Some(cause) =
-                                    availability_cause(record, query, document, budget)?
-                                {
-                                    availability_ok = false;
-                                    reject(&mut result, pair, binding, cause, budget)?;
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // Approved leave is independently owned and does not depend on an Availability rule.
-            if let Some(records) = input.availability_by_person.get(id) {
-                for availability_id in records {
-                    budget.step()?;
-                    let Some(WorkforceEntity::Availability(record)) =
-                        input.domain.entities.get(&availability_id.as_entity_id())
-                    else {
-                        return Err(invalid());
-                    };
-                    if record.availability_kind != AvailabilityKind::ApprovedTimeOff
-                        || !availability_scope(record, &metadata, budget)?
-                    {
-                        continue;
-                    }
-                    if let Some(cause) = availability_cause(record, query, document, budget)? {
-                        availability_ok = false;
-                        reject(
-                            &mut result,
-                            pair,
-                            RuleId::from_uuid(record.id.as_entity_id().as_uuid()),
-                            cause,
-                            budget,
-                        )?;
-                    }
-                }
-            }
-            if activity_ok {
-                result.estimate.after_activity_pruning =
-                    add(result.estimate.after_activity_pruning, 1)?;
-            }
-            if activity_ok && type_ok {
-                result.estimate.after_assignment_type_pruning =
-                    add(result.estimate.after_assignment_type_pruning, 1)?;
-            }
-            if activity_ok && type_ok && qualifications_ok {
-                result.estimate.after_qualification_pruning =
-                    add(result.estimate.after_qualification_pruning, 1)?;
-            }
-            if activity_ok && type_ok && qualifications_ok && availability_ok {
-                within(
-                    add(count(result.candidates.len())?, 1)?,
-                    budget.variable_limit(),
-                    AssignmentRuleLimit::Variables,
-                )?;
-                budget.reserve(1, 2, budget.measure(&pair)?)?;
-                result.candidates.push(pair);
-            }
+            context.analyze(active, &mut result, budget)?;
         }
     }
+    budget.sort_work(result.candidates.len())?;
     result.candidates.sort_unstable();
+    budget.sort_work(result.rejections.len())?;
     result.rejections.sort_unstable();
     result.estimate.after_availability_pruning = count(result.candidates.len())?;
     result.estimate.variables = count(result.candidates.len())?;
     result.estimate.rejection_facts = count(result.rejections.len())?;
     let plan = plan(input, &mut result, budget, limits)?;
     hard_lock_findings(input, &mut result, &plan, budget)?;
+    budget.sort_work(result.validation.issues.len())?;
     result.validation.issues.sort_by(|a, b| {
         (&a.code, &a.field_path, &a.message).cmp(&(&b.code, &b.field_path, &b.message))
     });
+    budget.steps(count(result.validation.issues.len())?)?;
     result.validation.issues.dedup();
     // The hash was measured by AssignmentInput; this is the only retained additional copy.
     budget.reserve(0, 0, 64)?;
-    result
-        .source_document_hash
-        .clone_from(&input.source_document_hash);
+    result.source_document_hash.clone_from(&input.source_document_hash);
     budget.check()?;
     Ok((result, plan))
+}
+
+struct PairContext<'a> {
+    document: &'a ScenarioDocument,
+    input: &'a AssignmentInput,
+    person: &'a Person,
+    shift: &'a ResolvedShift,
+    metadata: ShiftMetadata<'a>,
+    pair: AssignmentPair,
+}
+
+impl PairContext<'_> {
+    fn analyze(
+        &self,
+        active: Option<InstantInterval>,
+        result: &mut AssignmentAnalysis,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        budget.step()?;
+        let mut activity_ok = true;
+        let mut type_ok = true;
+        let mut qualifications_ok = true;
+        let mut availability_ok = true;
+        if let Some(allowed) = active
+            && let Some(outside) = outside(interval(self.shift), allowed)
+        {
+            activity_ok = false;
+            reject(result, self.pair, RuleId::from_uuid(self.person.id.as_uuid()),
+                RejectionCause::OutsideActiveRange { allowed, outside }, budget)?;
+        }
+        for rule in self.input.domain.rules.values() {
+            budget.step()?;
+            let (binding, active, scope) = rule.header();
+            if !active || !matches!(rule,
+                WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. })
+            {
+                continue;
+            }
+            if !person_scope(scope, self.person, budget)?
+                || !shift_scope(scope, self.shift, &self.metadata, budget)?
+            {
+                continue;
+            }
+            match rule {
+                WorkforceRule::Eligibility { .. } => {
+                    let (membership, qualifications) = self.eligibility(binding, result, budget)?;
+                    type_ok &= membership;
+                    qualifications_ok &= qualifications;
+                }
+                WorkforceRule::Availability { .. } => {
+                    availability_ok &= self.availability(Some(binding), result, budget)?;
+                }
+                _ => {}
+            }
+        }
+        // Approved leave is independently owned, regardless of any Availability rule.
+        availability_ok &= self.availability(None, result, budget)?;
+        record_candidate(result, self.pair,
+            (activity_ok, type_ok, qualifications_ok, availability_ok), budget)
+    }
+
+    fn eligibility(
+        &self,
+        binding: RuleId,
+        result: &mut AssignmentAnalysis,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(bool, bool), AssignmentRuleError> {
+        budget.steps(count(self.person.eligible_assignment_type_ids.len())?)?;
+        let membership = self.person.eligible_assignment_type_ids.contains(&self.metadata.assignment_type.id);
+        if !membership {
+            reject(result, self.pair, binding, RejectionCause::AssignmentTypeNotAllowed {
+                assignment_type_id: self.metadata.assignment_type.id,
+            }, budget)?;
+        }
+        let qualifications = expression(self.person, &self.metadata.assignment_type.qualifications,
+            interval(self.shift), budget)?;
+        if !qualifications {
+            reject(result, self.pair, binding, RejectionCause::QualificationExpression {
+                assignment_type_id: self.metadata.assignment_type.id,
+            }, budget)?;
+        }
+        Ok((membership, qualifications))
+    }
+
+    fn availability(
+        &self,
+        ordinary_rule: Option<RuleId>,
+        result: &mut AssignmentAnalysis,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<bool, AssignmentRuleError> {
+        let mut satisfied = true;
+        let Some(records) = self.input.availability_by_person.get(&self.person.id) else {
+            return Ok(true);
+        };
+        for availability_id in records {
+            budget.step()?;
+            let Some(WorkforceEntity::Availability(record)) =
+                self.input.domain.entities.get(&availability_id.as_entity_id())
+            else { return Err(invalid()); };
+            let applicable_kind = if ordinary_rule.is_some() {
+                matches!(record.availability_kind,
+                    AvailabilityKind::Unavailable | AvailabilityKind::AvailableOnly)
+            } else {
+                record.availability_kind == AvailabilityKind::ApprovedTimeOff
+            };
+            if !applicable_kind || !availability_scope(record, &self.metadata, budget)? {
+                continue;
+            }
+            if let Some(cause) = availability_cause(record, interval(self.shift), self.document, budget)? {
+                satisfied = false;
+                let binding = ordinary_rule.unwrap_or_else(||
+                    RuleId::from_uuid(record.id.as_entity_id().as_uuid()));
+                reject(result, self.pair, binding, cause, budget)?;
+            }
+        }
+        Ok(satisfied)
+    }
+}
+
+fn record_candidate(
+    result: &mut AssignmentAnalysis,
+    pair: AssignmentPair,
+    stages: (bool, bool, bool, bool),
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let (activity_ok, type_ok, qualifications_ok, availability_ok) = stages;
+    if activity_ok {
+        result.estimate.after_activity_pruning = add(result.estimate.after_activity_pruning, 1)?;
+    }
+    if activity_ok && type_ok {
+        result.estimate.after_assignment_type_pruning = add(result.estimate.after_assignment_type_pruning, 1)?;
+    }
+    if activity_ok && type_ok && qualifications_ok {
+        result.estimate.after_qualification_pruning = add(result.estimate.after_qualification_pruning, 1)?;
+    }
+    if activity_ok && type_ok && qualifications_ok && availability_ok {
+        within(add(count(result.candidates.len())?, 1)?, budget.variable_limit(), AssignmentRuleLimit::Variables)?;
+        budget.reserve(1, 2, budget.measure(&pair)?)?;
+        result.candidates.push(pair);
+    }
+    Ok(())
 }
 
 fn availability_cause(
@@ -398,9 +401,13 @@ fn obligations(
             result.remaining.push(RuleId::from_uuid(lock.id.as_uuid()));
         }
     }
+    budget.sort_work(result.handled.len())?;
     result.handled.sort_unstable();
+    budget.steps(count(result.handled.len())?)?;
     result.handled.dedup();
+    budget.sort_work(result.remaining.len())?;
     result.remaining.sort_unstable();
+    budget.steps(count(result.remaining.len())?)?;
     result.remaining.dedup();
     Ok(result)
 }
@@ -422,9 +429,7 @@ fn plan(
     limits: PlanningIrLimitsV1,
 ) -> Result<Plan, AssignmentRuleError> {
     let mut plan = Plan {
-        definitions: Vec::new(),
-        constraints: Vec::new(),
-        parents: BTreeMap::new(),
+        definitions: Vec::new(), constraints: Vec::new(), parents: BTreeMap::new(),
     };
     let mut definitions = BTreeMap::new();
     let mut by_shift = BTreeMap::<ShiftId, Vec<usize>>::new();
@@ -436,313 +441,275 @@ fn plan(
     for rule in input.domain.rules.values() {
         budget.step()?;
         let (id, active, scope) = rule.header();
-        if !active {
-            continue;
-        }
+        if !active { continue; }
         match rule {
             WorkforceRule::Coverage { .. } => {
-                for shift in &input.shifts {
-                    budget.step()?;
-                    let metadata = input.metadata(shift)?;
-                    if !shift_scope(scope, shift, &metadata, budget)? {
-                        continue;
-                    }
-                    let mut owners = Vec::new();
-                    budget.reserve(1, 1, 32)?;
-                    owners.push((definition_owner(metadata.definition), metadata.coverage));
-                    for entity in input.domain.entities.values() {
-                        budget.step()?;
-                        if let WorkforceEntity::CoverageRequirement(requirement) = entity {
-                            if requirement.active
-                                && requirement_scope(&requirement.scope, shift, &metadata, budget)?
-                            {
-                                budget.reserve(1, 1, 32)?;
-                                owners.push((
-                                    Owner {
-                                        kind: "coverage_requirement",
-                                        id: requirement.id.as_entity_id(),
-                                    },
-                                    &requirement.coverage,
-                                ));
-                            }
-                        }
-                    }
-                    owners.sort_by_key(|(owner, _)| *owner);
-                    for (owner, coverage) in owners {
-                        budget.step()?;
-                        let definition = if let Some(index) = definitions.get(&owner) {
-                            *index
-                        } else {
-                            let index = plan.definitions.len();
-                            let minima = canonical_minima(coverage, budget)?;
-                            budget.reserve(2, 2, 64)?;
-                            plan.definitions.push(Definition { owner, minima });
-                            definitions.insert(owner, index);
-                            index
-                        };
-                        let mut population = Vec::new();
-                        if let Some(indices) = by_shift.get(&shift.id) {
-                            for index in indices {
-                                budget.step()?;
-                                let person = input
-                                    .person(result.candidates[*index].person_id)
-                                    .ok_or_else(invalid)?;
-                                if person_scope(scope, person, budget)? {
-                                    budget.reserve(0, 1, 8)?;
-                                    population.push(*index);
-                                }
-                            }
-                        }
-                        let (lower, authored_upper) = bounds(coverage);
-                        let n = count(population.len())?;
-                        let upper = authored_upper.unwrap_or(n).min(n);
-                        if lower > n {
-                            finding(
-                                &mut result.validation,
-                                "candidate_shortage",
-                                id,
-                                owner,
-                                shift.id,
-                                budget,
-                            )?;
-                        }
-                        if lower > upper && lower <= n {
-                            finding(
-                                &mut result.validation,
-                                "contradictory_coverage_bounds",
-                                id,
-                                owner,
-                                shift.id,
-                                budget,
-                            )?;
-                        }
-                        let head_population = population;
-                        for minimum in 0..plan.definitions[definition].minima.len() {
-                            let key = &plan.definitions[definition].minima[minimum];
-                            let mut qualified = Vec::new();
-                            for index in &head_population {
-                                budget.step()?;
-                                let person = input
-                                    .person(result.candidates[*index].person_id)
-                                    .ok_or_else(invalid)?;
-                                if qualification_match(
-                                    person,
-                                    &key.all,
-                                    &key.any,
-                                    interval(shift),
-                                    budget,
-                                )? {
-                                    budget.reserve(0, 1, 8)?;
-                                    qualified.push(*index);
-                                }
-                            }
-                            let qualified_count = count(qualified.len())?;
-                            if u64::from(key.minimum) > qualified_count {
-                                finding(
-                                    &mut result.validation,
-                                    "qualification_shortage",
-                                    id,
-                                    owner,
-                                    shift.id,
-                                    budget,
-                                )?;
-                            }
-                            if authored_upper.is_some_and(|upper| u64::from(key.minimum) > upper) {
-                                finding(
-                                    &mut result.validation,
-                                    "qualification_above_headcount",
-                                    id,
-                                    owner,
-                                    shift.id,
-                                    budget,
-                                )?;
-                            }
-                            let impossible = u64::from(key.minimum) > qualified_count;
-                            append(
-                                &mut plan,
-                                PlannedConstraint {
-                                    rule: id,
-                                    predicate: Predicate::Qualification {
-                                        definition,
-                                        minimum,
-                                        shift: shift.id,
-                                        upper: qualified_count,
-                                    },
-                                    population: qualified,
-                                    impossible,
-                                },
-                                budget,
-                            )?;
-                        }
-                        append(
-                            &mut plan,
-                            PlannedConstraint {
-                                rule: id,
-                                predicate: Predicate::Headcount {
-                                    definition,
-                                    shift: shift.id,
-                                    lower,
-                                    upper,
-                                    authored_upper,
-                                },
-                                population: head_population,
-                                impossible: lower > upper,
-                            },
-                            budget,
-                        )?;
-                    }
-                }
+                CoveragePlanner {
+                    input, result, plan: &mut plan,
+                    definitions: &mut definitions, by_shift: &by_shift,
+                }.add_rule(id, scope, budget)?;
             }
-            WorkforceRule::NoOverlap {
-                compatible_category_pairs,
-                ..
-            } => {
-                for person_id in &input.people {
-                    budget.step()?;
-                    let person = input.person(*person_id).ok_or_else(invalid)?;
-                    if !person_scope(scope, person, budget)? {
-                        continue;
-                    }
-                    let mut chronological = Vec::new();
-                    let start = result
-                        .candidates
-                        .partition_point(|pair| pair.person_id < *person_id);
-                    for (offset, pair) in result.candidates[start..].iter().enumerate() {
-                        budget.step()?;
-                        if pair.person_id != *person_id {
-                            break;
-                        }
-                        let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
-                        if shift_scope(scope, shift, &input.metadata(shift)?, budget)? {
-                            budget.reserve(0, 1, 8)?;
-                            chronological.push(start + offset);
-                        }
-                    }
-                    chronological.sort_unstable_by_key(|index| {
-                        let pair = result.candidates[*index];
-                        (
-                            input
-                                .shift(pair.shift_id)
-                                .map(|shift| shift.interval.starts_at.instant),
-                            pair.shift_id,
-                        )
-                    });
-                    for (position, first_index) in chronological.iter().enumerate() {
-                        let first = input
-                            .shift(result.candidates[*first_index].shift_id)
-                            .ok_or_else(invalid)?;
-                        for second_index in &chronological[position + 1..] {
-                            budget.step()?;
-                            let second = input
-                                .shift(result.candidates[*second_index].shift_id)
-                                .ok_or_else(invalid)?;
-                            if second.interval.starts_at.instant >= first.interval.ends_at.instant {
-                                break;
-                            }
-                            if incompatible(
-                                input,
-                                first,
-                                second,
-                                compatible_category_pairs,
-                                budget,
-                            )? {
-                                budget.reserve(0, 2, 16)?;
-                                append(
-                                    &mut plan,
-                                    PlannedConstraint {
-                                        rule: id,
-                                        predicate: Predicate::Overlap {
-                                            person: *person_id,
-                                            first: first.id.min(second.id),
-                                            second: first.id.max(second.id),
-                                        },
-                                        population: vec![*first_index, *second_index],
-                                        impossible: false,
-                                    },
-                                    budget,
-                                )?;
-                            }
-                        }
-                    }
-                }
+            WorkforceRule::NoOverlap { compatible_category_pairs, .. } => {
+                plan_overlap(input, &result.candidates, &mut plan,
+                    id, scope, compatible_category_pairs, budget)?;
             }
             _ => {}
         }
     }
     coverage_bound_findings(&plan, &mut result.validation, budget)?;
+    estimate_contribution(result, &plan, budget, limits)?;
+    Ok(plan)
+}
+
+struct CoveragePlanner<'a> {
+    input: &'a AssignmentInput,
+    result: &'a mut AssignmentAnalysis,
+    plan: &'a mut Plan,
+    definitions: &'a mut BTreeMap<Owner, usize>,
+    by_shift: &'a BTreeMap<ShiftId, Vec<usize>>,
+}
+
+impl CoveragePlanner<'_> {
+    fn add_rule(
+        &mut self,
+        rule: RuleId,
+        scope: &Scope,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        let input = self.input;
+        for shift in &input.shifts {
+            budget.step()?;
+            let metadata = input.metadata(shift)?;
+            if !shift_scope(scope, shift, &metadata, budget)? { continue; }
+            for (owner, coverage) in coverage_owners(input, shift, &metadata, budget)? {
+                budget.step()?;
+                self.add_owner(rule, scope, shift, owner, coverage, budget)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_owner(
+        &mut self,
+        rule: RuleId,
+        scope: &Scope,
+        shift: &ResolvedShift,
+        owner: Owner,
+        coverage: &Coverage,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        let definition = match self.definitions.entry(owner) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let index = self.plan.definitions.len();
+                let minima = canonical_minima(coverage, budget)?;
+                budget.reserve(2, 2, 64)?;
+                self.plan.definitions.push(Definition { owner, minima });
+                entry.insert(index);
+                index
+            }
+        };
+        let mut population = Vec::new();
+        if let Some(indices) = self.by_shift.get(&shift.id) {
+            for index in indices {
+                budget.step()?;
+                let person = self.input.person(self.result.candidates[*index].person_id)
+                    .ok_or_else(invalid)?;
+                if person_scope(scope, person, budget)? {
+                    budget.reserve(0, 1, 8)?;
+                    population.push(*index);
+                }
+            }
+        }
+        let (lower, authored_upper) = bounds(coverage);
+        let n = count(population.len())?;
+        let upper = authored_upper.unwrap_or(n).min(n);
+        if lower > n {
+            finding(&mut self.result.validation, "candidate_shortage", rule, owner, shift.id, budget)?;
+        }
+        if lower > upper && lower <= n {
+            finding(&mut self.result.validation, "contradictory_coverage_bounds", rule, owner, shift.id, budget)?;
+        }
+        self.add_minima(rule, shift, definition, &population, authored_upper, budget)?;
+        append(self.plan, PlannedConstraint {
+            rule,
+            predicate: Predicate::Headcount { definition, shift: shift.id, lower, upper, authored_upper },
+            population,
+            impossible: lower > upper,
+        }, budget)
+    }
+
+    fn add_minima(
+        &mut self,
+        rule: RuleId,
+        shift: &ResolvedShift,
+        definition: usize,
+        head_population: &[usize],
+        authored_upper: Option<u64>,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        let owner = self.plan.definitions[definition].owner;
+        for minimum in 0..self.plan.definitions[definition].minima.len() {
+            budget.step()?;
+            let key = &self.plan.definitions[definition].minima[minimum];
+            let mut qualified = Vec::new();
+            for index in head_population {
+                budget.step()?;
+                let person = self.input.person(self.result.candidates[*index].person_id)
+                    .ok_or_else(invalid)?;
+                if qualification_match(person, &key.all, &key.any, interval(shift), budget)? {
+                    budget.reserve(0, 1, 8)?;
+                    qualified.push(*index);
+                }
+            }
+            let qualified_count = count(qualified.len())?;
+            if u64::from(key.minimum) > qualified_count {
+                finding(&mut self.result.validation, "qualification_shortage", rule, owner, shift.id, budget)?;
+            }
+            if authored_upper.is_some_and(|upper| u64::from(key.minimum) > upper) {
+                finding(&mut self.result.validation, "qualification_above_headcount", rule, owner, shift.id, budget)?;
+            }
+            let impossible = u64::from(key.minimum) > qualified_count;
+            append(self.plan, PlannedConstraint {
+                rule,
+                predicate: Predicate::Qualification {
+                    definition, minimum, shift: shift.id, upper: qualified_count,
+                },
+                population: qualified,
+                impossible,
+            }, budget)?;
+        }
+        Ok(())
+    }
+}
+
+fn coverage_owners<'a>(
+    input: &'a AssignmentInput,
+    shift: &ResolvedShift,
+    metadata: &ShiftMetadata<'a>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<(Owner, &'a Coverage)>, AssignmentRuleError> {
+    let mut owners = Vec::new();
+    budget.reserve(1, 1, 32)?;
+    owners.push((definition_owner(metadata.definition), metadata.coverage));
+    for entity in input.domain.entities.values() {
+        budget.step()?;
+        if let WorkforceEntity::CoverageRequirement(requirement) = entity
+            && requirement.active
+            && requirement_scope(&requirement.scope, shift, metadata, budget)?
+        {
+            budget.reserve(1, 1, 32)?;
+            owners.push((Owner { kind: "coverage_requirement", id: requirement.id.as_entity_id() },
+                &requirement.coverage));
+        }
+    }
+    budget.sort_work(owners.len())?;
+    owners.sort_by_key(|(owner, _)| *owner);
+    Ok(owners)
+}
+
+fn scoped_chronological(
+    input: &AssignmentInput,
+    candidates: &[AssignmentPair],
+    person: PersonId,
+    scope: &Scope,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<usize>, AssignmentRuleError> {
+    let mut chronological = Vec::new();
+    let start = candidates.partition_point(|pair| pair.person_id < person);
+    for (offset, pair) in candidates[start..].iter().enumerate() {
+        budget.step()?;
+        if pair.person_id != person { break; }
+        let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
+        if shift_scope(scope, shift, &input.metadata(shift)?, budget)? {
+            budget.reserve(0, 1, 8)?;
+            chronological.push(start + offset);
+        }
+    }
+    budget.sort_work(chronological.len())?;
+    chronological.sort_unstable_by_key(|index| {
+        let pair = candidates[*index];
+        (input.shift(pair.shift_id).map(|shift| shift.interval.starts_at.instant), pair.shift_id)
+    });
+    Ok(chronological)
+}
+
+fn plan_overlap(
+    input: &AssignmentInput,
+    candidates: &[AssignmentPair],
+    plan: &mut Plan,
+    rule: RuleId,
+    scope: &Scope,
+    compatibility: &[CategoryPair],
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    for person_id in &input.people {
+        budget.step()?;
+        let person = input.person(*person_id).ok_or_else(invalid)?;
+        if !person_scope(scope, person, budget)? { continue; }
+        let chronological = scoped_chronological(input, candidates, *person_id, scope, budget)?;
+        for (position, first_index) in chronological.iter().enumerate() {
+            budget.step()?;
+            let first = input.shift(candidates[*first_index].shift_id).ok_or_else(invalid)?;
+            for second_index in &chronological[position + 1..] {
+                budget.step()?;
+                let second = input.shift(candidates[*second_index].shift_id).ok_or_else(invalid)?;
+                if second.interval.starts_at.instant >= first.interval.ends_at.instant { break; }
+                if incompatible(input, first, second, compatibility, budget)? {
+                    budget.reserve(0, 2, 16)?;
+                    append(plan, PlannedConstraint {
+                        rule,
+                        predicate: Predicate::Overlap {
+                            person: *person_id, first: first.id.min(second.id), second: first.id.max(second.id),
+                        },
+                        population: vec![*first_index, *second_index],
+                        impossible: false,
+                    }, budget)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn estimate_contribution(
+    result: &mut AssignmentAnalysis,
+    plan: &Plan,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<(), AssignmentRuleError> {
     let variables = result.estimate.variables;
     let constraints = count(plan.constraints.len())?;
     let provenance = add(add(variables, constraints)?, count(plan.parents.len())?)?;
-    within(
-        provenance,
-        budget.provenance_limit(),
-        AssignmentRuleLimit::ProvenanceRecords,
-    )?;
-    let mut references = variables.checked_mul(3).ok_or_else(invalid)?; // variable -> fact; fact -> person/shift
+    within(provenance, budget.provenance_limit(), AssignmentRuleLimit::ProvenanceRecords)?;
+    let defaults = PlanningIrLimitsV1::DEFAULT;
+    // variable -> fact; fact -> person/shift
+    let mut references = variables.checked_mul(3).ok_or_else(invalid)?;
     for constraint in &plan.constraints {
         budget.step()?;
-        let literal_count = if constraint.impossible {
-            0
-        } else {
-            count(constraint.population.len())?
-        };
-        within(
-            literal_count,
-            limits
-                .max_refs_per_node
-                .min(PlanningIrLimitsV1::DEFAULT.max_refs_per_node),
-            AssignmentRuleLimit::PerRecord,
-        )?;
-        let (entities, parameters) = predicate_shape(&constraint.predicate, &plan)?;
-        within(
-            entities,
-            limits
-                .max_entity_refs_per_record
-                .min(PlanningIrLimitsV1::DEFAULT.max_entity_refs_per_record),
-            AssignmentRuleLimit::PerRecord,
-        )?;
-        within(
-            parameters,
-            limits
-                .max_parameters_per_record
-                .min(PlanningIrLimitsV1::DEFAULT.max_parameters_per_record),
-            AssignmentRuleLimit::PerRecord,
-        )?;
-        references = add(
-            references,
-            add(literal_count, add(2, add(entities, parameters)?)?)?,
-        )?;
+        let literals = if constraint.impossible { 0 } else { count(constraint.population.len())? };
+        within(literals, limits.max_refs_per_node.min(defaults.max_refs_per_node),
+            AssignmentRuleLimit::PerRecord)?;
+        let (entities, parameters) = predicate_shape(&constraint.predicate, plan)?;
+        within(entities, limits.max_entity_refs_per_record.min(defaults.max_entity_refs_per_record),
+            AssignmentRuleLimit::PerRecord)?;
+        within(parameters, limits.max_parameters_per_record.min(defaults.max_parameters_per_record),
+            AssignmentRuleLimit::PerRecord)?;
+        references = add(references, add(literals, add(2, add(entities, parameters)?)?)?)?;
     }
-    within(
-        references,
-        limits
-            .max_total_refs
-            .min(PlanningIrLimitsV1::DEFAULT.max_total_refs),
-        AssignmentRuleLimit::References,
-    )?;
+    within(references, limits.max_total_refs.min(defaults.max_total_refs),
+        AssignmentRuleLimit::References)?;
     if variables > 0 {
-        within(
-            2,
-            limits.max_entity_refs_per_record,
-            AssignmentRuleLimit::PerRecord,
-        )?;
-        within(
-            1,
-            limits.max_provenance_depth,
-            AssignmentRuleLimit::PerRecord,
-        )?;
+        within(2, limits.max_entity_refs_per_record, AssignmentRuleLimit::PerRecord)?;
+        within(1, limits.max_provenance_depth, AssignmentRuleLimit::PerRecord)?;
     }
     if constraints > 0 {
-        within(
-            2,
-            limits.max_provenance_depth,
-            AssignmentRuleLimit::PerRecord,
-        )?;
+        within(2, limits.max_provenance_depth, AssignmentRuleLimit::PerRecord)?;
     }
     result.estimate.constraints = constraints;
     result.estimate.provenance_records = provenance;
     result.estimate.references = references;
-    Ok(plan)
+    Ok(())
 }
 
 pub(super) fn predicate_shape(
@@ -775,16 +742,13 @@ fn append(
         budget.constraint_limit(),
         AssignmentRuleLimit::Constraints,
     )?;
-    if !plan.parents.contains_key(&constraint.rule) {
+    if let Entry::Vacant(entry) = plan.parents.entry(constraint.rule) {
         budget.reserve(1, 1, 64)?;
-        plan.parents.insert(
-            constraint.rule,
-            if matches!(constraint.predicate, Predicate::Overlap { .. }) {
-                "no_overlap"
-            } else {
-                "coverage"
-            },
-        );
+        entry.insert(if matches!(constraint.predicate, Predicate::Overlap { .. }) {
+            "no_overlap"
+        } else {
+            "coverage"
+        });
     }
     budget.reserve(1, 4, 128)?;
     plan.constraints.push(constraint);
@@ -956,6 +920,7 @@ fn hard_lock_findings(
             )?;
         }
     }
+    budget.sort_work(locks.len())?;
     locks.sort_unstable_by_key(|lock| {
         (
             lock.person_id,
@@ -966,7 +931,18 @@ fn hard_lock_findings(
             lock.id,
         )
     });
+    locked_overlap_findings(input, &locks, &mut result.validation, budget)?;
+    locked_coverage_findings(input, &pairs, plan, &mut result.validation, budget)
+}
+
+fn locked_overlap_findings(
+    input: &AssignmentInput,
+    locks: &[&AssignmentLock],
+    report: &mut DomainValidationReport,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
     for (position, first) in locks.iter().enumerate() {
+        budget.step()?;
         let Some(first_shift) = input.shift(first.shift_id) else {
             continue;
         };
@@ -994,30 +970,32 @@ fn hard_lock_findings(
                     compatible_category_pairs,
                     ..
                 } = rule
+                    && person_scope(scope, person, budget)?
+                    && shift_scope(scope, first_shift, &input.metadata(first_shift)?, budget)?
+                    && shift_scope(scope, second_shift, &input.metadata(second_shift)?, budget)?
+                    && incompatible(input, first_shift, second_shift, compatible_category_pairs, budget)?
                 {
-                    if person_scope(scope, person, budget)?
-                        && shift_scope(scope, first_shift, &input.metadata(first_shift)?, budget)?
-                        && shift_scope(scope, second_shift, &input.metadata(second_shift)?, budget)?
-                        && incompatible(
-                            input,
-                            first_shift,
-                            second_shift,
-                            compatible_category_pairs,
-                            budget,
-                        )?
-                    {
                         lock_finding(
-                            &mut result.validation,
+                            report,
                             "hard_lock_overlap",
                             first,
                             Some((second, *id)),
                             budget,
                         )?;
-                    }
                 }
             }
         }
     }
+    Ok(())
+}
+
+fn locked_coverage_findings(
+    input: &AssignmentInput,
+    pairs: &BTreeSet<AssignmentPair>,
+    plan: &Plan,
+    report: &mut DomainValidationReport,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
     for constraint in &plan.constraints {
         budget.step()?;
         let Predicate::Headcount {
@@ -1036,7 +1014,7 @@ fn hard_lock_findings(
             .ok_or_else(invalid)?;
         let (_, _, scope) = rule.header();
         let mut selected = 0;
-        for pair in &pairs {
+        for pair in pairs {
             budget.step()?;
             if pair.shift_id == shift
                 && person_scope(
@@ -1050,7 +1028,7 @@ fn hard_lock_findings(
         }
         if selected > upper {
             finding(
-                &mut result.validation,
+                report,
                 "hard_locked_coverage_excess",
                 constraint.rule,
                 plan.definitions[definition].owner,
@@ -1060,4 +1038,83 @@ fn hard_lock_findings(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AssignmentAnalysis, AssignmentInput, AssignmentModelEstimate, AssignmentPair,
+        AssignmentRuleError, DomainValidationReport, OperationBudget, PairContext, obligations};
+    use crate::test_support::{fixture, id};
+    use eutheto_planning_ir::PlanningIrLimitsV1;
+    use eutheto_types::{CancellationToken, ScenarioDocument};
+    use serde_json::json;
+
+    fn leaf_document(leaf: &str) -> Result<ScenarioDocument, Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        let mut references = Vec::new();
+        for index in 0..1_000 {
+            let reference = id(1_000 + index);
+            if leaf.ends_with("QualificationIds") {
+                document.domain.entities.insert(reference.parse()?,
+                    json!({"kind":"qualification","id":reference,"name":"Leaf","description":""}));
+            } else if leaf == "teamIds" {
+                document.domain.entities.insert(reference.parse()?,
+                    json!({"kind":"team","id":reference,"name":"Leaf"}));
+            }
+            references.push(reference);
+        }
+        let person = document.domain.entities.get_mut(&id(1).parse()?).ok_or("person")?;
+        person["qualificationGrants"] = json!([]);
+        person["tags"] = json!([]);
+        person["teamIds"] = json!([]);
+        let mut scope = json!({"people":{"kind":"all"}});
+        if leaf.ends_with("QualificationIds") {
+            let assignment_type = document.domain.entities.get_mut(&id(4).parse()?).ok_or("type")?;
+            assignment_type["qualifications"] = json!({
+                "kind":"matches","allQualificationIds":[],"anyQualificationIds":[],
+            });
+            assignment_type["qualifications"][leaf] = json!(references);
+        } else if leaf == "teamIds" {
+            scope["teamIds"] = json!(references);
+        } else {
+            scope["people"] = json!({"kind":"filter","allTags":[],"anyTags":[]});
+            scope["people"][leaf] = json!(references);
+        }
+        document.domain.rules.insert(id(20).parse()?, json!({
+            "kind":"eligibility","id":id(20),"active":true,"strength":"required","scope":scope,
+        }));
+        Ok(document)
+    }
+
+    #[test]
+    fn cancellation_inside_empty_inner_searches_requires_each_outer_leaf_checkpoint()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for leaf in ["allQualificationIds", "anyQualificationIds", "allTags", "anyTags", "teamIds"] {
+            let document = leaf_document(leaf)?;
+            let token = CancellationToken::new();
+            let mut budget = OperationBudget::analysis(Some(&token), PlanningIrLimitsV1::DEFAULT);
+            let input = AssignmentInput::new(&document, &mut budget)?;
+            let mut result = AssignmentAnalysis {
+                source_document_hash: String::new(), candidates: Vec::new(), rejections: Vec::new(),
+                estimate: AssignmentModelEstimate::default(), validation: DomainValidationReport::default(),
+                obligations: obligations(&input, &mut budget)?,
+            };
+            let person = input.person(id(1).parse()?).ok_or("resolved person")?;
+            let shift = input.shifts.first().ok_or("resolved shift")?;
+            let context = PairContext {
+                document: &document, input: &input, person, shift,
+                metadata: input.metadata(shift)?,
+                pair: AssignmentPair { person_id: person.id, shift_id: shift.id },
+            };
+            // Arm only after decode and pair setup. The other checkpoints for this one
+            // pair total fewer than 128: deleting this leaf's checkpoint makes the
+            // operation succeed without cancellation, so this regression then fails.
+            budget.cancel_after_steps(128)?;
+            assert_eq!(context.analyze(None, &mut result, &mut budget), Err(AssignmentRuleError::Cancelled));
+            assert!(token.is_cancelled());
+        }
+        Ok(())
+    }
 }

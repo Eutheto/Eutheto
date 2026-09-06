@@ -817,3 +817,72 @@ fn qualification_lower_bound_conflicts_with_an_independent_owner_upper_bound() -
         && issue.message.contains(&id(40))));
     Ok(())
 }
+
+fn amplification_document() -> Result<ScenarioDocument> {
+    let mut value = document()?;
+    value.domain.entities.remove(&id(6).parse()?);
+    let shift = entity(&mut value, 8)?.clone();
+    // One source rule/large leaf list amplified across valid resolved assignments, not
+    // across copied oversized rule records. The raw Cartesian product is only 2,048.
+    for index in 0..2047 {
+        let mut record = shift.clone();
+        record["id"] = json!(id(1000 + index));
+        value.domain.entities.insert(id(1000 + index).parse()?, record);
+    }
+    rule(&mut value, 20, "eligibility")?;
+    Ok(value)
+}
+
+fn add_leaf_entities(value: &mut ScenarioDocument, kind: &str) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    for index in 0..10_000 {
+        let identity = id(100_000 + index);
+        let mut record = json!({"kind":kind,"id":identity,"name":"Reference"});
+        if kind == "qualification" { record["description"] = json!(""); }
+        value.domain.entities.insert(identity.parse()?, record);
+        ids.push(identity);
+    }
+    Ok(ids)
+}
+
+#[test]
+fn empty_grants_cannot_bypass_work_limits_for_all_or_any_expression_leaves() -> Result {
+    let mut value = amplification_document()?;
+    entity(&mut value, 1)?["qualificationGrants"] = json!([]);
+    let ids = add_leaf_entities(&mut value, "qualification")?;
+    entity(&mut value, 4)?["qualifications"] = json!({
+        "kind":"matches","allQualificationIds":ids,"anyQualificationIds":[],
+    });
+    // 2,048 × 10,000 outer leaves exceed the work ceiling even though each leaf
+    // scans zero grants. Without the outer checkpoint this valid operation succeeds.
+    assert_eq!(analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT),
+        Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    entity(&mut value, 4)?["qualifications"] = json!({
+        "kind":"matches","allQualificationIds":[],"anyQualificationIds":ids,
+    });
+    assert_eq!(compile_assignment_rules(&value, &context(PlanningIrLimitsV1::DEFAULT)),
+        Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    Ok(())
+}
+
+#[test]
+fn empty_person_tags_and_teams_cannot_bypass_outer_filter_work_limits() -> Result {
+    let mut value = amplification_document()?;
+    entity(&mut value, 1)?["tags"] = json!([]);
+    entity(&mut value, 1)?["teamIds"] = json!([]);
+    let tags: Vec<_> = (0..10_000).map(|index| format!("tag-{index}")).collect();
+    for field in ["allTags", "anyTags"] {
+        let mut people = json!({"kind":"filter","allTags":[],"anyTags":[]});
+        people[field] = json!(tags);
+        value.domain.rules.get_mut(&id(20).parse()?).ok_or("missing rule")?["scope"] =
+            json!({"people":people});
+        assert_eq!(analyze_assignments(&value, None, PlanningIrLimitsV1::DEFAULT),
+            Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    }
+    let teams = add_leaf_entities(&mut value, "team")?;
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("missing rule")?["scope"] =
+        json!({"people":{"kind":"all"},"teamIds":teams});
+    assert_eq!(compile_assignment_rules(&value, &context(PlanningIrLimitsV1::DEFAULT)),
+        Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)));
+    Ok(())
+}

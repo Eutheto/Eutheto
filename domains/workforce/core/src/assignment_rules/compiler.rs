@@ -1,5 +1,5 @@
 use super::{
-    AssignmentConstructionIssue, AssignmentRuleCompilation, AssignmentRuleError,
+    AssignmentAnalysis, AssignmentConstructionIssue, AssignmentRuleCompilation, AssignmentRuleError,
     AssignmentRuleLimit, AssignmentVariable,
     analysis::{Plan, PlannedConstraint, Predicate, predicate_shape, prepare},
     budget::{OperationBudget, add, count, within},
@@ -39,6 +39,14 @@ pub fn compile_assignment_rules(
     // Counts, per-record bounds, references and exact serialized contribution bytes are all
     // reserved before the first IR variable is allocated. The dry pass streams literal lists.
     preflight(&analysis.candidates, &plan, &mut budget, limits)?;
+    construct(analysis, &plan, &mut budget)
+}
+
+fn construct(
+    analysis: AssignmentAnalysis,
+    plan: &Plan,
+    budget: &mut OperationBudget<'_>,
+) -> Result<AssignmentRuleCompilation, AssignmentRuleError> {
     let mut identities = PlanningIdentities::default();
     let mut variables = Vec::new();
     let mut provenance = Vec::new();
@@ -46,108 +54,97 @@ pub fn compile_assignment_rules(
     for pair in analysis.candidates {
         budget.step()?;
         let key = ("assignment", pair.person_id, pair.shift_id);
-        let id =
-            BoolVariableId::new(identities.derive(IdentityKind::Boolean, &key, &mut budget)?)
-                .map_err(|_| invalid_id())?;
-        let fact_id =
-            ProvenanceId::new(identities.derive(IdentityKind::Provenance, &key, &mut budget)?)
-                .map_err(|_| invalid_id())?;
-        let fact = variable_fact(pair, fact_id.clone())?;
-        provenance.push(fact);
+        let id = BoolVariableId::new(identities.derive(IdentityKind::Boolean, &key, budget)?)
+            .map_err(|_| invalid_id())?;
+        let fact_id = ProvenanceId::new(identities.derive(IdentityKind::Provenance, &key, budget)?)
+            .map_err(|_| invalid_id())?;
+        provenance.push(variable_fact(pair, fact_id.clone(), budget)?);
         variables.push(AssignmentVariable {
-            pair,
-            variable: BoolVariable {
-                id,
-                provenance: fact_id,
-            },
+            pair, variable: BoolVariable { id, provenance: fact_id },
         });
     }
     let mut parents = BTreeMap::new();
     for (rule, kind) in &plan.parents {
         budget.step()?;
         let id = ProvenanceId::new(identities.derive(
-            IdentityKind::Provenance,
-            &("rule", rule, kind),
-            &mut budget,
-        )?)
-        .map_err(|_| invalid_id())?;
+            IdentityKind::Provenance, &("rule", rule, kind), budget,
+        )?).map_err(|_| invalid_id())?;
         budget.reserve(1, 1, 128)?;
         parents.insert(*rule, id.clone());
         provenance.push(rule_fact(*rule, kind, id));
     }
     for planned in &plan.constraints {
-        budget.step()?;
-        let id = PlanningConstraintId::new(derive_predicate(
-            IdentityKind::Constraint,
-            planned,
-            &plan,
-            &mut identities,
-            &mut budget,
-        )?)
-        .map_err(|_| invalid_id())?;
-        let fact_id = ProvenanceId::new(derive_predicate(
-            IdentityKind::Provenance,
-            planned,
-            &plan,
-            &mut identities,
-            &mut budget,
-        )?)
-        .map_err(|_| invalid_id())?;
         let parent = parents.get(&planned.rule).ok_or_else(invalid)?.clone();
-        let mut literals = Vec::new();
-        if !planned.impossible {
-            for index in &planned.population {
-                budget.step()?;
-                let variable = variables.get(*index).ok_or_else(invalid)?;
-                literals.push(Literal::positive(variable.variable.id.clone()));
-            }
-        }
-        let body = if planned.impossible {
-            Constraint::bool_or(literals)
-        } else {
-            match planned.predicate {
-                Predicate::Headcount { lower, upper, .. } => {
-                    Constraint::cardinality(literals, lower, upper).map_err(|_| invalid())?
-                }
-                Predicate::Qualification {
-                    definition,
-                    minimum,
-                    upper,
-                    ..
-                } => Constraint::cardinality(
-                    literals,
-                    u64::from(plan.definitions[definition].minima[minimum].minimum),
-                    upper,
-                )
-                .map_err(|_| invalid())?,
-                Predicate::Overlap { .. } => Constraint::at_most_one(literals),
-            }
-        };
-        let (entities, parameters) = predicate_shape(&planned.predicate, &plan)?;
-        budget.steps(add(entities, parameters)?)?;
-        provenance.push(constraint_fact(planned, &plan, fact_id.clone(), parent)?);
-        constraints.push(ConstraintRecord {
-            id,
-            body,
-            enforcement: Vec::new(),
-            provenance: fact_id,
-            tags: Vec::new(),
-        });
+        let (record, fact) = compile_constraint(planned, plan, &variables, parent, &mut identities, budget)?;
+        constraints.push(record);
+        provenance.push(fact);
     }
+    budget.sort_work(variables.len())?;
     variables.sort_unstable_by(|a, b| a.variable.id.cmp(&b.variable.id));
+    budget.sort_work(constraints.len())?;
     constraints.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+    budget.sort_work(provenance.len())?;
     provenance.sort_unstable_by(|a, b| a.id.cmp(&b.id));
     budget.check()?;
     Ok(AssignmentRuleCompilation {
         source_document_hash: analysis.source_document_hash,
-        variables,
-        constraints,
-        provenance,
-        rejections: analysis.rejections,
-        estimate: analysis.estimate,
-        validation: analysis.validation,
-        obligations: analysis.obligations,
+        variables, constraints, provenance,
+        rejections: analysis.rejections, estimate: analysis.estimate,
+        validation: analysis.validation, obligations: analysis.obligations,
     })
+}
+
+fn compile_constraint(
+    planned: &PlannedConstraint,
+    plan: &Plan,
+    variables: &[AssignmentVariable],
+    parent: ProvenanceId,
+    identities: &mut PlanningIdentities,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(ConstraintRecord, ProvenanceRecord), AssignmentRuleError> {
+    budget.step()?;
+    let id = PlanningConstraintId::new(derive_predicate(
+        IdentityKind::Constraint, planned, plan, identities, budget,
+    )?).map_err(|_| invalid_id())?;
+    let fact_id = ProvenanceId::new(derive_predicate(
+        IdentityKind::Provenance, planned, plan, identities, budget,
+    )?).map_err(|_| invalid_id())?;
+    let body = constraint_body(planned, plan, variables, budget)?;
+    let (entities, parameters) = predicate_shape(&planned.predicate, plan)?;
+    budget.steps(add(entities, parameters)?)?;
+    let fact = constraint_fact(planned, plan, fact_id.clone(), parent, budget)?;
+    Ok((ConstraintRecord {
+        id, body, enforcement: Vec::new(), provenance: fact_id, tags: Vec::new(),
+    }, fact))
+}
+
+fn constraint_body(
+    planned: &PlannedConstraint,
+    plan: &Plan,
+    variables: &[AssignmentVariable],
+    budget: &mut OperationBudget<'_>,
+) -> Result<Constraint, AssignmentRuleError> {
+    let mut literals = Vec::new();
+    if !planned.impossible {
+        for index in &planned.population {
+            budget.step()?;
+            let variable = variables.get(*index).ok_or_else(invalid)?;
+            literals.push(Literal::positive(variable.variable.id.clone()));
+        }
+    }
+    // The Planning IR constructors canonically sort and deduplicate these lists.
+    budget.sort_work(literals.len())?;
+    budget.steps(count(literals.len())?)?;
+    if planned.impossible { return Ok(Constraint::bool_or(literals)); }
+    match planned.predicate {
+        Predicate::Headcount { lower, upper, .. } =>
+            Constraint::cardinality(literals, lower, upper).map_err(|_| invalid()),
+        Predicate::Qualification { definition, minimum, upper, .. } =>
+            Constraint::cardinality(literals,
+                u64::from(plan.definitions[definition].minima[minimum].minimum), upper)
+                .map_err(|_| invalid()),
+        Predicate::Overlap { .. } => Ok(Constraint::at_most_one(literals)),
+    }
 }
 
 fn derive_predicate(
@@ -215,11 +212,13 @@ fn entity(kind: &str, id: EntityId) -> Result<DomainEntityRef, AssignmentRuleErr
 fn variable_fact(
     pair: AssignmentPair,
     id: ProvenanceId,
+    budget: &mut OperationBudget<'_>,
 ) -> Result<ProvenanceRecord, AssignmentRuleError> {
     let mut entity_refs = vec![
         entity("person", EntityId::from_uuid(pair.person_id.as_uuid()))?,
         entity("shift", pair.shift_id.as_entity_id())?,
     ];
+    budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
     Ok(ProvenanceRecord {
         id,
@@ -249,6 +248,7 @@ fn constraint_fact(
     plan: &Plan,
     id: ProvenanceId,
     parent: ProvenanceId,
+    budget: &mut OperationBudget<'_>,
 ) -> Result<ProvenanceRecord, AssignmentRuleError> {
     let mut parameters = BTreeMap::new();
     let (mut entity_refs, message_key) = match planned.predicate {
@@ -321,6 +321,7 @@ fn constraint_fact(
             "official.workforce.incompatible_overlap",
         ),
     };
+    budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
     Ok(ProvenanceRecord {
         id,
@@ -417,7 +418,7 @@ pub(super) fn preflight(
         budget.reserve_ir(1, 1, budget.measure_ir(&variable)?)?;
         // Temporary small provenance payloads are charged separately before materialization.
         budget.reserve(1, 2, 1024)?;
-        let fact = variable_fact(*pair, placeholder.clone())?;
+        let fact = variable_fact(*pair, placeholder.clone(), budget)?;
         reserve_fact(&fact, budget, limits)?;
     }
     for (rule, kind) in &plan.parents {
@@ -474,7 +475,7 @@ pub(super) fn preflight(
         budget.reserve(1, add(entities, parameters)?, temporary_bytes)?;
         budget.steps(add(entities, parameters)?)?;
         reserve_fact(
-            &constraint_fact(planned, plan, placeholder.clone(), placeholder.clone())?,
+            &constraint_fact(planned, plan, placeholder.clone(), placeholder.clone(), budget)?,
             budget,
             limits,
         )?;
@@ -516,12 +517,10 @@ fn reserve_fact(
                 AssignmentRuleLimit::PerRecord,
             )?;
         }
-        if let ProvenanceParameter::Integer(value) = parameter {
-            if *value > limits.max_abs_value.min(defaults.max_abs_value) {
-                return Err(AssignmentRuleError::LimitExceeded(
-                    AssignmentRuleLimit::PerRecord,
-                ));
-            }
+        if let ProvenanceParameter::Integer(value) = parameter
+            && *value > limits.max_abs_value.min(defaults.max_abs_value)
+        {
+            return Err(AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::PerRecord));
         }
     }
     let refs = add(
@@ -536,4 +535,38 @@ fn invalid() -> AssignmentRuleError {
 }
 fn invalid_id() -> AssignmentRuleError {
     AssignmentRuleError::InvalidConstruction(AssignmentConstructionIssue::InvalidIdentifier)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AssignmentInput, AssignmentRuleError, OperationBudget, construct, preflight, prepare};
+    use crate::test_support::{fixture, id};
+    use eutheto_planning_ir::PlanningIrLimitsV1;
+    use eutheto_types::CancellationToken;
+    use serde_json::json;
+
+    #[test]
+    fn cancellation_during_variable_construction_returns_no_compilation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        let shift = document.domain.entities.get(&id(8).parse()?).ok_or("shift")?.clone();
+        for index in 0..255 {
+            let mut record = shift.clone();
+            record["id"] = json!(id(1_000 + index));
+            document.domain.entities.insert(id(1_000 + index).parse()?, record);
+        }
+        let token = CancellationToken::new();
+        let limits = PlanningIrLimitsV1::DEFAULT;
+        let mut budget = OperationBudget::analysis(Some(&token), limits);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
+        preflight(&analysis.candidates, &plan, &mut budget, limits)?;
+        // Genuine construction after completed resource preflight, not a pre-cancelled call.
+        budget.cancel_after_steps(100)?;
+        assert_eq!(construct(analysis, &plan, &mut budget), Err(AssignmentRuleError::Cancelled));
+        assert!(token.is_cancelled());
+        Ok(())
+    }
 }
