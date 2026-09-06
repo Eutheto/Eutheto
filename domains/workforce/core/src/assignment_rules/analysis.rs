@@ -1155,6 +1155,17 @@ fn locked_overlap_findings(
     report: &mut DomainValidationReport,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
+    let mut overlap_rules = Vec::new();
+    for rule in input.domain.rules.values() {
+        budget.step()?;
+        if matches!(rule, WorkforceRule::NoOverlap { active: true, .. }) {
+            budget.reserve(1, 1, 16)?;
+            overlap_rules.push(rule);
+        }
+    }
+    if overlap_rules.is_empty() {
+        return Ok(());
+    }
     for (position, first) in locks.iter().enumerate() {
         budget.step()?;
         let Some(first_shift) = input.shift(first.shift_id) else {
@@ -1175,7 +1186,7 @@ fn locked_overlap_findings(
                 break;
             }
             let person = input.person(first.person_id).ok_or_else(invalid)?;
-            for rule in input.domain.rules.values() {
+            for &rule in &overlap_rules {
                 budget.step()?;
                 if let WorkforceRule::NoOverlap {
                     id,

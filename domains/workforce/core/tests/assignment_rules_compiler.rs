@@ -998,7 +998,10 @@ fn minimum_rest_exact_nanoseconds_zero_overlap_and_extreme_minutes() -> Result {
     }
     // Extreme valid dates retain exact comparisons. Adding the maximum required
     // duration to the late positive endpoint would exceed Jiff's timestamp range.
-    for (date, next) in [("-009000-12-30", "-009000-12-31"), ("9000-12-30", "9000-12-31")] {
+    for (date, next) in [
+        ("-009000-12-30", "-009000-12-31"),
+        ("9000-12-30", "9000-12-31"),
+    ] {
         let mut value = serde_json::to_value(rest_document(u32::MAX)?)?;
         value["settings"]["horizon"] = json!({
             "start":format!("{date}T00:00:00Z"),"end":format!("{next}T00:00:00Z"),
@@ -1204,11 +1207,39 @@ fn minimum_rest_intersects_every_common_and_directional_scope_filter() -> Result
 
 #[test]
 fn minimum_rest_uses_elapsed_overnight_spring_and_fall_gaps() -> Result {
-    for (horizon_start, horizon_end, source_end, end_local, end_offset, target_start, target_local, target_offset, allowed) in [
-        ("2026-03-07T05:00:00Z", "2026-03-09T04:00:00Z", "2026-03-08T05:00:00Z", "2026-03-08T00:00:00", -18000,
-            "2026-03-08T14:00:00Z", "2026-03-08T10:00:00", -14400, false),
-        ("2026-10-31T04:00:00Z", "2026-11-02T05:00:00Z", "2026-11-01T04:00:00Z", "2026-11-01T00:00:00", -14400,
-            "2026-11-01T15:00:00Z", "2026-11-01T10:00:00", -18000, true),
+    for (
+        horizon_start,
+        horizon_end,
+        source_end,
+        end_local,
+        end_offset,
+        target_start,
+        target_local,
+        target_offset,
+        allowed,
+    ) in [
+        (
+            "2026-03-07T05:00:00Z",
+            "2026-03-09T04:00:00Z",
+            "2026-03-08T05:00:00Z",
+            "2026-03-08T00:00:00",
+            -18000,
+            "2026-03-08T14:00:00Z",
+            "2026-03-08T10:00:00",
+            -14400,
+            false,
+        ),
+        (
+            "2026-10-31T04:00:00Z",
+            "2026-11-02T05:00:00Z",
+            "2026-11-01T04:00:00Z",
+            "2026-11-01T00:00:00",
+            -14400,
+            "2026-11-01T15:00:00Z",
+            "2026-11-01T10:00:00",
+            -18000,
+            true,
+        ),
     ] {
         let mut value = serde_json::to_value(rest_document(600)?)?;
         value["settings"]["timeZone"] = json!("America/New_York");
@@ -1414,13 +1445,13 @@ fn minimum_rest_exact_estimates_typed_provenance_and_caller_limits() -> Result {
         .ok_or("parent")?;
     assert_eq!(parent.message_key, "official.workforce.minimum_rest");
     for (field, exact) in [(0, 1), (1, 3), (2, 3), (3, 600)] {
-        let limits = |cap| {
+        let limits = |cap: u32| {
             let mut limits = PlanningIrLimitsV1::DEFAULT;
             match field {
-                0 => limits.max_constraints = cap,
-                1 => limits.max_parameters_per_record = cap,
-                2 => limits.max_entity_refs_per_record = cap,
-                _ => limits.max_abs_value = cap as i64,
+                0 => limits.max_constraints = u64::from(cap),
+                1 => limits.max_parameters_per_record = u64::from(cap),
+                2 => limits.max_entity_refs_per_record = u64::from(cap),
+                _ => limits.max_abs_value = i64::from(cap),
             }
             limits
         };
@@ -1545,12 +1576,85 @@ fn minimum_rest_extreme_signed_gaps_do_not_overflow_total_nanoseconds() -> Resul
     value["settings"]["horizon"] = json!({
         "start":"-009000-12-30T00:00:00Z","end":"9000-12-31T00:00:00Z",
     });
-    utc_times(&mut value["domain"]["entities"][id(7)], "-009000-12-30T00:00:00", "-009000-12-30T01:00:00");
-    utc_times(&mut value["domain"]["entities"][id(8)], "9000-12-30T10:00:00", "9000-12-30T12:00:00");
-    assert!(allows(&compile(&serde_json::from_value(value.clone())?)?, &[pair(1, 7)?, pair(1, 8)?])?);
+    utc_times(
+        &mut value["domain"]["entities"][id(7)],
+        "-009000-12-30T00:00:00",
+        "-009000-12-30T01:00:00",
+    );
+    utc_times(
+        &mut value["domain"]["entities"][id(8)],
+        "9000-12-30T10:00:00",
+        "9000-12-30T12:00:00",
+    );
+    assert!(allows(
+        &compile(&serde_json::from_value(value.clone())?)?,
+        &[pair(1, 7)?, pair(1, 8)?]
+    )?);
     value["domain"]["rules"][id(24)]["minimumMinutes"] = json!(0);
-    utc_times(&mut value["domain"]["entities"][id(7)], "-009000-12-30T00:00:00", "9000-12-30T11:00:00");
-    utc_times(&mut value["domain"]["entities"][id(8)], "-008999-12-30T10:00:00", "-008999-12-30T12:00:00");
-    assert!(!allows(&compile(&serde_json::from_value(value)?)?, &[pair(1, 7)?, pair(1, 8)?])?);
+    utc_times(
+        &mut value["domain"]["entities"][id(7)],
+        "-009000-12-30T00:00:00",
+        "9000-12-30T11:00:00",
+    );
+    utc_times(
+        &mut value["domain"]["entities"][id(8)],
+        "-008999-12-30T10:00:00",
+        "-008999-12-30T12:00:00",
+    );
+    assert!(!allows(
+        &compile(&serde_json::from_value(value)?)?,
+        &[pair(1, 7)?, pair(1, 8)?]
+    )?);
+    Ok(())
+}
+
+#[test]
+fn rest_only_hard_locks_do_not_scan_unrelated_overlap_pairs() -> Result {
+    let mut value = rest_document(0)?;
+    let shift = entity(&mut value, 8)?.clone();
+    value.domain.entities.remove(&id(7).parse()?);
+    value.domain.entities.remove(&id(8).parse()?);
+    value.domain.rules.clear();
+    for index in 0..1_000 {
+        let shift_id = id(1_000 + index);
+        let lock_id = id(30_000 + index);
+        let mut record = shift.clone();
+        record["id"] = json!(shift_id);
+        value.domain.entities.insert(shift_id.parse()?, record);
+        value.domain.locked_assignments.insert(
+            lock_id.parse()?,
+            json!({
+                "id":lock_id,"personId":id(1),"shiftId":shift_id,"state":{"kind":"hard"},
+            }),
+        );
+    }
+    for index in 20_000..20_040 {
+        value.domain.rules.insert(
+            id(index).parse()?,
+            json!({
+                "kind":"minimumRest","id":id(index),"active":true,"strength":"required",
+                "scope":{"people":{"kind":"all"}},
+                "afterScope":{"people":{"kind":"all"},"categories":["absent"]},
+                "beforeScope":{"people":{"kind":"all"}},"minimumMinutes":0,
+            }),
+        );
+    }
+    // All source scopes resolve empty. An unrelated overlap scan would spend more than
+    // 20 million steps on these locks despite there being no NoOverlap rule.
+    let result = compile(&value)?;
+    assert_eq!(result.estimate.variables, 1_000);
+    assert_eq!(result.estimate.constraints, 0);
+    assert!(result.validation.issues.is_empty());
+    // Even with an active overlap rule, unrelated rest rules must not be rescanned
+    // for each overlapping lock pair.
+    rule(&mut value, 25, "noOverlap")?;
+    value
+        .domain
+        .rules
+        .get_mut(&id(25).parse()?)
+        .ok_or("overlap rule")?["scope"] = json!({"people":{"kind":"all"},"categories":["absent"]});
+    let mixed = compile(&value)?;
+    assert_eq!(mixed.estimate.constraints, 0);
+    assert!(mixed.validation.issues.is_empty());
     Ok(())
 }

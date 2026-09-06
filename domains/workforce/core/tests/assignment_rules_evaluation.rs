@@ -1077,9 +1077,48 @@ fn rest_sees_identified_inadmissible_selections_and_empty_selections() -> Result
 
 #[test]
 fn rest_distinguishes_overnight_dst_elapsed_time_from_reporting_weekday() -> Result {
-    for (date, next, source_start, source_end, target_start, target_end, horizon_start, horizon_end, offset, next_offset, violations, seconds) in [
-        ("2026-03-07", "2026-03-08", "2026-03-08T04:00:00Z", "2026-03-08T06:00:00Z", "2026-03-08T15:00:00Z", "2026-03-08T16:00:00Z", "2026-03-07T05:00:00Z", "2026-03-09T04:00:00Z", -18000, -14400, 1, 32400),
-        ("2026-10-31", "2026-11-01", "2026-11-01T03:00:00Z", "2026-11-01T05:00:00Z", "2026-11-01T16:00:00Z", "2026-11-01T17:00:00Z", "2026-10-31T04:00:00Z", "2026-11-02T05:00:00Z", -14400, -18000, 0, 39600),
+    for (
+        date,
+        next,
+        source_start,
+        source_end,
+        target_start,
+        target_end,
+        horizon_start,
+        horizon_end,
+        offset,
+        next_offset,
+        violations,
+        seconds,
+    ) in [
+        (
+            "2026-03-07",
+            "2026-03-08",
+            "2026-03-08T04:00:00Z",
+            "2026-03-08T06:00:00Z",
+            "2026-03-08T15:00:00Z",
+            "2026-03-08T16:00:00Z",
+            "2026-03-07T05:00:00Z",
+            "2026-03-09T04:00:00Z",
+            -18000,
+            -14400,
+            1,
+            32400,
+        ),
+        (
+            "2026-10-31",
+            "2026-11-01",
+            "2026-11-01T03:00:00Z",
+            "2026-11-01T05:00:00Z",
+            "2026-11-01T16:00:00Z",
+            "2026-11-01T17:00:00Z",
+            "2026-10-31T04:00:00Z",
+            "2026-11-02T05:00:00Z",
+            -14400,
+            -18000,
+            0,
+            39600,
+        ),
     ] {
         let mut value = base()?;
         value["settings"]["timeZone"] = json!("America/New_York");
@@ -1136,23 +1175,44 @@ fn rest_distinguishes_overnight_dst_elapsed_time_from_reporting_weekday() -> Res
 fn rest_maximum_minutes_and_extreme_instants_do_not_add_overflowing_endpoints() -> Result {
     let mut value = base()?;
     rest_rule(&mut value, 20, u32::MAX);
-    value["settings"]["horizon"] = json!({"start":"-009000-01-01T00:00:00Z","end":"9001-01-01T00:00:00Z"});
-    times(&mut value["domain"]["entities"][id(8)], "-009000-01-01T00:00:00", "-009000-01-02T00:00:00");
+    value["settings"]["horizon"] =
+        json!({"start":"-009000-01-01T00:00:00Z","end":"9001-01-01T00:00:00Z"});
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "-009000-01-01T00:00:00",
+        "-009000-01-02T00:00:00",
+    );
     another_shift(&mut value, 30, "9000-12-31T20:00:00", "9000-12-31T21:00:00");
     assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (1, 0));
     // Near the timestamp ceiling, adding the required minutes to the source end would fail.
-    times(&mut value["domain"]["entities"][id(8)], "9000-12-31T18:00:00", "9000-12-31T19:00:00");
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "9000-12-31T18:00:00",
+        "9000-12-31T19:00:00",
+    );
     let near_end = run(&value, &[(1, 8), (1, 30)])?;
     assert_eq!(totals(&near_end, 20)?, (1, 1));
     rest_evidence(&near_end, 20, 8, 30, u32::MAX, 3600, 0)?;
     // A long overlapping interval must retain a negative gap whose total nanoseconds do not
     // fit i64. Whole seconds and signed subsecond nanoseconds remain exact.
-    times(&mut value["domain"]["entities"][id(8)], "-009000-01-01T00:00:00", "9000-12-31T19:00:00.000000001");
-    times(&mut value["domain"]["entities"][id(30)], "-009000-01-02T00:00:00", "-009000-01-03T00:00:00");
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "-009000-01-01T00:00:00",
+        "9000-12-31T19:00:00.000000001",
+    );
+    times(
+        &mut value["domain"]["entities"][id(30)],
+        "-009000-01-02T00:00:00",
+        "-009000-01-03T00:00:00",
+    );
     let negative = run(&value, &[(1, 8), (1, 30)])?;
     assert_eq!(totals(&negative, 20)?, (1, 1));
-    let seconds = "-009000-01-02T00:00:00Z".parse::<jiff::Timestamp>()?.as_second()
-        - "9000-12-31T19:00:00Z".parse::<jiff::Timestamp>()?.as_second();
+    let seconds = "-009000-01-02T00:00:00Z"
+        .parse::<jiff::Timestamp>()?
+        .as_second()
+        - "9000-12-31T19:00:00Z"
+            .parse::<jiff::Timestamp>()?
+            .as_second();
     rest_evidence(&negative, 20, 8, 30, u32::MAX, seconds, -1)?;
     Ok(())
 }
@@ -1161,7 +1221,10 @@ fn rest_maximum_minutes_and_extreme_instants_do_not_add_overflowing_endpoints() 
 fn rest_safe_suffix_counts_quadratic_predicates_without_quadratic_work_or_output() -> Result {
     let mut value = base()?;
     rest_rule(&mut value, 20, 1);
-    value["domain"]["entities"].as_object_mut().ok_or("entities")?.remove(&id(8));
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(8));
     let prototype = base()?["domain"]["entities"][id(8)].clone();
     let mut people = vec![1];
     for person in 2000..2099 {
@@ -1172,9 +1235,19 @@ fn rest_safe_suffix_counts_quadratic_predicates_without_quadratic_work_or_output
     for index in 0..800_u32 {
         let mut shift = prototype.clone();
         let second = index * 90;
-        let start = format!("2026-11-01T{:02}:{:02}:{:02}", second / 3600, second / 60 % 60, second % 60);
+        let start = format!(
+            "2026-11-01T{:02}:{:02}:{:02}",
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
         let end_second = second + 30;
-        let end = format!("2026-11-01T{:02}:{:02}:{:02}", end_second / 3600, end_second / 60 % 60, end_second % 60);
+        let end = format!(
+            "2026-11-01T{:02}:{:02}:{:02}",
+            end_second / 3600,
+            end_second / 60 % 60,
+            end_second % 60
+        );
         shift["id"] = json!(id(1000 + index));
         times(&mut shift, &start, &end);
         value["domain"]["entities"][id(1000 + index)] = shift;

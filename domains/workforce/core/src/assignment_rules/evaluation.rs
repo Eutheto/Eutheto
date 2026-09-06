@@ -718,13 +718,21 @@ fn rest_evidence(
         budget,
     )?;
     for (key, value) in [
-        ("official.workforce.fact.actual_rest_seconds", rest.actual.as_secs()),
+        (
+            "official.workforce.fact.actual_rest_seconds",
+            rest.actual.as_secs(),
+        ),
         (
             "official.workforce.fact.actual_rest_subsecond_nanoseconds",
             i64::from(rest.actual.subsec_nanos()),
         ),
     ] {
-        fact(&mut result.observed, key, VerificationValue::Integer(value), budget)?;
+        fact(
+            &mut result.observed,
+            key,
+            VerificationValue::Integer(value),
+            budget,
+        )?;
     }
     Ok(())
 }

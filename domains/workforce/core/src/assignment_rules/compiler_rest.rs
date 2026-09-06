@@ -268,7 +268,9 @@ mod tests {
             roles.push(index, shift, &input, &rule, &mut budget)?;
         }
         let mut plan = Plan {
-            definitions: Vec::new(), constraints: Vec::new(), parents: BTreeMap::new(),
+            definitions: Vec::new(),
+            constraints: Vec::new(),
+            parents: BTreeMap::new(),
         };
         let mut entered = false;
         let result = roles.conflicts(600, &mut budget, |source, target, _, budget| {
