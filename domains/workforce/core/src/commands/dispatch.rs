@@ -1,23 +1,31 @@
 use super::{
-    effect::{self, Collection, Effect, Operation},
+    effect::{self, Changes, Collection, Effect, Operation},
     payload::{
-        ADD_ENTITY, ADD_LOCK, ADD_PREFERENCE, ADD_RULE, EntityPayload, EntityTarget, LockPayload,
-        LockTarget, PreferencePayload, PreferenceTarget, REMOVE_ENTITY, REMOVE_LOCK,
+        ADD_ENTITY, ADD_LOCK, ADD_OCCURRENCE_IDENTITIES, ADD_PREFERENCE, ADD_RULE, DETACH_SHIFT,
+        EntityPayload, EntityTarget, LockPayload, LockTarget, PreferencePayload, PreferenceTarget,
+        REATTACH_SHIFT, REMOVE_ENTITY, REMOVE_LOCK, REMOVE_OCCURRENCE_IDENTITIES,
         REMOVE_PREFERENCE, REMOVE_RULE, RulePayload, RuleTarget, UPDATE_ENTITY, UPDATE_LOCK,
         UPDATE_PREFERENCE, UPDATE_RULE,
     },
 };
 use crate::validation::common::{Result, invalid};
-use eutheto_types::{DomainCommandEnvelope, ScenarioDocument};
+use eutheto_types::{CancellationToken, DomainCommandEnvelope, ScenarioDocument};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 pub(super) fn apply_one(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
+    changes: &mut Changes,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Effect> {
+    super::check_cancellation(cancellation)?;
     let domain = &mut document.domain;
     match envelope.command_type.as_str() {
+        ADD_OCCURRENCE_IDENTITIES
+        | REMOVE_OCCURRENCE_IDENTITIES
+        | DETACH_SHIFT
+        | REATTACH_SHIFT => super::occurrences::apply(document, envelope, changes, cancellation),
         ADD_ENTITY | UPDATE_ENTITY => {
             let payload: EntityPayload = decode(&envelope.payload)?;
             effect::mutate(
@@ -25,6 +33,7 @@ pub(super) fn apply_one(
                 payload.entity.id(),
                 record_operation(envelope, &effect::ENTITIES)?,
                 &effect::ENTITIES,
+                changes,
             )
         }
         REMOVE_ENTITY => {
@@ -34,6 +43,7 @@ pub(super) fn apply_one(
                 payload.entity_id,
                 Operation::Remove,
                 &effect::ENTITIES,
+                changes,
             )
         }
         ADD_RULE | UPDATE_RULE => {
@@ -43,6 +53,7 @@ pub(super) fn apply_one(
                 payload.rule.header().0,
                 record_operation(envelope, &effect::RULES)?,
                 &effect::RULES,
+                changes,
             )
         }
         REMOVE_RULE => {
@@ -52,6 +63,7 @@ pub(super) fn apply_one(
                 payload.rule_id,
                 Operation::Remove,
                 &effect::RULES,
+                changes,
             )
         }
         ADD_PREFERENCE | UPDATE_PREFERENCE => {
@@ -61,6 +73,7 @@ pub(super) fn apply_one(
                 payload.preference.header().0,
                 record_operation(envelope, &effect::PREFERENCES)?,
                 &effect::PREFERENCES,
+                changes,
             )
         }
         REMOVE_PREFERENCE => {
@@ -70,6 +83,7 @@ pub(super) fn apply_one(
                 payload.preference_id,
                 Operation::Remove,
                 &effect::PREFERENCES,
+                changes,
             )
         }
         ADD_LOCK | UPDATE_LOCK => {
@@ -79,6 +93,7 @@ pub(super) fn apply_one(
                 payload.lock.id,
                 record_operation(envelope, &effect::LOCKS)?,
                 &effect::LOCKS,
+                changes,
             )
         }
         REMOVE_LOCK => {
@@ -88,6 +103,7 @@ pub(super) fn apply_one(
                 payload.assignment_id,
                 Operation::Remove,
                 &effect::LOCKS,
+                changes,
             )
         }
         _ => Err(eutheto_domain_api::DomainPackError::UnknownCommand(

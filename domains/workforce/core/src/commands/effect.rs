@@ -1,5 +1,5 @@
 use crate::validation::common::{Result, invalid, require};
-use eutheto_domain_api::DomainChange;
+use eutheto_domain_api::{DomainChange, bounded_json_size};
 use eutheto_types::DomainCommandEnvelope;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -61,8 +61,45 @@ pub(super) enum Operation<'a> {
 
 pub(super) struct Effect {
     pub result: Value,
-    pub change: DomainChange,
     pub inverse: DomainCommandEnvelope,
+}
+
+const MAX_CHANGES: usize = 85_536;
+const MAX_CHANGE_BYTES: usize = 64 * 1024 * 1024;
+
+/// One batch-owned buffer. Compound commands cannot amplify small payloads without bounds.
+pub(super) struct Changes {
+    records: Vec<DomainChange>,
+    bytes: usize,
+}
+
+impl Changes {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            records: Vec::with_capacity(capacity),
+            bytes: 2,
+        }
+    }
+
+    pub fn push(&mut self, change: DomainChange) -> Result {
+        require(
+            self.records.len() < MAX_CHANGES,
+            "/changes",
+            "too many command changes",
+        )?;
+        let separator = usize::from(!self.records.is_empty());
+        let remaining = MAX_CHANGE_BYTES
+            .checked_sub(self.bytes + separator)
+            .ok_or_else(|| invalid("/changes", "command changes exceed byte limit"))?;
+        let bytes = bounded_json_size(&change, remaining)?;
+        self.bytes += separator + bytes;
+        self.records.push(change);
+        Ok(())
+    }
+
+    pub fn into_records(self) -> Vec<DomainChange> {
+        self.records
+    }
 }
 
 /// Edits only the addressed raw record. The caller validates typed payload and resulting state.
@@ -72,6 +109,7 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
     id: K,
     operation: Operation<'_>,
     collection: &Collection,
+    changes: &mut Changes,
 ) -> Result<Effect> {
     let path = format!("/domain/{}/{id}", collection.map);
     let previous = records.get(&id);
@@ -113,12 +151,12 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
         ("before".to_owned(), before.unwrap_or(Value::Null)),
         ("after".to_owned(), after.unwrap_or(Value::Null)),
     ]));
+    changes.push(DomainChange {
+        command_id: command_id.to_owned(),
+        value: change,
+    })?;
     Ok(Effect {
         result: target(collection, id)?,
-        change: DomainChange {
-            command_id: command_id.to_owned(),
-            value: change,
-        },
         inverse: DomainCommandEnvelope {
             command_type: inverse_type.to_owned(),
             payload: inverse_payload,
@@ -134,4 +172,50 @@ fn target(collection: &Collection, id: impl Serialize) -> Result<Value> {
 
 fn field(name: &str, value: Value) -> Value {
     Value::Object(Map::from_iter([(name.to_owned(), value)]))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn change_count_limit_rejects_without_retaining_the_excess_entry() -> Result {
+        let mut changes = Changes::new(0);
+        for _ in 0..MAX_CHANGES {
+            changes.push(DomainChange {
+                command_id: ADD_ENTITY.to_owned(),
+                value: Value::Null,
+            })?;
+        }
+        assert!(
+            changes
+                .push(DomainChange {
+                    command_id: ADD_ENTITY.to_owned(),
+                    value: Value::Null
+                })
+                .is_err()
+        );
+        assert_eq!(changes.into_records().len(), MAX_CHANGES);
+        Ok(())
+    }
+
+    #[test]
+    fn change_byte_limit_includes_array_framing_and_keeps_accepted_data()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let empty = DomainChange {
+            command_id: ADD_ENTITY.to_owned(),
+            value: Value::String(String::new()),
+        };
+        let content_bytes = MAX_CHANGE_BYTES - 2 - serde_json::to_vec(&empty)?.len();
+        let mut changes = Changes::new(0);
+        changes.push(DomainChange {
+            command_id: ADD_ENTITY.to_owned(),
+            value: Value::String("x".repeat(content_bytes)),
+        })?;
+        assert!(changes.push(empty).is_err());
+        assert_eq!(
+            serde_json::to_vec(&changes.into_records())?.len(),
+            MAX_CHANGE_BYTES
+        );
+        Ok(())
+    }
 }

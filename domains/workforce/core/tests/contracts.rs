@@ -30,6 +30,16 @@ fn payload_roundtrip(command: &str, value: Value) -> Result<Value, Box<dyn Error
             typed_roundtrip::<commands::LockPayload>(value)
         }
         commands::REMOVE_LOCK => typed_roundtrip::<commands::LockTarget>(value),
+        commands::ADD_OCCURRENCE_IDENTITIES => {
+            typed_roundtrip::<commands::AddOccurrenceIdentitiesPayload>(value)
+        }
+        commands::REMOVE_OCCURRENCE_IDENTITIES => {
+            typed_roundtrip::<commands::RemoveOccurrenceIdentitiesPayload>(value)
+        }
+        commands::DETACH_SHIFT => typed_roundtrip::<commands::DetachShiftPayload>(value),
+        commands::REATTACH_SHIFT => {
+            typed_roundtrip::<commands::TemplateOccurrenceIdentities>(value)
+        }
         _ => Err(format!("generated command has no typed decoder: {command}").into()),
     }
 }

@@ -527,8 +527,9 @@ fn is_prohibited_field(field: &str) -> bool {
             | "authenticationstatus"
             | "authenticationlabel"
             | "authenticationmethod"
-            // Domain recurrence reference, not executable template content.
+            // Domain recurrence reference/count, not executable template content.
             | "templateid"
+            | "templatecount"
     ) {
         return false;
     }
@@ -1084,7 +1085,8 @@ mod tests {
     #[test]
     fn domain_template_references_keep_all_content_and_executable_field_checks()
     -> Result<(), Box<dyn std::error::Error>> {
-        let reference = json!({"templateId": "018f7b40-a000-7000-8000-000000000006"});
+        let reference =
+            json!({"templateId": "018f7b40-a000-7000-8000-000000000006", "templateCount": 1});
         validate_nonsecret_portable_json(&reference, &LIMITS)?;
         validate_nonsecret_portable_json_bytes(&serde_json::to_vec(&reference)?, &LIMITS)?;
         for prohibited in [
@@ -1092,6 +1094,8 @@ mod tests {
             json!({"scriptId": "018f7b40-a000-7000-8000-000000000006"}),
             json!({"templateId": "{{ executable_expression }}"}),
             json!({"templateId": {"script": "executable source"}}),
+            json!({"templateCount": "{{ executable_expression }}"}),
+            json!({"templateCount": {"script": "executable source"}}),
         ] {
             assert!(validate_nonsecret_portable_json(&prohibited, &LIMITS).is_err());
             assert!(
