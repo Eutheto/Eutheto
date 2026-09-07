@@ -1,7 +1,7 @@
 //! Workforce domain values, compilation, projection and independent original-domain authority.
 //!
-//! The real [`WorkforcePack`] is not registered in production. Host lifecycle integration and
-//! production registration remain separate phase gates.
+//! The application explicitly registers the complete [`WorkforcePack`]. This crate owns no
+//! persistence, approval custody or client lifecycle.
 
 pub mod assignment_rules;
 pub mod commands;

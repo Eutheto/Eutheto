@@ -209,6 +209,7 @@ type MutationOverride = fn(&mut DomainMutation, &CancellationToken) -> Result<()
 struct IntervalFixturePack {
     prune: bool,
     mutation_override: Option<MutationOverride>,
+    large_values: bool,
 }
 
 impl IntervalFixturePack {
@@ -216,6 +217,7 @@ impl IntervalFixturePack {
         Self {
             prune,
             mutation_override: None,
+            large_values: false,
         }
     }
 }
@@ -228,7 +230,19 @@ impl DomainPack for IntervalFixturePack {
     }
 
     fn catalog(&self) -> Result<DomainCatalog, DomainPackError> {
-        OfficialTestPack.catalog()
+        let mut catalog = OfficialTestPack.catalog()?;
+        if self.large_values {
+            let notes = json!({"type": "array", "items": {"type": "string"}});
+            catalog.commands[0].payload_schema["properties"]["notes"] = notes.clone();
+            catalog.commands[0].result_schema["properties"]["notes"] = notes;
+            for tool in &mut catalog.ai_tools {
+                if tool.command_id == catalog.commands[0].id {
+                    tool.input_schema
+                        .clone_from(&catalog.commands[0].payload_schema);
+                }
+            }
+        }
+        Ok(catalog)
     }
 
     fn new_document(&self, shell: ScenarioDocument) -> Result<ScenarioDocument, DomainPackError> {
@@ -256,17 +270,26 @@ impl DomainPack for IntervalFixturePack {
         batch: &DomainBatchCommand,
         cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError> {
+        batch.validate_bounds()?;
         let Some(mutate) = self.mutation_override else {
             return OfficialTestPack.apply_batch(document, batch, cancellation);
         };
-        // A faulty pack deliberately ignores submitted payloads. This makes host
-        // input validation independent of the real pack's own validation.
+        // Fault injection ignores input so host validation is independently exercised.
+        // Large-value fixtures instead preserve semantics, stripping only auxiliary notes.
         let mut canonical = batch.clone();
         for command in &mut canonical.commands {
-            "official.test.configure_entity".clone_into(&mut command.command_type);
-            command.payload = json!({
-                "entityId": MUTATION_ENTITY_ID, "enabled": true, "target": 3,
-            });
+            if self.large_values {
+                command
+                    .payload
+                    .as_object_mut()
+                    .ok_or_else(|| contract("payload"))?
+                    .remove("notes");
+            } else {
+                "official.test.configure_entity".clone_into(&mut command.command_type);
+                command.payload = json!({
+                    "entityId": MUTATION_ENTITY_ID, "enabled": true, "target": 3,
+                });
+            }
         }
         let mut mutation = OfficialTestPack.apply_batch(document, &canonical, cancellation)?;
         mutate(&mut mutation, cancellation)?;
@@ -2150,6 +2173,7 @@ fn assert_mutation_faults_rejected(
             .register(IntervalFixturePack {
                 prune: false,
                 mutation_override: Some(mutate),
+                large_values: false,
             })
             .build()?;
         let result = apply_command_with_registry(
@@ -2171,6 +2195,7 @@ fn command_boundary_rejects_inputs_even_when_the_pack_ignores_them() -> Result<(
         .register(IntervalFixturePack {
             prune: false,
             mutation_override: Some(|_, _| Ok(())),
+            large_values: false,
         })
         .build()?;
     let (document, mut envelope) = mutation_fixture()?;
@@ -2210,6 +2235,7 @@ fn command_boundary_observes_cancellation_after_a_pack_returns() -> Result<(), B
     let registry = DomainPackRegistry::builder()
         .register(IntervalFixturePack {
             prune: false,
+            large_values: false,
             mutation_override: Some(|_, cancellation| {
                 cancellation.cancel();
                 Ok(())
@@ -2227,5 +2253,326 @@ fn command_boundary_observes_cancellation_after_a_pack_returns() -> Result<(), B
         ),
         Err(CommandError::Cancelled),
     );
+    Ok(())
+}
+
+fn mutation_batch(
+    command: eutheto_types::ScenarioCommand,
+    count: usize,
+) -> eutheto_types::ScenarioCommand {
+    eutheto_types::ScenarioCommand::ApplyBatch(eutheto_types::CommandBatch {
+        label: Some("Output budget".to_owned()),
+        commands: vec![command; count],
+    })
+}
+
+#[test]
+fn command_boundary_rejects_valid_index_changes_returned_out_of_order() -> Result<(), Box<dyn Error>>
+{
+    let registry = DomainPackRegistry::builder()
+        .register(IntervalFixturePack {
+            prune: false,
+            large_values: false,
+            mutation_override: Some(|mutation, _| {
+                mutation.changes.swap(0, 1);
+                Ok(())
+            }),
+        })
+        .build()?;
+    let (document, mut envelope) = mutation_fixture()?;
+    envelope.command = mutation_batch(envelope.command, 2);
+    assert!(
+        matches!(apply_command_with_registry(&document, Revision::INITIAL, &envelope,
+        &registry, &CancellationToken::new()),
+        Err(CommandError::Validation { path, .. }) if path == "/domainMutation")
+    );
+    Ok(())
+}
+
+#[test]
+fn late_nested_pack_cancellation_discards_earlier_successful_effects() -> Result<(), Box<dyn Error>>
+{
+    let registry = DomainPackRegistry::builder()
+        .register(IntervalFixturePack {
+            prune: false,
+            large_values: false,
+            mutation_override: Some(|mutation, cancellation| {
+                if mutation.changes[0].value["before"]["target"] == json!(3) {
+                    cancellation.cancel();
+                }
+                Ok(())
+            }),
+        })
+        .build()?;
+    let (document, mut envelope) = mutation_fixture()?;
+    let original = document.clone();
+    envelope.command = mutation_batch(mutation_batch(envelope.command, 1), 2);
+    assert_eq!(
+        apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new()
+        ),
+        Err(CommandError::Cancelled)
+    );
+    assert_eq!(document, original);
+    Ok(())
+}
+
+#[test]
+fn cumulative_mutation_outputs_are_bounded_across_nested_runs() -> Result<(), Box<dyn Error>> {
+    let cases: &[(&str, MutationOverride, usize, bool)] = &[
+        (
+            "change count",
+            |mutation, _| {
+                mutation.changes = vec![mutation.changes[0].clone(); 43_000];
+                Ok(())
+            },
+            2,
+            false,
+        ),
+        (
+            "change bytes",
+            |mutation, _| {
+                mutation.changes[0].value["before"] =
+                    json!({"notes": vec!["public ".repeat(2_000); 640]});
+                mutation.changes = vec![mutation.changes[0].clone(); 4];
+                Ok(())
+            },
+            2,
+            false,
+        ),
+        (
+            "result bytes",
+            |mutation, _| {
+                mutation.results[0]["notes"] = json!(vec!["public ".repeat(2_000); 480]);
+                Ok(())
+            },
+            3,
+            true,
+        ),
+        (
+            "generic inverse bytes",
+            |mutation, _| {
+                mutation.inverse.commands[0].payload["notes"] =
+                    json!(vec!["public ".repeat(2_000); 640]);
+                mutation.inverse.validate_inverse_bounds()
+            },
+            8,
+            true,
+        ),
+    ];
+    for &(name, mutate, count, large_values) in cases {
+        let registry = DomainPackRegistry::builder()
+            .register(IntervalFixturePack {
+                prune: false,
+                mutation_override: Some(mutate),
+                large_values,
+            })
+            .build()?;
+        let (document, mut envelope) = mutation_fixture()?;
+        let original = document.clone();
+        // Prove each individual output is valid; rejection must be cumulative,
+        // not a schema or per-call output failure.
+        let single = apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new(),
+        )?;
+        assert_eq!(
+            single.document.domain.entities[&MUTATION_ENTITY_ID.parse()?]["target"],
+            json!(3)
+        );
+        envelope.command = mutation_batch(mutation_batch(envelope.command, 1), count);
+        assert!(
+            apply_command_with_registry(
+                &document,
+                Revision::INITIAL,
+                &envelope,
+                &registry,
+                &CancellationToken::new()
+            )
+            .is_err(),
+            "{name} was not bounded"
+        );
+        assert_eq!(document, original);
+    }
+    Ok(())
+}
+
+#[test]
+fn semantic_pack_errors_are_not_retried_as_smaller_chunks() -> Result<(), Box<dyn Error>> {
+    let registry = DomainPackRegistry::builder()
+        .register(IntervalFixturePack {
+            prune: false,
+            large_values: false,
+            mutation_override: Some(|mutation, _| {
+                if mutation.results.len() > 1 {
+                    return Err(DomainPackError::InvalidPayload {
+                        path: "/commands/1".to_owned(),
+                        message: "invalid second prefix".to_owned(),
+                    });
+                }
+                Ok(())
+            }),
+        })
+        .build()?;
+    let (document, mut envelope) = mutation_fixture()?;
+    envelope.command = mutation_batch(envelope.command, 2);
+    assert!(
+        matches!(apply_command_with_registry(&document, Revision::INITIAL, &envelope,
+        &registry, &CancellationToken::new()),
+        Err(CommandError::InvalidDomainBatchPayload { path, .. }) if path == "/commands/1")
+    );
+    Ok(())
+}
+
+#[test]
+fn typed_inverse_overflow_is_bisected_and_byte_chunked_replay_restores_state()
+-> Result<(), Box<dyn Error>> {
+    let pack = IntervalFixturePack {
+        prune: false,
+        large_values: true,
+        mutation_override: Some(|mutation, _| {
+            for inverse in &mut mutation.inverse.commands {
+                inverse.payload["notes"] = json!(vec!["public ".repeat(2_000); 640]);
+            }
+            // Exercise the real typed byte check, rather than simulating it by call size.
+            mutation.inverse.validate_inverse_bounds()
+        }),
+    };
+    let registry = DomainPackRegistry::builder().register(pack).build()?;
+    let (document, mut envelope) = mutation_fixture()?;
+    let eutheto_types::ScenarioCommand::ApplyDomainCommand(first) = envelope.command else {
+        return Err("expected domain command".into());
+    };
+    let mut second = first.clone();
+    second.payload["target"] = json!(4);
+    let direct = DomainBatchCommand {
+        schema_version: eutheto_domain_api::DOMAIN_BATCH_SCHEMA_VERSION,
+        pack_id: document.domain_pack.id.clone(),
+        scenario_schema_version: document.domain_pack.schema_version,
+        label: None,
+        commands: vec![first, second],
+    };
+    direct.validate_bounds()?;
+    assert!(matches!(
+        pack.apply_batch(&document, &direct, &CancellationToken::new()),
+        Err(DomainPackError::BatchInverseTooLarge)
+    ));
+    envelope.command = eutheto_types::ScenarioCommand::ApplyBatch(eutheto_types::CommandBatch {
+        label: Some("inverse amplification".to_owned()),
+        commands: direct
+            .commands
+            .into_iter()
+            .map(eutheto_types::ScenarioCommand::ApplyDomainCommand)
+            .collect(),
+    });
+    let applied = apply_command_with_registry(
+        &document,
+        Revision::INITIAL,
+        &envelope,
+        &registry,
+        &CancellationToken::new(),
+    )?;
+    let changes = &applied.result.change_set.changes;
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        changes[0].before.as_ref().ok_or("missing before")?["target"],
+        json!(1)
+    );
+    assert_eq!(
+        changes[0].after.as_ref().ok_or("missing after")?["target"],
+        json!(3)
+    );
+    assert_eq!(
+        changes[1].before.as_ref().ok_or("missing before")?["target"],
+        json!(3)
+    );
+    assert_eq!(
+        changes[1].after.as_ref().ok_or("missing after")?["target"],
+        json!(4)
+    );
+    let inverse = applied.result.inverse.ok_or("missing inverse")?;
+    assert!(serde_json::to_vec(&inverse)?.len() > 16 * 1024 * 1024);
+    let eutheto_types::ScenarioCommand::ApplyBatch(inverse_batch) = &inverse else {
+        return Err("expected original batch wrapper".into());
+    };
+    assert_eq!(
+        inverse_batch.label.as_deref(),
+        Some("inverse amplification")
+    );
+    assert_eq!(inverse_batch.commands.len(), 2);
+    for (command, target) in inverse_batch.commands.iter().zip([3, 1]) {
+        let eutheto_types::ScenarioCommand::ApplyDomainCommand(command) = command else {
+            return Err("unexpected extra inverse batch layer".into());
+        };
+        assert_eq!(command.payload["target"], json!(target));
+    }
+    // This replay has only ~1300 nodes, so the byte ceiling, not node packing,
+    // requires splitting its two large envelopes.
+    envelope.command = inverse;
+    envelope.expected_revision = applied.result.new_revision;
+    let undone = apply_command_with_registry(
+        &applied.document,
+        applied.result.new_revision,
+        &envelope,
+        &registry,
+        &CancellationToken::new(),
+    )?;
+    assert_eq!(undone.document, document);
+    Ok(())
+}
+
+#[test]
+fn domain_input_node_limit_includes_header_and_envelope_nodes() -> Result<(), Box<dyn Error>> {
+    let registry = DomainPackRegistry::builder()
+        .register(IntervalFixturePack {
+            prune: false,
+            large_values: true,
+            mutation_override: Some(|_, _| Ok(())),
+        })
+        .build()?;
+    let (document, mut envelope) = mutation_fixture()?;
+    let eutheto_types::ScenarioCommand::ApplyDomainCommand(command) = &mut envelope.command else {
+        return Err("expected domain command".into());
+    };
+    // Six header nodes plus two envelope nodes plus five payload nodes.
+    command.payload["notes"] = json!(vec![""; 100_000 - 13]);
+    let applied = apply_command_with_registry(
+        &document,
+        Revision::INITIAL,
+        &envelope,
+        &registry,
+        &CancellationToken::new(),
+    )?;
+    assert_eq!(
+        applied.result.change_set.changes[0]
+            .after
+            .as_ref()
+            .ok_or("missing after")?["target"],
+        json!(3)
+    );
+    let eutheto_types::ScenarioCommand::ApplyDomainCommand(command) = &mut envelope.command else {
+        return Err("expected domain command".into());
+    };
+    command.payload["notes"]
+        .as_array_mut()
+        .ok_or("expected notes array")?
+        .push(json!(""));
+    assert!(matches!(
+        apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new()
+        ),
+        Err(CommandError::InvalidDomainPayload { .. })
+    ));
     Ok(())
 }

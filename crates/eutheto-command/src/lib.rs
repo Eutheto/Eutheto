@@ -7,9 +7,10 @@ mod generated_official_test_pack_contract;
 mod official_test_pack;
 
 use eutheto_domain_api::{
-    DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainMutation, DomainPack, DomainPackError,
-    DomainPackRegistry, MAX_DOMAIN_MUTATION_CHANGE_BYTES, MAX_DOMAIN_MUTATION_CHANGES,
-    MAX_DOMAIN_MUTATION_RESULT_BYTES, RegisteredCommand, bounded_json_size,
+    ContractJsonLimits, DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainMutation,
+    DomainPack, DomainPackError, DomainPackRegistry, MAX_DOMAIN_MUTATION_CHANGE_BYTES,
+    MAX_DOMAIN_MUTATION_CHANGES, MAX_DOMAIN_MUTATION_RESULT_BYTES, RegisteredCommand,
+    bounded_json_size,
 };
 use eutheto_types::{
     AddEntity, AddRule, AssignmentId, CancellationToken, Change, ChangeKind, ChangeSet,
@@ -32,6 +33,8 @@ use thiserror::Error;
 pub const MAX_BATCH_DEPTH: usize = 8;
 /// Bounds total leaf commands in one atomic batch.
 pub const MAX_BATCH_COMMANDS: usize = 1_000;
+/// Maximum compact JSON bytes in the complete generic inverse, including nested batches.
+pub const MAX_COMMAND_INVERSE_BYTES: usize = 64 * 1024 * 1024;
 
 pub const CODE_BATCH_DEPTH_EXCEEDED: &str = "command.batch_depth_exceeded";
 pub const CODE_BATCH_TOO_LARGE: &str = "command.batch_too_large";
@@ -96,6 +99,9 @@ pub enum CommandError {
         command_type: String,
         message: String,
     },
+    /// A coalesced domain batch failed without identifying an individual command.
+    #[error("invalid domain batch payload at {path}: {message}")]
+    InvalidDomainBatchPayload { path: String, message: String },
     /// The revision cannot be incremented.
     #[error("revision overflow at {revision}")]
     RevisionOverflow { revision: u64 },
@@ -111,7 +117,9 @@ impl CommandError {
             Self::Conflict { .. } => "command.revision_conflict",
             Self::Validation { code, .. } => code,
             Self::Unsupported { .. } => "command.unsupported",
-            Self::InvalidDomainPayload { .. } => "command.invalid_domain_payload",
+            Self::InvalidDomainPayload { .. } | Self::InvalidDomainBatchPayload { .. } => {
+                "command.invalid_domain_payload"
+            }
             Self::RevisionOverflow { .. } => "command.revision_overflow",
         }
     }
@@ -131,6 +139,10 @@ struct ApplyContext<'a> {
     registry: &'a DomainPackRegistry,
     cancellation: &'a CancellationToken,
     leaf_count: usize,
+    change_count: usize,
+    change_bytes: usize,
+    result_bytes: usize,
+    inverse_bytes: usize,
 }
 
 impl ApplyContext<'_> {
@@ -152,6 +164,39 @@ impl ApplyContext<'_> {
             ));
         }
         Ok(())
+    }
+
+    fn charge_inverse<T: Serialize>(&mut self, value: &T) -> Result<(), CommandError> {
+        let remaining = MAX_COMMAND_INVERSE_BYTES.saturating_sub(self.inverse_bytes);
+        self.inverse_bytes +=
+            bounded_json_size(value, remaining).map_err(|error| domain_pack_error(&error))?;
+        Ok(())
+    }
+
+    fn charge_output(
+        &mut self,
+        change_count: usize,
+        change_bytes: usize,
+        result_bytes: usize,
+    ) -> Result<(), CommandError> {
+        if change_count != 0 {
+            self.change_bytes = self.change_bytes.saturating_add(
+                change_bytes.saturating_sub(2) + usize::from(self.change_count != 0),
+            );
+        }
+        if result_bytes > 2 {
+            self.result_bytes = self
+                .result_bytes
+                .saturating_add(result_bytes - 2 + usize::from(self.result_bytes > 2));
+        }
+        self.change_count = self.change_count.saturating_add(change_count);
+        if self.change_count > MAX_DOMAIN_MUTATION_CHANGES
+            || self.change_bytes > MAX_DOMAIN_MUTATION_CHANGE_BYTES
+            || self.result_bytes > MAX_DOMAIN_MUTATION_RESULT_BYTES
+        {
+            return Err(domain_pack_error(&DomainPackError::MutationOutputLimit));
+        }
+        self.check_cancelled()
     }
 }
 
@@ -254,8 +299,18 @@ pub fn apply_command_with_registry(
         registry,
         cancellation,
         leaf_count: 0,
+        change_count: 0,
+        change_bytes: 2,
+        result_bytes: 2,
+        inverse_bytes: 0,
     };
     let effect = apply_nested(&mut working, &envelope.command, &mut context, 0)?;
+    context.check_cancelled()?;
+    bounded_json_size(&effect.inverse, MAX_COMMAND_INVERSE_BYTES)
+        .map_err(|error| domain_pack_error(&error))?;
+    context.check_cancelled()?;
+    validate_safe_serialized(&effect.inverse, "/inverse")?;
+    context.check_cancelled()?;
     validate_document_shape(&working)?;
     let after_issues = pack.validate_fast(&working).issues;
     let validation_delta = validation_delta(&before_issues, &after_issues);
@@ -295,10 +350,25 @@ fn apply_nested(
     context.charge_leaves(1)?;
     match command {
         ScenarioCommand::ApplyDomainCommand(envelope) => {
-            apply_registered_domain_command(document, envelope, context)
+            let mut run = apply_domain_run(document, std::iter::once(envelope), context)?;
+            let inverse = run
+                .inverses
+                .pop()
+                .ok_or_else(|| mutation_error("missing inverse"))?;
+            Ok(PackCommandEffect {
+                changes: run.changes,
+                inverse,
+                summary: format!("Apply {} domain command", envelope.command_type),
+                command_type: format!("domain.{}", envelope.command_type),
+            })
         }
         _ if document.domain_pack.id.as_str() == OFFICIAL_TEST_PACK_ID => {
-            apply_official_test_leaf(document, command)
+            let effect = apply_official_test_leaf(document, command)?;
+            let bytes = bounded_json_size(&effect.changes, MAX_DOMAIN_MUTATION_CHANGE_BYTES)
+                .map_err(|error| domain_pack_error(&error))?;
+            context.charge_output(effect.changes.len(), bytes, 2)?;
+            context.charge_inverse(&effect.inverse)?;
+            Ok(effect)
         }
         _ => Err(CommandError::Unsupported {
             pack_id: document.domain_pack.id.to_string(),
@@ -328,12 +398,45 @@ fn apply_batch(
         ));
     }
 
+    // Charge each existing batch frame once, not its growing inverse prefix.
+    context.charge_inverse(&ScenarioCommand::ApplyBatch(CommandBatch {
+        label: batch.label.clone(),
+        commands: Vec::new(),
+    }))?;
+    context.inverse_bytes = context
+        .inverse_bytes
+        .saturating_add(batch.commands.len().saturating_sub(1));
+    if context.inverse_bytes > MAX_COMMAND_INVERSE_BYTES {
+        return Err(domain_pack_error(&DomainPackError::MutationOutputLimit));
+    }
     let mut changes = Vec::new();
     let mut inverses = Vec::with_capacity(batch.commands.len());
-    for child in &batch.commands {
-        let effect = apply_nested(document, child, context, depth + 1)?;
-        changes.extend(effect.changes);
-        inverses.push(effect.inverse);
+    let mut children = batch.commands.as_slice();
+    while let Some(child) = children.first() {
+        context.check_cancelled()?;
+        if matches!(child, ScenarioCommand::ApplyDomainCommand(_)) {
+            let length = children
+                .iter()
+                .take_while(|child| matches!(child, ScenarioCommand::ApplyDomainCommand(_)))
+                .count();
+            context.charge_leaves(length)?;
+            let run = apply_domain_run(
+                document,
+                children[..length].iter().filter_map(|child| match child {
+                    ScenarioCommand::ApplyDomainCommand(envelope) => Some(envelope),
+                    _ => None,
+                }),
+                context,
+            )?;
+            changes.extend(run.changes);
+            inverses.extend(run.inverses);
+            children = &children[length..];
+        } else {
+            let effect = apply_nested(document, child, context, depth + 1)?;
+            changes.extend(effect.changes);
+            inverses.push(effect.inverse);
+            children = &children[1..];
+        }
     }
     inverses.reverse();
     let count = batch.commands.len();
@@ -652,59 +755,184 @@ fn unlock_assignment(
     ))
 }
 
-fn apply_registered_domain_command(
+struct DomainRunEffect {
+    changes: Vec<Change>,
+    /// Input correspondence order; the containing generic batch reverses its children.
+    inverses: Vec<ScenarioCommand>,
+}
+
+fn apply_domain_run<'a>(
     document: &mut ScenarioDocument,
-    envelope: &DomainCommandEnvelope,
-    context: &ApplyContext<'_>,
-) -> Result<PackCommandEffect, CommandError> {
-    context.check_cancelled()?;
-    let registered = context
-        .registry
-        .command(&document.domain_pack.id, &envelope.command_type)
-        .map_err(|error| domain_command_error(document, envelope, error))?;
-    registered
-        .validate_payload(&envelope.payload)
-        .map_err(|error| domain_command_error(document, envelope, error))?;
-    let batch = DomainBatchCommand {
+    envelopes: impl Iterator<Item = &'a DomainCommandEnvelope>,
+    context: &mut ApplyContext<'_>,
+) -> Result<DomainRunEffect, CommandError> {
+    let mut batch = DomainBatchCommand {
         schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
         pack_id: document.domain_pack.id.clone(),
         scenario_schema_version: document.domain_pack.schema_version,
         label: None,
-        commands: vec![envelope.clone()],
+        commands: Vec::new(),
     };
+    let limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES)
+        .map_err(|_| mutation_error("scenario byte limit is unavailable"))?;
+    let framing = bounded_json_size(&batch, limit).map_err(|error| domain_pack_error(&error))?;
+    // Aggregate items are nodes minus the root, so the shared node ceiling also
+    // enforces the item ceiling. Count the serialized header once, including [].
+    let frame_nodes = json_node_count(
+        &serde_json::to_value(&batch)
+            .map_err(|_| mutation_error("domain batch frame cannot be serialized"))?,
+    );
+    let node_limit = ContractJsonLimits::DEFAULT.max_collection_items;
+    let mut nodes = frame_nodes;
+    let mut bytes = framing;
+    let mut registered = Vec::new();
+    let mut effect = DomainRunEffect {
+        changes: Vec::new(),
+        inverses: Vec::new(),
+    };
+    for envelope in envelopes {
+        context.check_cancelled()?;
+        let input = (|| {
+            let command = context
+                .registry
+                .command(&batch.pack_id, &envelope.command_type)
+                .map_err(|error| domain_command_error(document, envelope, error))?;
+            command
+                .validate_payload(&envelope.payload)
+                .map_err(|error| domain_command_error(document, envelope, error))?;
+            // Measure every envelope once; only fixed framing and commas are added later.
+            let size = bounded_json_size(envelope, limit.saturating_sub(framing))
+                .map_err(|error| domain_command_error(document, envelope, error))?;
+            // An envelope adds an object and commandType string around its payload.
+            // Schema validation already bounds depth; this traversal visits each node once.
+            let envelope_nodes = 2 + json_node_count(&envelope.payload);
+            if frame_nodes + envelope_nodes > node_limit {
+                return Err(domain_command_error(
+                    document,
+                    envelope,
+                    DomainPackError::InvalidPayload {
+                        path: "/commands".to_owned(),
+                        message: "domain command exceeds the batch JSON node limit".to_owned(),
+                    },
+                ));
+            }
+            Ok::<_, CommandError>((command, size, envelope_nodes))
+        })();
+        let (command, size, envelope_nodes) = match input {
+            Ok(input) => input,
+            Err(error) => {
+                // A later schema/identity failure must not mask an earlier semantic failure.
+                if !batch.commands.is_empty() {
+                    apply_domain_chunk(document, batch, registered, context, &mut effect)?;
+                }
+                context.check_cancelled()?;
+                return Err(error);
+            }
+        };
+        let separator = usize::from(!batch.commands.is_empty());
+        if bytes + separator + size > limit || nodes + envelope_nodes > node_limit {
+            let next = DomainBatchCommand {
+                schema_version: batch.schema_version,
+                pack_id: batch.pack_id.clone(),
+                scenario_schema_version: batch.scenario_schema_version,
+                label: None,
+                commands: Vec::new(),
+            };
+            let chunk = std::mem::replace(&mut batch, next);
+            apply_domain_chunk(
+                document,
+                chunk,
+                std::mem::take(&mut registered),
+                context,
+                &mut effect,
+            )?;
+            bytes = framing;
+            nodes = frame_nodes;
+        }
+        bytes += usize::from(!batch.commands.is_empty()) + size;
+        nodes += envelope_nodes;
+        batch.commands.push(envelope.clone());
+        registered.push(command);
+    }
+    if !batch.commands.is_empty() {
+        apply_domain_chunk(document, batch, registered, context, &mut effect)?;
+    }
+    Ok(effect)
+}
+
+fn json_node_count(value: &Value) -> usize {
+    1 + match value {
+        Value::Array(values) => values.iter().map(json_node_count).sum::<usize>(),
+        Value::Object(values) => values.values().map(json_node_count).sum::<usize>(),
+        _ => 0,
+    }
+}
+
+fn apply_domain_chunk(
+    document: &mut ScenarioDocument,
+    mut batch: DomainBatchCommand,
+    mut registered: Vec<RegisteredCommand<'_>>,
+    context: &mut ApplyContext<'_>,
+    effect: &mut DomainRunEffect,
+) -> Result<(), CommandError> {
+    context.check_cancelled()?;
     let mutation = context
         .pack
-        .apply_batch(document, &batch, context.cancellation)
-        .map_err(|error| domain_command_error(document, envelope, error))?;
+        .apply_batch(document, &batch, context.cancellation);
     context.check_cancelled()?;
-    validate_domain_mutation(document, &batch, &mutation, &[registered], context)?;
+    let mutation = match mutation {
+        Ok(mutation) => mutation,
+        Err(DomainPackError::BatchInverseTooLarge) if batch.commands.len() > 1 => {
+            // Pure packing retry only. split_off moves the owned payloads; each descent
+            // halves a <=1000-leaf chunk, bounding recursion to ten levels.
+            let midpoint = batch.commands.len() / 2;
+            let right = DomainBatchCommand {
+                schema_version: batch.schema_version,
+                pack_id: batch.pack_id.clone(),
+                scenario_schema_version: batch.scenario_schema_version,
+                label: None,
+                commands: batch.commands.split_off(midpoint),
+            };
+            let right_registered = registered.split_off(midpoint);
+            apply_domain_chunk(document, batch, registered, context, effect)?;
+            return apply_domain_chunk(document, right, right_registered, context, effect);
+        }
+        Err(error) if batch.commands.len() == 1 => {
+            return Err(domain_command_error(document, &batch.commands[0], error));
+        }
+        // The pack error does not identify an input leaf. Never blame the first one.
+        Err(DomainPackError::InvalidPayload { path, message }) => {
+            return Err(CommandError::InvalidDomainBatchPayload { path, message });
+        }
+        Err(error) => return Err(domain_pack_error(&error)),
+    };
+    let (change_bytes, result_bytes) =
+        validate_domain_mutation(document, &batch, &mutation, &registered, context)?;
     let changes = mutation
         .changes
         .into_iter()
-        .map(|change| domain_change(&change.value))
+        .map(|change| {
+            context.check_cancelled()?;
+            domain_change(change.value)
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut inverses = mutation.inverse.commands;
-    if inverses.len() != 1 {
-        return Err(validation_error(
-            CODE_INVALID_RECORD_SHAPE,
-            "/inverse/commands",
-            "one domain command must produce exactly one inverse command",
-        ));
+    let translated_bytes = bounded_json_size(&changes, MAX_DOMAIN_MUTATION_CHANGE_BYTES)
+        .map_err(|error| domain_pack_error(&error))?;
+    context.charge_output(
+        changes.len(),
+        change_bytes.max(translated_bytes),
+        result_bytes,
+    )?;
+    for inverse in mutation.inverse.commands.into_iter().rev() {
+        context.check_cancelled()?;
+        let inverse = ScenarioCommand::ApplyDomainCommand(inverse);
+        context.charge_inverse(&inverse)?;
+        effect.inverses.push(inverse);
     }
-    let Some(inverse) = inverses.pop() else {
-        return Err(validation_error(
-            CODE_INVALID_RECORD_SHAPE,
-            "/inverse/commands",
-            "domain-pack inverse command is missing",
-        ));
-    };
+    context.check_cancelled()?;
+    effect.changes.extend(changes);
     *document = mutation.document;
-    Ok(PackCommandEffect {
-        changes,
-        inverse: ScenarioCommand::ApplyDomainCommand(inverse),
-        summary: format!("Apply {} domain command", envelope.command_type),
-        command_type: format!("domain.{}", envelope.command_type),
-    })
+    Ok(())
 }
 
 fn domain_command_error(
@@ -733,7 +961,7 @@ fn validate_domain_mutation(
     mutation: &DomainMutation,
     commands: &[RegisteredCommand<'_>],
     context: &ApplyContext<'_>,
-) -> Result<(), CommandError> {
+) -> Result<(usize, usize), CommandError> {
     context.check_cancelled()?;
     if mutation.results.len() != batch.commands.len()
         || mutation.inverse.commands.len() != batch.commands.len()
@@ -743,9 +971,9 @@ fn validate_domain_mutation(
             "domain result, change or inverse count is invalid",
         ));
     }
-    bounded_json_size(&mutation.results, MAX_DOMAIN_MUTATION_RESULT_BYTES)
+    let result_bytes = bounded_json_size(&mutation.results, MAX_DOMAIN_MUTATION_RESULT_BYTES)
         .map_err(|error| domain_pack_error(&error))?;
-    bounded_json_size(&mutation.changes, MAX_DOMAIN_MUTATION_CHANGE_BYTES)
+    let change_bytes = bounded_json_size(&mutation.changes, MAX_DOMAIN_MUTATION_CHANGE_BYTES)
         .map_err(|error| domain_pack_error(&error))?;
     let changed = &mutation.document;
     if changed.format != original.format
@@ -803,41 +1031,34 @@ fn validate_domain_mutation(
             .and_then(|command| command.validate_payload(&inverse.payload))
             .map_err(|error| domain_pack_error(&error))?;
     }
-    context.check_cancelled()
+    context.check_cancelled()?;
+    Ok((change_bytes, result_bytes))
 }
 
 fn mutation_error(message: &str) -> CommandError {
     validation_error(CODE_INVALID_RECORD_SHAPE, "/domainMutation", message)
 }
 
-fn domain_change(value: &Value) -> Result<Change, CommandError> {
-    let object = value.as_object().ok_or_else(|| {
-        validation_error(
+fn domain_change(value: Value) -> Result<Change, CommandError> {
+    let Value::Object(mut object) = value else {
+        return Err(validation_error(
             CODE_INVALID_RECORD_SHAPE,
             "/domainChange",
             "domain-pack change must be an object",
-        )
-    })?;
-    let path = object
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|path| path.starts_with('/'))
-        .ok_or_else(|| {
-            validation_error(
+        ));
+    };
+    let path = match object.remove("path") {
+        Some(Value::String(path)) if path.starts_with('/') => path,
+        _ => {
+            return Err(validation_error(
                 CODE_INVALID_RECORD_SHAPE,
                 "/domainChange/path",
                 "domain-pack change path must be absolute",
-            )
-        })?
-        .to_owned();
-    let before = object
-        .get("before")
-        .filter(|value| !value.is_null())
-        .cloned();
-    let after = object
-        .get("after")
-        .filter(|value| !value.is_null())
-        .cloned();
+            ));
+        }
+    };
+    let before = object.remove("before").filter(|value| !value.is_null());
+    let after = object.remove("after").filter(|value| !value.is_null());
     let kind = match (&before, &after) {
         (None, Some(_)) => ChangeKind::Added,
         (Some(_), None) => ChangeKind::Removed,

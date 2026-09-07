@@ -140,7 +140,7 @@ pub fn preview_people_csv<R: Read + ?Sized>(
         proposed
             .validate_bounds()
             .map_err(|_| CsvError::source(CsvErrorCode::InvalidBatch))?;
-        match commands::apply_batch_cancellable(document, proposed, cancellation) {
+        match validate_proposed_state(document, proposed, cancellation) {
             Ok(_) => {}
             Err(DomainPackError::InvalidPayload { .. }) => {
                 validation_issues.push(ValidationIssue {
@@ -210,6 +210,35 @@ pub fn preview_people_csv<R: Read + ?Sized>(
         .map_err(|_| CsvError::source(CsvErrorCode::PreviewLimit))?;
     check_cancelled(cancellation)?;
     Ok(preview)
+}
+
+fn validate_proposed_state(
+    document: &ScenarioDocument,
+    batch: &DomainBatchCommand,
+    cancellation: &CancellationToken,
+) -> Result<ScenarioDocument, DomainPackError> {
+    if cancellation.is_cancelled() {
+        return Err(DomainPackError::Cancelled);
+    }
+    match commands::apply_batch_cancellable(document, batch, cancellation) {
+        Ok(mutation) => Ok(mutation.document),
+        Err(DomainPackError::BatchInverseTooLarge) if batch.commands.len() > 1 => {
+            // The forward preview is already bounded. Only inverse amplification needs
+            // smaller private applications; retain the original batch for review binding.
+            let (left, right) = batch.commands.split_at(batch.commands.len() / 2);
+            let mut part = DomainBatchCommand {
+                schema_version: batch.schema_version,
+                pack_id: batch.pack_id.clone(),
+                scenario_schema_version: batch.scenario_schema_version,
+                label: batch.label.clone(),
+                commands: left.to_vec(),
+            };
+            let working = validate_proposed_state(document, &part, cancellation)?;
+            part.commands = right.to_vec();
+            validate_proposed_state(&working, &part, cancellation)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn rejected_issue(row: RejectedRow) -> ValidationIssue {

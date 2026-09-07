@@ -4471,9 +4471,11 @@ mod tests {
             .result
             .as_array()
             .ok_or("pack list result must be an array")?;
-        assert_eq!(pack_items.len(), 1);
+        assert_eq!(pack_items.len(), 2);
         assert_eq!(pack_items[0]["id"], "official.test");
         assert_eq!(pack_items[0]["syntheticTestOnly"], true);
+        assert_eq!(pack_items[1]["id"], "official.workforce");
+        assert_eq!(pack_items[1]["syntheticTestOnly"], false);
 
         let described: ApiResponseDto<Value> = invoke_ok(
             &webview,
