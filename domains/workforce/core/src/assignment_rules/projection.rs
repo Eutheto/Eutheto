@@ -12,15 +12,15 @@ use eutheto_planning_ir::{
     CandidateValues, PlanningIrLimitsV1, PlanningProblem, ProjectionError, ProjectionExpression,
     Variable, project_candidate,
 };
-use eutheto_types::{PersonId, SolutionId};
+use eutheto_types::{OperationControl, PersonId, SolutionId};
 use std::mem::size_of;
 
 /// Projects a candidate under Workforce's V1 typed-pair assignment contract.
 ///
 /// Both selected and unselected required decisions must be supplied. The generic projector
 /// remains the model/domain validation authority; decoding checks every returned assignment,
-/// not whether its pair belongs to an immutable original scenario. This tokenless API applies
-/// finite cumulative resource limits, but does not claim interruptible cancellation.
+/// not whether its pair belongs to an immutable original scenario. Cumulative resource limits
+/// and the caller's cancellation/deadline apply throughout bounded projection work.
 ///
 /// # Errors
 /// Returns bounded projection contract codes or the existing Workforce budget error conversion.
@@ -30,7 +30,9 @@ pub fn project_workforce_candidate(
     candidate: &CandidateValues,
     solution_id: SolutionId,
     limits: PlanningIrLimitsV1,
+    control: &OperationControl,
 ) -> Result<NormalizedSolution, DomainPackError> {
+    control.check()?;
     if problem.metadata.pack_id.as_str() != WORKFORCE_PACK_ID {
         return Err(contract("official.workforce.projection.pack"));
     }
@@ -38,7 +40,7 @@ pub fn project_workforce_candidate(
         return Err(contract("official.workforce.projection.version"));
     }
     let limits = effective_limits(limits)?;
-    let mut budget = OperationBudget::analysis(None, limits);
+    let mut budget = OperationBudget::analysis(Some(control), limits);
     let raw_text_bytes = precharge_text(problem, limits, &mut budget)?;
     // Generic validate does not enforce whole-model bytes. Measure the borrowed model before
     // its indexes, candidate processing, or output allocations; never serialize into a Vec.
@@ -53,6 +55,7 @@ pub fn project_workforce_candidate(
         .map_err(|error| projection_error(&error))?;
     budget.check()?;
     for assignment in &solution.assignments {
+        budget.step()?;
         decode_workforce_assignment(assignment)?;
     }
     Ok(solution)

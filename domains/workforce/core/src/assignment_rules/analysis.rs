@@ -101,7 +101,10 @@ pub fn analyze_assignments(
     cancellation: Option<&CancellationToken>,
     limits: PlanningIrLimitsV1,
 ) -> Result<AssignmentAnalysis, AssignmentRuleError> {
-    let mut budget = OperationBudget::analysis(cancellation, limits);
+    let control = cancellation
+        .cloned()
+        .map(eutheto_types::OperationControl::Cancellation);
+    let mut budget = OperationBudget::analysis(control.as_ref(), limits);
     analyze_with_budget(document, &mut budget, limits)
 }
 
@@ -1384,7 +1387,8 @@ mod tests {
         ] {
             let document = leaf_document(leaf)?;
             let token = CancellationToken::new();
-            let mut budget = OperationBudget::analysis(Some(&token), PlanningIrLimitsV1::DEFAULT);
+            let control = eutheto_types::OperationControl::Cancellation(token.clone());
+            let mut budget = OperationBudget::analysis(Some(&control), PlanningIrLimitsV1::DEFAULT);
             let input = AssignmentInput::new(&document, &mut budget)?;
             let mut result = AssignmentAnalysis {
                 source_document_hash: String::new(),

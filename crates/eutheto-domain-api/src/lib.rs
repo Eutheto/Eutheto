@@ -17,9 +17,9 @@ use eutheto_domain_ir::{
 };
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, PackId,
-    PortableDomainDocument, ScenarioDocument, SemanticCapability, SolutionId, SolveBudgetView,
-    ValidationIssue,
+    CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl,
+    OperationInterruption, PackId, PortableDomainDocument, ScenarioDocument, SemanticCapability,
+    SolutionId, SolveBudgetView, ValidationIssue,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -347,7 +347,7 @@ impl DomainUiManifest {
 pub struct CompileContext {
     pub scenario_revision: u64,
     pub semantic_metadata: BTreeMap<String, String>,
-    pub cancellation: CancellationToken,
+    pub control: OperationControl,
     pub planning_limits: PlanningIrLimitsV1,
 }
 
@@ -528,7 +528,15 @@ pub trait DomainPack: Send + Sync {
     ) -> Result<ScenarioDocument, DomainPackError>;
 
     fn validate_fast(&self, document: &ScenarioDocument) -> DomainValidationReport;
-    fn validate_full(&self, document: &ScenarioDocument) -> DomainValidationReport;
+    /// Performs full readiness validation under the caller's cancellation or solve deadline.
+    ///
+    /// # Errors
+    /// Interruption is returned separately from issues in a successfully completed report.
+    fn validate_full(
+        &self,
+        document: &ScenarioDocument,
+        control: &OperationControl,
+    ) -> Result<DomainValidationReport, DomainPackError>;
 
     /// Applies an atomic command batch to a document.
     ///
@@ -569,6 +577,7 @@ pub trait DomainPack: Send + Sync {
         problem: &PlanningProblem,
         candidate: &CandidateValues,
         solution_id: SolutionId,
+        control: &OperationControl,
     ) -> Result<NormalizedSolution, DomainPackError>;
 
     /// Declares the required-rule identities and semantic bindings for a scenario revision.
@@ -580,6 +589,7 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         scenario_revision: u64,
+        control: &OperationControl,
     ) -> Result<VerificationScope, DomainPackError>;
 
     /// Verifies required rules against a normalized solution and embeds the separately
@@ -594,6 +604,7 @@ pub trait DomainPack: Send + Sync {
         solution: &NormalizedSolution,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
+        control: &OperationControl,
     ) -> Result<VerificationReport, DomainPackError>;
 
     /// Computes the pack-defined score vector for a solution.
@@ -605,6 +616,7 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        control: &OperationControl,
     ) -> Result<ScoreVector, DomainPackError>;
 
     /// Exports a scenario document as the pack's current portable representation.
@@ -951,6 +963,15 @@ pub enum DomainPackError {
     UnsupportedExplanationCapability(ExplanationCapability),
     #[error("domain contract violation: {0}")]
     Contract(String),
+}
+
+impl From<OperationInterruption> for DomainPackError {
+    fn from(reason: OperationInterruption) -> Self {
+        match reason {
+            OperationInterruption::Cancelled => Self::Cancelled,
+            OperationInterruption::DeadlineExceeded => Self::BudgetExpired,
+        }
+    }
 }
 
 fn schema_version(schema: &Value) -> Option<u64> {

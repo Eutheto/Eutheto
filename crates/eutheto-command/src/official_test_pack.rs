@@ -215,8 +215,15 @@ impl DomainPack for crate::OfficialTestPack {
         validation_report(document)
     }
 
-    fn validate_full(&self, document: &ScenarioDocument) -> DomainValidationReport {
-        validation_report(document)
+    fn validate_full(
+        &self,
+        document: &ScenarioDocument,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<DomainValidationReport, DomainPackError> {
+        control.check()?;
+        let report = validation_report(document);
+        control.check()?;
+        Ok(report)
     }
 
     fn apply_batch(
@@ -286,9 +293,7 @@ impl DomainPack for crate::OfficialTestPack {
         document: &ScenarioDocument,
         context: &CompileContext,
     ) -> Result<PlanningProblem, DomainPackError> {
-        if context.cancellation.is_cancelled() {
-            return Err(DomainPackError::Cancelled);
-        }
+        context.control.check()?;
         require_pack(document)?;
         build_problem(document, context, &parse_entities(document)?)
     }
@@ -298,7 +303,9 @@ impl DomainPack for crate::OfficialTestPack {
         problem: &PlanningProblem,
         candidate: &CandidateValues,
         solution_id: SolutionId,
+        control: &eutheto_types::OperationControl,
     ) -> Result<NormalizedSolution, DomainPackError> {
+        control.check()?;
         if problem.metadata.pack_id.as_str() != OFFICIAL_TEST_PACK_ID {
             return Err(DomainPackError::Contract(
                 "planning problem pack mismatch".to_owned(),
@@ -317,10 +324,13 @@ impl DomainPack for crate::OfficialTestPack {
         &self,
         document: &ScenarioDocument,
         scenario_revision: u64,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationScope, DomainPackError> {
+        control.check()?;
         let required_rules = parse_entities(document)?
             .into_values()
             .map(|entity| {
+                control.check()?;
                 Ok(RequiredRuleBinding {
                     rule_id: RuleId::from_uuid(entity.id.as_uuid()),
                     semantic_hash: blake3_hex(
@@ -340,9 +350,11 @@ impl DomainPack for crate::OfficialTestPack {
         solution: &NormalizedSolution,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
-        validate_verification_context(*self, document, solution, context)?;
-        let evaluations = evaluate_required_rules(document, solution)?;
+        control.check()?;
+        validate_verification_context(*self, document, solution, context, control)?;
+        let evaluations = evaluate_required_rules(document, solution, control)?;
         VerificationReport::new(
             context,
             evaluations,
@@ -357,8 +369,10 @@ impl DomainPack for crate::OfficialTestPack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
-        authoritative_score(document, solution)
+        control.check()?;
+        authoritative_score(document, solution, control)
     }
 
     fn export_portable(
@@ -737,9 +751,7 @@ fn compile_counterfactual_problem(
     context: &CounterfactualCompileContext<'_>,
 ) -> Result<PlanningProblem, DomainPackError> {
     check_counterfactual_budget(context)?;
-    if context.compile_context.cancellation.is_cancelled() {
-        return Err(DomainPackError::Cancelled);
-    }
+    context.compile_context.control.check()?;
     let entities = parse_entities(document)?;
     condition.validate().map_err(contract)?;
     validate(
@@ -1307,6 +1319,7 @@ fn compile_metadata(
         .semantic_metadata
         .iter()
         .map(|(key, value)| {
+            context.control.check()?;
             Ok((
                 MetadataKey::new(key.clone()).map_err(contract)?,
                 ProvenanceParameter::Text(value.clone()),
@@ -1324,6 +1337,7 @@ fn build_problem(
         ProvenanceId::new("official_test.preference.target").map_err(contract)?;
     let mut parts = ProblemParts::with_capacity(entities.len());
     for (id, entity) in entities {
+        context.control.check()?;
         parts.add_entity(id, entity, &preference_provenance)?;
     }
     parts.provenance.push(ProvenanceRecord {
@@ -1379,10 +1393,12 @@ fn build_problem(
         split_authorization: None,
     };
     problem.canonicalize().map_err(contract)?;
+    context.control.check()?;
     problem
         .declared_capabilities
         .insert(Capability::ForbiddenTable);
     validate(&problem, context.planning_limits).map_err(contract)?;
+    context.control.check()?;
     Ok(problem)
 }
 
@@ -1408,12 +1424,13 @@ fn validate_verification_context(
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
     context: &VerificationContextV1,
+    control: &eutheto_types::OperationControl,
 ) -> Result<(), DomainPackError> {
     context.validate().map_err(contract)?;
     let document_hash =
         blake3_hex(&serde_json::to_vec(document).map_err(|error| payload("/document", error))?);
     let normalized_solution_hash = solution.canonical_hash().map_err(contract)?;
-    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    let scope = pack.verification_scope(document, solution.scenario_revision, control)?;
     if context.scenario_id != document.scenario_id
         || context.evaluated_revision != solution.scenario_revision
         || context.document_hash != document_hash
@@ -1428,6 +1445,7 @@ fn validate_verification_context(
 fn evaluate_required_rules(
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
+    control: &eutheto_types::OperationControl,
 ) -> Result<Vec<RuleEvaluation>, DomainPackError> {
     require_pack(document)?;
     solution.validate().map_err(contract)?;
@@ -1465,6 +1483,7 @@ fn evaluate_required_rules(
     let target_fact = VerificationFactId::new("official.test.fact.target").map_err(contract)?;
     let mut evaluations = Vec::with_capacity(entities.len());
     for (id, entity) in &entities {
+        control.check()?;
         let suffix = id.to_string();
         let entity_ref = DomainEntityRef {
             kind: DomainEntityKindId::new(ENTITY_KIND).map_err(contract)?,
@@ -1520,12 +1539,14 @@ fn evaluate_required_rules(
             ],
         });
     }
+    control.check()?;
     Ok(evaluations)
 }
 
 fn authoritative_score(
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
+    control: &eutheto_types::OperationControl,
 ) -> Result<ScoreVector, DomainPackError> {
     require_pack(document)?;
     solution.validate().map_err(contract)?;
@@ -1560,6 +1581,7 @@ fn authoritative_score(
     let mut feasibility = 0_i64;
     let mut total = 0_i64;
     for (id, entity) in &entities {
+        control.check()?;
         let suffix = id.to_string();
         let enabled = assignments.get(&format!("official.test.assignment.enabled.{suffix}"));
         let target = assignments.get(&format!("official.test.assignment.target.{suffix}"));
@@ -1583,6 +1605,7 @@ fn authoritative_score(
                 .ok_or_else(|| contract("score overflow"))?;
         }
     }
+    control.check()?;
     Ok(ScoreVector {
         feasibility,
         levels: vec![ScoreLevelValue {

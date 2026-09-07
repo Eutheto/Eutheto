@@ -29,7 +29,7 @@ fn context() -> CompileContext {
     CompileContext {
         scenario_revision: 17,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }

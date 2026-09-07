@@ -1,7 +1,7 @@
 use super::{AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleLimit};
 use crate::temporal::ResolutionStep;
 use eutheto_planning_ir::PlanningIrLimitsV1;
-use eutheto_types::CancellationToken;
+use eutheto_types::{OperationControl, OperationInterruption};
 use serde::Serialize;
 use std::io::{self, Write};
 
@@ -21,7 +21,7 @@ struct Usage {
 }
 
 pub(super) struct OperationBudget<'a> {
-    cancellation: Option<&'a CancellationToken>,
+    control: Option<&'a OperationControl>,
     limits: PlanningIrLimitsV1,
     steps: u64,
     expanded_intervals: u64,
@@ -35,12 +35,9 @@ pub(super) struct OperationBudget<'a> {
 }
 
 impl<'a> OperationBudget<'a> {
-    pub fn analysis(
-        cancellation: Option<&'a CancellationToken>,
-        limits: PlanningIrLimitsV1,
-    ) -> Self {
+    pub fn analysis(control: Option<&'a OperationControl>, limits: PlanningIrLimitsV1) -> Self {
         Self {
-            cancellation,
+            control,
             limits,
             steps: 0,
             expanded_intervals: 0,
@@ -60,8 +57,8 @@ impl<'a> OperationBudget<'a> {
         }
     }
 
-    pub fn evaluation(cancellation: Option<&'a CancellationToken>) -> Self {
-        let mut budget = Self::analysis(cancellation, PlanningIrLimitsV1::DEFAULT);
+    pub fn evaluation(control: Option<&'a OperationControl>) -> Self {
+        let mut budget = Self::analysis(control, PlanningIrLimitsV1::DEFAULT);
         budget.max_records = MAX_EVALUATION_RECORDS;
         budget.max_items = MAX_EVALUATION_ITEMS;
         budget.max_bytes = MAX_EVALUATION_BYTES;
@@ -69,14 +66,9 @@ impl<'a> OperationBudget<'a> {
     }
 
     pub fn check(&self) -> Result<(), AssignmentRuleError> {
-        if self
-            .cancellation
-            .is_some_and(CancellationToken::is_cancelled)
-        {
-            Err(AssignmentRuleError::Cancelled)
-        } else {
-            Ok(())
-        }
+        self.control
+            .map_or(Ok(()), OperationControl::check)
+            .map_err(interruption)
     }
 
     pub fn steps(&mut self, amount: u64) -> Result<(), AssignmentRuleError> {
@@ -87,7 +79,7 @@ impl<'a> OperationBudget<'a> {
             .cancel_at_step
             .is_some_and(|threshold| next >= threshold)
         {
-            if let Some(token) = self.cancellation {
+            if let Some(OperationControl::Cancellation(token)) = self.control {
                 token.cancel();
             }
             self.check()?;
@@ -111,7 +103,7 @@ impl<'a> OperationBudget<'a> {
     /// Tests arm this only after entering the operation phase they exercise.
     #[cfg(test)]
     pub fn cancel_after_steps(&mut self, additional: u64) -> Result<(), AssignmentRuleError> {
-        if self.cancellation.is_none() {
+        if !matches!(self.control, Some(OperationControl::Cancellation(_))) {
             return Err(AssignmentRuleError::InvalidConstruction(
                 AssignmentConstructionIssue::InvalidRecord,
             ));
@@ -236,7 +228,7 @@ impl<'a> OperationBudget<'a> {
         let mut writer = CountingWriter {
             bytes: 0,
             limit,
-            cancellation: self.cancellation,
+            control: self.control,
             failure: None,
         };
         if serde_json::to_writer(&mut writer, value).is_err() {
@@ -374,25 +366,22 @@ fn reserve(
 struct CountingWriter<'a> {
     bytes: u64,
     limit: u64,
-    cancellation: Option<&'a CancellationToken>,
+    control: Option<&'a OperationControl>,
     failure: Option<AssignmentRuleError>,
 }
 
 impl Write for CountingWriter<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let next = if self
-            .cancellation
-            .is_some_and(CancellationToken::is_cancelled)
-        {
-            Err(AssignmentRuleError::Cancelled)
-        } else {
-            count(buffer.len())
-                .and_then(|length| add(self.bytes, length))
-                .and_then(|bytes| {
-                    within(bytes, self.limit, AssignmentRuleLimit::Bytes)?;
-                    Ok(bytes)
-                })
-        };
+        let next = self
+            .control
+            .map_or(Ok(()), OperationControl::check)
+            .map_err(interruption)
+            .and_then(|()| count(buffer.len()))
+            .and_then(|length| add(self.bytes, length))
+            .and_then(|bytes| {
+                within(bytes, self.limit, AssignmentRuleLimit::Bytes)?;
+                Ok(bytes)
+            });
         match next {
             Ok(bytes) => {
                 self.bytes = bytes;
@@ -408,5 +397,12 @@ impl Write for CountingWriter<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+fn interruption(reason: OperationInterruption) -> AssignmentRuleError {
+    match reason {
+        OperationInterruption::Cancelled => AssignmentRuleError::Cancelled,
+        OperationInterruption::DeadlineExceeded => AssignmentRuleError::BudgetExpired,
     }
 }

@@ -434,6 +434,56 @@ impl SolveBudgetView {
     }
 }
 
+/// Explicit control for ordinary cancellable work or a phase of one immutable solve deadline.
+#[derive(Clone)]
+pub enum OperationControl {
+    Cancellation(CancellationToken),
+    Solve(SolveBudgetView),
+}
+
+/// An interrupted operation is neither invalid data nor a correctness failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationInterruption {
+    Cancelled,
+    DeadlineExceeded,
+}
+
+impl OperationControl {
+    /// Checks cancellation first, then the original solve deadline when present.
+    ///
+    /// # Errors
+    /// Returns the observed interruption without changing or extending the parent budget.
+    pub fn check(&self) -> Result<(), OperationInterruption> {
+        match self {
+            Self::Cancellation(token) if token.is_cancelled() => {
+                Err(OperationInterruption::Cancelled)
+            }
+            Self::Solve(budget) => {
+                let remaining = budget.snapshot();
+                if remaining.cancelled {
+                    Err(OperationInterruption::Cancelled)
+                } else if remaining.expired
+                    || remaining.remaining_milliseconds == DurationMillis::ZERO
+                {
+                    Err(OperationInterruption::DeadlineExceeded)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Cancellation(_) => Ok(()),
+        }
+    }
+}
+
+impl fmt::Debug for OperationControl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Cancellation(_) => "OperationControl::Cancellation",
+            Self::Solve(_) => "OperationControl::Solve",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -559,6 +609,29 @@ mod tests {
         let both = parent.snapshot();
         assert!(both.cancelled);
         assert!(both.expired);
+        Ok(())
+    }
+
+    #[test]
+    fn operation_control_clones_retain_deadline_and_cancellation_precedence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{OperationControl, OperationInterruption};
+        let clock = Arc::new(FixedMonotonicClock::default());
+        let token = CancellationToken::new();
+        let parent = budget(10, &clock, token.clone())?;
+        let control = OperationControl::Solve(parent.phase_view());
+        clock.advance(Duration::from_millis(9))?;
+        let nested = control.clone();
+        assert_eq!(nested.check(), Ok(()));
+        clock.advance(Duration::from_millis(1))?;
+        assert_eq!(nested.check(), Err(OperationInterruption::DeadlineExceeded));
+        token.cancel();
+        assert_eq!(control.check(), Err(OperationInterruption::Cancelled));
+        assert_eq!(nested.check(), Err(OperationInterruption::Cancelled));
+        assert_eq!(
+            OperationControl::Cancellation(token).check(),
+            Err(OperationInterruption::Cancelled)
+        );
         Ok(())
     }
 

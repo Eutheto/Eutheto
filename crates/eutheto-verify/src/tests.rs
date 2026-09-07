@@ -62,6 +62,14 @@ enum ReportMutation {
     InvalidChecksum,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InterruptStage {
+    Projection,
+    Scope,
+    Score,
+    Verification,
+}
+
 #[derive(Default)]
 #[allow(clippy::struct_field_names)]
 struct TestPack {
@@ -69,6 +77,16 @@ struct TestPack {
     score_mutation: ScoreMutation,
     report_mutation: ReportMutation,
     fail_scope: bool,
+    interrupt_at: Option<(InterruptStage, DomainPackError)>,
+}
+
+impl TestPack {
+    fn interrupt(&self, stage: InterruptStage) -> Result<(), DomainPackError> {
+        match &self.interrupt_at {
+            Some((configured, error)) if *configured == stage => Err(error.clone()),
+            _ => Ok(()),
+        }
+    }
 }
 
 fn contract(error: impl std::fmt::Display) -> DomainPackError {
@@ -117,8 +135,13 @@ impl DomainPack for TestPack {
         DomainValidationReport::default()
     }
 
-    fn validate_full(&self, _document: &ScenarioDocument) -> DomainValidationReport {
-        DomainValidationReport::default()
+    fn validate_full(
+        &self,
+        _document: &ScenarioDocument,
+        control: &OperationControl,
+    ) -> Result<DomainValidationReport, DomainPackError> {
+        control.check()?;
+        Ok(DomainValidationReport::default())
     }
 
     fn apply_batch(
@@ -143,7 +166,10 @@ impl DomainPack for TestPack {
         problem: &PlanningProblem,
         candidate: &CandidateValues,
         solution_id: SolutionId,
+        control: &OperationControl,
     ) -> Result<NormalizedSolution, DomainPackError> {
+        control.check()?;
+        self.interrupt(InterruptStage::Projection)?;
         let mut solution =
             project_candidate(problem, candidate, solution_id, PlanningIrLimitsV1::DEFAULT)
                 .map_err(contract)?;
@@ -208,7 +234,10 @@ impl DomainPack for TestPack {
         &self,
         document: &ScenarioDocument,
         scenario_revision: u64,
+        control: &OperationControl,
     ) -> Result<VerificationScope, DomainPackError> {
+        control.check()?;
+        self.interrupt(InterruptStage::Scope)?;
         if self.fail_scope {
             return Err(contract("injected verification scope failure"));
         }
@@ -229,7 +258,10 @@ impl DomainPack for TestPack {
         _solution: &NormalizedSolution,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
+        control: &OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
+        control.check()?;
+        self.interrupt(InterruptStage::Verification)?;
         if self.report_mutation == ReportMutation::Reject {
             return Err(contract("injected verifier failure"));
         }
@@ -288,7 +320,10 @@ impl DomainPack for TestPack {
         &self,
         _document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        control: &OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
+        control.check()?;
+        self.interrupt(InterruptStage::Score)?;
         let value = match solution
             .assignments
             .first()
@@ -575,7 +610,11 @@ fn review(
     let clock = SequenceClock::new(clock_values)?;
     let reviewer = AcceptanceReviewer::new(pack, &document, REVISION, &problem, &clock)
         .map_err(|alarm| io::Error::other(format!("reviewer construction failed: {alarm:?}")))?;
-    Ok(reviewer.review(&candidate(objective)?, SOLUTION_ID.parse()?))
+    Ok(reviewer.review(
+        &candidate(objective)?,
+        SOLUTION_ID.parse()?,
+        &OperationControl::Cancellation(CancellationToken::new()),
+    ))
 }
 
 fn accepted(
@@ -920,5 +959,89 @@ fn backward_parent_clock_is_quarantined() -> Result<(), Box<dyn Error>> {
         )?,
         CorrectnessAlarmCategory::ClockFailed,
     )?;
+    Ok(())
+}
+
+#[test]
+fn pack_interruption_at_each_acceptance_stage_never_becomes_a_correctness_alarm()
+-> Result<(), Box<dyn Error>> {
+    for stage in [
+        InterruptStage::Projection,
+        InterruptStage::Scope,
+        InterruptStage::Score,
+        InterruptStage::Verification,
+    ] {
+        for (error, expected) in [
+            (DomainPackError::Cancelled, OperationInterruption::Cancelled),
+            (
+                DomainPackError::BudgetExpired,
+                OperationInterruption::DeadlineExceeded,
+            ),
+        ] {
+            let pack = TestPack {
+                interrupt_at: Some((stage, error)),
+                ..TestPack::default()
+            };
+            let decision = review(&pack, Some(vec![AUTHORITATIVE_SCORE]), &[0, 1, 2, 3, 4])?;
+            assert!(
+                matches!(decision, AcceptanceDecision::Interrupted { reason, .. } if reason == expected),
+                "{stage:?}: {decision:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn expiry_during_acceptance_prevents_an_accepted_result() -> Result<(), Box<dyn Error>> {
+    use std::sync::Arc;
+    use std::time::Duration;
+    struct ExpiringClock {
+        calls: AtomicUsize,
+        stop_on: usize,
+        parent_clock: FixedMonotonicClock,
+    }
+    impl VerificationClock for ExpiringClock {
+        fn now_milliseconds(&self) -> DurationMillis {
+            let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            if call == self.stop_on {
+                assert!(self.parent_clock.advance(Duration::from_secs(1)).is_ok());
+            }
+            DurationMillis::ZERO
+        }
+    }
+    let document = document()?;
+    let problem = planning_problem()?;
+    for stop_on in 0..5 {
+        let parent_clock = FixedMonotonicClock::default();
+        let budget = ParentSolveBudget::new(
+            DurationMillis::new(1000)?,
+            Arc::new(parent_clock.clone()),
+            CancellationToken::new(),
+        )?;
+        let clock = ExpiringClock {
+            calls: AtomicUsize::new(0),
+            stop_on,
+            parent_clock,
+        };
+        let pack = TestPack::default();
+        let reviewer = AcceptanceReviewer::new(&pack, &document, REVISION, &problem, &clock)
+            .map_err(|alarm| io::Error::other(format!("{alarm:?}")))?;
+        let decision = reviewer.review(
+            &candidate(Some(vec![AUTHORITATIVE_SCORE]))?,
+            SOLUTION_ID.parse()?,
+            &OperationControl::Solve(budget.phase_view()),
+        );
+        assert!(
+            matches!(
+                decision,
+                AcceptanceDecision::Interrupted {
+                    reason: OperationInterruption::DeadlineExceeded,
+                    ..
+                }
+            ),
+            "stage boundary {stop_on}: {decision:?}"
+        );
+    }
     Ok(())
 }

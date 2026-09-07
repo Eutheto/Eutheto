@@ -4,7 +4,7 @@
 //! pack, validates the projected shape against the planning IR, checks complete required-rule
 //! coverage and authoritative score bindings, and only then constructs an accepted result.
 
-use eutheto_domain_api::DomainPack;
+use eutheto_domain_api::{DomainPack, DomainPackError};
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, DomainAssignmentId, NormalizedSolution, ScoreVector,
     VerificationContextV1, VerificationReport, VerificationScope, blake3_hex,
@@ -14,7 +14,10 @@ use eutheto_planning_ir::{
     canonical_ir_hash, project_candidate, validate,
 };
 use eutheto_solver_api::{BackendCandidate, BackendObjectiveEvidence};
-use eutheto_types::{DurationMillis, REVISION_MAX_V1, ScenarioDocument, SolutionId};
+use eutheto_types::{
+    DurationMillis, OperationControl, OperationInterruption, REVISION_MAX_V1, ScenarioDocument,
+    SolutionId,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -289,6 +292,10 @@ pub enum AcceptanceDecision {
         alarm: CorrectnessAlarm,
         timings: AcceptancePhaseTimings,
     },
+    Interrupted {
+        reason: OperationInterruption,
+        timings: AcceptancePhaseTimings,
+    },
 }
 
 /// Injectable monotonic clock for deterministic acceptance timing tests.
@@ -382,14 +389,21 @@ impl<'a> AcceptanceReviewer<'a> {
         &self,
         candidate: &BackendCandidate,
         solution_id: SolutionId,
+        control: &OperationControl,
     ) -> AcceptanceDecision {
         let mut timings = AcceptancePhaseTimings::default();
+        if let Some(decision) = interrupted(control, None, timings) {
+            return decision;
+        }
 
         let started = self.clock.now_milliseconds();
         let projection = self
             .pack
-            .project(self.problem, &candidate.values, solution_id);
+            .project(self.problem, &candidate.values, solution_id, control);
         let finished = self.clock.now_milliseconds();
+        if let Some(decision) = interrupted(control, projection.as_ref().err(), timings) {
+            return decision;
+        }
         let Some(projection_elapsed) = elapsed(started, finished) else {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
         };
@@ -407,6 +421,9 @@ impl<'a> AcceptanceReviewer<'a> {
             &solution,
         );
         let finished = self.clock.now_milliseconds();
+        if let Some(decision) = interrupted(control, None, timings) {
+            return decision;
+        }
         let Some(structural_elapsed) = elapsed(started, finished) else {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
         };
@@ -419,8 +436,11 @@ impl<'a> AcceptanceReviewer<'a> {
         };
 
         let started = finished;
-        let authoritative_score = self.pack.score(self.document, &solution);
+        let authoritative_score = self.pack.score(self.document, &solution, control);
         let score_finished = self.clock.now_milliseconds();
+        if let Some(decision) = interrupted(control, authoritative_score.as_ref().err(), timings) {
+            return decision;
+        }
         let Some(score_elapsed) = elapsed(started, score_finished) else {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
         };
@@ -430,9 +450,12 @@ impl<'a> AcceptanceReviewer<'a> {
         };
 
         let verification_started = score_finished;
-        let verification_scope = self
-            .pack
-            .verification_scope(self.document, self.scenario_revision);
+        let verification_scope =
+            self.pack
+                .verification_scope(self.document, self.scenario_revision, control);
+        if let Some(decision) = interrupted(control, verification_scope.as_ref().err(), timings) {
+            return decision;
+        }
         let Ok(verification_scope) = verification_scope else {
             let failed = self.clock.now_milliseconds();
             let Some(verification_elapsed) = elapsed(verification_started, failed) else {
@@ -459,9 +482,16 @@ impl<'a> AcceptanceReviewer<'a> {
             return quarantine(CorrectnessAlarmCategory::ReportBindingFailed, timings);
         };
 
-        let report = self
-            .pack
-            .verify(self.document, &solution, &context, &authoritative_score);
+        let report = self.pack.verify(
+            self.document,
+            &solution,
+            &context,
+            &authoritative_score,
+            control,
+        );
+        if let Some(decision) = interrupted(control, report.as_ref().err(), timings) {
+            return decision;
+        }
         let Ok(report) = report else {
             let failed = self.clock.now_milliseconds();
             let Some(verification_elapsed) = elapsed(verification_started, failed) else {
@@ -482,6 +512,9 @@ impl<'a> AcceptanceReviewer<'a> {
             candidate.objective.as_ref(),
         );
         let verify_finished = self.clock.now_milliseconds();
+        if let Some(decision) = interrupted(control, None, timings) {
+            return decision;
+        }
         let Some(verify_elapsed) = elapsed(verification_started, verify_finished) else {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
         };
@@ -492,7 +525,11 @@ impl<'a> AcceptanceReviewer<'a> {
         let Some(objective_reconciliation) = validation.ok() else {
             return quarantine(CorrectnessAlarmCategory::ReportBindingFailed, timings);
         };
-        match AcceptedResult::new(solution, report) {
+        let accepted = AcceptedResult::new(solution, report);
+        if let Some(decision) = interrupted(control, None, timings) {
+            return decision;
+        }
+        match accepted {
             Ok(result) => AcceptanceDecision::Accepted {
                 result: Box::new(result),
                 objective_reconciliation,
@@ -501,6 +538,19 @@ impl<'a> AcceptanceReviewer<'a> {
             Err(_) => quarantine(CorrectnessAlarmCategory::ReportBindingFailed, timings),
         }
     }
+}
+
+fn interrupted(
+    control: &OperationControl,
+    error: Option<&DomainPackError>,
+    timings: AcceptancePhaseTimings,
+) -> Option<AcceptanceDecision> {
+    let reason = control.check().err().or(match error {
+        Some(DomainPackError::Cancelled) => Some(OperationInterruption::Cancelled),
+        Some(DomainPackError::BudgetExpired) => Some(OperationInterruption::DeadlineExceeded),
+        _ => None,
+    })?;
+    Some(AcceptanceDecision::Interrupted { reason, timings })
 }
 
 fn validate_report(

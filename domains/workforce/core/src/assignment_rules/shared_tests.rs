@@ -247,7 +247,8 @@ fn exact_resource_limits_fail_safely_without_claiming_expired_deadlines() -> Res
 #[test]
 fn cancellation_wins_at_checkpoint_and_none_retains_finite_work() -> Result {
     let cancellation = CancellationToken::new();
-    let mut controlled = OperationBudget::evaluation(Some(&cancellation));
+    let control = eutheto_types::OperationControl::Cancellation(cancellation.clone());
+    let mut controlled = OperationBudget::evaluation(Some(&control));
     controlled.steps(MAX_WORK_STEPS)?;
     cancellation.cancel();
     assert_eq!(controlled.step(), Err(AssignmentRuleError::Cancelled));
@@ -272,7 +273,8 @@ fn cancellation_during_serialization_is_not_retried_as_interrupted_io() {
         }
     }
     let cancellation = CancellationToken::new();
-    let budget = OperationBudget::evaluation(Some(&cancellation));
+    let control = eutheto_types::OperationControl::Cancellation(cancellation.clone());
+    let budget = OperationBudget::evaluation(Some(&control));
     assert_eq!(
         budget.measure(&Cancel(&cancellation)),
         Err(AssignmentRuleError::Cancelled)
@@ -417,7 +419,8 @@ fn weekly_expansion_observes_real_cancellation_inside_date_iteration() -> Result
     let settings = settings("UTC")?;
     let shift = interval("2026-11-01T08:00:00Z", "2026-11-01T10:00:00Z")?;
     let token = CancellationToken::new();
-    let mut budget = OperationBudget::evaluation(Some(&token));
+    let control = eutheto_types::OperationControl::Cancellation(token.clone());
+    let mut budget = OperationBudget::evaluation(Some(&control));
     budget.cancel_after_steps(5)?;
     let result = availability_intervals(&record, shift, &settings, &mut budget);
     assert!(matches!(result, Err(AssignmentRuleError::Cancelled)));

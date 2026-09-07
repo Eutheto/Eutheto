@@ -48,17 +48,17 @@ use eutheto_store::{
 use eutheto_types::{
     ActorRef, AppError, BackendId, BundleId, CancellationToken, Change, ChangeKind, ChangeSet,
     Clock, CommandEnvelope, CommandResult, CommandSource, DirectoryAvailabilityLabel,
-    DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator, MonotonicClock, PackId,
-    PortableAsset, PortableDomainDocument, PortableProjectMetadata, ProjectMetadataDto,
-    ProjectSummaryDto, ProtocolFailure, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
-    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument, ScenarioDomain,
-    ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, ScenarioViewDto,
-    SolutionId, SolveRunId, SolveStatus, StorageFailure, SupportApplicationMetadataDto,
-    SupportDirectoryMetadataDto, SupportLibraryMetadataDto, SupportPreviewDto,
-    SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue, ValidationReport,
-    ValidationSeverity, VerificationFailure, collect_scenario_owned_uuids,
-    extract_asset_references, extract_result_dependency, extract_result_id,
-    extract_scenario_references,
+    DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator, MonotonicClock,
+    OperationControl, OperationInterruption, PackId, PortableAsset, PortableDomainDocument,
+    PortableProjectMetadata, ProjectMetadataDto, ProjectSummaryDto, ProtocolFailure, RequestId,
+    ResourceRef, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
+    SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata,
+    ScenarioSettings, ScenarioSnapshotV1, ScenarioViewDto, SolutionId, SolveRunId, SolveStatus,
+    StorageFailure, SupportApplicationMetadataDto, SupportDirectoryMetadataDto,
+    SupportLibraryMetadataDto, SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature,
+    ValidationIssue, ValidationReport, ValidationSeverity, VerificationFailure,
+    collect_scenario_owned_uuids, extract_asset_references, extract_result_dependency,
+    extract_result_id, extract_scenario_references,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1693,7 +1693,11 @@ impl EuthetoApp {
             .await?;
         let current_revision = self.current_scenario_revision(request.scenario_id).await?;
         let accepted = &stored.portable.accepted_result;
-        let report = reverify_accepted_solution(&stored, &self.pack_registry)?;
+        let report = reverify_accepted_solution(
+            &stored,
+            &self.pack_registry,
+            &OperationControl::Cancellation(self.cancellation.clone()),
+        )?;
         Ok(AppQueryResult::SolutionVerification(Box::new(
             SolutionVerificationDtoV1 {
                 schema_version: SOLUTION_API_SCHEMA_VERSION,
@@ -2138,7 +2142,13 @@ impl EuthetoApp {
         }
         validate_document_shape(&document).map_err(|_| project_initialization_error())?;
         if pack
-            .validate_full(&document)
+            .validate_full(
+                &document,
+                &OperationControl::Cancellation(self.cancellation.clone()),
+            )
+            .map_err(|error| {
+                domain_interruption(&error).unwrap_or_else(project_initialization_error)
+            })?
             .issues
             .iter()
             .any(|issue| issue.severity == ValidationSeverity::Error)
@@ -4545,7 +4555,9 @@ fn compare_stored_solutions(
 fn reverify_accepted_solution(
     stored: &StoredAcceptedResultV2,
     registry: &DomainPackRegistry,
+    control: &OperationControl,
 ) -> Result<VerificationReport, AppError> {
+    control.check().map_err(operation_interrupted)?;
     let accepted = &stored.portable.accepted_result;
     let solution = &accepted.solution;
     let pack = solution_pack(stored, registry)?;
@@ -4561,8 +4573,10 @@ fn reverify_accepted_solution(
         return Err(solution_verification_mismatch());
     }
     let scope = pack
-        .verification_scope(&stored.document, solution.scenario_revision)
-        .map_err(|_| solution_verification_failed())?;
+        .verification_scope(&stored.document, solution.scenario_revision, control)
+        .map_err(|error| {
+            domain_interruption(&error).unwrap_or_else(solution_verification_failed)
+        })?;
     if scope.checksum != accepted.verification.verification_scope_checksum {
         return Err(solution_verification_mismatch());
     }
@@ -4578,11 +4592,21 @@ fn reverify_accepted_solution(
     )
     .map_err(|_| solution_verification_mismatch())?;
     let authoritative_score = pack
-        .score(&stored.document, solution)
-        .map_err(|_| solution_verification_failed())?;
+        .score(&stored.document, solution, control)
+        .map_err(|error| {
+            domain_interruption(&error).unwrap_or_else(solution_verification_failed)
+        })?;
     let report = pack
-        .verify(&stored.document, solution, &context, &authoritative_score)
-        .map_err(|_| solution_verification_failed())?;
+        .verify(
+            &stored.document,
+            solution,
+            &context,
+            &authoritative_score,
+            control,
+        )
+        .map_err(|error| {
+            domain_interruption(&error).unwrap_or_else(solution_verification_failed)
+        })?;
     report
         .validate()
         .map_err(|_| solution_verification_mismatch())?;
@@ -4595,7 +4619,31 @@ fn reverify_accepted_solution(
     {
         return Err(solution_verification_mismatch());
     }
+    control.check().map_err(operation_interrupted)?;
     Ok(report)
+}
+
+fn operation_interrupted(reason: OperationInterruption) -> AppError {
+    match reason {
+        OperationInterruption::Cancelled => {
+            protocol_error("operation.cancelled", "The operation was cancelled.", false)
+        }
+        OperationInterruption::DeadlineExceeded => protocol_error(
+            "operation.deadline_exceeded",
+            "The operation deadline was reached.",
+            false,
+        ),
+    }
+}
+
+fn domain_interruption(error: &DomainPackError) -> Option<AppError> {
+    match error {
+        DomainPackError::Cancelled => Some(operation_interrupted(OperationInterruption::Cancelled)),
+        DomainPackError::BudgetExpired => Some(operation_interrupted(
+            OperationInterruption::DeadlineExceeded,
+        )),
+        _ => None,
+    }
 }
 
 fn solution_view_error(error: &DomainPackError) -> AppError {

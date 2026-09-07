@@ -46,7 +46,10 @@ pub fn evaluate_assignment_rules(
     selected_pairs: &[AssignmentPair],
     cancellation: Option<&CancellationToken>,
 ) -> Result<AssignmentRuleEvaluation, AssignmentRuleError> {
-    let mut budget = OperationBudget::evaluation(cancellation);
+    let control = cancellation
+        .cloned()
+        .map(eutheto_types::OperationControl::Cancellation);
+    let mut budget = OperationBudget::evaluation(control.as_ref());
     budget.check()?;
     within(
         count(selected_pairs.len())?,
@@ -1244,7 +1247,8 @@ mod tests {
     fn genuine_token_cancels_inside_dense_rest_pairs_after_validated_setup() -> TestResult {
         let (document, pairs) = dense_rest_document(65)?;
         let token = CancellationToken::new();
-        let mut budget = OperationBudget::evaluation(Some(&token));
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut budget = OperationBudget::evaluation(Some(&control));
         let input = AssignmentInput::new(&document, &mut budget)?;
         input.validate_selection(&pairs, &mut budget)?;
         let selected = Selected::new(&input, &pairs, &mut budget)?;
@@ -1296,7 +1300,8 @@ mod tests {
     fn genuine_token_cancels_during_rest_witness_fact_construction() -> TestResult {
         let (document, pairs) = dense_rest_document(2)?;
         let token = CancellationToken::new();
-        let mut budget = OperationBudget::evaluation(Some(&token));
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut budget = OperationBudget::evaluation(Some(&control));
         let input = AssignmentInput::new(&document, &mut budget)?;
         input.validate_selection(&pairs, &mut budget)?;
         let selected = Selected::new(&input, &pairs, &mut budget)?;
@@ -1388,7 +1393,8 @@ mod tests {
             }),
         );
         let token = CancellationToken::new();
-        let mut budget = OperationBudget::evaluation(Some(&token));
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut budget = OperationBudget::evaluation(Some(&control));
         let input = AssignmentInput::new(&document, &mut budget)?;
         let selected = Selected::new(&input, &[selected_pair()?], &mut budget)?;
         let rule = input.domain.rules.get(&rule_id(20)?).ok_or("rule")?;
@@ -1420,7 +1426,8 @@ mod tests {
             }),
         );
         let token = CancellationToken::new();
-        let mut budget = OperationBudget::evaluation(Some(&token));
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut budget = OperationBudget::evaluation(Some(&control));
         let input = AssignmentInput::new(&document, &mut budget)?;
         let Some(WorkforceEntity::Availability(record)) =
             input.domain.entities.get(&entity_id(30)?)
@@ -1466,7 +1473,8 @@ mod tests {
         ] {
             let scope: Scope = serde_json::from_value(scope)?;
             let token = CancellationToken::new();
-            let mut budget = OperationBudget::evaluation(Some(&token));
+            let control = eutheto_types::OperationControl::Cancellation(token.clone());
+            let mut budget = OperationBudget::evaluation(Some(&control));
             budget.cancel_after_steps(32)?;
             assert_eq!(
                 predicates::person_matches(&person, &scope, &mut budget),

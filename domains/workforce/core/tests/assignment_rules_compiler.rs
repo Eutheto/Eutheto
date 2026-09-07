@@ -47,7 +47,7 @@ fn context(limits: PlanningIrLimitsV1) -> CompileContext {
     CompileContext {
         scenario_revision: 1,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: limits,
     }
 }
@@ -662,18 +662,16 @@ fn malformed_cancellation_and_tight_variable_constraint_limits_fail_atomically()
             AssignmentRuleLimit::Constraints
         ))
     ));
-    let cancelled = context(PlanningIrLimitsV1::DEFAULT);
-    cancelled.cancellation.cancel();
+    let token = CancellationToken::new();
+    token.cancel();
+    let mut cancelled = context(PlanningIrLimitsV1::DEFAULT);
+    cancelled.control = eutheto_types::OperationControl::Cancellation(token.clone());
     assert_eq!(
         compile_assignment_rules(&value, &cancelled),
         Err(AssignmentRuleError::Cancelled)
     );
     assert_eq!(
-        analyze_assignments(
-            &value,
-            Some(&cancelled.cancellation),
-            PlanningIrLimitsV1::DEFAULT
-        ),
+        analyze_assignments(&value, Some(&token), PlanningIrLimitsV1::DEFAULT),
         Err(AssignmentRuleError::Cancelled)
     );
     value

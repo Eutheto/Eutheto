@@ -134,7 +134,7 @@ fn accepted_fixture(
     let clock = SystemVerificationClock::default();
     let reviewer = AcceptanceReviewer::new(&WorkforcePack, document, 1, &problem, &clock)
         .map_err(|alarm| alarm.diagnostic_code)?;
-    match reviewer.review(&candidate, id(700).parse()?) {
+    match reviewer.review(&candidate, id(700).parse()?, &context().control) {
         AcceptanceDecision::Accepted { result, .. } => Ok((problem, candidate, *result)),
         other => Err(format!("expected real acceptance, got {other:?}").into()),
     }
@@ -350,7 +350,7 @@ fn real_reviewer_quarantines_bad_candidates_and_ignores_backend_rank_authority()
         result,
         objective_reconciliation,
         ..
-    } = reviewer.review(&candidate, id(700).parse()?)
+    } = reviewer.review(&candidate, id(700).parse()?, &context().control)
     else {
         return Err("backend objective mismatch must not replace source score".into());
     };
@@ -360,7 +360,8 @@ fn real_reviewer_quarantines_bad_candidates_and_ignores_backend_rank_authority()
     );
     assert_eq!(result.verification.score, accepted.verification.score);
     let bad = tiny_candidate(&problem, false)?;
-    let AcceptanceDecision::Quarantined { alarm, .. } = reviewer.review(&bad, id(701).parse()?)
+    let AcceptanceDecision::Quarantined { alarm, .. } =
+        reviewer.review(&bad, id(701).parse()?, &context().control)
     else {
         return Err("infeasible original assignment was not quarantined".into());
     };
@@ -379,9 +380,11 @@ fn real_reviewer_rejects_a_validly_encoded_missing_coverage_compiler_mutant() ->
     let clock = SystemVerificationClock::default();
     let reviewer = AcceptanceReviewer::new(&WorkforcePack, &document, 1, &problem, &clock)
         .map_err(|alarm| alarm.diagnostic_code)?;
-    let AcceptanceDecision::Quarantined { alarm, .. } =
-        reviewer.review(&tiny_candidate(&problem, false)?, id(701).parse()?)
-    else {
+    let AcceptanceDecision::Quarantined { alarm, .. } = reviewer.review(
+        &tiny_candidate(&problem, false)?,
+        id(701).parse()?,
+        &context().control,
+    ) else {
         return Err("weakened compiler model became feasibility authority".into());
     };
     assert_eq!(
@@ -610,7 +613,10 @@ fn validation_rendering_is_current_code_summary_not_submitted_prose_or_stale_occ
         .entities
         .get_mut(&id(8).parse()?)
         .ok_or("shift")?["coverage"]["count"] = json!(3);
-    let findings = WorkforcePack.validate_full(&document);
+    let findings = WorkforcePack.validate_full(
+        &document,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let current = findings
         .issues
         .first()
@@ -660,12 +666,13 @@ fn typed_input_bounds_precede_generic_checksums_and_cancellation_precedes_semant
     let solution = &accepted.solution;
     let token = CancellationToken::new();
     token.cancel();
+    let control = eutheto_types::OperationControl::Cancellation(token);
     assert_eq!(
-        workforce_verification_scope(&document, u64::MAX, Some(&token)),
+        workforce_verification_scope(&document, u64::MAX, Some(&control)),
         Err(DomainPackError::Cancelled)
     );
     assert_eq!(
-        score_workforce_solution(&document, solution, Some(&token)),
+        score_workforce_solution(&document, solution, Some(&control)),
         Err(DomainPackError::Cancelled)
     );
     let context = report_context(&accepted.verification, solution)?;
@@ -675,7 +682,7 @@ fn typed_input_bounds_precede_generic_checksums_and_cancellation_precedes_semant
             solution,
             &context,
             &accepted.verification.score,
-            Some(&token)
+            Some(&control)
         ),
         Err(DomainPackError::Cancelled)
     );

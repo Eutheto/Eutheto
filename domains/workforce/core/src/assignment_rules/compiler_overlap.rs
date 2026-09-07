@@ -146,7 +146,8 @@ mod tests {
         let end: Timestamp = "2026-11-01T01:00:00Z".parse()?;
         for during_emission in [false, true] {
             let token = CancellationToken::new();
-            let mut budget = OperationBudget::analysis(Some(&token), PlanningIrLimitsV1::DEFAULT);
+            let control = eutheto_types::OperationControl::Cancellation(token.clone());
+            let mut budget = OperationBudget::analysis(Some(&control), PlanningIrLimitsV1::DEFAULT);
             let mut events: Vec<_> = (0..128)
                 .flat_map(|candidate| {
                     [

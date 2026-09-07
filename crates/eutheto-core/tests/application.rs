@@ -663,7 +663,9 @@ async fn persist_application_accepted_result(
     let compile_context = CompileContext {
         scenario_revision: revision.value(),
         semantic_metadata: BTreeMap::new(),
-        cancellation: eutheto_types::CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(
+            eutheto_types::CancellationToken::new(),
+        ),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     };
     let problem = pack.compile(&project.document, &compile_context)?;
@@ -710,8 +712,17 @@ async fn persist_application_accepted_result(
         }
     }
     let solution_id = SolutionId::from_uuid(solution_test_id(0x8300, suffix)?);
-    let solution = pack.project(&problem, &candidate, solution_id)?;
-    let scope = pack.verification_scope(&project.document, revision.value())?;
+    let solution = pack.project(
+        &problem,
+        &candidate,
+        solution_id,
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
+    let scope = pack.verification_scope(
+        &project.document,
+        revision.value(),
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
     let context = VerificationContextV1::new(
         scenario_id,
         revision.value(),
@@ -720,8 +731,18 @@ async fn persist_application_accepted_result(
         solution.canonical_hash()?,
         scope.checksum,
     )?;
-    let authoritative_score = pack.score(&project.document, &solution)?;
-    let verification = pack.verify(&project.document, &solution, &context, &authoritative_score)?;
+    let authoritative_score = pack.score(
+        &project.document,
+        &solution,
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
+    let verification = pack.verify(
+        &project.document,
+        &solution,
+        &context,
+        &authoritative_score,
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
     let accepted = AcceptedResult::new(solution, verification)?;
     let manifest = RunManifestV1::new(
         started.input.run_id,
@@ -5155,7 +5176,9 @@ fn counterfactual_runtime_request(
         &CompileContext {
             scenario_revision: base.portable.run_input.scenario_revision,
             semantic_metadata: BTreeMap::new(),
-            cancellation: eutheto_types::CancellationToken::new(),
+            control: eutheto_types::OperationControl::Cancellation(
+                eutheto_types::CancellationToken::new(),
+            ),
             planning_limits: PlanningIrLimitsV1::DEFAULT,
         },
     )?;

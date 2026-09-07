@@ -260,8 +260,12 @@ impl DomainPack for IntervalFixturePack {
         OfficialTestPack.validate_fast(document)
     }
 
-    fn validate_full(&self, document: &ScenarioDocument) -> DomainValidationReport {
-        OfficialTestPack.validate_full(document)
+    fn validate_full(
+        &self,
+        document: &ScenarioDocument,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<DomainValidationReport, DomainPackError> {
+        OfficialTestPack.validate_full(document, control)
     }
 
     fn apply_batch(
@@ -309,15 +313,19 @@ impl DomainPack for IntervalFixturePack {
         problem: &PlanningProblem,
         candidate: &CandidateValues,
         solution_id: SolutionId,
+        control: &eutheto_types::OperationControl,
     ) -> Result<NormalizedSolution, DomainPackError> {
-        OfficialTestPack.project(problem, candidate, solution_id)
+        control.check()?;
+        OfficialTestPack.project(problem, candidate, solution_id, control)
     }
 
     fn verification_scope(
         &self,
         document: &ScenarioDocument,
         scenario_revision: u64,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationScope, DomainPackError> {
+        control.check()?;
         if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID {
             return Err(contract("optional fixture scenario pack mismatch"));
         }
@@ -335,7 +343,9 @@ impl DomainPack for IntervalFixturePack {
         solution: &NormalizedSolution,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
+        control.check()?;
         validate_interval_verification_context(*self, document, solution, context)?;
         VerificationReport::new(
             context,
@@ -351,7 +361,9 @@ impl DomainPack for IntervalFixturePack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
+        control.check()?;
         authoritative_interval_score(document, solution)
     }
 
@@ -425,9 +437,7 @@ fn build_interval_problem(
     context: &CompileContext,
     prune: bool,
 ) -> Result<PlanningProblem, DomainPackError> {
-    if context.cancellation.is_cancelled() {
-        return Err(DomainPackError::Cancelled);
-    }
+    context.control.check()?;
     if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID
         || document.domain_pack.schema_version != 1
     {
@@ -775,7 +785,11 @@ fn validate_interval_verification_context(
     context.validate().map_err(contract)?;
     let document_hash =
         blake3_hex(&serde_json::to_vec(document).map_err(|error| contract(error.to_string()))?);
-    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    let scope = pack.verification_scope(
+        document,
+        solution.scenario_revision,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     if context.scenario_id != document.scenario_id
         || context.evaluated_revision != solution.scenario_revision
         || context.document_hash != document_hash
@@ -1171,7 +1185,7 @@ fn fixture_context() -> CompileContext {
     CompileContext {
         scenario_revision: 11,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }
@@ -1181,7 +1195,11 @@ fn fixture_verification_context(
     problem: &PlanningProblem,
     solution: &NormalizedSolution,
 ) -> Result<VerificationContextV1, Box<dyn Error>> {
-    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    let scope = pack.verification_scope(
+        document,
+        solution.scenario_revision,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     Ok(VerificationContextV1::new(
         document.scenario_id,
         solution.scenario_revision,
@@ -1564,10 +1582,25 @@ fn observe_fixture_candidate(
     let candidate = candidate_for(problem, selected_mask)?;
     let compiler_accepts = fixture_compiler_accepts(problem, &candidate)?;
     let compiler_objective = fixture_compiler_objective(problem, &candidate)?;
-    let solution = pack.project(problem, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
-    let score = pack.score(document, &solution)?;
+    let solution = pack.project(
+        problem,
+        &candidate,
+        SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
+    let score = pack.score(
+        document,
+        &solution,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let verification_context = fixture_verification_context(&pack, document, problem, &solution)?;
-    let report = pack.verify(document, &solution, &verification_context, &score)?;
+    let report = pack.verify(
+        document,
+        &solution,
+        &verification_context,
+        &score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     Ok(FixtureObservation {
         compiler_accepts,
         compiler_objective,
@@ -1712,7 +1745,8 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         pack.project(
             &first,
             &missing_presence,
-            SolutionId::from_str(SOLUTION_ID)?
+            SolutionId::from_str(SOLUTION_ID)?,
+            &context.control
         )
         .is_err()
     );
@@ -1722,6 +1756,7 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         &first,
         &absent_candidate,
         SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     assert!(
         absent
@@ -1729,13 +1764,27 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
             .iter()
             .all(|assignment| assignment.value == AssignmentValue::Absent)
     );
-    let absent_score = pack.score(&document, &absent)?;
+    let absent_score = pack.score(
+        &document,
+        &absent,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let absent_context = fixture_verification_context(&pack, &document, &first, &absent)?;
-    let absent_report = pack.verify(&document, &absent, &absent_context, &absent_score)?;
+    let absent_report = pack.verify(
+        &document,
+        &absent,
+        &absent_context,
+        &absent_score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     assert!(absent_report.accepted);
     assert_eq!(absent_report.score.feasibility, 0);
     assert_eq!(absent_report.score.levels[0].value, 0);
-    let scope = pack.verification_scope(&document, context.scenario_revision)?;
+    let scope = pack.verification_scope(
+        &document,
+        context.scenario_revision,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     assert_eq!(
         scope
             .required_rules
@@ -1778,6 +1827,7 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         &first,
         &ignored_incoherence,
         SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     assert!(
         still_absent
@@ -1791,10 +1841,21 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         &first,
         &present_candidate,
         SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
-    let present_score = pack.score(&document, &present)?;
+    let present_score = pack.score(
+        &document,
+        &present,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let present_context = fixture_verification_context(&pack, &document, &first, &present)?;
-    let present_report = pack.verify(&document, &present, &present_context, &present_score)?;
+    let present_report = pack.verify(
+        &document,
+        &present,
+        &present_context,
+        &present_score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     assert!(present_report.accepted);
     assert_eq!(present_report.score.feasibility, 0);
     assert_eq!(present_report.score, present_score);
@@ -1808,7 +1869,12 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
     incoherent
         .integers
         .insert(fixture_int_id(OPTIONS[0], "end")?, 3);
-    let incoherent_error = pack.project(&first, &incoherent, SolutionId::from_str(SOLUTION_ID)?);
+    let incoherent_error = pack.project(
+        &first,
+        &incoherent,
+        SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    );
     let message = match incoherent_error {
         Err(DomainPackError::Contract(message)) => message,
         other => {
@@ -1824,10 +1890,21 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         &first,
         &candidate_for(&first, 0b011)?,
         SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
-    let overlap_score = pack.score(&document, &overlap)?;
+    let overlap_score = pack.score(
+        &document,
+        &overlap,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let overlap_context = fixture_verification_context(&pack, &document, &first, &overlap)?;
-    let overlap_report = pack.verify(&document, &overlap, &overlap_context, &overlap_score)?;
+    let overlap_report = pack.verify(
+        &document,
+        &overlap,
+        &overlap_context,
+        &overlap_score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     assert!(!overlap_report.accepted);
     assert_eq!(overlap_report.score.feasibility, 2);
     assert_eq!(

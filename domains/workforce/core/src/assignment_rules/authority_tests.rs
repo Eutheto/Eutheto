@@ -32,7 +32,8 @@ fn fixture() -> Result<(ScenarioDocument, NormalizedSolution)> {
 fn cancellation_after_entry_aborts_input_traversal_and_report_finalization() -> Result<()> {
     let (document, solution) = fixture()?;
     let token = CancellationToken::new();
-    let mut budget = OperationBudget::evaluation(Some(&token));
+    let control = eutheto_types::OperationControl::Cancellation(token.clone());
+    let mut budget = OperationBudget::evaluation(Some(&control));
     budget.cancel_after_steps(10)?;
     assert!(matches!(
         assess(&document, &solution, &mut budget),
@@ -41,7 +42,8 @@ fn cancellation_after_entry_aborts_input_traversal_and_report_finalization() -> 
     assert!(token.is_cancelled());
 
     let token = CancellationToken::new();
-    let mut budget = OperationBudget::evaluation(Some(&token));
+    let control = eutheto_types::OperationControl::Cancellation(token.clone());
+    let mut budget = OperationBudget::evaluation(Some(&control));
     let assessment = assess(&document, &solution, &mut budget)?;
     let scope = workforce_verification_scope(&document, 1, None)?;
     let context = VerificationContextV1::new(

@@ -17,7 +17,7 @@ fn model() -> Result<(PlanningProblem, CandidateValues)> {
     let context = CompileContext {
         scenario_revision: 7,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     };
     let problem = compile_workforce(&document, &context)?.problem;
@@ -40,7 +40,8 @@ fn reject(problem: &PlanningProblem, candidate: &CandidateValues, code: &'static
             problem,
             candidate,
             solution_id()?,
-            PlanningIrLimitsV1::DEFAULT
+            PlanningIrLimitsV1::DEFAULT,
+            &OperationControl::Cancellation(CancellationToken::new())
         ),
         Err(contract(code)),
     );
@@ -77,6 +78,7 @@ fn required_false_values_survive_with_original_binding_and_no_auxiliary_values()
         &candidate,
         solution_id,
         PlanningIrLimitsV1::DEFAULT,
+        &OperationControl::Cancellation(CancellationToken::new()),
     )?;
     assert_eq!(solution.scenario_id, id(100).parse()?);
     assert_eq!(solution.scenario_revision, 7);
@@ -280,7 +282,13 @@ fn aggregate_metadata_bytes_are_bounded_before_generic_indexes() -> Result {
     // deliberately does not enforce aggregate serialized bytes.
     validate(&problem, limits)?;
     assert_eq!(
-        project_workforce_candidate(&problem, &candidate, solution_id()?, limits),
+        project_workforce_candidate(
+            &problem,
+            &candidate,
+            solution_id()?,
+            limits,
+            &OperationControl::Cancellation(CancellationToken::new())
+        ),
         Err(contract("official.workforce.limit.bytes"))
     );
     // Exhausting index/reference quota as well must not move it ahead of the byte gate.
@@ -289,7 +297,13 @@ fn aggregate_metadata_bytes_are_bounded_before_generic_indexes() -> Result {
         ..limits
     };
     assert_eq!(
-        project_workforce_candidate(&problem, &candidate, solution_id()?, no_indexes),
+        project_workforce_candidate(
+            &problem,
+            &candidate,
+            solution_id()?,
+            no_indexes,
+            &OperationControl::Cancellation(CancellationToken::new())
+        ),
         Err(contract("official.workforce.limit.bytes"))
     );
     Ok(())
@@ -305,7 +319,13 @@ fn generic_scratch_exhaustion_returns_no_partial_solution_and_does_not_poison_re
     // The source model fits, but cumulative generic validation/projection scratch does not.
     validate(&problem, limits)?;
     assert_eq!(
-        project_workforce_candidate(&problem, &candidate, solution_id()?, limits),
+        project_workforce_candidate(
+            &problem,
+            &candidate,
+            solution_id()?,
+            limits,
+            &OperationControl::Cancellation(CancellationToken::new())
+        ),
         Err(contract("official.workforce.limit.references"))
     );
     let solution = project_workforce_candidate(
@@ -313,6 +333,7 @@ fn generic_scratch_exhaustion_returns_no_partial_solution_and_does_not_poison_re
         &candidate,
         solution_id()?,
         PlanningIrLimitsV1::DEFAULT,
+        &OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let values = solution
         .assignments
@@ -351,7 +372,13 @@ fn caller_cannot_expand_supported_generic_limits() -> Result {
     };
     validate(&problem, limits)?;
     assert_eq!(
-        project_workforce_candidate(&problem, &candidate, solution_id()?, limits),
+        project_workforce_candidate(
+            &problem,
+            &candidate,
+            solution_id()?,
+            limits,
+            &OperationControl::Cancellation(CancellationToken::new())
+        ),
         Err(contract("official.workforce.projection.invalid_problem"))
     );
     Ok(())
@@ -434,5 +461,63 @@ fn borrowed_text_gate_covers_every_public_unbounded_string_before_serialization(
             ))
         );
     }
+    Ok(())
+}
+
+#[test]
+fn running_deadline_interrupts_projection_validation_and_pack_compilation_preflight() -> Result {
+    use eutheto_domain_api::DomainPack;
+    use eutheto_types::{DurationMillis, MonotonicClock, ParentSolveBudget};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    use std::time::Duration;
+    struct AdvancingClock(AtomicU64);
+    impl MonotonicClock for AdvancingClock {
+        fn now(&self) -> Duration {
+            Duration::from_millis(self.0.fetch_add(1, Ordering::Relaxed))
+        }
+    }
+    fn control() -> Result<OperationControl> {
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(3)?,
+            Arc::new(AdvancingClock(AtomicU64::new(0))),
+            CancellationToken::new(),
+        )?;
+        let control = OperationControl::Solve(parent.phase_view());
+        assert_eq!(control.check(), Ok(()));
+        Ok(control)
+    }
+    let (problem, candidate) = model()?;
+    assert_eq!(
+        project_workforce_candidate(
+            &problem,
+            &candidate,
+            solution_id()?,
+            PlanningIrLimitsV1::DEFAULT,
+            &control()?
+        ),
+        Err(DomainPackError::BudgetExpired),
+    );
+    let mut document = fixture()?;
+    assert_eq!(
+        crate::WorkforcePack.validate_full(&document, &control()?),
+        Err(DomainPackError::BudgetExpired),
+    );
+    // An uncontrolled preflight would return this bounds error before the compiler's next
+    // deadline check. Interruption must be observed inside the pack-facade traversal instead.
+    document.metadata.title =
+        "x".repeat(eutheto_domain_api::ContractJsonLimits::DEFAULT.max_string_bytes + 1);
+    let context = CompileContext {
+        scenario_revision: 1,
+        semantic_metadata: BTreeMap::new(),
+        control: control()?,
+        planning_limits: PlanningIrLimitsV1::DEFAULT,
+    };
+    assert_eq!(
+        crate::WorkforcePack.compile(&document, &context),
+        Err(DomainPackError::BudgetExpired),
+    );
     Ok(())
 }
