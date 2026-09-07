@@ -512,7 +512,7 @@ Commit versioned fixtures with fixed clock, explicit timezone/locale, stable IDs
 2. **Clinic + overnight call:** 12 people with cross-category 10-hour elapsed rest.
 3. **Rolling-hours stress:** overlapping rule windows and hard locks.
 4. **Qualification coverage:** one specialist required per session.
-5. **Repair after call-out:** published schedule plus one new unavailability.
+5. **Repair after call-out:** accepted, selected local baseline schedule plus one new unavailability.
 6. **Provably infeasible:** insufficient eligible coverage with mapped sufficient conflict evidence.
 7. **DST transition:** overnight shifts across spring-forward and fall-back transitions.
 8. **Large benchmark:** configurable 100+ people and thousands of candidate assignments.

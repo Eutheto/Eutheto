@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Extend the released local-first `eutheto` platform without weakening public-MVP contracts. The original immediate release delivers the complete official school-timetabling pack, deeper explainability, stronger verified portfolio routing and alternative generation, and a separate Nuxt documentation/community website. Independently, early post-MVP Branch K delivers bounded conversational experiments and staged voice capabilities from completed Phase 12, without waiting for school, transportation, or the original immediate-wave exit. Dependency-gated planner evolution deepens repair, semantic comparison, plan health, trade-off exploration, history, resilience analysis, and person-aware fairness before any generalized platform claim. Later independent branches may add sandboxed domain packs, optional solver adapters, specialized algorithms, new targets, richer imports, collaboration/server mode, enterprise integrations, additional official domains, advanced AI integrations, optional telemetry, and optional hosted services. Every branch remains independently gated, capability-scoped, license-reviewed, resource-bounded, migration-safe, accessible, and optional relative to the open-source core and desktop application.
+Extend the released local-first `eutheto` platform without weakening public-MVP contracts. The original immediate release delivers the complete official school-timetabling pack, deeper explainability, stronger verified portfolio routing and alternative generation, and a separate Nuxt documentation/community website. Independently, early post-MVP Branch K delivers bounded conversational experiments and staged voice capabilities from completed Phase 12, without waiting for school, transportation, or the original immediate-wave exit. The approved Branch-H direction likewise defines an independently gated complete H1 Workforce collaboration pilot after Phase12 and its H0/service/operating gates, with N1 separately proving managed operation of the same open capabilities. Dependency-gated planner evolution deepens repair, semantic comparison, plan health, trade-off exploration, history, resilience analysis, and person-aware fairness before any generalized platform claim. Later independent branches may add sandboxed domain packs, optional solver adapters, specialized algorithms, new targets, richer imports, expanded collaboration/server deployments, enterprise integrations, additional official domains, advanced AI integrations, optional telemetry, and additional hosted-service profiles. Every branch remains independently gated, capability-scoped, license-reviewed, resource-bounded, migration-safe, accessible, and optional relative to the open-source core and desktop application; independent eligibility does not promise simultaneous implementation or silently change priorities.
 
 The public-MVP baseline is defined in [Phase 11](11-public-mvp-packaging-and-documentation.md) and approved in [Phase 12](12-stabilization-and-public-release-gate.md). Version and decision evidence is in [the assumptions ledger](assumptions.md).
 
@@ -58,6 +58,10 @@ Every branch delivered at or after 1.0 must:
 
 Enter from completed Phase 12, alongside rather than after the original immediate wave. Bounded conversational experiments and dictation have independent deliveries; realtime voice follows its own media/security gate and does not require experiments to ship. Workforce and seating provide the initial cross-domain evidence. Neither school/transport completion, generalized Scenario Compare, richer branching/merge, nor Branches H/I/N is a prerequisite for these local desktop deliveries. The restricted local MCP server is a separate optional increment; conditional runtime integration and organization administration do not gate planning or voice.
 
+### Independent post-MVP collaboration — Branch H
+
+The [Collaborative Planning and Hosted Service specification](collaborative-planning-and-hosted-service.md) was approved as roadmap direction on 2026-09-07. H0 maps reusable contracts and validates a pilot charter without production expansion. H1 enters from completed Phase12 plus its own service/authority/operating gates and delivers one complete Workforce organizational cycle, including publication and a subsequent change/repair—not an intake-only prototype. N1 separately proves managed operation of the same open capabilities. Neither H1 nor the original immediate wave, Branch K or Phase14 requires completion of the other. Allocation and priority remain explicit; independent entry does not promise simultaneous implementation.
+
 ### Later post-MVP
 
 - generalized pack-evidenced Plan Health, arbitrary semantic Scenario Compare, named timeline milestones, and refresh-and-compare;
@@ -66,7 +70,7 @@ Enter from completed Phase 12, alongside rather than after the original immediat
 - advanced result capsules and explicit capsule-to-scenario workflows under the portable-data privacy and provenance gates;
 - native specialized algorithms;
 - optional HiGHS, SCIP, MiniZinc, commercial-solver, and routing adapters;
-- collaboration/server and enterprise integrations;
+- expanded collaboration policies/deployments and enterprise integrations beyond the bounded H1 pilot, under their applicable gates;
 - the proposed [Transportation domain-pack plan](14-transportation-domain-pack.md), independently entered from completed Phase 12;
 - additional official domain packs;
 - richer imports and structured import assistance;
@@ -74,7 +78,7 @@ Enter from completed Phase 12, alongside rather than after the original immediat
 - encrypted/automatic backup, signed bundles, selected multi-scenario portability, richer result-report profiles, annotations/branding, and optional hosted sharing;
 - optional anonymous diagnostics;
 - Linux arm64, Windows arm64, and additional package/repository targets;
-- optional hosted services that never gate the local product.
+- additional optional hosted-service profiles beyond N1, never a prerequisite for the local product.
 
 ## Branch A — Complete official school-timetabling pack
 
@@ -342,15 +346,19 @@ Use a separate Nuxt site for landing pages, searchable docs, domain/solver capab
 
 The provisional `optimizer serve` uses a separately designed authenticated API, never exposed Tauri commands. Initial local mode binds loopback, uses explicit tokens, and warns that internet exposure requires a hardened profile.
 
-Potential scope: local network service, authenticated organization server, scheduled jobs, webhooks/import pipelines, review/approval, shared history, and role-based permissions. Before implementation design concurrency/revisions, audit, authentication/session/token lifecycle, authorization/RBAC, tenant isolation, quotas, cancellation, secrets, backup/restore, TLS/proxy deployment, abuse prevention, migration/rollback, incident response, retention/privacy. Desktop remains server-independent.
+The [detailed Branch-H contract](collaborative-planning-and-hosted-service.md#delivery-and-ownership) owns H0 reuse/pilot validation and H1's complete collect/reconcile/verified-solve/approval/publication/change/repair cycle. It reuses ordinary typed commands, scenario revisions, immutable runs/results and Share Result projections. No universal shared-person store, parallel constraint authority or generic workflow engine is a foundation requirement. Requested treatment and accepting authority remain distinct from effective Required/Preference meaning.
 
-This branch does not gate Branch-K desktop experiments, voice, a restricted local MCP server, or a locally embedded supported runtime. A remote/managed Branch-K deployment must first satisfy the applicable service identity, authorization, concurrency, quota, audit, and operations gates here; it cannot expose Tauri IPC as its service API.
+Before any production participant data, satisfy the applicable concurrency/revision, audit, authentication/session/invitation lifecycle, subject/field authorization, isolation, quota/cancellation, credential/egress, TLS/proxy, abuse, retention/deletion, backup/restore, update/recovery and incident/support gates. Start with one documented self-hostable reference deployment and minimal workflow roles; managed operation adds N1 evidence rather than exclusive software. H2 expands only from demonstrated need. Scheduled jobs, broad webhooks/import pipelines, additional permissions and organization administration are not all mandatory H1 features.
+
+This branch does not gate Branch-K desktop experiments, voice, a restricted local MCP server, or a locally embedded supported runtime. A remote/managed deployment must satisfy the applicable service identity, authorization, concurrency, quota, audit and operations controls; it cannot expose Tauri IPC. Those controls do not require an unrelated service to implement H1 campaigns or its complete product workflow.
 
 ## Branch I — Enterprise integrations
 
 Optional directory/HRIS import, calendar sync, school information systems, event/guest platforms, signed policy packs, user-provided solver discovery, server SSO, and audit/report exports. Keep vendor fields out of core models. Each adapter needs typed boundary, disclosed data scope, credentials, rate/retry/cancellation, conformance fixtures, version mapping, preview/transactional apply, audit/redaction, license review, offline/failure behavior, and removal/migration path.
 
-Branch-K local privacy and provider controls precede organization administration. Central provider allowlists, roles, SSO, and managed policy distribution enter only with the applicable H/I deployment gates; they are not dependencies of desktop planning, voice, or local MCP.
+The existing Phase10 local privacy/provider boundaries remain binding; Branch K carries them into its own extensions. Central organization provider policy, SSO and advanced administration enter only with applicable H/I deployment gates. H1 does not wait for Branch-K features, and organization administration is not a dependency of desktop planning, voice or local MCP.
+
+Branch I owns additional enterprise adapters, not H1's minimum subject-scoped permissions. The [pilot decision gate](collaborative-planning-and-hosted-service.md#pilot-validation-and-decision-gates) selects only necessary integrations; SSO, delegated administration and vendor breadth are evidence-led additions, with open software availability and distinct operating responsibilities.
 
 ## Branch J — Additional official packs
 
@@ -472,9 +480,11 @@ Potential additions after reliable CI/end-user testing:
 
 Each completes the same one-install, worker, license/SBOM/provenance, signing, updater, migration, offline, accessibility, E2E, and clean-machine gates as Phase 11/12. Development-shell availability is not release support.
 
-## Branch N — Hosted services, if ever added
+## Branch N — Optional managed services
 
-Potential update/catalog hosting, shared projects, remote solves, and managed AI gateways remain optional and never gate open-source core/desktop. Separate open-source capabilities from paid services. Require independent governance, tenancy, security/privacy/compliance, auth, retention/deletion, audit, availability/recovery, abuse controls, compatibility, export/exit, incident response, and disclosure.
+N1 is the [managed collaboration operating milestone](collaborative-planning-and-hosted-service.md#delivery-and-ownership) over H1's documented self-hostable open capabilities. It requires evidenced isolation, supported workloads/admission, credential custody, monitored health, retention/deletion, controlled updates/recovery, restore-tested backups, incident/support responsibility and practical export/exit before production use. Baseline production safety is already required for H1; it is not postponed until managed scale. Official software functionality is not sold as proprietary feature unlocks, and technical resource limits remain legitimate.
+
+Other update/catalog hosting, remote solves or service profiles remain independently optional with their applicable governance, security/privacy, authorization, compatibility, recovery, abuse and disclosure gates. Managed AI, SMS, hybrid workers and unrestricted APIs are demand-led investigations, not initial N1 offerings. No deployment promises unlimited resources, automatic local-endpoint reachability or institutional suitability. Desktop and local Branch-K capabilities remain independent.
 
 Branch-K local MCP and local-capable embedded runtimes do not inherently require this branch. Managed gateways, hosted runtimes, or remote assistant access inherit these gates only when that deployment is explicitly selected; they never become prerequisites for early desktop experiments or voice.
 
@@ -489,6 +499,7 @@ Enter each enhancement independently; none is required to keep opening, exportin
 - **Semantic merge:** only after pack-defined field/entity conflict semantics, three-way ancestry, preview, validation, atomic apply/undo, migration ordering, and exhaustive collision/reference tests. Until then users choose Create copy, Replace, or Skip.
 - **Richer offline reports:** additional coordinator/custom profiles, annotations, branding, richer diagrams/maps and organization privacy policies only through versioned Share Result fields, exact preview, inert rendering, accessible equivalents, licensing/provenance and zero-required-network behavior.
 - **Hosted sharing:** optional publish/revoke/expire/access-control/audit/download/export/delete flows over the same immutable Share Result artifact. Define authentication, authorization, tenancy, encryption, abuse, retention, region, incident response and billing/availability boundaries; hosted access can fail without affecting the local file.
+- **Organization migration and deployment recovery:** use distinct declared profiles and destination identity/authority mapping, not ordinary scenario archives as a universal organization backup. Apply the [privacy/retention/recovery contract](collaborative-planning-and-hosted-service.md#privacy-retention-and-recovery): no imported privilege/session/invitation authority, safe restored-service quarantine, revocation/deletion reconciliation and no automatic job or notification replay.
 
 Every enhancement has version/migration/downgrade behavior, bounded resource and cancellation policy, threat/privacy/licensing review, desktop/CLI parity where applicable, permanent compatibility/security/recovery fixtures, docs, and an exit path back to the local open format. Provider or third-party content remains excluded unless its redistribution terms and user choice permit inclusion.
 
@@ -509,18 +520,22 @@ Every enhancement has version/migration/downgrade behavior, bounded resource and
 
 From completed Phase 12, run the K1 isolated-experiment/verified-comparison delivery and K2 dictation/media-feasibility delivery independently of items 1–8. Realtime follows K2's own gate; the existing one-parent asynchronous-job controls apply before optional K3 reasoning delegation. K4 local MCP and K5 conditional runtime investigation are separately gated optional increments, not dependencies of those early deliveries. Use K6's staged exits rather than waiting for the original immediate-wave exit.
 
+### Independent Branch-H and N1 work packages
+
+Use H0/H1/N1 in the [detailed delivery contract](collaborative-planning-and-hosted-service.md#delivery-and-ownership). Reconcile existing authorities and the pilot charter, then complete service identity/subject access, typed intake/reconciliation, reused verified planning, atomic approval/publication/notification handoff, one change/repair/republication, and the full export/restore/accessibility/operating proof. These milestones are not dependencies of items1–8 or Branch K. The original service/hosted backlog coverage in items12/18 below is preserved by these explicit milestones plus later extensions.
+
 ### Later independent waves
 
 9. Proven-structure algorithms.
 10. Individually gated solver adapters.
 11. WASM SDK, manager/catalog, conformance kit.
-12. Authenticated service/collaboration design.
+12. Authenticated service/collaboration design and delivery through H0/H1, followed by separately justified H2 breadth.
 13. Enterprise adapters.
 14. Other selected official domains; transportation is ordered separately in its sibling [Phase-14 plan](14-transportation-domain-pack.md).
 15. Advanced AI/import integrations and organization administration beyond the early Branch-K increments, under their applicable deterministic/security/service gates.
 16. Optional diagnostics.
 17. Additional targets/distribution.
-18. Optional hosted services.
+18. N1 managed collaboration operation and independently gated additional hosted-service profiles.
 19. Individually gated portable-data, automatic/encrypted-backup, authenticity, richer-report, and hosted-sharing enhancements.
 
 ## Tests and acceptance
@@ -560,6 +575,8 @@ The **original immediate-wave milestone** exits only when the complete school co
 
 **Branch K exits incrementally under K6**, beginning independently from completed Phase 12. Planning, dictation/realtime, optional delegation, local MCP, and conditional runtime support each meet their own listed gates and the common branch contract; no combined “all Phase 13 complete” gate holds early planning or voice behind school, transportation, or services. The original immediate wave likewise does not require Branch K.
 
+**H1 and N1 have their own complete exits** in the [collaboration specification](collaborative-planning-and-hosted-service.md#delivery-and-ownership). They preserve all PRODUCT-01–15 and ACCEPT-01–22 dispositions and applicable additional adversarial cases; inherited phase ownership never counts as implementation or passing evidence. H1 requires the entire pilot lifecycle and minimum production operations. N1 adds the managed operator's release evidence. They do not widen the public MVP or waive the required Phase05 manual-testing pause.
+
 Any independently delivered branch or increment exits only when its contract, tests, security/privacy/license review, migration/compatibility, accessibility/usability, packaging/operations, ownership/docs, and rollback/removal path are complete. One branch never makes another an implicit commitment, and a conditional integration cannot be marked supported until its evidence gates pass.
 
 ## Deferred and non-goals
@@ -572,6 +589,7 @@ Any independently delivered branch or increment exits only when its contract, te
 - Server mode never directly exposes Tauri IPC.
 - Vendor fields never pollute core domain contracts.
 - Hosted/paid services never remove required local open-source functionality.
+- Open local/self-hosted official capabilities have no commercial feature/population caps, but retain documented technical safety/resource bounds. Mode-specific infrastructure and support claims require an explicit deployment/capability matrix; source availability is not an uptime guarantee.
 - Branch-K isolated experiments do not require or deliver universal branching/merge, a general agent framework, or coordinated cross-pack solving.
 - Voice, MCP, and embedded runtimes never grant ambient approval, frontend credentials, export/privacy/import/backup authority, or an automatic session-budget compute permission; any policy exception requires a future explicit ADR before enablement.
 

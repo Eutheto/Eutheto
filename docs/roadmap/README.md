@@ -27,6 +27,8 @@ Resolve conflicts by changing the authoritative source and its tests together. [
 
 Cross-cutting roadmap contracts complement the numbered phase files: [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) defines provisional latency, budget, progress, and benchmark policy; [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md) defines implementation-independent bundle, import/restore, and privacy-filtered report boundaries. Each contract identifies the phase that owns implementation and release evidence.
 
+[Collaborative Planning and Hosted Service](collaborative-planning-and-hosted-service.md) is the detailed post-MVP Branch-H workflow contract, with Branch-I/N/O integration, operations and portability ownership. Its approved product direction does not add collaboration production work or service-release gates to Phases00–12.
+
 ## Product vision
 
 Build a general-purpose, human-friendly planning platform in which ordinary users describe what **must** happen, what they **prefer**, and which trade-offs matter, then receive understandable, verifiable, editable plans. The system is a headless optimization platform with an excellent desktop client, not optimization logic buried inside Tauri.
@@ -47,12 +49,15 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 
 Conversational planning follows **describe → clarify → preview → explore → compare → decide**, with typed domain meaning and independently verified evidence at every applicable step. Complete reviewed text assistance remains a Phase-10 MVP commitment. Conversational experiments and voice are prioritized early post-MVP deliveries in [Phase 13, Branch K](13-post-mvp-roadmap.md#branch-k--early-conversational-experiments-voice-and-optional-integrations), useful across workforce and seating rather than dependent on a new domain pack. External-assistant access and supported subscription runtimes are separate, gated extensions—not prerequisites for local scheduling or voice.
 
+Optional organizational planning extends the same core through **collect → reconcile → solve → independently verify → explain → approve → publish → change → repair → republish**. The [bounded collaboration pilot](collaborative-planning-and-hosted-service.md#delivery-and-ownership) has its own post-Phase12 entry and complete-cycle exit; it is not a second optimizer or a reason to retrofit a universal organization/person/workflow model into the local MVP. Finish Phase05 and pause for user manual testing before starting Phase06.
+
 ## Product principles
 
 - **Human language before solver language.** Say “Required,” “Preference,” and “minimum rest after call”; reserve solver terminology for an advanced inspector.
 - **Progressive disclosure.** Guided choices and safe defaults lead; advanced modeling appears only when needed.
 - **Deterministic core; optional AI.** Validation, compilation, solving, verification, persistence, scoring, and deterministic explanations are application functions. AI is neither source of truth nor solver.
 - **Local-first.** Create, edit, solve, and inspect without accounts or cloud services. Local storage is the default.
+- **Open software, explicit deployment support.** Official implemented software capabilities remain available locally/self-hosted with their stated runtime prerequisites, without commercial feature or population caps. Technical safety/resource limits remain; managed capacity and operating assurances are separate from software licensing. Semantic parity, data portability and supported deployment combinations are distinct [evidence-backed promises](collaborative-planning-and-hosted-service.md#open-software-and-deployment-parity).
 - **Human control and plan stability.** AI writes are visible proposals; all applied changes use the normal command API, are undoable, and honor revisions. A user can hard-lock what must remain, express softer preferences, and reflow from an accepted plan while explicitly minimizing avoidable disruption. A hard lock is never silently weakened.
 - **Verifiability over trust.** Backend claims never make a candidate publishable; original domain meaning is independently evaluated.
 - **Explanations and recovery are product behavior.** “No solution” alone is insufficient. Report validation issues and, where evidence permits, sufficient conflicting required rules in domain language. Proposed repairs identify the exact compromise, require explicit review, and apply only through reversible commands; deterministic evidence remains useful without AI.
@@ -225,7 +230,7 @@ Pause work and write an ADR before continuing if a rule cannot be independently 
                                                                workforce and seating flows]
 
 00–10 all complete ──> 11 packaging/docs ──> 12 stabilization/release
-                                               ├─> 13 independent school/platform/assistant tracks
+                                               ├─> 13 independent school/platform/assistant/collaboration tracks
                                                └─> 14 post-MVP transportation
 ```
 
@@ -233,7 +238,9 @@ The arrows are phase-entry gates, not merely suggested sequencing: transitive pr
 
 Phase 13 and Phase 14 are sibling post-MVP branches entered directly from completed Phase 12. Neither branch requires completion of the other.
 
-Within Phase 13, the early Branch-K experiment and voice deliveries require the completed Phase-12 public release and their own named prerequisites, not completion of school timetabling, transportation, the documentation site, or the entire Phase-13 immediate milestone. They may release independently; the original school, portfolio, explanation, and site commitments remain intact. General branching/reconciliation, remote service deployment, and organization administration retain their separate later gates.
+Within Phase 13, the early Branch-K experiment and voice deliveries require the completed Phase-12 public release and their own named prerequisites, not completion of school timetabling, transportation, the documentation site, or the entire Phase-13 immediate milestone. They may release independently; the original school, portfolio, explanation, and site commitments remain intact. General branching/reconciliation, remote service deployment, and organization administration retain their separate applicable gates.
+
+The Branch-H collaboration pilot likewise enters from completed Phase12 plus its own H0/service/operating gates, not from completed school, Branch K or Phase14. Read-only pilot discovery may inform planning earlier but cannot authorize production expansion. Independent eligibility is not simultaneous staffing or an implicit priority change; H/N deployments inherit relevant security controls without requiring unrelated services to implement the entire intake pilot.
 
 | Assistant-related work | Owning phase and boundary |
 |---|---|
@@ -263,6 +270,8 @@ Use trunk-based development, short-lived branches, protected `main`, and tags fr
 | Candidate | Raw backend values not yet independently verified. |
 | Normalized solution | Backend-independent projected assignments using stable domain IDs. |
 | Accepted/verified solution | Normalized solution whose required rules and authoritative score were recomputed successfully. |
+| Organizational approval | Post-MVP governance decision bound to an exact independently verified result, input revision and policy; not solver acceptance or a local selection. |
+| Published plan version | Post-MVP immutable, authorized recipient distribution with version/current-pointer/audit linkage; not a second assignment authority or a synonym for local file export. |
 | Required rule | Condition every accepted solution must satisfy (“hard constraint” only in internal advanced terminology). |
 | Preference | Explicit bounded objective contribution that may remain unmet. |
 | Score vector | Ordered domain-owned objective levels with category breakdowns for comparing verified solutions. |
@@ -304,6 +313,7 @@ An AI capability has a deterministic non-AI equivalent, typed allowlisted risk-c
 |---|---|
 | [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) | Provisional end-to-end latency objectives, one-budget solve policy, responsive progress behavior, instrumentation, representative benchmark packs, and Phase-12 calibration. |
 | [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md) | Proposed `.eutheto` bundle/version/migration contract, bounded import and atomic restore, immutable privacy-filtered HTML/PDF result sharing, security evidence, and phase ownership. |
+| [Collaborative Planning and Hosted Service](collaborative-planning-and-hosted-service.md) | Post-MVP open deployment parity, scoped participant intake/authority, verified approval/publication, privacy/retention/recovery, complete pilot and managed-operation gates; preserves all source PRODUCT/ACCEPT identifiers without claiming implementation. |
 
 ## Phase navigation
 
