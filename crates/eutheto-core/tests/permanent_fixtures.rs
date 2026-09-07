@@ -162,6 +162,7 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         _document: &ScenarioDocument,
         _batch: &DomainBatchCommand,
+        _cancellation: &eutheto_types::CancellationToken,
     ) -> Result<DomainMutation, DomainPackError> {
         Self::unsupported()
     }

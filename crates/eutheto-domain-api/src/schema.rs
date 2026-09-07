@@ -305,7 +305,7 @@ pub fn validate_contract_value(
     validate_value_with_schema(schema, value, limits)
 }
 
-fn validate_value_with_schema(
+pub(super) fn validate_value_with_schema(
     schema: &Value,
     value: &Value,
     limits: ContractJsonLimits,

@@ -1,5 +1,8 @@
 use crate::validation::common::{Result, invalid, require};
-use eutheto_domain_api::{DomainChange, bounded_json_size};
+use eutheto_domain_api::{
+    DomainChange, DomainPackError, MAX_DOMAIN_MUTATION_CHANGE_BYTES, MAX_DOMAIN_MUTATION_CHANGES,
+    bounded_json_size,
+};
 use eutheto_types::DomainCommandEnvelope;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -64,13 +67,11 @@ pub(super) struct Effect {
     pub inverse: DomainCommandEnvelope,
 }
 
-const MAX_CHANGES: usize = 85_536;
-const MAX_CHANGE_BYTES: usize = 64 * 1024 * 1024;
-
 /// One batch-owned buffer. Compound commands cannot amplify small payloads without bounds.
 pub(super) struct Changes {
     records: Vec<DomainChange>,
     bytes: usize,
+    command_index: u32,
 }
 
 impl Changes {
@@ -78,20 +79,30 @@ impl Changes {
         Self {
             records: Vec::with_capacity(capacity),
             bytes: 2,
+            command_index: 0,
         }
     }
 
-    pub fn push(&mut self, change: DomainChange) -> Result {
-        require(
-            self.records.len() < MAX_CHANGES,
-            "/changes",
-            "too many command changes",
-        )?;
+    pub fn begin_command(&mut self, index: usize) -> Result {
+        self.command_index =
+            u32::try_from(index).map_err(|_| DomainPackError::MutationOutputLimit)?;
+        Ok(())
+    }
+
+    pub fn push(&mut self, value: Value) -> Result {
+        if self.records.len() >= MAX_DOMAIN_MUTATION_CHANGES {
+            return Err(DomainPackError::MutationOutputLimit);
+        }
+        let change = DomainChange {
+            command_index: self.command_index,
+            value,
+        };
         let separator = usize::from(!self.records.is_empty());
-        let remaining = MAX_CHANGE_BYTES
+        let remaining = MAX_DOMAIN_MUTATION_CHANGE_BYTES
             .checked_sub(self.bytes + separator)
-            .ok_or_else(|| invalid("/changes", "command changes exceed byte limit"))?;
-        let bytes = bounded_json_size(&change, remaining)?;
+            .ok_or(DomainPackError::MutationOutputLimit)?;
+        let bytes = bounded_json_size(&change, remaining)
+            .map_err(|_| DomainPackError::MutationOutputLimit)?;
         self.bytes += separator + bytes;
         self.records.push(change);
         Ok(())
@@ -113,10 +124,10 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
 ) -> Result<Effect> {
     let path = format!("/domain/{}/{id}", collection.map);
     let previous = records.get(&id);
-    let (command_id, inverse_type, inverse_payload) = match operation {
+    let (inverse_type, inverse_payload) = match operation {
         Operation::Add(_) => {
             require(previous.is_none(), &path, "record already exists")?;
-            (collection.add, collection.remove, target(collection, id)?)
+            (collection.remove, target(collection, id)?)
         }
         Operation::Update(value) => {
             let previous = previous.ok_or_else(|| invalid(&path, "record does not exist"))?;
@@ -127,17 +138,12 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
             )?;
             (
                 collection.update,
-                collection.update,
                 field(collection.record, previous.clone()),
             )
         }
         Operation::Remove => {
             let previous = previous.ok_or_else(|| invalid(&path, "record does not exist"))?;
-            (
-                collection.remove,
-                collection.add,
-                field(collection.record, previous.clone()),
-            )
+            (collection.add, field(collection.record, previous.clone()))
         }
     };
     let (before, after) = match operation {
@@ -151,10 +157,7 @@ pub(super) fn mutate<K: Copy + Ord + Display + Serialize>(
         ("before".to_owned(), before.unwrap_or(Value::Null)),
         ("after".to_owned(), after.unwrap_or(Value::Null)),
     ]));
-    changes.push(DomainChange {
-        command_id: command_id.to_owned(),
-        value: change,
-    })?;
+    changes.push(change)?;
     Ok(Effect {
         result: target(collection, id)?,
         inverse: DomainCommandEnvelope {
@@ -180,21 +183,14 @@ mod tests {
     #[test]
     fn change_count_limit_rejects_without_retaining_the_excess_entry() -> Result {
         let mut changes = Changes::new(0);
-        for _ in 0..MAX_CHANGES {
-            changes.push(DomainChange {
-                command_id: ADD_ENTITY.to_owned(),
-                value: Value::Null,
-            })?;
+        for _ in 0..MAX_DOMAIN_MUTATION_CHANGES {
+            changes.push(Value::Null)?;
         }
-        assert!(
-            changes
-                .push(DomainChange {
-                    command_id: ADD_ENTITY.to_owned(),
-                    value: Value::Null
-                })
-                .is_err()
-        );
-        assert_eq!(changes.into_records().len(), MAX_CHANGES);
+        assert!(matches!(
+            changes.push(Value::Null),
+            Err(DomainPackError::MutationOutputLimit)
+        ));
+        assert_eq!(changes.into_records().len(), MAX_DOMAIN_MUTATION_CHANGES);
         Ok(())
     }
 
@@ -202,19 +198,17 @@ mod tests {
     fn change_byte_limit_includes_array_framing_and_keeps_accepted_data()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let empty = DomainChange {
-            command_id: ADD_ENTITY.to_owned(),
+            command_index: 0,
             value: Value::String(String::new()),
         };
-        let content_bytes = MAX_CHANGE_BYTES - 2 - serde_json::to_vec(&empty)?.len();
+        let content_bytes =
+            MAX_DOMAIN_MUTATION_CHANGE_BYTES - 2 - serde_json::to_vec(&empty)?.len();
         let mut changes = Changes::new(0);
-        changes.push(DomainChange {
-            command_id: ADD_ENTITY.to_owned(),
-            value: Value::String("x".repeat(content_bytes)),
-        })?;
-        assert!(changes.push(empty).is_err());
+        changes.push(Value::String("x".repeat(content_bytes)))?;
+        assert!(changes.push(empty.value).is_err());
         assert_eq!(
             serde_json::to_vec(&changes.into_records())?.len(),
-            MAX_CHANGE_BYTES
+            MAX_DOMAIN_MUTATION_CHANGE_BYTES
         );
         Ok(())
     }

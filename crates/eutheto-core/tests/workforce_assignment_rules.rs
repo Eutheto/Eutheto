@@ -799,9 +799,11 @@ fn rest_command_inverse_and_portable_roundtrip_preserve_assignment_semantics() -
                 payload: json!({"rule":relaxed}),
             }],
         },
+        &CancellationToken::new(),
     )?;
     assert!(original_accepts(&change.document, &selected)?);
-    let undone = WorkforcePack.apply_batch(&change.document, &change.inverse)?;
+    let undone =
+        WorkforcePack.apply_batch(&change.document, &change.inverse, &CancellationToken::new())?;
     assert_eq!(undone.document, original);
     assert!(!original_accepts(&undone.document, &selected)?);
 

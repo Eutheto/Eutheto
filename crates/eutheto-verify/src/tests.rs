@@ -125,6 +125,7 @@ impl DomainPack for TestPack {
         &self,
         _document: &ScenarioDocument,
         _batch: &DomainBatchCommand,
+        _cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError> {
         unsupported()
     }

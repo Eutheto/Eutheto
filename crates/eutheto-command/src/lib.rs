@@ -7,14 +7,16 @@ mod generated_official_test_pack_contract;
 mod official_test_pack;
 
 use eutheto_domain_api::{
-    DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPack, DomainPackError,
-    DomainPackRegistry,
+    DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainMutation, DomainPack, DomainPackError,
+    DomainPackRegistry, MAX_DOMAIN_MUTATION_CHANGE_BYTES, MAX_DOMAIN_MUTATION_CHANGES,
+    MAX_DOMAIN_MUTATION_RESULT_BYTES, RegisteredCommand, bounded_json_size,
 };
 use eutheto_types::{
-    AddEntity, AddRule, AssignmentId, Change, ChangeKind, ChangeSet, CommandBatch, CommandEnvelope,
-    CommandResult, DomainCommandEnvelope, EntityId, LockAssignment, PortableJsonLimits, Revision,
-    RuleId, ScenarioCommand, ScenarioDocument, SetPreference, UnlockAssignment, UpdateEntity,
-    UpdateRule, ValidationDelta, ValidationIssue, validate_nonsecret_portable_json,
+    AddEntity, AddRule, AssignmentId, CancellationToken, Change, ChangeKind, ChangeSet,
+    CommandBatch, CommandEnvelope, CommandResult, DomainCommandEnvelope, EntityId, LockAssignment,
+    MAX_SCENARIO_DOCUMENT_BYTES, PortableJsonLimits, Revision, RuleId, ScenarioCommand,
+    ScenarioDocument, SetPreference, UnlockAssignment, UpdateEntity, UpdateRule, ValidationDelta,
+    ValidationIssue, validate_nonsecret_portable_json,
 };
 /// Generated authoritative metadata for the synthetic conformance pack.
 pub use generated_official_test_pack_contract::{
@@ -61,6 +63,9 @@ pub struct AppliedCommand {
 /// Stable failure returned by pure application.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CommandError {
+    /// Cancellation observed before the pure mutation completed.
+    #[error("command application was cancelled")]
+    Cancelled,
     /// The command targets a different scenario.
     #[error(
         "command scenario {command_scenario_id} does not match document scenario {document_scenario_id}"
@@ -101,6 +106,7 @@ impl CommandError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::Cancelled => "command.cancelled",
             Self::ScenarioMismatch { .. } => "command.scenario_mismatch",
             Self::Conflict { .. } => "command.revision_conflict",
             Self::Validation { code, .. } => code,
@@ -118,6 +124,35 @@ struct PackCommandEffect {
     inverse: ScenarioCommand,
     summary: String,
     command_type: String,
+}
+
+struct ApplyContext<'a> {
+    pack: &'a dyn DomainPack,
+    registry: &'a DomainPackRegistry,
+    cancellation: &'a CancellationToken,
+    leaf_count: usize,
+}
+
+impl ApplyContext<'_> {
+    fn check_cancelled(&self) -> Result<(), CommandError> {
+        if self.cancellation.is_cancelled() {
+            Err(CommandError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn charge_leaves(&mut self, count: usize) -> Result<(), CommandError> {
+        self.leaf_count = self.leaf_count.saturating_add(count);
+        if self.leaf_count > MAX_BATCH_COMMANDS {
+            return Err(validation_error(
+                CODE_BATCH_TOO_LARGE,
+                "/command/commands",
+                format!("batch may contain at most {MAX_BATCH_COMMANDS} commands"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Synthetic Phase-02 conformance pack. It is never a production domain or authority.
@@ -150,7 +185,13 @@ pub fn apply_command(
     envelope: &CommandEnvelope,
 ) -> Result<AppliedCommand, CommandError> {
     let registry = official_registry().map_err(|error| domain_pack_error(&error))?;
-    apply_command_with_registry(document, current_revision, envelope, &registry)
+    apply_command_with_registry(
+        document,
+        current_revision,
+        envelope,
+        &registry,
+        &CancellationToken::new(),
+    )
 }
 
 /// Apply using an already validated Phase-02 compiled-in pack registry.
@@ -166,7 +207,11 @@ pub fn apply_command_with_registry(
     current_revision: Revision,
     envelope: &CommandEnvelope,
     registry: &DomainPackRegistry,
+    cancellation: &CancellationToken,
 ) -> Result<AppliedCommand, CommandError> {
+    if cancellation.is_cancelled() {
+        return Err(CommandError::Cancelled);
+    }
     validate_safe_serialized(&envelope.command, "/command")?;
     if envelope.scenario_id != document.scenario_id {
         return Err(CommandError::ScenarioMismatch {
@@ -204,11 +249,17 @@ pub fn apply_command_with_registry(
     validate_document_shape(document)?;
     let before_issues = pack.validate_fast(document).issues;
     let mut working = document.clone();
-    let mut leaf_count = 0_usize;
-    let effect = apply_nested(&mut working, &envelope.command, pack, 0, &mut leaf_count)?;
+    let mut context = ApplyContext {
+        pack,
+        registry,
+        cancellation,
+        leaf_count: 0,
+    };
+    let effect = apply_nested(&mut working, &envelope.command, &mut context, 0)?;
     validate_document_shape(&working)?;
     let after_issues = pack.validate_fast(&working).issues;
     let validation_delta = validation_delta(&before_issues, &after_issues);
+    context.check_cancelled()?;
     let new_revision =
         current_revision
             .checked_next()
@@ -234,24 +285,17 @@ pub fn apply_command_with_registry(
 fn apply_nested(
     document: &mut ScenarioDocument,
     command: &ScenarioCommand,
-    pack: &dyn DomainPack,
+    context: &mut ApplyContext<'_>,
     depth: usize,
-    leaf_count: &mut usize,
 ) -> Result<PackCommandEffect, CommandError> {
+    context.check_cancelled()?;
     if let ScenarioCommand::ApplyBatch(batch) = command {
-        return apply_batch(document, batch, pack, depth, leaf_count);
+        return apply_batch(document, batch, context, depth);
     }
-    *leaf_count = leaf_count.saturating_add(1);
-    if *leaf_count > MAX_BATCH_COMMANDS {
-        return Err(validation_error(
-            CODE_BATCH_TOO_LARGE,
-            "/command/commands",
-            format!("batch may contain at most {MAX_BATCH_COMMANDS} commands"),
-        ));
-    }
+    context.charge_leaves(1)?;
     match command {
         ScenarioCommand::ApplyDomainCommand(envelope) => {
-            apply_registered_domain_command(document, envelope, pack)
+            apply_registered_domain_command(document, envelope, context)
         }
         _ if document.domain_pack.id.as_str() == OFFICIAL_TEST_PACK_ID => {
             apply_official_test_leaf(document, command)
@@ -266,9 +310,8 @@ fn apply_nested(
 fn apply_batch(
     document: &mut ScenarioDocument,
     batch: &CommandBatch,
-    pack: &dyn DomainPack,
+    context: &mut ApplyContext<'_>,
     depth: usize,
-    leaf_count: &mut usize,
 ) -> Result<PackCommandEffect, CommandError> {
     if batch.commands.is_empty() {
         return Err(validation_error(
@@ -288,7 +331,7 @@ fn apply_batch(
     let mut changes = Vec::new();
     let mut inverses = Vec::with_capacity(batch.commands.len());
     for child in &batch.commands {
-        let effect = apply_nested(document, child, pack, depth + 1, leaf_count)?;
+        let effect = apply_nested(document, child, context, depth + 1)?;
         changes.extend(effect.changes);
         inverses.push(effect.inverse);
     }
@@ -612,8 +655,16 @@ fn unlock_assignment(
 fn apply_registered_domain_command(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
-    pack: &dyn DomainPack,
+    context: &ApplyContext<'_>,
 ) -> Result<PackCommandEffect, CommandError> {
+    context.check_cancelled()?;
+    let registered = context
+        .registry
+        .command(&document.domain_pack.id, &envelope.command_type)
+        .map_err(|error| domain_command_error(document, envelope, error))?;
+    registered
+        .validate_payload(&envelope.payload)
+        .map_err(|error| domain_command_error(document, envelope, error))?;
     let batch = DomainBatchCommand {
         schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
         pack_id: document.domain_pack.id.clone(),
@@ -621,21 +672,12 @@ fn apply_registered_domain_command(
         label: None,
         commands: vec![envelope.clone()],
     };
-    let mutation = pack
-        .apply_batch(document, &batch)
-        .map_err(|error| match error {
-            DomainPackError::PackUnavailable(_) | DomainPackError::UnknownCommand(_) => {
-                CommandError::Unsupported {
-                    pack_id: document.domain_pack.id.to_string(),
-                    command_type: envelope.command_type.clone(),
-                }
-            }
-            DomainPackError::InvalidPayload { message, .. } => CommandError::InvalidDomainPayload {
-                command_type: envelope.command_type.clone(),
-                message,
-            },
-            other => domain_pack_error(&other),
-        })?;
+    let mutation = context
+        .pack
+        .apply_batch(document, &batch, context.cancellation)
+        .map_err(|error| domain_command_error(document, envelope, error))?;
+    context.check_cancelled()?;
+    validate_domain_mutation(document, &batch, &mutation, &[registered], context)?;
     let changes = mutation
         .changes
         .into_iter()
@@ -663,6 +705,109 @@ fn apply_registered_domain_command(
         summary: format!("Apply {} domain command", envelope.command_type),
         command_type: format!("domain.{}", envelope.command_type),
     })
+}
+
+fn domain_command_error(
+    document: &ScenarioDocument,
+    envelope: &DomainCommandEnvelope,
+    error: DomainPackError,
+) -> CommandError {
+    match error {
+        DomainPackError::PackUnavailable(_) | DomainPackError::UnknownCommand(_) => {
+            CommandError::Unsupported {
+                pack_id: document.domain_pack.id.to_string(),
+                command_type: envelope.command_type.clone(),
+            }
+        }
+        DomainPackError::InvalidPayload { message, .. } => CommandError::InvalidDomainPayload {
+            command_type: envelope.command_type.clone(),
+            message,
+        },
+        other => domain_pack_error(&other),
+    }
+}
+
+fn validate_domain_mutation(
+    original: &ScenarioDocument,
+    batch: &DomainBatchCommand,
+    mutation: &DomainMutation,
+    commands: &[RegisteredCommand<'_>],
+    context: &ApplyContext<'_>,
+) -> Result<(), CommandError> {
+    context.check_cancelled()?;
+    if mutation.results.len() != batch.commands.len()
+        || mutation.inverse.commands.len() != batch.commands.len()
+        || mutation.changes.len() > MAX_DOMAIN_MUTATION_CHANGES
+    {
+        return Err(mutation_error(
+            "domain result, change or inverse count is invalid",
+        ));
+    }
+    bounded_json_size(&mutation.results, MAX_DOMAIN_MUTATION_RESULT_BYTES)
+        .map_err(|error| domain_pack_error(&error))?;
+    bounded_json_size(&mutation.changes, MAX_DOMAIN_MUTATION_CHANGE_BYTES)
+        .map_err(|error| domain_pack_error(&error))?;
+    let changed = &mutation.document;
+    if changed.format != original.format
+        || changed.format_version != original.format_version
+        || changed.scenario_id != original.scenario_id
+        || changed.domain_pack != original.domain_pack
+        || changed.metadata != original.metadata
+        || changed.settings != original.settings
+        || changed.extensions != original.extensions
+    {
+        return Err(mutation_error("domain mutation changed host-owned fields"));
+    }
+    let document_limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES)
+        .map_err(|_| mutation_error("scenario byte limit is unavailable"))?;
+    bounded_json_size(changed, document_limit).map_err(|error| domain_pack_error(&error))?;
+    validate_document_shape(changed)?;
+    if mutation.inverse.pack_id != batch.pack_id
+        || mutation.inverse.scenario_schema_version != batch.scenario_schema_version
+    {
+        return Err(mutation_error(
+            "domain inverse identity does not match its input",
+        ));
+    }
+    mutation
+        .inverse
+        .validate_bounds()
+        .map_err(|error| domain_pack_error(&error))?;
+    for (command, result) in commands.iter().zip(&mutation.results) {
+        context.check_cancelled()?;
+        command
+            .validate_result(result)
+            .map_err(|error| domain_pack_error(&error))?;
+    }
+    let mut previous = None;
+    for change in &mutation.changes {
+        context.check_cancelled()?;
+        if previous.is_some_and(|index| index > change.command_index) {
+            return Err(mutation_error("domain changes are not in input order"));
+        }
+        let index = usize::try_from(change.command_index)
+            .map_err(|_| mutation_error("domain change index is invalid"))?;
+        let command = commands
+            .get(index)
+            .ok_or_else(|| mutation_error("domain change index is outside its input"))?;
+        command
+            .validate_change(&change.value)
+            .map_err(|error| domain_pack_error(&error))?;
+        previous = Some(change.command_index);
+    }
+    for inverse in &mutation.inverse.commands {
+        context.check_cancelled()?;
+        context
+            .registry
+            .command(&batch.pack_id, &inverse.command_type)
+            .and_then(|command| command.validate_payload(&inverse.payload))
+            .map_err(|error| domain_pack_error(&error))?;
+    }
+    context.check_cancelled()
+}
+
+fn mutation_error(message: &str) -> CommandError {
+    validation_error(CODE_INVALID_RECORD_SHAPE, "/domainMutation", message)
 }
 
 fn domain_change(value: &Value) -> Result<Change, CommandError> {
@@ -707,6 +852,9 @@ fn domain_change(value: &Value) -> Result<Change, CommandError> {
 }
 
 fn domain_pack_error(error: &DomainPackError) -> CommandError {
+    if matches!(error, DomainPackError::Cancelled) {
+        return CommandError::Cancelled;
+    }
     validation_error(
         CODE_INVALID_RECORD_SHAPE,
         "/domainPack",

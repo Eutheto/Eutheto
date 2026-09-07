@@ -1,8 +1,11 @@
-use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
+use eutheto_command::{
+    CommandError, OFFICIAL_TEST_PACK_ID, OfficialTestPack, apply_command_with_registry,
+};
 use eutheto_domain_api::{
     CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
-    DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainShareResult,
-    DomainValidationReport, PortableImportContext, ShareResultOptions,
+    DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainPackRegistry,
+    DomainShareResult, DomainValidationReport, MAX_DOMAIN_MUTATION_CHANGES, PortableImportContext,
+    ShareResultOptions,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, CounterfactualConditionV1, DomainAssignmentId, DomainEntityId,
@@ -24,7 +27,8 @@ use eutheto_planning_ir::{
     feature_usage, summarize, validate,
 };
 use eutheto_types::{
-    CancellationToken, PortableDomainDocument, RuleId, ScenarioDocument, SolutionId,
+    ActorRef, CancellationToken, CommandEnvelope, CommandSource, DomainCommandEnvelope,
+    PortableDomainDocument, Revision, RuleId, ScenarioDocument, SolutionId,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -199,9 +203,21 @@ fn metadata_count(problem: &PlanningProblem, key: &str) -> Result<u32, DomainPac
     u32::try_from(*value).map_err(contract)
 }
 
+type MutationOverride = fn(&mut DomainMutation, &CancellationToken) -> Result<(), DomainPackError>;
+
 #[derive(Clone, Copy)]
 struct IntervalFixturePack {
     prune: bool,
+    mutation_override: Option<MutationOverride>,
+}
+
+impl IntervalFixturePack {
+    fn with_pruning(prune: bool) -> Self {
+        Self {
+            prune,
+            mutation_override: None,
+        }
+    }
 }
 
 impl DomainPack for IntervalFixturePack {
@@ -238,8 +254,23 @@ impl DomainPack for IntervalFixturePack {
         &self,
         document: &ScenarioDocument,
         batch: &DomainBatchCommand,
+        cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError> {
-        OfficialTestPack.apply_batch(document, batch)
+        let Some(mutate) = self.mutation_override else {
+            return OfficialTestPack.apply_batch(document, batch, cancellation);
+        };
+        // A faulty pack deliberately ignores submitted payloads. This makes host
+        // input validation independent of the real pack's own validation.
+        let mut canonical = batch.clone();
+        for command in &mut canonical.commands {
+            "official.test.configure_entity".clone_into(&mut command.command_type);
+            command.payload = json!({
+                "entityId": MUTATION_ENTITY_ID, "enabled": true, "target": 3,
+            });
+        }
+        let mut mutation = OfficialTestPack.apply_batch(document, &canonical, cancellation)?;
+        mutate(&mut mutation, cancellation)?;
+        Ok(mutation)
     }
 
     fn compile(
@@ -1648,7 +1679,7 @@ fn compile_and_assert_interval_problem(
 // This test intentionally exercises the complete optional-interval boundary in one sequence.
 #[allow(clippy::too_many_lines)]
 fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<dyn Error>> {
-    let pack = IntervalFixturePack { prune: false };
+    let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
     let context = fixture_context();
     let first = compile_and_assert_interval_problem(pack, &document, &context)?;
@@ -1796,8 +1827,8 @@ fn deterministic_pruning_preserves_every_feasible_schedule_and_score() -> Result
 {
     let document = fixture_document()?;
     let context = fixture_context();
-    let unpruned_pack = IntervalFixturePack { prune: false };
-    let pruned_pack = IntervalFixturePack { prune: true };
+    let unpruned_pack = IntervalFixturePack::with_pruning(false);
+    let pruned_pack = IntervalFixturePack::with_pruning(true);
     let unpruned = unpruned_pack.compile(&document, &context)?;
     let pruned = pruned_pack.compile(&document, &context)?;
     assert_eq!(unpruned, unpruned_pack.compile(&document, &context)?);
@@ -1902,7 +1933,7 @@ fn deterministic_pruning_preserves_every_feasible_schedule_and_score() -> Result
 
 #[test]
 fn conformance_rejects_one_sided_compiler_constraint_mutation() -> Result<(), Box<dyn Error>> {
-    let pack = IntervalFixturePack { prune: false };
+    let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
     let mut problem = pack.compile(&document, &fixture_context())?;
     let record = problem
@@ -1925,7 +1956,7 @@ fn conformance_rejects_one_sided_compiler_constraint_mutation() -> Result<(), Bo
 
 #[test]
 fn conformance_rejects_one_sided_verifier_rule_mutation() -> Result<(), Box<dyn Error>> {
-    let pack = IntervalFixturePack { prune: false };
+    let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
     let problem = pack.compile(&document, &fixture_context())?;
     let mut observation = observe_fixture_candidate(pack, &document, &problem, 0b001)?;
@@ -1955,7 +1986,7 @@ fn conformance_rejects_one_sided_verifier_rule_mutation() -> Result<(), Box<dyn 
 
 #[test]
 fn conformance_rejects_one_sided_exact_projection_mutation() -> Result<(), Box<dyn Error>> {
-    let pack = IntervalFixturePack { prune: false };
+    let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
     let mut problem = pack.compile(&document, &fixture_context())?;
     let projection_id = fixture_projection_id(OPTIONS[0])?;
@@ -1978,7 +2009,7 @@ fn conformance_rejects_one_sided_exact_projection_mutation() -> Result<(), Box<d
 
 #[test]
 fn conformance_rejects_one_sided_in_bounds_score_mutation() -> Result<(), Box<dyn Error>> {
-    let pack = IntervalFixturePack { prune: false };
+    let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
     let problem = pack.compile(&document, &fixture_context())?;
     let mut observation = observe_fixture_candidate(pack, &document, &problem, 0)?;
@@ -1993,5 +2024,208 @@ fn conformance_rejects_one_sided_in_bounds_score_mutation() -> Result<(), Box<dy
         return Err("the oracle accepted a one-sided in-bounds score mutation".into());
     };
     assert!(error.to_string().contains("authoritative score mismatch"));
+    Ok(())
+}
+
+const MUTATION_ENTITY_ID: &str = "0195a5e4-7c00-7000-8000-000000000013";
+
+fn mutation_fixture() -> Result<(ScenarioDocument, CommandEnvelope), Box<dyn Error>> {
+    let mut document = fixture_document()?;
+    document.domain.entities.insert(
+        MUTATION_ENTITY_ID.parse()?,
+        json!({"id": MUTATION_ENTITY_ID, "enabled": true, "target": 1}),
+    );
+    let envelope = CommandEnvelope {
+        command_id: "0195a5e4-7c00-7000-8000-000000000014".parse()?,
+        scenario_id: document.scenario_id,
+        expected_revision: Revision::INITIAL,
+        actor: ActorRef {
+            actor_id: None,
+            display_name: "Contract test".to_owned(),
+        },
+        source: CommandSource::System,
+        command: eutheto_types::ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+            command_type: "official.test.configure_entity".to_owned(),
+            payload: json!({"entityId": MUTATION_ENTITY_ID, "enabled": true, "target": 3}),
+        }),
+    };
+    Ok((document, envelope))
+}
+
+#[test]
+fn command_boundary_rejects_independent_mutation_contract_faults() -> Result<(), Box<dyn Error>> {
+    let faults: &[(&str, MutationOverride)] = &[
+        ("result count", |mutation, _| {
+            mutation.results.clear();
+            Ok(())
+        }),
+        ("result schema", |mutation, _| {
+            mutation.results[0] = json!({});
+            Ok(())
+        }),
+        ("change index", |mutation, _| {
+            mutation.changes[0].command_index = 1;
+            Ok(())
+        }),
+        ("change schema", |mutation, _| {
+            mutation.changes[0]
+                .value
+                .as_object_mut()
+                .ok_or_else(|| contract("change"))?
+                .remove("after");
+            Ok(())
+        }),
+        ("inverse count", |mutation, _| {
+            mutation.inverse.commands.clear();
+            Ok(())
+        }),
+        ("inverse version", |mutation, _| {
+            mutation.inverse.schema_version = 2;
+            Ok(())
+        }),
+        ("inverse pack", |mutation, _| {
+            mutation.inverse.pack_id = "official.other".parse().map_err(contract)?;
+            Ok(())
+        }),
+        ("inverse scenario schema", |mutation, _| {
+            mutation.inverse.scenario_schema_version = 2;
+            Ok(())
+        }),
+        ("inverse command", |mutation, _| {
+            mutation.inverse.commands[0].command_type = "official.test.unknown".to_owned();
+            Ok(())
+        }),
+        ("inverse payload", |mutation, _| {
+            mutation.inverse.commands[0].payload["target"] = json!("invalid");
+            Ok(())
+        }),
+        ("host identity", |mutation, _| {
+            mutation.document.scenario_id = MUTATION_ENTITY_ID.parse().map_err(contract)?;
+            Ok(())
+        }),
+        ("host version", |mutation, _| {
+            mutation.document.format_version = 2;
+            Ok(())
+        }),
+        ("host pack", |mutation, _| {
+            mutation.document.domain_pack.schema_version = 2;
+            Ok(())
+        }),
+        ("host metadata", |mutation, _| {
+            mutation.document.metadata.title = "Changed".to_owned();
+            Ok(())
+        }),
+        ("host settings", |mutation, _| {
+            mutation.document.settings.locale = "sv-SE".parse().map_err(contract)?;
+            Ok(())
+        }),
+        ("host extensions", |mutation, _| {
+            mutation
+                .document
+                .extensions
+                .insert("official.test.marker".to_owned(), json!(true));
+            Ok(())
+        }),
+        ("change count", |mutation, _| {
+            mutation.changes = vec![mutation.changes[0].clone(); MAX_DOMAIN_MUTATION_CHANGES + 1];
+            Ok(())
+        }),
+        ("aggregate change bytes", |mutation, _| {
+            mutation.changes[0].value["before"] =
+                json!({"notes": vec!["public ".repeat(2_000); 640]});
+            mutation.changes = vec![mutation.changes[0].clone(); 8];
+            Ok(())
+        }),
+    ];
+    assert_mutation_faults_rejected(faults)
+}
+
+fn assert_mutation_faults_rejected(
+    faults: &[(&str, MutationOverride)],
+) -> Result<(), Box<dyn Error>> {
+    for &(name, mutate) in faults {
+        let (document, envelope) = mutation_fixture()?;
+        let original = document.clone();
+        let registry = DomainPackRegistry::builder()
+            .register(IntervalFixturePack {
+                prune: false,
+                mutation_override: Some(mutate),
+            })
+            .build()?;
+        let result = apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new(),
+        );
+        assert!(result.is_err(), "{name} was accepted");
+        assert_eq!(document, original, "{name} changed the input");
+    }
+    Ok(())
+}
+
+#[test]
+fn command_boundary_rejects_inputs_even_when_the_pack_ignores_them() -> Result<(), Box<dyn Error>> {
+    let registry = DomainPackRegistry::builder()
+        .register(IntervalFixturePack {
+            prune: false,
+            mutation_override: Some(|_, _| Ok(())),
+        })
+        .build()?;
+    let (document, mut envelope) = mutation_fixture()?;
+    let eutheto_types::ScenarioCommand::ApplyDomainCommand(command) = &mut envelope.command else {
+        return Err("expected domain command".into());
+    };
+    command.payload["target"] = json!("invalid");
+    assert!(matches!(
+        apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new(),
+        ),
+        Err(CommandError::InvalidDomainPayload { .. })
+    ));
+    let eutheto_types::ScenarioCommand::ApplyDomainCommand(command) = &mut envelope.command else {
+        return Err("expected domain command".into());
+    };
+    command.command_type = "official.test.unknown".to_owned();
+    assert!(matches!(
+        apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new(),
+        ),
+        Err(CommandError::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn command_boundary_observes_cancellation_after_a_pack_returns() -> Result<(), Box<dyn Error>> {
+    let registry = DomainPackRegistry::builder()
+        .register(IntervalFixturePack {
+            prune: false,
+            mutation_override: Some(|_, cancellation| {
+                cancellation.cancel();
+                Ok(())
+            }),
+        })
+        .build()?;
+    let (document, envelope) = mutation_fixture()?;
+    assert_eq!(
+        apply_command_with_registry(
+            &document,
+            Revision::INITIAL,
+            &envelope,
+            &registry,
+            &CancellationToken::new(),
+        ),
+        Err(CommandError::Cancelled),
+    );
     Ok(())
 }

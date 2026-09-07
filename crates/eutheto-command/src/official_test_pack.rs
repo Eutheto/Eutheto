@@ -8,7 +8,7 @@ use eutheto_domain_api::{
     DomainCapability, DomainCatalog, DomainChange, DomainMutation, DomainPack,
     DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
     DomainValidationReport, LicenseMetadata, LocalizedText, PortableImportContext,
-    SchemaVersionDescriptor, ShareResultOptions, validate_contract_value,
+    SchemaVersionDescriptor, ShareResultOptions, ValidatedContractSchema, validate_contract_value,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
@@ -30,9 +30,9 @@ use eutheto_planning_ir::{
     project_candidate, validate,
 };
 use eutheto_types::{
-    AssignmentId, DomainCommandEnvelope, DomainPackRef, EntityId, PackId, PortableDomainDocument,
-    RuleId, ScenarioDocument, ScenarioDomain, SemanticCapability, SolutionId, ValidationIssue,
-    ValidationSeverity,
+    AssignmentId, CancellationToken, DomainCommandEnvelope, DomainPackRef, EntityId, PackId,
+    PortableDomainDocument, RuleId, ScenarioDocument, ScenarioDomain, SemanticCapability,
+    SolutionId, ValidationIssue, ValidationSeverity,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -223,92 +223,49 @@ impl DomainPack for crate::OfficialTestPack {
         &self,
         document: &ScenarioDocument,
         batch: &DomainBatchCommand,
+        cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError> {
+        if cancellation.is_cancelled() {
+            return Err(DomainPackError::Cancelled);
+        }
         require_pack(document)?;
         validate_batch(document, batch)?;
-        let catalog = generated_catalog()?;
-        let descriptor = catalog
-            .command(CONFIGURE_ENTITY)
+        let descriptor = generated_catalog()?
+            .commands
+            .into_iter()
+            .find(|command| command.id == CONFIGURE_ENTITY)
             .ok_or_else(|| DomainPackError::UnknownCommand(CONFIGURE_ENTITY.to_owned()))?;
+        let payload_schema = ValidatedContractSchema::new(descriptor.payload_schema)?;
+        let result_schema = ValidatedContractSchema::new(descriptor.result_schema)?;
+        let change_schema = ValidatedContractSchema::new(descriptor.change_schema)?;
         let mut working = document.clone();
         let mut results = Vec::with_capacity(batch.commands.len());
         let mut changes = Vec::with_capacity(batch.commands.len());
         let mut inverses = Vec::with_capacity(batch.commands.len());
-        for envelope in &batch.commands {
-            validate_contract_value(
-                &descriptor.payload_schema,
-                &envelope.payload,
-                ContractJsonLimits::DEFAULT,
-            )?;
+        for (index, envelope) in batch.commands.iter().enumerate() {
+            if cancellation.is_cancelled() {
+                return Err(DomainPackError::Cancelled);
+            }
+            payload_schema.validate(&envelope.payload, ContractJsonLimits::DEFAULT)?;
             let command: ConfigureEntity = serde_json::from_value(envelope.payload.clone())
                 .map_err(|error| payload("/commands/payload", error))?;
-            check_target(command.target)?;
-            if command.enabled != (command.target >= 1) {
-                return Err(DomainPackError::InvalidPayload {
-                    path: "/commands/payload".to_owned(),
-                    message: "enabled must equal target >= 1".to_owned(),
-                });
-            }
-            let previous_value = working
-                .domain
-                .entities
-                .get(&command.entity_id)
-                .cloned()
-                .ok_or_else(|| DomainPackError::InvalidPayload {
-                    path: format!("/domain/entities/{}", command.entity_id),
-                    message: "configured entity does not exist".to_owned(),
-                })?;
-            let previous: TestEntity = serde_json::from_value(previous_value.clone())
-                .map_err(|error| payload("/domain/entities", error))?;
-            if previous.id != command.entity_id {
-                return Err(DomainPackError::Contract(
-                    "entity map key/id mismatch".to_owned(),
-                ));
-            }
-            let next = TestEntity {
-                id: command.entity_id,
-                enabled: command.enabled,
-                target: command.target,
-            };
-            let next_value =
-                serde_json::to_value(&next).map_err(|error| payload("/domain/entities", error))?;
-            working
-                .domain
-                .entities
-                .insert(command.entity_id, next_value.clone());
+            let (change, inverse) = configure_entity(&mut working, &command)?;
             let result = json!({ "entityId": command.entity_id });
-            validate_contract_value(
-                &descriptor.result_schema,
-                &result,
-                ContractJsonLimits::DEFAULT,
-            )?;
-            let change = json!({
-                "path": format!("/domain/entities/{}", command.entity_id),
-                "before": previous_value,
-                "after": next_value,
-            });
-            validate_contract_value(
-                &descriptor.change_schema,
-                &change,
-                ContractJsonLimits::DEFAULT,
-            )?;
+            result_schema.validate(&result, ContractJsonLimits::DEFAULT)?;
+            change_schema.validate(&change, ContractJsonLimits::DEFAULT)?;
             results.push(result);
             changes.push(DomainChange {
-                command_id: CONFIGURE_ENTITY.to_owned(),
+                command_index: u32::try_from(index)
+                    .map_err(|_| DomainPackError::MutationOutputLimit)?,
                 value: change,
             });
-            inverses.push(DomainCommandEnvelope {
-                command_type: CONFIGURE_ENTITY.to_owned(),
-                payload: serde_json::to_value(ConfigureEntity {
-                    entity_id: previous.id,
-                    enabled: previous.enabled,
-                    target: previous.target,
-                })
-                .map_err(|error| payload("/inverse", error))?,
-            });
+            inverses.push(inverse);
         }
         inverses.reverse();
-        Ok(DomainMutation {
+        if cancellation.is_cancelled() {
+            return Err(DomainPackError::Cancelled);
+        }
+        let mutation = DomainMutation {
             document: working,
             results,
             changes,
@@ -319,7 +276,9 @@ impl DomainPack for crate::OfficialTestPack {
                 label: batch.label.clone(),
                 commands: inverses,
             },
-        })
+        };
+        mutation.inverse.validate_inverse_bounds()?;
+        Ok(mutation)
     }
 
     fn compile(
@@ -1664,6 +1623,60 @@ fn contract(error: impl std::fmt::Display) -> DomainPackError {
     DomainPackError::Contract(error.to_string())
 }
 
+fn configure_entity(
+    working: &mut ScenarioDocument,
+    command: &ConfigureEntity,
+) -> Result<(Value, DomainCommandEnvelope), DomainPackError> {
+    check_target(command.target)?;
+    if command.enabled != (command.target >= 1) {
+        return Err(DomainPackError::InvalidPayload {
+            path: "/commands/payload".to_owned(),
+            message: "enabled must equal target >= 1".to_owned(),
+        });
+    }
+    let previous_value = working
+        .domain
+        .entities
+        .get(&command.entity_id)
+        .cloned()
+        .ok_or_else(|| DomainPackError::InvalidPayload {
+            path: format!("/domain/entities/{}", command.entity_id),
+            message: "configured entity does not exist".to_owned(),
+        })?;
+    let previous: TestEntity = serde_json::from_value(previous_value.clone())
+        .map_err(|error| payload("/domain/entities", error))?;
+    if previous.id != command.entity_id {
+        return Err(DomainPackError::Contract(
+            "entity map key/id mismatch".to_owned(),
+        ));
+    }
+    let next = TestEntity {
+        id: command.entity_id,
+        enabled: command.enabled,
+        target: command.target,
+    };
+    let next_value =
+        serde_json::to_value(&next).map_err(|error| payload("/domain/entities", error))?;
+    working
+        .domain
+        .entities
+        .insert(command.entity_id, next_value.clone());
+    let change = json!({
+        "path": format!("/domain/entities/{}", command.entity_id),
+        "before": previous_value,
+        "after": next_value,
+    });
+    let inverse = DomainCommandEnvelope {
+        command_type: CONFIGURE_ENTITY.to_owned(),
+        payload: serde_json::to_value(ConfigureEntity {
+            entity_id: previous.id,
+            enabled: previous.enabled,
+            target: previous.target,
+        })
+        .map_err(|error| payload("/inverse", error))?,
+    };
+    Ok((change, inverse))
+}
 #[cfg(test)]
 mod tests {
     use super::{DomainPackError, ExplanationKind, VerificationValue, evidence_message_for_kind};

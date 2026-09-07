@@ -3,8 +3,6 @@ use crate::counterfactual::{
     SolutionCancelCounterfactualDtoV1, SolutionCancelCounterfactualRequestV1,
     SolutionStartCounterfactualDtoV1, SolutionStartCounterfactualRequestV1,
 };
-#[cfg(debug_assertions)]
-use eutheto_command::official_registry;
 use eutheto_command::{CommandError, apply_command_with_registry, validate_document_shape};
 use eutheto_domain_api::{
     DomainCatalog, DomainPackDescriptor, DomainPackError, DomainPackRegistry, DomainView,
@@ -90,22 +88,11 @@ fn collision_plan_sha256(collision_plan: &CollisionPlan) -> Result<String, AppEr
     domain_separated.extend_from_slice(&canonical);
     Ok(eutheto_export::sha256_hex(&domain_separated))
 }
-#[cfg(debug_assertions)]
 fn validated_static_pack_registry() -> Result<DomainPackRegistry, AppError> {
-    // The synthetic conformance pack is available only to debug/test binaries. Release binaries
-    // start without domain packs until a real pack is explicitly supplied.
-    official_registry().map_err(|_| {
-        protocol_error(
-            "application.pack_registry_invalid",
-            "Compiled domain-pack metadata failed its startup invariant.",
-            false,
-        )
-    })
-}
-
-#[cfg(not(debug_assertions))]
-fn validated_static_pack_registry() -> Result<DomainPackRegistry, AppError> {
-    DomainPackRegistry::builder().build().map_err(|_| {
+    let builder = DomainPackRegistry::builder().register(eutheto_workforce::WorkforcePack);
+    #[cfg(debug_assertions)]
+    let builder = builder.register(eutheto_command::OfficialTestPack);
+    builder.build().map_err(|_| {
         protocol_error(
             "application.pack_registry_invalid",
             "Compiled domain-pack metadata failed its startup invariant.",
@@ -1084,8 +1071,13 @@ impl EuthetoApp {
                 envelope,
                 truncate_redo,
             } => {
-                self.apply_scenario(request_id, envelope, truncate_redo)
-                    .await
+                self.apply_scenario(
+                    request_id,
+                    envelope,
+                    truncate_redo,
+                    self.cancellation.clone(),
+                )
+                .await
             }
             AppCommand::Undo {
                 request_id,
@@ -2176,11 +2168,15 @@ impl EuthetoApp {
         request_id: RequestId,
         envelope: CommandEnvelope,
         truncate_redo: bool,
+        cancellation: CancellationToken,
     ) -> Result<AppCommandResult, AppError> {
         let scenario_id = envelope.scenario_id;
         let mutation = self.scenario_lock(scenario_id).await;
         let _guard = mutation.lock().await;
-        let journal_envelope = envelope.clone();
+        if cancellation.is_cancelled() {
+            return Err(store_error(StoreError::OperationCancelled));
+        }
+        let mutation_cancellation = cancellation.clone();
         let applied_at = self.clock.now();
         let pack_registry = Arc::clone(&self.pack_registry);
         let result = self
@@ -2193,6 +2189,7 @@ impl EuthetoApp {
                 } else {
                     RedoBranchPolicy::Reject
                 },
+                cancellation,
                 move |document| {
                     ensure_supported_document(document, &pack_registry)?;
                     let mut applied = apply_command_with_registry(
@@ -2200,12 +2197,13 @@ impl EuthetoApp {
                         envelope.expected_revision,
                         &envelope,
                         &pack_registry,
+                        &mutation_cancellation,
                     )
                     .map_err(|error| command_store_error(&error))?;
                     applied.document.metadata.updated_at = applied_at;
-                    let result = applied.result.clone();
-                    let command = serde_json::to_value(&journal_envelope.command)
-                        .map_err(StoreError::Json)?;
+                    let result = applied.result;
+                    let command =
+                        serde_json::to_value(&envelope.command).map_err(StoreError::Json)?;
                     let inverse = result
                         .inverse
                         .as_ref()
@@ -2217,10 +2215,10 @@ impl EuthetoApp {
                         journal: JournalWrite {
                             command_type: applied.command_type,
                             command,
-                            command_id: journal_envelope.command_id,
+                            command_id: envelope.command_id,
                             inverse,
-                            actor: journal_envelope.actor.clone(),
-                            source: journal_envelope.source,
+                            actor: envelope.actor,
+                            source: envelope.source,
                             summary: applied.summary,
                             created_at: applied_at,
                         },
@@ -2252,8 +2250,15 @@ impl EuthetoApp {
             CommandSource::Redo
         };
         let pack_registry = Arc::clone(&self.pack_registry);
+        let cancellation = self.cancellation.clone();
         let apply = move |history: HistoryCommand| {
-            history_apply(history, expected_revision, source, &pack_registry)
+            history_apply(
+                history,
+                expected_revision,
+                source,
+                &pack_registry,
+                &cancellation,
+            )
         };
         let committed = if undo {
             self.store
@@ -4261,6 +4266,7 @@ fn history_apply(
     current_revision: Revision,
     source: CommandSource,
     registry: &DomainPackRegistry,
+    cancellation: &CancellationToken,
 ) -> Result<(ScenarioDocument, CommandResult), StoreError> {
     let envelope = CommandEnvelope {
         command_id: history.entry.id,
@@ -4274,9 +4280,14 @@ fn history_apply(
         command: serde_json::from_value(history.command).map_err(StoreError::Json)?,
     };
     ensure_supported_document(&history.document, registry)?;
-    let mut applied =
-        apply_command_with_registry(&history.document, current_revision, &envelope, registry)
-            .map_err(|error| command_store_error(&error))?;
+    let mut applied = apply_command_with_registry(
+        &history.document,
+        current_revision,
+        &envelope,
+        registry,
+        cancellation,
+    )
+    .map_err(|error| command_store_error(&error))?;
     applied.document.metadata.updated_at = history.target_document_updated_at;
     Ok((applied.document, applied.result))
 }
@@ -4602,6 +4613,9 @@ fn directory_availability(path: Option<&Path>) -> DirectoryAvailabilityLabel {
 }
 
 fn command_store_error(error: &CommandError) -> StoreError {
+    if matches!(error, CommandError::Cancelled) {
+        return StoreError::OperationCancelled;
+    }
     StoreError::CommandApplication {
         code: error.code().to_owned(),
         message: error.to_string(),
@@ -4610,6 +4624,9 @@ fn command_store_error(error: &CommandError) -> StoreError {
 
 fn store_error(error: StoreError) -> AppError {
     match error {
+        StoreError::OperationCancelled => {
+            protocol_error("operation.cancelled", "The operation was cancelled.", false)
+        }
         StoreError::ScenarioNotFound(id) => AppError::NotFound(ResourceRef::Scenario(id)),
         StoreError::AcceptedResultNotFound(id) => AppError::NotFound(ResourceRef::Solution(id)),
         StoreError::CounterfactualJobNotFound(_) => validation_error(

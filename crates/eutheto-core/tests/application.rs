@@ -4083,18 +4083,20 @@ async fn registries_expose_only_validated_static_metadata_in_stable_order()
             .iter()
             .map(|pack| pack.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["official.test"]
+        vec!["official.test", "official.workforce"]
     );
     assert!(packs.windows(2).all(|pair| pair[0].id < pair[1].id));
-    let pack_id = packs[0].id.clone();
-    assert!(matches!(
-        app.query(AppQuery::DescribeDomainPack(pack_id.clone()))
-            .await
-            .boxed()?,
-        AppQueryResult::DomainPack(metadata)
-            if metadata.as_ref().descriptor.id == pack_id
-                && metadata.as_ref().catalog.pack_id == pack_id
-    ));
+    for pack in &packs {
+        let pack_id = pack.id.clone();
+        assert!(matches!(
+            app.query(AppQuery::DescribeDomainPack(pack_id.clone()))
+                .await
+                .boxed()?,
+            AppQueryResult::DomainPack(metadata)
+                if metadata.as_ref().descriptor.id == pack_id
+                    && metadata.as_ref().catalog.pack_id == pack_id
+        ));
+    }
     let missing_pack: eutheto_types::PackId = "vendor.future".parse()?;
     assert!(matches!(
         app.query(AppQuery::DescribeDomainPack(missing_pack.clone()))

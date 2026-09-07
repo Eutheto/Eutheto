@@ -1,8 +1,11 @@
 mod support;
 
-use eutheto_types::{CancellationToken, Revision, ScenarioDocument};
+use eutheto_types::{CancellationToken, Revision, ScenarioDocument, ValidationSeverity};
 use eutheto_workforce::{
-    commands, model::WorkforceEntity, people_csv::*, validation::validate_document,
+    commands,
+    model::WorkforceEntity,
+    people_csv::*,
+    validation::{MAX_REFERENCE_ITEMS, validate_document},
 };
 use serde_json::{Value, json};
 use std::{
@@ -120,7 +123,19 @@ fn reviewed_mixed_import_rebuilds_exact_batch_and_ordinary_inverse() -> TestResu
             code: RowRejectionCode::ColumnCount
         }]
     );
+    assert_eq!(preview.validation_issues.len(), 1);
+    let warning = &preview.validation_issues[0];
+    assert_eq!(warning.severity, ValidationSeverity::Warning);
+    assert_eq!(warning.code, "columnCount");
+    assert_eq!(warning.field_path.as_deref(), Some("/peopleCsv/records/4"));
+    assert!(warning.resource.is_none());
     let review = preview.review.as_ref().ok_or("missing review")?;
+    assert_eq!(
+        review.validation_blake3,
+        blake3::hash(&serde_json::to_vec(&preview.validation_issues)?)
+            .to_hex()
+            .to_string()
+    );
     let decoded = decode_people_csv_review(&serde_json::to_vec(review)?)?;
     assert_eq!(&decoded, review);
     let rebuilt = rebuild_review(
@@ -135,6 +150,7 @@ fn reviewed_mixed_import_rebuilds_exact_batch_and_ordinary_inverse() -> TestResu
         &CancellationToken::default(),
     )?;
     assert_eq!(rebuilt.batch, preview.batch);
+    assert_eq!(rebuilt.validation_issues, preview.validation_issues);
     let batch = rebuilt.batch.as_ref().ok_or("missing batch")?;
     assert_eq!(batch.commands.len(), 2);
     let changed = commands::apply_batch(&original, batch)?;
@@ -659,5 +675,187 @@ fn cancellation_after_rows_were_processed_cannot_return_an_approved_batch() -> T
         .code,
         CsvErrorCode::Cancelled
     );
+    Ok(())
+}
+
+#[test]
+fn aggregate_capacity_blocks_individually_valid_rows_without_approval_authority() -> TestResult {
+    let mut original = fixture()?;
+    let mut next = 1_000;
+    while original.domain.entities.len() < MAX_REFERENCE_ITEMS - 1 {
+        original.domain.entities.insert(
+            id(next).parse()?,
+            json!({"kind":"location", "id":id(next), "name":"Private location", "transitions":[]}),
+        );
+        next += 1;
+    }
+    let mapping = mapping(&original)?;
+    for (external, person) in [("private-a", 20), ("private-b", 21)] {
+        let source = format!("external,name\n{external},Private person\n");
+        let single = preview(&original, source.as_bytes(), &mapping, &[add(2, person)?])?;
+        assert_eq!(single.disposition, PeopleImportDisposition::Reviewable);
+        let changed = commands::apply_batch(
+            &original,
+            single
+                .batch
+                .as_ref()
+                .ok_or("missing individually valid batch")?,
+        )?;
+        assert_eq!(changed.document.domain.entities.len(), MAX_REFERENCE_ITEMS);
+    }
+    let source = format!(
+        "external,name\nprivate-a,Private person\nprivate-b,Private person\n{}",
+        "private-rejected-cell\n".repeat(MAX_CSV_REJECTED_ROWS)
+    );
+    let result = preview(
+        &original,
+        source.as_bytes(),
+        &mapping,
+        &[add(2, 20)?, add(3, 21)?],
+    )?;
+    assert_eq!(result.disposition, PeopleImportDisposition::Blocked);
+    assert!(result.batch.is_none());
+    assert!(result.review.is_none());
+    assert!(result.approval_digest.is_none());
+    assert_eq!(result.rows[0].status, PeopleRowStatus::Added);
+    assert_eq!(result.rows[1].status, PeopleRowStatus::Added);
+    assert_eq!(result.rejected_rows.len(), MAX_CSV_REJECTED_ROWS);
+    assert_eq!(result.validation_issues.len(), MAX_CSV_VALIDATION_ISSUES);
+    for (index, issue) in result.validation_issues[..MAX_CSV_REJECTED_ROWS]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(issue.severity, ValidationSeverity::Warning);
+        assert_eq!(issue.code, "columnCount");
+        assert_eq!(
+            issue.field_path,
+            Some(format!("/peopleCsv/records/{}", index + 4))
+        );
+    }
+    let issue = result
+        .validation_issues
+        .last()
+        .ok_or("missing aggregate error")?;
+    assert_eq!(issue.severity, ValidationSeverity::Error);
+    assert_eq!(issue.code, "invalidProposedState");
+    assert_eq!(
+        issue.field_path.as_deref(),
+        Some("/peopleCsv/proposedState")
+    );
+    assert!(issue.resource.is_none());
+    let report = serde_json::to_string(&result.validation_issues)?;
+    assert!(report.len() <= MAX_CSV_VALIDATION_BYTES);
+    for private in [
+        "private-a",
+        "private-b",
+        "Private person",
+        "private-rejected-cell",
+        "Private location",
+    ] {
+        assert!(!report.contains(private));
+    }
+    // Report overflow remains an operation failure even when the proposed batch is invalid.
+    let overflow = format!("{source}private-overflow\n");
+    assert_eq!(
+        preview(
+            &original,
+            overflow.as_bytes(),
+            &mapping,
+            &[add(2, 20)?, add(3, 21)?],
+        )
+        .err()
+        .ok_or("expected report overflow")?
+        .code,
+        CsvErrorCode::RejectedReportLimit
+    );
+    Ok(())
+}
+
+#[test]
+fn warning_binding_rejects_tampering_even_with_a_recomputed_approval_digest() -> TestResult {
+    let original = fixture()?;
+    let source = b"external,name\nstaff-01,Revised\nprivate-rejected-cell\n";
+    let initial = preview(&original, source, &mapping(&original)?, &[])?;
+    let mut review = initial.review.ok_or("missing partial-import review")?;
+    let digest = initial.approval_digest.ok_or("missing approval")?;
+    let approval_for = |review: &PeopleCsvReview| -> Result<String, Box<dyn Error>> {
+        let canonical_review = serde_json::to_value(review)?;
+        Ok(blake3::hash(
+            format!(
+                "{{\"domain\":\"eutheto/workforce-people-csv-approval\",\"version\":1,\"review\":{canonical_review}}}"
+            )
+            .as_bytes(),
+        )
+        .to_hex()
+        .to_string())
+    };
+    // Establish that the forged approval uses the real contract, so the second
+    // rejection exercises fresh report equality rather than a malformed digest.
+    assert_eq!(approval_for(&review)?, digest);
+    // Replace the real warning report with a different, validly encoded report hash.
+    let mut altered_issues = initial.validation_issues;
+    altered_issues[0].severity = ValidationSeverity::Error;
+    review.validation_blake3 = blake3::hash(&serde_json::to_vec(&altered_issues)?)
+        .to_hex()
+        .to_string();
+    let encoded = serde_json::to_vec(&review)?;
+    let review = decode_people_csv_review(&encoded)?;
+    let forged_digest = approval_for(&review)?;
+    for approval in [&digest, &forged_digest] {
+        assert_eq!(
+            rebuild_review(
+                &original,
+                Revision::INITIAL,
+                &mut Cursor::new(source),
+                &review,
+                approval,
+                &CancellationToken::default(),
+            )
+            .err()
+            .ok_or("altered warning binding was accepted")?
+            .code,
+            CsvErrorCode::StaleReview
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn reviews_without_a_valid_validation_binding_require_fresh_review() -> TestResult {
+    let original = fixture()?;
+    let initial = preview(
+        &original,
+        b"external,name\nstaff-01,Revised\nprivate-rejected-cell\n",
+        &mapping(&original)?,
+        &[],
+    )?;
+    let review = initial.review.ok_or("missing review")?;
+    let mut absent = serde_json::to_value(&review)?;
+    absent
+        .as_object_mut()
+        .ok_or("review is not an object")?
+        .remove("validationBlake3");
+    assert_eq!(
+        decode_people_csv_review(&serde_json::to_vec(&absent)?)
+            .err()
+            .ok_or("old unbound review was accepted")?
+            .code,
+        CsvErrorCode::InvalidReview
+    );
+    for invalid in [
+        Value::Null,
+        json!("private-invalid-digest"),
+        json!("A".repeat(64)),
+    ] {
+        let mut malformed = serde_json::to_value(&review)?;
+        malformed["validationBlake3"] = invalid;
+        assert_eq!(
+            decode_people_csv_review(&serde_json::to_vec(&malformed)?)
+                .err()
+                .ok_or("invalid validation binding was accepted")?
+                .code,
+            CsvErrorCode::InvalidReview
+        );
+    }
     Ok(())
 }

@@ -23,6 +23,8 @@ pub const MAX_CSV_REVIEW_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CSV_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CSV_REJECTED_ROWS: usize = 200;
 pub const MAX_CSV_REJECTED_REPORT_BYTES: usize = 64 * 1024;
+pub const MAX_CSV_VALIDATION_ISSUES: usize = MAX_CSV_REJECTED_ROWS + 1;
+pub const MAX_CSV_VALIDATION_BYTES: usize = 64 * 1024;
 pub const MAX_CSV_DETECTION_BYTES: usize = 64 * 1024;
 pub const MAX_CSV_SAMPLE_RECORDS: usize = 2;
 pub const MAX_CSV_SAMPLE_CELL_BYTES: usize = 64;
@@ -182,6 +184,7 @@ pub enum CsvErrorCode {
     DecisionLimit,
     MutationLimit,
     RejectedReportLimit,
+    ValidationReportLimit,
     PreviewLimit,
     ReviewLimit,
     UnsupportedVersion,

@@ -452,7 +452,13 @@ fn fast_validation_is_derived_from_the_registered_phase_02_pack() -> Result<(), 
     });
     let command_envelope = envelope(scenario.scenario_id, revision, command)?;
     let registry = official_registry()?;
-    let applied = apply_command_with_registry(&scenario, revision, &command_envelope, &registry)?;
+    let applied = apply_command_with_registry(
+        &scenario,
+        revision,
+        &command_envelope,
+        &registry,
+        &eutheto_types::CancellationToken::new(),
+    )?;
     assert!(applied.result.validation_delta.added.is_empty());
     assert!(applied.result.validation_delta.resolved.is_empty());
 
@@ -467,6 +473,7 @@ fn fast_validation_is_derived_from_the_registered_phase_02_pack() -> Result<(), 
         applied.result.new_revision,
         &inverse_envelope,
         &registry,
+        &eutheto_types::CancellationToken::new(),
     )?;
     assert!(restored.result.validation_delta.added.is_empty());
     assert!(restored.result.validation_delta.resolved.is_empty());

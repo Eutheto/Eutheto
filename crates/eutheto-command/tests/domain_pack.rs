@@ -248,7 +248,7 @@ fn command_validation_rejects_unknown_version_command_and_field_atomically()
     let mut unknown_version = batch(vec![command(true, 3)])?;
     unknown_version.scenario_schema_version = 2;
     assert!(matches!(
-        pack.apply_batch(&source, &unknown_version),
+        pack.apply_batch(&source, &unknown_version, &CancellationToken::new()),
         Err(DomainPackError::UnsupportedVersion(2))
     ));
 
@@ -257,7 +257,11 @@ fn command_validation_rejects_unknown_version_command_and_field_atomically()
         payload: json!({}),
     };
     assert!(matches!(
-        pack.apply_batch(&source, &batch(vec![unknown_command])?),
+        pack.apply_batch(
+            &source,
+            &batch(vec![unknown_command])?,
+            &CancellationToken::new()
+        ),
         Err(DomainPackError::UnknownCommand(_))
     ));
 
@@ -272,7 +276,7 @@ fn command_validation_rejects_unknown_version_command_and_field_atomically()
     };
     let two = batch(vec![command(true, 3), invalid_field])?;
     assert!(matches!(
-        pack.apply_batch(&source, &two),
+        pack.apply_batch(&source, &two, &CancellationToken::new()),
         Err(DomainPackError::InvalidPayload { .. })
     ));
     assert_eq!(source, document()?);
@@ -283,11 +287,19 @@ fn command_validation_rejects_unknown_version_command_and_field_atomically()
 fn batch_is_atomic_and_inverse_restores_exact_document() -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
     let source = document()?;
-    let applied = pack.apply_batch(&source, &batch(vec![command(true, 3), command(true, 4)])?)?;
+    let applied = pack.apply_batch(
+        &source,
+        &batch(vec![command(true, 3), command(true, 4)])?,
+        &CancellationToken::new(),
+    )?;
     assert_eq!(applied.results.len(), 2);
     assert_eq!(applied.changes.len(), 2);
     assert_eq!(applied.inverse.commands.len(), 2);
-    let restored = pack.apply_batch(&applied.document, &applied.inverse)?;
+    let restored = pack.apply_batch(
+        &applied.document,
+        &applied.inverse,
+        &CancellationToken::new(),
+    )?;
     assert_eq!(restored.document, source);
     Ok(())
 }

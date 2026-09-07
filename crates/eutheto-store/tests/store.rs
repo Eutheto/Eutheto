@@ -24,16 +24,17 @@ use eutheto_store::{
 };
 #[cfg(debug_assertions)]
 use eutheto_store::{
-    Failpoint, V2MigrationBeginTestHook, V3MigrationBeginTestHook, V4MigrationBeginTestHook,
+    CommandCommitTestHook, CommandCommitTestPhase, Failpoint, V2MigrationBeginTestHook,
+    V3MigrationBeginTestHook, V4MigrationBeginTestHook,
 };
 use eutheto_types::{
-    ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, CounterfactualJobId,
-    DomainPackRef, DurationMillis, EntityId, ExplanationMode, GapPolicy, Horizon, IanaTimeZone,
-    LocaleTag, MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PortableAsset,
-    PortableProjectMetadata, PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits,
-    Revision, Rfc3339Timestamp, RuleId, ScenarioDocument, ScenarioDomain, ScenarioId,
-    ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, SemanticCapability, SolutionId,
-    SolveMode, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
+    ActorRef, BackendId, BackendSelection, BundleId, CancellationToken, CommandId, CommandSource,
+    CounterfactualJobId, DomainPackRef, DurationMillis, EntityId, ExplanationMode, GapPolicy,
+    Horizon, IanaTimeZone, LocaleTag, MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId,
+    PortableAsset, PortableProjectMetadata, PreservationPolicy, ReproducibilityMode, RequestId,
+    ResourceLimits, Revision, Rfc3339Timestamp, RuleId, ScenarioDocument, ScenarioDomain,
+    ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, SemanticCapability,
+    SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
     SupplementalSectionKind, UnitSystem, WorkerThreadPolicy,
 };
 use rusqlite::{Connection, params};
@@ -817,6 +818,7 @@ async fn command_rejects_identity_owned_by_another_project_atomically() -> Resul
                 target_id,
                 Revision::INITIAL,
                 RedoBranchPolicy::Reject,
+                CancellationToken::new(),
                 move |current| {
                     let mut updated = current.clone();
                     updated
@@ -871,6 +873,7 @@ async fn removed_identity_remains_reserved_for_undo() -> Result<(), Box<dyn Erro
             owner_id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             move |current| {
                 let mut updated = current.clone();
                 updated.domain.entities.insert(
@@ -894,6 +897,7 @@ async fn removed_identity_remains_reserved_for_undo() -> Result<(), Box<dyn Erro
             owner_id,
             Revision::new(1),
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             move |current| {
                 let mut updated = current.clone();
                 updated.domain.entities.remove(&person_id);
@@ -929,6 +933,7 @@ async fn removed_identity_remains_reserved_for_undo() -> Result<(), Box<dyn Erro
                 target_id,
                 Revision::INITIAL,
                 RedoBranchPolicy::Reject,
+                CancellationToken::new(),
                 move |current| {
                     let mut updated = current.clone();
                     updated.domain.rules.insert(
@@ -1930,13 +1935,19 @@ async fn lifecycle_mutations_require_the_current_scenario_revision() -> Result<(
         })
         .await?;
     store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(1), UPDATED)?,
-                journal: journal(json!({"marker": 1}), None, UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
     assert!(matches!(
         store
@@ -2013,6 +2024,7 @@ async fn authoritative_document_limit_covers_creation_commands_import_restore_an
                 legal_id,
                 Revision::INITIAL,
                 RedoBranchPolicy::Reject,
+                CancellationToken::new(),
                 move |_| Ok(CommandWrite {
                     document: command_document,
                     journal: journal(json!({"oversized": true}), None, UPDATED)?,
@@ -2043,12 +2055,11 @@ async fn authoritative_document_limit_covers_creation_commands_import_restore_an
         Err(StoreError::ScenarioNotFound(found)) if found == imported_id
     ));
     let restored_id = scenario_id(40)?;
-    let restored_oversized = oversized_document(restored_id)?;
     let mut restore = staged_import(
         Revision::new(1),
         vec![(
             Revision::new(6),
-            restored_oversized,
+            oversized_document(restored_id)?,
             StagedDisposition::Create,
         )],
         timestamp(CREATED)?,
@@ -2093,13 +2104,19 @@ async fn replace_revision_advances_past_a_newer_local_revision() -> Result<(), B
         })
         .await?;
     store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(1), UPDATED)?,
-                journal: journal(json!({"marker": 1}), None, UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
     let staged = staged_import(
         Revision::new(2),
@@ -2316,7 +2333,7 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
     );
     assert!(matches!(
         reopened
-            .execute_command(id, Revision::new(2), RedoBranchPolicy::Reject, |_| {
+            .execute_command(id, Revision::new(2), RedoBranchPolicy::Reject, CancellationToken::new(), |_| {
                 Err::<CommandWrite<()>, StoreError>(StoreError::CommandApplication {
                     code: "must-not-run".to_owned(),
                     message: "stale callback ran".to_owned(),
@@ -2404,13 +2421,19 @@ async fn startup_backfills_revision_high_water_from_durable_history() -> Result<
         .await?;
     for (expected, marker) in [(Revision::INITIAL, 1), (Revision::new(1), 2)] {
         store
-            .execute_command(id, expected, RedoBranchPolicy::Reject, move |current| {
-                Ok(CommandWrite {
-                    document: set_marker(current.clone(), Some(marker), LATER)?,
-                    journal: journal(json!({"advance": marker}), None, LATER)?,
-                    output: (),
-                })
-            })
+            .execute_command(
+                id,
+                expected,
+                RedoBranchPolicy::Reject,
+                CancellationToken::new(),
+                move |current| {
+                    Ok(CommandWrite {
+                        document: set_marker(current.clone(), Some(marker), LATER)?,
+                        journal: journal(json!({"advance": marker}), None, LATER)?,
+                        output: (),
+                    })
+                },
+            )
             .await?;
     }
     drop(store);
@@ -2805,6 +2828,7 @@ async fn stale_duplicate_is_rejected_without_mutation_and_survives_reopen()
             source_id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             |current| {
                 Ok(CommandWrite {
                     document: set_marker(current.clone(), Some(1), UPDATED)?,
@@ -2865,13 +2889,19 @@ async fn stale_revision_is_rejected_before_callback_or_mutation() -> Result<(), 
         .await?;
 
     store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(1), UPDATED)?,
-                journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
 
     let callback_ran = Arc::new(AtomicBool::new(false));
@@ -2881,6 +2911,7 @@ async fn stale_revision_is_rejected_before_callback_or_mutation() -> Result<(), 
             id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             move |current| {
                 callback_flag.store(true, Ordering::SeqCst);
                 Ok(CommandWrite {
@@ -2903,6 +2934,435 @@ async fn stale_revision_is_rejected_before_callback_or_mutation() -> Result<(), 
     );
     assert_eq!(store.history(id).await?.len(), 1);
     Ok(())
+}
+
+#[tokio::test]
+async fn command_cancelled_while_queued_never_calls_apply() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let id = scenario_id(120)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    let initial = document(id)?;
+    store
+        .create_project(NewProject {
+            document: initial.clone(),
+        })
+        .await?;
+    let before = store.library_snapshot().await?;
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let callback_entered = Arc::clone(&entered);
+    let callback_release = Arc::clone(&release);
+    let blocking_store = store.clone();
+    let blocker_cancellation = CancellationToken::new();
+    let actor_cancellation = blocker_cancellation.clone();
+    let blocker = tokio::spawn(async move {
+        blocking_store
+            .execute_command(
+                id,
+                Revision::INITIAL,
+                RedoBranchPolicy::Reject,
+                actor_cancellation,
+                move |current| {
+                    callback_entered.wait();
+                    callback_release.wait();
+                    Ok(CommandWrite {
+                        document: set_marker(current.clone(), Some(1), UPDATED)?,
+                        journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                        output: (),
+                    })
+                },
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || entered.wait()).await?;
+
+    let cancellation = CancellationToken::new();
+    let callback_ran = Arc::new(AtomicBool::new(false));
+    let callback_flag = Arc::clone(&callback_ran);
+    let mut queued = Box::pin(store.execute_command(
+        id,
+        Revision::INITIAL,
+        RedoBranchPolicy::Reject,
+        cancellation.clone(),
+        move |current| {
+            callback_flag.store(true, Ordering::SeqCst);
+            Ok(CommandWrite {
+                document: set_marker(current.clone(), Some(2), LATER)?,
+                journal: journal(json!({"marker": 2}), None, LATER)?,
+                output: (),
+            })
+        },
+    ));
+    // Poll once to enqueue behind the blocked actor, without a scheduler/timing assumption.
+    std::future::poll_fn(|context| {
+        assert!(queued.as_mut().poll(context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    cancellation.cancel();
+    blocker_cancellation.cancel();
+    release.wait();
+
+    assert!(matches!(
+        blocker.await?,
+        Err(StoreError::OperationCancelled)
+    ));
+    assert!(matches!(queued.await, Err(StoreError::OperationCancelled)));
+    assert!(!callback_ran.load(Ordering::SeqCst));
+    assert_eq!(store.get_project(id).await?.document, initial);
+    assert!(store.history(id).await?.is_empty());
+    assert_eq!(store.library_snapshot().await?.revision, before.revision);
+    drop(store);
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    assert_eq!(
+        reopened.get_project(id).await?.summary.revision,
+        Revision::INITIAL
+    );
+    assert_eq!(reopened.get_project(id).await?.document, initial);
+    assert!(reopened.history(id).await?.is_empty());
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Eq, PartialEq)]
+struct CommandSnapshotRow {
+    id: String,
+    revision: i64,
+    compressed_document: Vec<u8>,
+    created_at: String,
+    reason: String,
+}
+
+#[cfg(debug_assertions)]
+fn command_snapshots(path: &std::path::Path) -> Result<Vec<CommandSnapshotRow>, rusqlite::Error> {
+    let connection = Connection::open(path)?;
+    connection.prepare(
+        "SELECT id, revision, document_json_zstd, created_at, reason FROM scenario_snapshots ORDER BY id",
+    )?.query_map([], |row| {
+        Ok(CommandSnapshotRow {
+            id: row.get(0)?,
+            revision: row.get(1)?,
+            compressed_document: row.get(2)?,
+            created_at: row.get(3)?,
+            reason: row.get(4)?,
+        })
+    })?.collect()
+}
+
+#[cfg(debug_assertions)]
+#[allow(clippy::too_many_lines)]
+async fn cancelled_branch_transaction_rolls_back(
+    abandon_receiver: bool,
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let id = scenario_id(121)?;
+    let policy = SnapshotPolicy::new(
+        NonZeroU32::new(1).ok_or("nonzero interval")?,
+        MAX_SCENARIO_DOCUMENT_BYTES,
+        3,
+    )?;
+    let (store, _) =
+        SqliteScenarioStore::open_with_options(&path, OpenOptions::new(policy)).await?;
+    store
+        .create_project(NewProject {
+            document: document(id)?,
+        })
+        .await?;
+    store
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
+                    output: (),
+                })
+            },
+        )
+        .await?;
+    store
+        .undo(id, Revision::new(1), timestamp(LATER)?, |history| {
+            let target = history.target_document_updated_at.to_string();
+            Ok((set_marker(history.document, None, &target)?, ()))
+        })
+        .await?;
+    drop(store);
+
+    let hook = CommandCommitTestHook::new(CommandCommitTestPhase::BeforeFinalCancellationCheck);
+    let (store, _) = SqliteScenarioStore::open_with_options(
+        &path,
+        OpenOptions::new(policy).with_command_commit_test_hook(hook.clone()),
+    )
+    .await?;
+    let before = store.library_snapshot().await?;
+    let history_before = store.history(id).await?;
+    let snapshots_before = command_snapshots(&path)?;
+    let identity = scenario_id(122)?.as_uuid();
+    let entity: EntityId = identity.to_string().parse()?;
+    let cancellation = CancellationToken::new();
+    let actor_cancellation = cancellation.clone();
+    let actor_store = store.clone();
+    let command = tokio::spawn(async move {
+        actor_store
+            .execute_command(
+                id,
+                Revision::new(2),
+                RedoBranchPolicy::Truncate,
+                actor_cancellation,
+                move |current| {
+                    let mut updated = set_marker(current.clone(), Some(2), LATER)?;
+                    updated
+                        .domain
+                        .entities
+                        .insert(entity, json!({"id": identity}));
+                    Ok(CommandWrite {
+                        document: updated,
+                        journal: journal(
+                            json!({"marker": 2}),
+                            Some(json!({"marker": null})),
+                            LATER,
+                        )?,
+                        output: (),
+                    })
+                },
+            )
+            .await
+    });
+    let wait_hook = hook.clone();
+    tokio::task::spawn_blocking(move || wait_hook.wait_until_reached()).await?;
+    cancellation.cancel();
+    if abandon_receiver {
+        command.abort();
+        assert!(command.await.is_err_and(|error| error.is_cancelled()));
+    } else {
+        hook.release();
+        assert!(matches!(
+            command.await?,
+            Err(StoreError::OperationCancelled)
+        ));
+    }
+    if abandon_receiver {
+        hook.release();
+    }
+    // This actor round trip also drains work whose response receiver was abandoned.
+    let after = store.library_snapshot().await?;
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(
+        after.scenario_identity_owners,
+        before.scenario_identity_owners
+    );
+    assert_eq!(
+        after.scenario_revision_high_water,
+        before.scenario_revision_high_water
+    );
+    assert_eq!(after.scenario_revisions, before.scenario_revisions);
+    assert_eq!(after.projects[0].document, before.projects[0].document);
+    assert_eq!(after.projects[0].summary, before.projects[0].summary);
+    assert_eq!(store.history(id).await?, history_before);
+    assert_eq!(command_snapshots(&path)?, snapshots_before);
+    drop(store);
+
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    let durable = reopened.library_snapshot().await?;
+    assert_eq!(durable.revision, before.revision);
+    assert_eq!(
+        durable.scenario_identity_owners,
+        before.scenario_identity_owners
+    );
+    assert_eq!(
+        durable.scenario_revision_high_water,
+        before.scenario_revision_high_water
+    );
+    assert_eq!(durable.scenario_revisions, before.scenario_revisions);
+    assert_eq!(durable.projects[0].document, before.projects[0].document);
+    assert_eq!(durable.projects[0].summary, before.projects[0].summary);
+    assert_eq!(reopened.history(id).await?, history_before);
+    assert_eq!(command_snapshots(&path)?, snapshots_before);
+    // The original branch must still be redoable, not merely present in the journal.
+    let redone = reopened
+        .redo(id, Revision::new(2), timestamp(LATER)?, |history| {
+            let target = history.target_document_updated_at.to_string();
+            Ok((set_marker(history.document, Some(1), &target)?, ()))
+        })
+        .await?;
+    assert_eq!(redone.new_revision, Revision::new(3));
+    assert_eq!(
+        reopened.get_project(id).await?.document,
+        set_marker(document(id)?, Some(1), UPDATED)?
+    );
+    let history = reopened.history(id).await?;
+    assert_eq!(
+        history[0].branch_generation,
+        history_before[0].branch_generation
+    );
+    assert!(history[0].applied);
+    reopened
+        .execute_command(
+            id,
+            Revision::new(3),
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(3), LATER)?,
+                    journal: journal(json!({"marker": 3}), Some(json!({"marker": 1})), LATER)?,
+                    output: (),
+                })
+            },
+        )
+        .await?;
+    let continued_history = reopened.history(id).await?;
+    assert_eq!(continued_history.len(), 2);
+    assert_eq!(continued_history[1].history_sequence, 2);
+    assert_eq!(
+        continued_history[1].branch_generation,
+        history_before[0].branch_generation
+    );
+    // Rollback must not leave the candidate identity reserved for a nonexistent command.
+    let mut another = document(scenario_id(123)?)?;
+    another
+        .domain
+        .entities
+        .insert(entity, json!({"id": identity}));
+    reopened
+        .create_project(NewProject { document: another })
+        .await?;
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn command_cancelled_before_final_check_restores_branch_and_survives_reopen()
+-> Result<(), Box<dyn Error>> {
+    cancelled_branch_transaction_rolls_back(false).await
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn command_cancelled_with_abandoned_receiver_rolls_back() -> Result<(), Box<dyn Error>> {
+    cancelled_branch_transaction_rolls_back(true).await
+}
+
+#[cfg(debug_assertions)]
+async fn command_commit_wins_late_cancellation(
+    abandon_receiver: bool,
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let id = scenario_id(124)?;
+    let expected_document = set_marker(document(id)?, Some(1), UPDATED)?;
+    let hook = CommandCommitTestHook::new(CommandCommitTestPhase::AfterFinalCancellationCheck);
+    let policy = SnapshotPolicy::new(
+        NonZeroU32::new(1).ok_or("nonzero interval")?,
+        MAX_SCENARIO_DOCUMENT_BYTES,
+        3,
+    )?;
+    let (store, _) = SqliteScenarioStore::open_with_options(
+        &path,
+        OpenOptions::new(policy).with_command_commit_test_hook(hook.clone()),
+    )
+    .await?;
+    store
+        .create_project(NewProject {
+            document: document(id)?,
+        })
+        .await?;
+    let before = store.library_snapshot().await?;
+    let cancellation = CancellationToken::new();
+    let actor_cancellation = cancellation.clone();
+    let actor_store = store.clone();
+    let command = tokio::spawn(async move {
+        actor_store
+            .execute_command(
+                id,
+                Revision::INITIAL,
+                RedoBranchPolicy::Reject,
+                actor_cancellation,
+                |current| {
+                    Ok(CommandWrite {
+                        document: set_marker(current.clone(), Some(1), UPDATED)?,
+                        journal: journal(
+                            json!({"marker": 1}),
+                            Some(json!({"marker": null})),
+                            UPDATED,
+                        )?,
+                        output: 42,
+                    })
+                },
+            )
+            .await
+    });
+    let wait_hook = hook.clone();
+    tokio::task::spawn_blocking(move || wait_hook.wait_until_reached()).await?;
+    cancellation.cancel();
+    if abandon_receiver {
+        command.abort();
+        assert!(command.await.is_err_and(|error| error.is_cancelled()));
+    } else {
+        hook.release();
+        let committed = command.await??;
+        assert_eq!(committed.new_revision, Revision::new(1));
+        assert_eq!(committed.output, 42);
+    }
+    if abandon_receiver {
+        hook.release();
+    }
+    let after = store.library_snapshot().await?;
+    assert_eq!(after.revision, before.revision.checked_next()?);
+    assert_eq!(
+        after.scenario_revision_high_water.get(&id),
+        Some(&Revision::new(1))
+    );
+    let persisted = store.get_project(id).await?;
+    assert_eq!(persisted.summary.revision, Revision::new(1));
+    assert_eq!(persisted.document, expected_document);
+    let history = store.history(id).await?;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].command, json!({"marker": 1}));
+    assert!(history[0].applied);
+    let snapshots = command_snapshots(&path)?;
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].revision, 1);
+    let snapshot_document: ScenarioDocument = serde_json::from_slice(&zstd::stream::decode_all(
+        snapshots[0].compressed_document.as_slice(),
+    )?)?;
+    assert_eq!(snapshot_document, expected_document);
+    drop(store);
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    assert_eq!(
+        reopened.get_project(id).await?.summary.revision,
+        Revision::new(1)
+    );
+    assert_eq!(reopened.get_project(id).await?.document, snapshot_document);
+    assert_eq!(reopened.history(id).await?, history);
+    assert_eq!(command_snapshots(&path)?, snapshots);
+    reopened
+        .undo(id, Revision::new(1), timestamp(LATER)?, |history| {
+            let target = history.target_document_updated_at.to_string();
+            Ok((set_marker(history.document, None, &target)?, ()))
+        })
+        .await?;
+    assert_eq!(reopened.get_project(id).await?.document, document(id)?);
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn command_cancelled_after_final_check_returns_committed_success()
+-> Result<(), Box<dyn Error>> {
+    command_commit_wins_late_cancellation(false).await
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn command_cancelled_after_final_check_commits_with_abandoned_receiver()
+-> Result<(), Box<dyn Error>> {
+    command_commit_wins_late_cancellation(true).await
 }
 
 #[tokio::test]
@@ -2931,6 +3391,7 @@ async fn actor_self_drop_detaches_without_deadlock_and_allows_reopen() -> Result
                 id,
                 Revision::INITIAL,
                 RedoBranchPolicy::Reject,
+                CancellationToken::new(),
                 move |current| {
                     callback_entered.wait();
                     callback_release.wait();
@@ -2995,13 +3456,19 @@ async fn document_write_failpoint_rolls_back_document_journal_revision_and_snaps
     store.set_failpoint(Failpoint::AfterDocumentWrite)?;
 
     let result = store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(1), UPDATED)?,
-                journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await;
     assert!(matches!(result, Err(StoreError::InjectedFailure)));
     let persisted = store.get_project(id).await?;
@@ -3032,13 +3499,19 @@ async fn undo_and_redo_survive_restart_and_branch_truncation_is_explicit()
         })
         .await?;
     store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(1), UPDATED)?,
-                journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
     let initial_document_timestamp = timestamp(CREATED)?;
     store
@@ -3078,14 +3551,21 @@ async fn undo_and_redo_survive_restart_and_branch_truncation_is_explicit()
         })
         .await?;
 
-    let rejected = reopened
-        .execute_command(id, Revision::new(4), RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(2), LATER)?,
-                journal: journal(json!({"marker": 2}), Some(json!({"marker": null})), LATER)?,
-                output: (),
-            })
+    let replacement = |current: &ScenarioDocument| {
+        Ok(CommandWrite {
+            document: set_marker(current.clone(), Some(2), LATER)?,
+            journal: journal(json!({"marker": 2}), Some(json!({"marker": null})), LATER)?,
+            output: (),
         })
+    };
+    let rejected = reopened
+        .execute_command(
+            id,
+            Revision::new(4),
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            replacement,
+        )
         .await;
     assert!(matches!(
         rejected,
@@ -3096,13 +3576,8 @@ async fn undo_and_redo_survive_restart_and_branch_truncation_is_explicit()
             id,
             Revision::new(4),
             RedoBranchPolicy::Truncate,
-            |current| {
-                Ok(CommandWrite {
-                    document: set_marker(current.clone(), Some(2), LATER)?,
-                    journal: journal(json!({"marker": 2}), Some(json!({"marker": null})), LATER)?,
-                    output: (),
-                })
-            },
+            CancellationToken::new(),
+            replacement,
         )
         .await?;
     assert_eq!(reopened.history(id).await?.len(), 1);
@@ -3184,13 +3659,19 @@ async fn deleting_project_cascades_owned_rows_and_referencing_supplemental()
         })
         .await?;
     store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(1), UPDATED)?,
-                journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), Some(json!({"marker": null})), UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
     seed_scenario_referencing_supplemental(&store, id).await?;
 
@@ -3465,13 +3946,19 @@ async fn seed_and_advance_retained_revision(
             .is_empty()
     );
     store
-        .execute_command(id, Revision::new(7), RedoBranchPolicy::Reject, |current| {
-            Ok(CommandWrite {
-                document: set_marker(current.clone(), Some(8), UPDATED)?,
-                journal: journal(json!({"marker": 8}), Some(json!({"marker": 7})), UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::new(7),
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(8), UPDATED)?,
+                    journal: journal(json!({"marker": 8}), Some(json!({"marker": 7})), UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
     let advanced = store.library_snapshot().await?;
     assert_eq!(advanced.projects[0].summary.revision, Revision::new(8));
@@ -4250,6 +4737,7 @@ async fn terminal_finalizers_are_compare_and_set_and_atomic() -> Result<(), Box<
             scenario_id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             |current| {
                 Ok(CommandWrite {
                     document: set_marker(current.clone(), Some(1), UPDATED)?,
@@ -4416,6 +4904,7 @@ async fn accepted_r0_survives_edit_ordinary_replace_and_reopen() -> Result<(), B
             scenario_id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             |current| {
                 Ok(CommandWrite {
                     document: set_marker(current.clone(), Some(1), UPDATED)?,
@@ -4518,6 +5007,7 @@ async fn nonaccepted_terminal_run_prunes_its_retained_source_revision() -> Resul
             scenario_id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             |current| {
                 Ok(CommandWrite {
                     document: set_marker(current.clone(), Some(1), UPDATED)?,
@@ -5336,6 +5826,7 @@ async fn stale_base_job_is_durably_queued_then_failed_without_a_derived_run()
             fixture.request.semantics.scenario_id,
             Revision::INITIAL,
             RedoBranchPolicy::Reject,
+            CancellationToken::new(),
             |current| {
                 Ok(CommandWrite {
                     document: set_marker(current.clone(), Some(1), UPDATED)?,
@@ -6594,13 +7085,19 @@ async fn accepted_result_reads_and_selection_preserve_validated_viewing_state_af
     let current_document = set_marker(original_document.clone(), Some(1), UPDATED)?;
     let written_document = current_document.clone();
     store
-        .execute_command(id, Revision::INITIAL, RedoBranchPolicy::Reject, move |_| {
-            Ok(CommandWrite {
-                document: written_document,
-                journal: journal(json!({"marker": 1}), None, UPDATED)?,
-                output: (),
-            })
-        })
+        .execute_command(
+            id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            CancellationToken::new(),
+            move |_| {
+                Ok(CommandWrite {
+                    document: written_document,
+                    journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                    output: (),
+                })
+            },
+        )
         .await?;
 
     let current_started_at = shift_timestamp(started_at, 1)?;

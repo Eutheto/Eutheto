@@ -20,10 +20,10 @@ use eutheto_import::{
     SafetyBackupEvidence, StagedBackupRestore, StagedDisposition, StagedImport,
 };
 use eutheto_types::{
-    ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, CounterfactualJobId,
-    IanaTimeZone, MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset, PortableJsonLimits,
-    ProjectMetadataDto, ProjectSummaryDto, RequestId, Revision, Rfc3339Timestamp,
-    SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
+    ActorRef, BackendId, BackendSelection, BundleId, CancellationToken, CommandId, CommandSource,
+    CounterfactualJobId, IanaTimeZone, MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset,
+    PortableJsonLimits, ProjectMetadataDto, ProjectSummaryDto, RequestId, Revision,
+    Rfc3339Timestamp, SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
     ScenarioSnapshotId, ScenarioSnapshotV1, SemanticCapability, SolutionId, SolveOptions,
     SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
     collect_scenario_owned_uuids, collect_self_declared_uuids, extract_result_dependency,
@@ -88,6 +88,8 @@ pub enum StoreError {
     ActorUnavailable,
     #[error("failed to start the database actor: {0}")]
     ActorStart(String),
+    #[error("the operation was cancelled before commit")]
+    OperationCancelled,
     #[error("database operation failed")]
     Database(#[source] rusqlite::Error),
     #[error("stored JSON is invalid")]
@@ -273,6 +275,8 @@ pub struct OpenOptions {
     #[cfg(debug_assertions)]
     v4_migration_begin_test_hook: Option<V4MigrationBeginTestHook>,
     #[cfg(debug_assertions)]
+    command_commit_test_hook: Option<CommandCommitTestHook>,
+    #[cfg(debug_assertions)]
     recovery_now: Option<jiff::Timestamp>,
 }
 
@@ -292,6 +296,55 @@ pub enum Failpoint {
     AfterCounterfactualJobInsert,
     AfterCounterfactualTransition,
     AfterCounterfactualCancelWrite,
+}
+
+/// The command commit boundary at which a debug-only hook pauses once.
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandCommitTestPhase {
+    BeforeFinalCancellationCheck,
+    AfterFinalCancellationCheck,
+}
+
+/// One-shot, per-store synchronization around the final command cancellation check.
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug)]
+pub struct CommandCommitTestHook {
+    phase: CommandCommitTestPhase,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    reached: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+}
+
+#[cfg(debug_assertions)]
+impl CommandCommitTestHook {
+    /// Pauses the first command reaching the selected phase, after all writes.
+    #[must_use]
+    pub fn new(phase: CommandCommitTestPhase) -> Self {
+        Self {
+            phase,
+            armed: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            reached: Arc::new(std::sync::Barrier::new(2)),
+            release: Arc::new(std::sync::Barrier::new(2)),
+        }
+    }
+
+    /// Blocks the test thread until the actor reaches the selected phase.
+    pub fn wait_until_reached(&self) {
+        self.reached.wait();
+    }
+
+    /// Releases the paused actor.
+    pub fn release(&self) {
+        self.release.wait();
+    }
+
+    fn actor_pause(&self, phase: CommandCommitTestPhase) {
+        if self.phase == phase && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.reached.wait();
+            self.release.wait();
+        }
+    }
 }
 
 /// Debug-only synchronization immediately before the V2 writer transaction.
@@ -434,6 +487,8 @@ impl OpenOptions {
             #[cfg(debug_assertions)]
             v4_migration_begin_test_hook: None,
             #[cfg(debug_assertions)]
+            command_commit_test_hook: None,
+            #[cfg(debug_assertions)]
             recovery_now: None,
         }
     }
@@ -475,6 +530,14 @@ impl OpenOptions {
     #[must_use]
     pub fn with_v4_migration_begin_test_hook(mut self, hook: V4MigrationBeginTestHook) -> Self {
         self.v4_migration_begin_test_hook = Some(hook);
+        self
+    }
+
+    /// Pauses one command at its final cancellation/commit boundary in debug builds.
+    #[cfg(debug_assertions)]
+    #[must_use]
+    pub fn with_command_commit_test_hook(mut self, hook: CommandCommitTestHook) -> Self {
+        self.command_commit_test_hook = Some(hook);
         self
     }
 }
@@ -979,6 +1042,8 @@ pub struct SqliteScenarioStore {
     snapshot_policy: SnapshotPolicy,
     #[cfg(debug_assertions)]
     failpoint: Arc<std::sync::Mutex<Option<Failpoint>>>,
+    #[cfg(debug_assertions)]
+    command_commit_test_hook: Option<CommandCommitTestHook>,
 }
 
 impl fmt::Debug for SqliteScenarioStore {
@@ -1040,6 +1105,8 @@ impl SqliteScenarioStore {
         let failpoint = Arc::new(std::sync::Mutex::new(options.failpoint));
         #[cfg(debug_assertions)]
         let actor_failpoint = Arc::clone(&failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = options.command_commit_test_hook.clone();
 
         let actor_thread = thread::Builder::new()
             .name("eutheto-sqlite-store".to_owned())
@@ -1089,6 +1156,8 @@ impl SqliteScenarioStore {
                 snapshot_policy: policy,
                 #[cfg(debug_assertions)]
                 failpoint,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook,
             },
             outcome,
         ))
@@ -1933,6 +2002,10 @@ impl SqliteScenarioStore {
     /// Runs a pure command callback after checking the current revision and
     /// commits the document, journal, cursor, revision, and optional snapshot
     /// in one immediate transaction.
+    /// Cancellation observed inside the actor before the callback or at the final
+    /// pre-commit check rolls back the entire transaction. After that final check,
+    /// commit wins: later cancellation never changes a successful commit into an error.
+    /// Dropping the awaiting future does not cancel actor work; cancel the token.
     ///
     /// # Errors
     ///
@@ -1940,12 +2013,13 @@ impl SqliteScenarioStore {
     /// redo history requires explicit truncation, the callback returns a typed
     /// command error, command data cannot be serialized, numeric bounds are
     /// exceeded, snapshot sizing or compression fails, the transaction or actor
-    /// fails, or a debug failpoint is triggered.
+    /// fails, cancellation is observed before commit, or a debug failpoint is triggered.
     pub async fn execute_command<T, F>(
         &self,
         scenario_id: ScenarioId,
         expected_revision: Revision,
         branch_policy: RedoBranchPolicy,
+        cancellation: CancellationToken,
         apply: F,
     ) -> Result<CommittedCommand<T>, StoreError>
     where
@@ -1955,7 +2029,10 @@ impl SqliteScenarioStore {
         let snapshot_policy = self.snapshot_policy;
         #[cfg(debug_assertions)]
         let failpoint = Arc::clone(&self.failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = self.command_commit_test_hook.clone();
         self.call(move |connection| {
+            Self::check_command_cancelled(&cancellation)?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let project = load_project(&transaction, scenario_id)?;
@@ -1977,6 +2054,7 @@ impl SqliteScenarioStore {
                     }
                 }
             }
+            Self::check_command_cancelled(&cancellation)?;
             let write = apply(&document)?;
             let new_revision = checked_revision(actual_revision)?
                 .checked_next()
@@ -2034,13 +2112,44 @@ impl SqliteScenarioStore {
             maybe_snapshot(&transaction, scenario_id, new_revision.value(), sequence, &write.document, &write.journal.created_at, snapshot_policy)?;
             validate_global_identity_ownership(&transaction)?;
             increment_library_revision(&transaction)?;
-            transaction.commit()?;
+            Self::commit_command(
+                transaction,
+                &cancellation,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook.as_ref(),
+            )?;
             Ok(CommittedCommand {
                 new_revision,
                 output: write.output,
             })
         })
         .await
+    }
+
+    fn check_command_cancelled(cancellation: &CancellationToken) -> Result<(), StoreError> {
+        if cancellation.is_cancelled() {
+            Err(StoreError::OperationCancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn commit_command(
+        transaction: rusqlite::Transaction<'_>,
+        cancellation: &CancellationToken,
+        #[cfg(debug_assertions)] hook: Option<&CommandCommitTestHook>,
+    ) -> Result<(), StoreError> {
+        #[cfg(debug_assertions)]
+        if let Some(hook) = hook {
+            hook.actor_pause(CommandCommitTestPhase::BeforeFinalCancellationCheck);
+        }
+        Self::check_command_cancelled(cancellation)?;
+        #[cfg(debug_assertions)]
+        if let Some(hook) = hook {
+            hook.actor_pause(CommandCommitTestPhase::AfterFinalCancellationCheck);
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Applies the inverse of the current history entry.

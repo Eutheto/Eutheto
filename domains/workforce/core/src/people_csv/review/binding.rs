@@ -71,6 +71,7 @@ fn validated_review_value(review: &PeopleCsvReview) -> Result<Value, CsvError> {
         || !valid_digest(&review.source.blake3)
         || !valid_digest(&review.changes_blake3)
         || !valid_digest(&review.rejected_blake3)
+        || !valid_digest(&review.validation_blake3)
         || usize::try_from(review.source.raw_bytes)
             .map_or(true, |bytes| bytes > MAX_CSV_SOURCE_BYTES)
         || review.source.logical_records > MAX_CSV_LOGICAL_RECORDS

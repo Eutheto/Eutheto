@@ -22,6 +22,7 @@ eutheto-store = { path = "../eutheto-store" }
 eutheto-solver-api = { path = "../eutheto-solver-api" }
 eutheto-solver-router = { path = "../eutheto-solver-router" }
 eutheto-verify = { path = "../eutheto-verify" }
+eutheto-workforce = { path = "../../domains/workforce/core" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 tokio = { version = "=1.53.1", features = ["rt", "sync"] }
@@ -30,7 +31,6 @@ uuid = "=1.26.0"
 [dev-dependencies]
 dirs = "=6.0.0"
 eutheto-solver-ortools = { path = "../eutheto-solver-ortools" }
-eutheto-workforce = { path = "../../domains/workforce/core" }
 sha2 = "=0.10.9"
 tempfile = "=3.27.0"
 tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "sync"] }
