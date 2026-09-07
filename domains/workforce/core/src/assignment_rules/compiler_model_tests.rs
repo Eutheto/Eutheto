@@ -29,7 +29,7 @@ fn context() -> CompileContext {
             "test.payload".to_owned(),
             "quotes \" slash \\ café\n".to_owned(),
         )]),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }
@@ -61,7 +61,7 @@ fn full_ir_preflight_accounts_for_every_serialized_byte() -> Result {
         }
         let context = context();
         let limits = context.planning_limits;
-        let mut budget = OperationBudget::analysis(Some(&context.cancellation), limits);
+        let mut budget = OperationBudget::analysis(Some(&context.control), limits);
         let input = AssignmentInput::new(&document, &mut budget)?;
         let policy = require_supported(&input, &mut budget)?;
         check_metadata(&context, limits, &mut budget)?;
@@ -93,7 +93,7 @@ fn construction_and_generic_phases_observe_the_same_cancellation_token() -> Resu
         let document = source()?;
         let context = context();
         let limits = context.planning_limits;
-        let mut budget = OperationBudget::analysis(Some(&context.cancellation), limits);
+        let mut budget = OperationBudget::analysis(Some(&context.control), limits);
         let input = AssignmentInput::new(&document, &mut budget)?;
         let policy = require_supported(&input, &mut budget)?;
         let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
@@ -140,7 +140,10 @@ fn construction_and_generic_phases_observe_the_same_cancellation_token() -> Resu
                 Err(AssignmentRuleError::Cancelled)
             );
         }
-        assert!(context.cancellation.is_cancelled());
+        assert_eq!(
+            context.control.check(),
+            Err(eutheto_types::OperationInterruption::Cancelled)
+        );
     }
     Ok(())
 }
@@ -268,7 +271,7 @@ fn later_model_phases_cannot_refill_consumed_retention() -> Result {
         let document = source()?;
         let context = context();
         let limits = context.planning_limits;
-        let mut budget = OperationBudget::analysis(Some(&context.cancellation), limits);
+        let mut budget = OperationBudget::analysis(Some(&context.control), limits);
         let input = AssignmentInput::new(&document, &mut budget)?;
         let policy = require_supported(&input, &mut budget)?;
         let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;

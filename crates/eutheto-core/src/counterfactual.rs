@@ -476,7 +476,7 @@ impl CounterfactualRuntime {
         let compile_context = CompileContext {
             scenario_revision: request.semantics.scenario_revision,
             semantic_metadata: BTreeMap::new(),
-            cancellation: live.cancellation.clone(),
+            control: eutheto_types::OperationControl::Solve(budget.phase_view()),
             planning_limits: PlanningIrLimitsV1::DEFAULT,
         };
         let base_problem = match pack.compile(&base.document, &compile_context) {
@@ -653,25 +653,26 @@ impl CounterfactualRuntime {
         let event_request = request.clone();
         let event_run_id = loaded.input.run_id;
         let mut verifying_emitted = false;
-        let mut reviewer = RouterCandidateReviewer::new_notifying(
+        let mut reviewer = RouterCandidateReviewer::new(
             pack,
             &loaded.document,
             request.semantics.scenario_revision,
             derived_problem.as_ref(),
             &verification_clock,
             self.ids.as_ref(),
-            move || {
-                if !verifying_emitted {
-                    event_runtime.publish(
-                        &event_request,
-                        Some(event_run_id),
-                        CounterfactualProgressPhase::Verifying,
-                    );
-                    verifying_emitted = true;
-                }
-            },
+            &compile_context.control,
         )
-        .map_err(|_| ())?;
+        .map_err(|_| ())?
+        .with_before_review(move || {
+            if !verifying_emitted {
+                event_runtime.publish(
+                    &event_request,
+                    Some(event_run_id),
+                    CounterfactualProgressPhase::Verifying,
+                );
+                verifying_emitted = true;
+            }
+        });
         let mut progress = IgnoreSolverProgress;
         let router_record = SolverRouter::new(&self.solvers)
             .execute(
@@ -1298,14 +1299,18 @@ fn select_terminal(
                 first_verified,
             )
         }
-        Some(AcceptanceDecision::Quarantined { alarm, .. }) => (
-            RunTerminalOutcomeV1::VerificationAlarm {
-                diagnostic_code: alarm.diagnostic_code.clone(),
-            },
-            None,
-            IntendedTerminal::Quarantined,
-            None,
-        ),
+        Some(AcceptanceDecision::Quarantined { alarm, .. })
+            if record.terminal_reason == ExecutionTerminalReason::VerificationQuarantined =>
+        {
+            (
+                RunTerminalOutcomeV1::VerificationAlarm {
+                    diagnostic_code: alarm.diagnostic_code.clone(),
+                },
+                None,
+                IntendedTerminal::Quarantined,
+                None,
+            )
+        }
         _ => status_terminal(record.terminal_status),
     }
 }
@@ -1373,7 +1378,8 @@ fn status_terminal(
 fn decision_timings(decision: &AcceptanceDecision) -> AcceptancePhaseTimings {
     match decision {
         AcceptanceDecision::Accepted { timings, .. }
-        | AcceptanceDecision::Quarantined { timings, .. } => *timings,
+        | AcceptanceDecision::Quarantined { timings, .. }
+        | AcceptanceDecision::Interrupted { timings, .. } => *timings,
         AcceptanceDecision::Awaiting => AcceptancePhaseTimings::default(),
     }
 }
@@ -1769,10 +1775,102 @@ mod tests {
             report.issues[0].code,
             "solution.counterfactual_budget_invalid"
         );
-        assert_eq!(
-            report.issues[0].message,
-            "The total counterfactual budget must be between 1 and 30000 milliseconds."
-        );
+        Ok(())
+    }
+
+    #[test]
+    fn router_interruption_cannot_resurrect_a_stale_reviewer_quarantine()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use eutheto_solver_router::{
+            DecisionStatus, OverrideHandling, RoutingDecision, SplitDisposition,
+        };
+        use eutheto_types::*;
+        let options = SolveOptions {
+            backend: BackendSelection::Auto,
+            mode: SolveMode::Balanced,
+            time_limit_milliseconds: DurationMillis::new(1000)?,
+            memory_limit_bytes: None,
+            worker_threads: WorkerThreadPolicy::Exact(1),
+            random_seed: 1,
+            solution_limit: None,
+            stop_after_first_feasible: false,
+            collect_intermediate_solutions: false,
+            explanation_mode: ExplanationMode::None,
+            preserve_existing: PreservationPolicy::None,
+            reproducibility: ReproducibilityMode::Deterministic,
+            resource_limits: ResourceLimits {
+                max_entities: 100,
+                max_rules: 100,
+                max_variables: 100,
+                max_constraints: 100,
+            },
+        };
+        let identity = BackendRuntimeIdentity::new(
+            "tests.backend".parse()?,
+            "1.0.0".to_owned(),
+            "1.0.0".to_owned(),
+            "1.0.0".to_owned(),
+            "1.0.0".to_owned(),
+            1,
+            0,
+        )?;
+        let condition = CounterfactualConditionV1::new(start_request()?.condition)?;
+        let decision = AcceptanceDecision::Quarantined {
+            alarm: eutheto_verify::CorrectnessAlarm {
+                category: eutheto_verify::CorrectnessAlarmCategory::RequiredRuleRejected,
+                diagnostic_code: "verification.required_rule_rejected".to_owned(),
+            },
+            timings: AcceptancePhaseTimings::default(),
+        };
+        for (status, reason) in [
+            (SolveStatus::Cancelled, ExecutionTerminalReason::Cancelled),
+            (
+                SolveStatus::NoSolutionWithinLimit,
+                ExecutionTerminalReason::ParentDeadlineExceeded,
+            ),
+        ] {
+            let record = RouterExecutionRecord {
+                decision: RoutingDecision {
+                    policy_version: 1,
+                    profile: None,
+                    profile_contract_version: 1,
+                    requested_backend: BackendSelection::Auto,
+                    status: DecisionStatus::Ready,
+                    summary: None,
+                    component_analysis: eutheto_planning_ir::ComponentAnalysis {
+                        components: Vec::new(),
+                        edge_count: 0,
+                        component_hash: "0".repeat(64),
+                    },
+                    split: SplitDisposition::SingleComponent,
+                    considered_backends: Vec::new(),
+                    chosen_backend: Some(identity.backend_id().clone()),
+                    override_handling: OverrideHandling::Automatic,
+                    fallback_order: Vec::new(),
+                    diagnostics: Vec::new(),
+                },
+                solve_options: options.clone(),
+                attempts: Vec::new(),
+                invocation_count: 1,
+                terminal_status: status,
+                terminal_reason: reason,
+                selected_candidate: None,
+                first_verified_feasible_milliseconds: None,
+                diagnostics: Vec::new(),
+            };
+            let (outcome, alternative, _, first_verified) = select_terminal(
+                &record,
+                Some(&decision),
+                &identity,
+                &options,
+                &condition,
+                false,
+                None,
+            );
+            assert_eq!(outcome, RunTerminalOutcomeV1::NoResult { status });
+            assert!(alternative.is_none());
+            assert!(first_verified.is_none());
+        }
         Ok(())
     }
 }

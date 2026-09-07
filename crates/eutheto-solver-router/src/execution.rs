@@ -7,7 +7,8 @@ use eutheto_solver_api::{
     SolverRegistry, preflight, validate_outcome,
 };
 use eutheto_types::{
-    BackendId, BackendSelection, DurationMillis, ParentSolveBudget, SolveOptions, SolveStatus,
+    BackendId, BackendSelection, DurationMillis, OperationInterruption, ParentSolveBudget,
+    SolveOptions, SolveStatus,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -16,8 +17,9 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CandidateReview {
     AwaitingIndependentVerification,
-    Verified,
+    Verified { objective_matches: bool },
     VerificationFailed { diagnostic_code: String },
+    Interrupted(OperationInterruption),
 }
 
 /// Authority injected by the application layer after projection and independent verification exist.
@@ -749,6 +751,7 @@ fn finish_candidate_attempt(
             &run.candidates,
             reviewer,
             parent_budget,
+            None,
         )
     } else {
         match &run.completion {
@@ -757,6 +760,7 @@ fn finish_candidate_attempt(
                 &run.candidates,
                 reviewer,
                 parent_budget,
+                None,
             ),
             BackendCompletion::Returned(Ok(outcome)) => {
                 if let Err(error) =
@@ -778,6 +782,7 @@ fn finish_candidate_attempt(
                         &run.candidates,
                         reviewer,
                         parent_budget,
+                        Some(outcome.as_ref()),
                     )
                 }
             }
@@ -913,6 +918,7 @@ fn review_candidates(
     candidates: &[BackendCandidate],
     reviewer: &mut dyn CandidateReviewer,
     parent_budget: &ParentSolveBudget,
+    outcome: Option<&BackendSolveOutcome>,
 ) -> CandidateDisposition {
     for candidate in candidates {
         if let Some(stopped) = stopped_review(parent_budget) {
@@ -933,10 +939,17 @@ fn review_candidates(
                     diagnostic: Some(diagnostic),
                 };
             }
-            CandidateReview::Verified => {
+            CandidateReview::Interrupted(reason) => return interrupted_review(reason),
+            CandidateReview::Verified { objective_matches } => {
                 return CandidateDisposition {
                     termination: AttemptTermination::CandidateVerified,
-                    status: SolveStatus::Feasible,
+                    status: if objective_matches
+                        && selected_optimal_candidate(candidate, candidates, outcome)
+                    {
+                        SolveStatus::Optimal
+                    } else {
+                        SolveStatus::Feasible
+                    },
                     reason: ExecutionTerminalReason::CandidateVerified,
                     selected_candidate: Some(candidate.clone()),
                     diagnostic: None,
@@ -957,24 +970,56 @@ fn review_candidates(
 fn stopped_review(parent_budget: &ParentSolveBudget) -> Option<CandidateDisposition> {
     let snapshot = parent_budget.snapshot();
     if snapshot.cancelled {
-        Some(CandidateDisposition {
-            termination: AttemptTermination::ReviewCancelled,
-            status: SolveStatus::Cancelled,
-            reason: ExecutionTerminalReason::Cancelled,
-            selected_candidate: None,
-            diagnostic: None,
-        })
+        Some(interrupted_review(OperationInterruption::Cancelled))
     } else if snapshot.expired || snapshot.remaining_milliseconds == DurationMillis::ZERO {
-        Some(CandidateDisposition {
-            termination: AttemptTermination::ReviewDeadlineExceeded,
-            status: SolveStatus::NoSolutionWithinLimit,
-            reason: ExecutionTerminalReason::ParentDeadlineExceeded,
-            selected_candidate: None,
-            diagnostic: None,
-        })
+        Some(interrupted_review(OperationInterruption::DeadlineExceeded))
     } else {
         None
     }
+}
+
+fn interrupted_review(reason: OperationInterruption) -> CandidateDisposition {
+    let (termination, status, reason) = match reason {
+        OperationInterruption::Cancelled => (
+            AttemptTermination::ReviewCancelled,
+            SolveStatus::Cancelled,
+            ExecutionTerminalReason::Cancelled,
+        ),
+        OperationInterruption::DeadlineExceeded => (
+            AttemptTermination::ReviewDeadlineExceeded,
+            SolveStatus::NoSolutionWithinLimit,
+            ExecutionTerminalReason::ParentDeadlineExceeded,
+        ),
+    };
+    CandidateDisposition {
+        termination,
+        status,
+        reason,
+        selected_candidate: None,
+        diagnostic: None,
+    }
+}
+
+fn selected_optimal_candidate(
+    selected: &BackendCandidate,
+    candidates: &[BackendCandidate],
+    outcome: Option<&BackendSolveOutcome>,
+) -> bool {
+    let Some(outcome) = outcome else { return false };
+    if outcome.termination != BackendTerminationReason::OptimalityClaimed
+        || candidates
+            .last()
+            .is_none_or(|last| last.sequence != selected.sequence)
+    {
+        return false;
+    }
+    let (Some(selected_objective), Some(final_objective)) =
+        (&selected.objective, &outcome.evidence.objective)
+    else {
+        return false;
+    };
+    selected_objective.objective_values == final_objective.objective_values
+        && final_objective.best_bound_values.as_ref() == Some(&final_objective.objective_values)
 }
 
 fn terminal_from_outcome(

@@ -32,6 +32,12 @@ enum Behavior {
     AssignmentFlood,
     LateCandidate(BackendTerminationReason, u64, u64),
     Never,
+    Proof {
+        termination: BackendTerminationReason,
+        candidates: Vec<i64>,
+        final_value: i64,
+        bound: Option<i64>,
+    },
 }
 
 struct TestBackend {
@@ -105,11 +111,61 @@ impl SolverBackend for TestBackend {
                     },
                 });
             }
+            if let Behavior::Proof {
+                termination,
+                candidates,
+                final_value,
+                bound,
+            } = &self.behavior
+            {
+                for value in candidates {
+                    let mut values = candidate_values()?;
+                    values.integers.insert(
+                        IntVariableId::new("tests.left")
+                            .map_err(|_| OutputError::UnsafeDiagnosticLine)?,
+                        *value,
+                    );
+                    output.submit_candidate(CandidateSubmission {
+                        values,
+                        observed_after_milliseconds: millis(1)?,
+                        objective: Some(BackendObjectiveEvidence {
+                            objective_values: vec![*value],
+                            best_bound_values: None,
+                        }),
+                        evidence_refs: Vec::new(),
+                    })?;
+                }
+                return Ok(BackendSolveOutcome {
+                    backend_id: self.descriptor.id.clone(),
+                    model_hash: request.model_hash().to_owned(),
+                    solve_fingerprint: request.solve_fingerprint().to_owned(),
+                    termination: *termination,
+                    evidence: BackendTerminationEvidence {
+                        remaining_at_dispatch_milliseconds: request
+                            .dispatch_budget()
+                            .remaining_at_dispatch(),
+                        backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+                        elapsed_milliseconds: if *termination == BackendTerminationReason::TimeLimit
+                        {
+                            request.dispatch_budget().backend_limit()
+                        } else {
+                            millis(3)?
+                        },
+                        first_incumbent_milliseconds: Some(millis(1)?),
+                        objective: Some(BackendObjectiveEvidence {
+                            objective_values: vec![*final_value],
+                            best_bound_values: bound.map(|value| vec![value]),
+                        }),
+                        evidence_refs: Vec::new(),
+                        execution: None,
+                    },
+                });
+            }
             let (candidate, advance) = match &self.behavior {
                 Behavior::Outcome(_, candidate, _, advance)
                 | Behavior::Error(candidate, advance) => (*candidate, *advance),
                 Behavior::AssignmentFlood => (false, 0),
-                Behavior::LateCandidate(_, _, _) | Behavior::Never => {
+                Behavior::Proof { .. } | Behavior::LateCandidate(_, _, _) | Behavior::Never => {
                     unreachable!("handled before ordinary backend behavior")
                 }
             };
@@ -178,7 +234,7 @@ impl SolverBackend for TestBackend {
                     },
                 }),
                 Behavior::AssignmentFlood => unreachable!("handled before backend outcome"),
-                Behavior::LateCandidate(_, _, _) | Behavior::Never => {
+                Behavior::Proof { .. } | Behavior::LateCandidate(_, _, _) | Behavior::Never => {
                     unreachable!("handled before ordinary backend outcome")
                 }
             }
@@ -208,7 +264,9 @@ impl CandidateReviewer for Quarantine {
 struct Verify;
 impl CandidateReviewer for Verify {
     fn review(&mut self, _backend: &BackendId, _candidate: &BackendCandidate) -> CandidateReview {
-        CandidateReview::Verified
+        CandidateReview::Verified {
+            objective_matches: false,
+        }
     }
 }
 
@@ -222,7 +280,9 @@ impl CandidateReviewer for ExpiringReview {
                 diagnostic_code: "verification.clock_overflow".to_owned(),
             };
         }
-        CandidateReview::Verified
+        CandidateReview::Verified {
+            objective_matches: false,
+        }
     }
 }
 
@@ -1342,7 +1402,7 @@ async fn retained_candidate_is_reviewed_after_backend_error_and_failure_is_prese
 }
 
 #[tokio::test]
-async fn backend_optimality_claim_never_elevates_verified_candidate_above_feasible() -> TestResult {
+async fn backend_optimality_without_independent_objective_match_stays_feasible() -> TestResult {
     let clock = FixedMonotonicClock::default();
     let registry = registry(
         vec![(
@@ -1359,6 +1419,166 @@ async fn backend_optimality_claim_never_elevates_verified_candidate_above_feasib
         result.first_verified_feasible_milliseconds,
         Some(DurationMillis::new(5)?)
     );
+    Ok(())
+}
+
+#[tokio::test]
+// Keep the distinct proof-binding, candidate-selection and limit cases in one auditable matrix.
+#[allow(clippy::too_many_lines)]
+async fn optimal_status_requires_the_selected_verified_final_candidate_and_equal_bound()
+-> TestResult {
+    struct Review {
+        skip_first: bool,
+        matches: bool,
+    }
+    impl CandidateReviewer for Review {
+        fn review(&mut self, _: &BackendId, candidate: &BackendCandidate) -> CandidateReview {
+            if self.skip_first && candidate.sequence == 1 {
+                CandidateReview::AwaitingIndependentVerification
+            } else {
+                CandidateReview::Verified {
+                    objective_matches: self.matches,
+                }
+            }
+        }
+    }
+    use BackendTerminationReason::{OptimalityClaimed, SolutionLimit, TimeLimit};
+    for (termination, candidates, final_value, bound, skip_first, matched, expected) in [
+        (
+            OptimalityClaimed,
+            vec![1],
+            1,
+            Some(1),
+            false,
+            true,
+            SolveStatus::Optimal,
+        ),
+        (
+            OptimalityClaimed,
+            vec![2, 1],
+            1,
+            Some(1),
+            false,
+            true,
+            SolveStatus::Feasible,
+        ),
+        (
+            OptimalityClaimed,
+            vec![2, 1],
+            1,
+            Some(1),
+            true,
+            true,
+            SolveStatus::Optimal,
+        ),
+        (
+            OptimalityClaimed,
+            vec![1],
+            1,
+            None,
+            false,
+            true,
+            SolveStatus::Feasible,
+        ),
+        (
+            OptimalityClaimed,
+            vec![1],
+            2,
+            Some(2),
+            false,
+            true,
+            SolveStatus::Feasible,
+        ),
+        (
+            OptimalityClaimed,
+            vec![2],
+            2,
+            Some(1),
+            false,
+            true,
+            SolveStatus::Feasible,
+        ),
+        (
+            OptimalityClaimed,
+            vec![1],
+            1,
+            Some(1),
+            false,
+            false,
+            SolveStatus::Feasible,
+        ),
+        (
+            TimeLimit,
+            vec![1],
+            1,
+            Some(1),
+            false,
+            true,
+            SolveStatus::Feasible,
+        ),
+        (
+            SolutionLimit,
+            vec![1],
+            1,
+            Some(1),
+            false,
+            true,
+            SolveStatus::Feasible,
+        ),
+    ] {
+        let clock = FixedMonotonicClock::default();
+        let registry = registry(
+            vec![(
+                "tests.a",
+                Behavior::Proof {
+                    termination,
+                    candidates,
+                    final_value,
+                    bound,
+                },
+                false,
+            )],
+            &clock,
+        )?;
+        let mut fixture = problem()?;
+        let provenance = ProvenanceId::new("tests.provenance")?;
+        fixture.objectives.levels.push(ObjectiveLevel {
+            id: ObjectiveLevelId::new("tests.level")?,
+            direction: OptimizationDirection::Minimize,
+            lower_bound: 1,
+            upper_bound: 3,
+            terms: vec![ObjectiveTerm {
+                id: ObjectiveTermId::new("tests.objective")?,
+                expression: LinearExpression::new(
+                    vec![LinearTerm {
+                        variable: IntVariableId::new("tests.left")?,
+                        coefficient: 1,
+                    }],
+                    0,
+                )?,
+                kind: ObjectiveTermKind::Penalty,
+                category: ScoreCategoryId::new("tests.score")?,
+                provenance: provenance.clone(),
+            }],
+            provenance,
+        });
+        fixture.canonicalize()?;
+        let result = run(
+            &registry,
+            fixture,
+            &clock,
+            &mut Review {
+                skip_first,
+                matches: matched,
+            },
+        )
+        .await?;
+        assert_eq!(
+            result.terminal_status, expected,
+            "{termination:?}, skip_first={skip_first}, matched={matched}, bound={bound:?}"
+        );
+        assert!(result.selected_candidate.is_some());
+    }
     Ok(())
 }
 

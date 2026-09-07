@@ -34,7 +34,7 @@ pub fn compile_assignment_rules(
     context: &CompileContext,
 ) -> Result<AssignmentRuleCompilation, AssignmentRuleError> {
     let limits = context.planning_limits;
-    let mut budget = OperationBudget::analysis(Some(&context.cancellation), limits);
+    let mut budget = OperationBudget::analysis(Some(&context.control), limits);
     let input = AssignmentInput::new(document, &mut budget)?;
     let (analysis, plan) = prepare(document, &input, &mut budget, limits)?;
     // Counts, per-record bounds, references and exact serialized contribution bytes are all
@@ -761,8 +761,9 @@ mod tests {
                 .insert(id(1_000 + index).parse()?, record);
         }
         let token = CancellationToken::new();
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
         let limits = PlanningIrLimitsV1::DEFAULT;
-        let mut budget = OperationBudget::analysis(Some(&token), limits);
+        let mut budget = OperationBudget::analysis(Some(&control), limits);
         let input = AssignmentInput::new(&document, &mut budget)?;
         let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
         preflight(&analysis.candidates, &plan, &mut budget, limits)?;
@@ -791,8 +792,9 @@ mod tests {
             }),
         );
         let token = CancellationToken::new();
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
         let limits = PlanningIrLimitsV1::DEFAULT;
-        let mut budget = OperationBudget::analysis(Some(&token), limits);
+        let mut budget = OperationBudget::analysis(Some(&control), limits);
         let input = AssignmentInput::new(&document, &mut budget)?;
         let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
         preflight(&analysis.candidates, &plan, &mut budget, limits)?;

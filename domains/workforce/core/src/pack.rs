@@ -104,7 +104,7 @@ impl DomainPack for WorkforcePack {
         &self,
         mut shell: ScenarioDocument,
     ) -> Result<ScenarioDocument, DomainPackError> {
-        validate_input_bounds(&shell)?;
+        validate_input_bounds(&shell, None)?;
         if shell.domain_pack.id.as_str() != WORKFORCE_PACK_ID {
             return Err(DomainPackError::InvalidPayload {
                 path: "domainPack.id".to_owned(),
@@ -125,13 +125,14 @@ impl DomainPack for WorkforcePack {
         &self,
         document: ScenarioDocument,
     ) -> Result<ScenarioDocument, DomainPackError> {
-        validate_input_bounds(&document)?;
+        validate_input_bounds(&document, None)?;
         validate_document(&document)?;
         Ok(document)
     }
 
     fn validate_fast(&self, document: &ScenarioDocument) -> DomainValidationReport {
-        match validate_input_bounds(document).and_then(|()| validate_document(document).map(|_| ()))
+        match validate_input_bounds(document, None)
+            .and_then(|()| validate_document(document).map(|_| ()))
         {
             Ok(()) => DomainValidationReport::default(),
             Err(error) => DomainValidationReport {
@@ -140,8 +141,12 @@ impl DomainPack for WorkforcePack {
         }
     }
 
-    fn validate_full(&self, document: &ScenarioDocument) -> DomainValidationReport {
-        validate_workforce_full(document)
+    fn validate_full(
+        &self,
+        document: &ScenarioDocument,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<DomainValidationReport, DomainPackError> {
+        validate_workforce_full(document, control)
     }
 
     fn apply_batch(
@@ -153,8 +158,9 @@ impl DomainPack for WorkforcePack {
         if cancellation.is_cancelled() {
             return Err(DomainPackError::Cancelled);
         }
-        validate_input_bounds(document)?;
-        validate_input_bounds(batch)?;
+        let control = eutheto_types::OperationControl::Cancellation(cancellation.clone());
+        validate_input_bounds(document, Some(&control))?;
+        validate_input_bounds(batch, Some(&control))?;
         commands::apply_batch_cancellable(document, batch, cancellation)
     }
 
@@ -163,11 +169,9 @@ impl DomainPack for WorkforcePack {
         document: &ScenarioDocument,
         context: &CompileContext,
     ) -> Result<PlanningProblem, DomainPackError> {
-        if context.cancellation.is_cancelled() {
-            return Err(DomainPackError::Cancelled);
-        }
-        validate_input_bounds(document)?;
-        validate_input_bounds(&context.semantic_metadata)?;
+        context.control.check()?;
+        validate_input_bounds(document, Some(&context.control))?;
+        validate_input_bounds(&context.semantic_metadata, Some(&context.control))?;
         compile_workforce(document, context)
             .map(|compiled| compiled.problem)
             .map_err(|error| operation_error(&error))
@@ -178,16 +182,26 @@ impl DomainPack for WorkforcePack {
         problem: &PlanningProblem,
         candidate: &CandidateValues,
         solution_id: SolutionId,
+        control: &eutheto_types::OperationControl,
     ) -> Result<NormalizedSolution, DomainPackError> {
-        project_workforce_candidate(problem, candidate, solution_id, PlanningIrLimitsV1::DEFAULT)
+        control.check()?;
+        project_workforce_candidate(
+            problem,
+            candidate,
+            solution_id,
+            PlanningIrLimitsV1::DEFAULT,
+            control,
+        )
     }
 
     fn verification_scope(
         &self,
         document: &ScenarioDocument,
         scenario_revision: u64,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationScope, DomainPackError> {
-        workforce_verification_scope(document, scenario_revision, None)
+        control.check()?;
+        workforce_verification_scope(document, scenario_revision, Some(control))
     }
 
     fn verify(
@@ -196,23 +210,33 @@ impl DomainPack for WorkforcePack {
         solution: &NormalizedSolution,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
-        verify_workforce_solution(document, solution, context, authoritative_score, None)
+        control.check()?;
+        verify_workforce_solution(
+            document,
+            solution,
+            context,
+            authoritative_score,
+            Some(control),
+        )
     }
 
     fn score(
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
-        score_workforce_solution(document, solution, None)
+        control.check()?;
+        score_workforce_solution(document, solution, Some(control))
     }
 
     fn export_portable(
         &self,
         document: &ScenarioDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
-        validate_input_bounds(document)?;
+        validate_input_bounds(document, None)?;
         portable::export_portable(document)
     }
 
@@ -229,8 +253,8 @@ impl DomainPack for WorkforcePack {
         document: &PortableDomainDocument,
         context: &PortableImportContext,
     ) -> Result<ScenarioDocument, DomainPackError> {
-        validate_input_bounds(document)?;
-        validate_input_bounds(&context.scenario_shell)?;
+        validate_input_bounds(document, None)?;
+        validate_input_bounds(&context.scenario_shell, None)?;
         portable::import_portable(document, context)
     }
 

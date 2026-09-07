@@ -60,11 +60,14 @@ pub fn compile_workforce(
     document: &ScenarioDocument,
     context: &CompileContext,
 ) -> Result<WorkforceCompilation, AssignmentRuleError> {
-    if context.cancellation.is_cancelled() {
-        return Err(AssignmentRuleError::Cancelled);
-    }
+    context.control.check().map_err(|reason| match reason {
+        eutheto_types::OperationInterruption::Cancelled => AssignmentRuleError::Cancelled,
+        eutheto_types::OperationInterruption::DeadlineExceeded => {
+            AssignmentRuleError::BudgetExpired
+        }
+    })?;
     let limits = effective_limits(context.planning_limits)?;
-    let mut budget = OperationBudget::analysis(Some(&context.cancellation), limits);
+    let mut budget = OperationBudget::analysis(Some(&context.control), limits);
     let input = AssignmentInput::new(document, &mut budget)?;
     let policy = require_supported(&input, &mut budget)?;
     check_metadata(context, limits, &mut budget)?;

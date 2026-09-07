@@ -89,7 +89,7 @@ fn context() -> CompileContext {
     CompileContext {
         scenario_revision: 7,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }
@@ -99,7 +99,11 @@ fn verification_context(
     problem: &PlanningProblem,
     solution: &NormalizedSolution,
 ) -> Result<VerificationContextV1, Box<dyn Error>> {
-    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    let scope = pack.verification_scope(
+        document,
+        solution.scenario_revision,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     Ok(VerificationContextV1::new(
         document.scenario_id,
         solution.scenario_revision,
@@ -386,14 +390,24 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
             Variable::Interval(_) => {}
         }
     }
-    let solution = pack.project(&problem, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
-    let authoritative_score = pack.score(&source, &solution)?;
+    let solution = pack.project(
+        &problem,
+        &candidate,
+        SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
+    let authoritative_score = pack.score(
+        &source,
+        &solution,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let verification_context = verification_context(&pack, &source, &problem, &solution)?;
     let verification = pack.verify(
         &source,
         &solution,
         &verification_context,
         &authoritative_score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let accepted = AcceptedResult::new(solution, verification)?;
     source.extensions.insert(
@@ -534,10 +548,14 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     let pack = OfficialTestPack;
     let source = document()?;
     let limits = PlanningIrLimitsV1::DEFAULT;
-    let verification_scope = pack.verification_scope(&source, context().scenario_revision)?;
+    let verification_scope = pack.verification_scope(
+        &source,
+        context().scenario_revision,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     assert_eq!(
         verification_scope,
-        pack.verification_scope(&source, context().scenario_revision)?
+        pack.verification_scope(&source, context().scenario_revision, &context().control)?
     );
     assert_eq!(verification_scope.required_rules.len(), 1);
     assert_eq!(
@@ -604,12 +622,21 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     );
 
     let candidate = satisfying_candidate(&first);
-    let solution = pack.project(&first, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
+    let solution = pack.project(
+        &first,
+        &candidate,
+        SolutionId::from_str(SOLUTION_ID)?,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let projection_evidence = format!("official_test.projection.{ENTITY_ID}");
     assert!(solution.assignments.iter().all(|assignment| {
         assignment.evidence.len() == 1 && assignment.evidence[0].as_str() == projection_evidence
     }));
-    let authoritative_score = pack.score(&source, &solution)?;
+    let authoritative_score = pack.score(
+        &source,
+        &solution,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let context_for_solution = verification_context(&pack, &source, &first, &solution)?;
     let mut unsatisfied = solution.clone();
     let target = unsatisfied
@@ -618,13 +645,18 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
         .find(|assignment| assignment.id.as_str().contains(".target."))
         .ok_or("target assignment missing")?;
     target.value = AssignmentValue::Integer(4);
-    let unsatisfied_score = pack.score(&source, &unsatisfied)?;
+    let unsatisfied_score = pack.score(
+        &source,
+        &unsatisfied,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     let unsatisfied_context = verification_context(&pack, &source, &first, &unsatisfied)?;
     let report = pack.verify(
         &source,
         &solution,
         &context_for_solution,
         &authoritative_score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     assert!(report.accepted);
     assert_eq!(report.required_rule_results.len(), 1);
@@ -656,7 +688,13 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     );
     assert_eq!(
         report,
-        pack.verify(&source, &solution, &context_for_solution, &report.score)?
+        pack.verify(
+            &source,
+            &solution,
+            &context_for_solution,
+            &report.score,
+            &context().control
+        )?
     );
 
     let unsatisfied_report = pack.verify(
@@ -664,6 +702,7 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
         &unsatisfied,
         &unsatisfied_context,
         &unsatisfied_score,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     assert!(!unsatisfied_report.accepted);
     assert_eq!(unsatisfied_report.required_rule_results.len(), 1);

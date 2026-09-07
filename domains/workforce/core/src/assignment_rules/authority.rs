@@ -22,7 +22,7 @@ use eutheto_domain_ir::{
 };
 use eutheto_planning_ir::PlanningIrLimitsV1;
 use eutheto_types::{
-    CancellationToken, EntityId, REVISION_MAX_V1, RuleId, ScenarioDocument, ScenarioId,
+    EntityId, OperationControl, REVISION_MAX_V1, RuleId, ScenarioDocument, ScenarioId,
 };
 use std::collections::BTreeMap;
 
@@ -42,9 +42,9 @@ pub(super) const VIOLATIONS_METRIC: &str = "official.workforce.metric.violations
 pub fn workforce_verification_scope(
     document: &ScenarioDocument,
     scenario_revision: u64,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<VerificationScope, DomainPackError> {
-    let mut budget = OperationBudget::evaluation(cancellation);
+    let mut budget = OperationBudget::evaluation(control);
     budget.check().map_err(|error| operation_error(&error))?;
     check_revision(scenario_revision)?;
     let input = prepare_source(document, &mut budget)?;
@@ -65,9 +65,9 @@ pub fn workforce_verification_scope(
 pub fn score_workforce_solution(
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<ScoreVector, DomainPackError> {
-    let mut budget = OperationBudget::evaluation(cancellation);
+    let mut budget = OperationBudget::evaluation(control);
     Ok(assess(document, solution, &mut budget)?.score)
 }
 
@@ -83,9 +83,9 @@ pub fn verify_workforce_solution(
     solution: &NormalizedSolution,
     context: &VerificationContextV1,
     authoritative_score: &ScoreVector,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<VerificationReport, DomainPackError> {
-    let mut budget = OperationBudget::evaluation(cancellation);
+    let mut budget = OperationBudget::evaluation(control);
     budget.check().map_err(|error| operation_error(&error))?;
     check_rank_shape(authoritative_score)?;
     preflight(context, &mut budget, DOMAIN_LIMITS).map_err(|error| operation_error(&error))?;
@@ -160,8 +160,11 @@ pub(super) fn revalidate_workforce_accepted(
     Ok(())
 }
 
-pub(crate) fn validate_input_bounds<T: serde::Serialize>(value: &T) -> Result<(), DomainPackError> {
-    let mut budget = OperationBudget::evaluation(None);
+pub(crate) fn validate_input_bounds<T: serde::Serialize>(
+    value: &T,
+    control: Option<&OperationControl>,
+) -> Result<(), DomainPackError> {
+    let mut budget = OperationBudget::evaluation(control);
     preflight(value, &mut budget, ContractJsonLimits::DEFAULT)
         .map(|_| ())
         .map_err(|error| operation_error(&error))
@@ -660,10 +663,10 @@ fn check_revision(value: u64) -> Result<(), DomainPackError> {
     }
 }
 pub(crate) fn operation_error(error: &AssignmentRuleError) -> DomainPackError {
-    if error == &AssignmentRuleError::Cancelled {
-        DomainPackError::Cancelled
-    } else {
-        DomainPackError::Contract(error.code().to_owned())
+    match error {
+        AssignmentRuleError::Cancelled => DomainPackError::Cancelled,
+        AssignmentRuleError::BudgetExpired => DomainPackError::BudgetExpired,
+        _ => DomainPackError::Contract(error.code().to_owned()),
     }
 }
 pub(super) fn contract(code: &'static str) -> DomainPackError {

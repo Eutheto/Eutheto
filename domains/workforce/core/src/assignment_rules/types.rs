@@ -189,6 +189,7 @@ pub enum AssignmentRuleError {
     ReservedSemanticMetadata(&'static str),
     InvalidSemanticMetadata,
     Cancelled,
+    BudgetExpired,
 }
 
 impl AssignmentRuleError {
@@ -199,6 +200,7 @@ impl AssignmentRuleError {
             Self::InvalidDocument(_) => "official.workforce.invalid_document",
             Self::Temporal(_) => "official.workforce.temporal_review",
             Self::Cancelled => "official.workforce.cancelled",
+            Self::BudgetExpired => "official.workforce.budget_expired",
             Self::MissingScorePolicy => "official.workforce.compile.missing_score_policy",
             Self::UnsupportedObligation(_) => "official.workforce.compile.unsupported_obligation",
             Self::ReservedSemanticMetadata(_) => "official.workforce.compile.reserved_metadata",
@@ -283,6 +285,7 @@ impl From<DomainPackError> for AssignmentRuleError {
     fn from(error: DomainPackError) -> Self {
         match error {
             DomainPackError::Cancelled => Self::Cancelled,
+            DomainPackError::BudgetExpired => Self::BudgetExpired,
             other => Self::InvalidDocument(other),
         }
     }
@@ -303,6 +306,7 @@ impl From<AssignmentRuleError> for DomainPackError {
         match error {
             AssignmentRuleError::InvalidDocument(error) => error,
             AssignmentRuleError::Cancelled => Self::Cancelled,
+            AssignmentRuleError::BudgetExpired => Self::BudgetExpired,
             AssignmentRuleError::Temporal(issue) => Self::InvalidPayload {
                 path: issue.entity_id.map_or_else(
                     || "settings".to_owned(),

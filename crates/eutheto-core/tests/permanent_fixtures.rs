@@ -154,8 +154,13 @@ impl DomainPack for HistoricalFixturePack {
         Self::validation_report(document)
     }
 
-    fn validate_full(&self, document: &ScenarioDocument) -> DomainValidationReport {
-        Self::validation_report(document)
+    fn validate_full(
+        &self,
+        document: &ScenarioDocument,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<DomainValidationReport, DomainPackError> {
+        control.check()?;
+        Ok(Self::validation_report(document))
     }
 
     fn apply_batch(
@@ -180,7 +185,9 @@ impl DomainPack for HistoricalFixturePack {
         _problem: &PlanningProblem,
         _candidate: &CandidateValues,
         _solution_id: SolutionId,
+        control: &eutheto_types::OperationControl,
     ) -> Result<NormalizedSolution, DomainPackError> {
+        control.check()?;
         Self::unsupported()
     }
 
@@ -188,7 +195,9 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         _document: &ScenarioDocument,
         _scenario_revision: u64,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationScope, DomainPackError> {
+        control.check()?;
         Self::unsupported()
     }
 
@@ -198,7 +207,9 @@ impl DomainPack for HistoricalFixturePack {
         _solution: &NormalizedSolution,
         _context: &VerificationContextV1,
         _authoritative_score: &ScoreVector,
+        control: &eutheto_types::OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
+        control.check()?;
         Self::unsupported()
     }
 
@@ -206,7 +217,9 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         _document: &ScenarioDocument,
         _solution: &NormalizedSolution,
+        control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
+        control.check()?;
         Self::unsupported()
     }
 

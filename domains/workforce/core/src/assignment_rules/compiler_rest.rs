@@ -253,7 +253,8 @@ mod tests {
             document.domain.entities.insert(id(index).parse()?, record);
         }
         let token = CancellationToken::new();
-        let mut budget = OperationBudget::analysis(Some(&token), PlanningIrLimitsV1::DEFAULT);
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut budget = OperationBudget::analysis(Some(&control), PlanningIrLimitsV1::DEFAULT);
         let input = AssignmentInput::new(&document, &mut budget)?;
         let scope: Scope = serde_json::from_value(json!({"people":{"kind":"all"}}))?;
         let rule = RestRule {

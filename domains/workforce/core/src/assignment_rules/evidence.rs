@@ -21,7 +21,7 @@ use eutheto_domain_ir::{
     VerificationFactId, VerificationValue,
 };
 use eutheto_planning_ir::PlanningIrLimitsV1;
-use eutheto_types::{ScenarioDocument, ValidationSeverity};
+use eutheto_types::{OperationControl, ScenarioDocument, ValidationSeverity};
 use std::collections::BTreeMap;
 
 /// Renders current code-level validation or rederived pair-local assignment facts.
@@ -89,16 +89,24 @@ pub fn render_workforce_evidence(
     Ok(result)
 }
 
-pub(crate) fn validate_workforce_full(document: &ScenarioDocument) -> DomainValidationReport {
-    let mut budget = OperationBudget::evaluation(None);
+pub(crate) fn validate_workforce_full(
+    document: &ScenarioDocument,
+    control: &OperationControl,
+) -> Result<DomainValidationReport, DomainPackError> {
+    let mut budget = OperationBudget::evaluation(Some(control));
     let result = preflight(document, &mut budget, ContractJsonLimits::DEFAULT)
         .and_then(|measured| measured.reserve_json(&mut budget, 1))
         .and_then(|()| analyze_with_budget(document, &mut budget, PlanningIrLimitsV1::DEFAULT));
+    budget.check().map_err(|error| operation_error(&error))?;
     match result {
-        Ok(analysis) => analysis.validation,
-        Err(error) => DomainValidationReport {
+        Ok(analysis) => Ok(analysis.validation),
+        Err(
+            error @ (super::AssignmentRuleError::Cancelled
+            | super::AssignmentRuleError::BudgetExpired),
+        ) => Err(operation_error(&error)),
+        Err(error) => Ok(DomainValidationReport {
             issues: vec![error.validation_issue()],
-        },
+        }),
     }
 }
 

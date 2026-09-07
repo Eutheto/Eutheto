@@ -170,7 +170,7 @@ fn compile_context() -> CompileContext {
     CompileContext {
         scenario_revision: 12,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }
@@ -345,6 +345,7 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
         problem.as_ref(),
         &verification_clock,
         &id_generator,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )
     .map_err(|alarm| std::io::Error::other(alarm.diagnostic_code))?;
     let execution = SolverRouter::new(&solver_registry)
@@ -448,6 +449,7 @@ async fn domain_invalid_backend_candidate_is_quarantined_before_result_availabil
         problem.as_ref(),
         &verification_clock,
         &id_generator,
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )
     .map_err(|alarm| std::io::Error::other(alarm.diagnostic_code))?;
 

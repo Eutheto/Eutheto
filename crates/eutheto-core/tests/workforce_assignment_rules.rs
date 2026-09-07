@@ -136,7 +136,7 @@ fn context() -> CompileContext {
     CompileContext {
         scenario_revision: 1,
         semantic_metadata: BTreeMap::new(),
-        cancellation: CancellationToken::new(),
+        control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }
@@ -906,6 +906,7 @@ async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> T
         &candidate.values,
         solution_id,
         PlanningIrLimitsV1::DEFAULT,
+        &context().control,
     )?;
     assert_eq!(workforce_solution, solution);
     let structural = eutheto_verify::validate_structure(
@@ -990,7 +991,7 @@ fn assert_real_workforce_acceptance(
         result,
         objective_reconciliation,
         ..
-    } = reviewer.review(candidate, solution.solution_id)
+    } = reviewer.review(candidate, solution.solution_id, &context().control)
     else {
         return Err("real Workforce candidate was not independently accepted".into());
     };
@@ -1046,7 +1047,7 @@ async fn assert_real_worker_coverage_mutant_quarantined(
     )
     .map_err(|alarm| alarm.diagnostic_code)?;
     let eutheto_verify::AcceptanceDecision::Quarantined { alarm, .. } =
-        reviewer.review(candidate, id(501).parse()?)
+        reviewer.review(candidate, id(501).parse()?, &context().control)
     else {
         return Err("bad compiler semantics crossed real-worker acceptance".into());
     };
