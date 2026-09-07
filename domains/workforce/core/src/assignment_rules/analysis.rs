@@ -102,9 +102,17 @@ pub fn analyze_assignments(
     limits: PlanningIrLimitsV1,
 ) -> Result<AssignmentAnalysis, AssignmentRuleError> {
     let mut budget = OperationBudget::analysis(cancellation, limits);
-    let input = AssignmentInput::new(document, &mut budget)?;
-    let (analysis, plan) = prepare(document, &input, &mut budget, limits)?;
-    super::compiler::preflight(&analysis.candidates, &plan, &mut budget, limits)?;
+    analyze_with_budget(document, &mut budget, limits)
+}
+
+pub(super) fn analyze_with_budget(
+    document: &ScenarioDocument,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<AssignmentAnalysis, AssignmentRuleError> {
+    let input = AssignmentInput::new(document, budget)?;
+    let (analysis, plan) = prepare(document, &input, budget, limits)?;
+    super::compiler::preflight(&analysis.candidates, &plan, budget, limits)?;
     Ok(analysis)
 }
 

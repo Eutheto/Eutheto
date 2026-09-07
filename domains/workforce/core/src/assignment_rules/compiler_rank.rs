@@ -1,7 +1,7 @@
 use super::{
     AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleLimit,
     budget::{OperationBudget, add, count, within},
-    identity::{IdentityKind, PlanningIdentities},
+    identity::{ASSIGNMENT_KIND, IdentityKind, PlanningIdentities, RANK_CATEGORY, RANK_LEVEL},
     input::AssignmentInput,
 };
 use crate::{ids::ShiftId, model::AssignmentPair};
@@ -17,11 +17,6 @@ use eutheto_planning_ir::{
 };
 use eutheto_types::PersonId;
 use std::collections::BTreeMap;
-
-pub(super) const RANK_LEVEL: &str = "official.workforce.objective.assignment.rank";
-pub(super) const RANK_CATEGORY: &str = "official.workforce.score.assignment.rank";
-pub(super) const ASSIGNMENT_KIND: &str = "official.workforce.assignment";
-pub(super) const WORKFORCE_PROJECTION_VERSION: u32 = 1;
 
 /// Original source universe: pruning must never change a surviving pair's coefficient.
 pub(super) struct RankIndex<'a> {
