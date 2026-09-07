@@ -1,17 +1,20 @@
-//! Workforce domain values, independent of application and solver authority.
+//! Workforce domain values, compilation, projection and independent original-domain authority.
 //!
-//! This crate is not registered as a production domain pack. Registration requires
-//! the complete Workforce compiler, independent verifier, and result contracts.
+//! The real [`WorkforcePack`] is not registered in production. Host lifecycle integration and
+//! production registration remain separate phase gates.
 
 pub mod assignment_rules;
 pub mod commands;
 pub mod generated_workforce_pack_contract;
 pub mod ids;
 pub mod model;
+mod pack;
 pub mod people_csv;
 pub mod portable;
 pub mod temporal;
 pub mod validation;
+
+pub use pack::WorkforcePack;
 
 #[cfg(test)]
 #[path = "../tests/support/mod.rs"]

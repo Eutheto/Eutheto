@@ -4,8 +4,8 @@ use super::{
     analysis::{Plan, prepare, supported_rule},
     budget::{OperationBudget, count, effective_limits},
     compiler::{DecisionVariables, compile_constraint, rule_fact, variable_fact},
-    compiler_rank::{RANK_LEVEL, RankIds, RankIndex, WORKFORCE_PROJECTION_VERSION, emit_rank},
-    identity::{IdentityKind, PlanningIdentities},
+    compiler_rank::{RankIds, RankIndex, emit_rank},
+    identity::{IdentityKind, PlanningIdentities, RANK_LEVEL, WORKFORCE_PROJECTION_VERSION},
     input::AssignmentInput,
     ir_cost::{precharge_canonicalization, precharge_validation},
 };

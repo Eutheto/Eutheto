@@ -9,6 +9,10 @@ use std::{
 };
 
 const CONTEXT: &[u8] = b"eutheto/workforce/planning-id/v1\0";
+pub(super) const RANK_LEVEL: &str = "official.workforce.objective.assignment.rank";
+pub(super) const RANK_CATEGORY: &str = "official.workforce.score.assignment.rank";
+pub(super) const ASSIGNMENT_KIND: &str = "official.workforce.assignment";
+pub(super) const WORKFORCE_PROJECTION_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum IdentityKind {

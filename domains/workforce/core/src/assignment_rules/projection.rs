@@ -1,7 +1,7 @@
 //! Bounded, unregistered Workforce projection; not original-scenario verification.
 
 use super::budget::{OperationBudget, add, count, effective_limits, within};
-use super::compiler_rank::{ASSIGNMENT_KIND, WORKFORCE_PROJECTION_VERSION};
+use super::identity::{ASSIGNMENT_KIND, WORKFORCE_PROJECTION_VERSION};
 use super::ir_cost::precharge_validation;
 use super::{AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleLimit};
 use crate::generated_workforce_pack_contract::WORKFORCE_PACK_ID;

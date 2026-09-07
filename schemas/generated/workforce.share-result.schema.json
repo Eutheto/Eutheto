@@ -1,0 +1,163 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "acceptedResultChecksum": {
+      "maxLength": 64,
+      "minLength": 64,
+      "type": "string"
+    },
+    "assignments": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "assignmentId": {
+            "maxLength": 103,
+            "minLength": 103,
+            "type": "string"
+          },
+          "personId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shiftId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "personId",
+          "shiftId"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100000,
+      "type": "array"
+    },
+    "evidenceReferences": {
+      "items": {
+        "maxLength": 94,
+        "minLength": 94,
+        "type": "string"
+      },
+      "maxItems": 100000,
+      "type": "array"
+    },
+    "privacy": {
+      "additionalProperties": false,
+      "properties": {
+        "includeEvidenceReferences": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "includeEvidenceReferences"
+      ],
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "sourceDocumentHash": {
+          "maxLength": 64,
+          "minLength": 64,
+          "type": "string"
+        },
+        "verificationReportChecksum": {
+          "maxLength": 64,
+          "minLength": 64,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceDocumentHash",
+        "verificationReportChecksum"
+      ],
+      "type": "object"
+    },
+    "scenarioId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "scenarioRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "score": {
+      "additionalProperties": false,
+      "properties": {
+        "feasibility": {
+          "const": 0
+        },
+        "levels": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "categoryBreakdown": {
+                "additionalProperties": false,
+                "properties": {
+                  "official.workforce.score.assignment.rank": {
+                    "maximum": 1000000000000000,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "direction": {
+                "const": "minimize"
+              },
+              "levelId": {
+                "const": "official.workforce.objective.assignment.rank"
+              },
+              "value": {
+                "maximum": 1000000000000000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "levelId",
+              "value",
+              "direction",
+              "categoryBreakdown"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "feasibility",
+        "levels"
+      ],
+      "type": "object"
+    },
+    "solutionId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "status": {
+      "const": "verifiedFeasible"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "scenarioId",
+    "scenarioRevision",
+    "solutionId",
+    "acceptedResultChecksum",
+    "status",
+    "provenance",
+    "privacy",
+    "assignments",
+    "score"
+  ],
+  "type": "object"
+}

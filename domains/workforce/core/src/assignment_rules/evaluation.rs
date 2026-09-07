@@ -28,8 +28,8 @@ use eutheto_types::{
 use jiff::SignedDuration;
 use std::collections::BTreeMap;
 
-const VIOLATIONS: &str = "official.workforce.fact.violation_count";
-const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
+pub(super) const VIOLATIONS: &str = "official.workforce.fact.violation_count";
+pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
 /// Evaluates Eligibility, Availability, Coverage, `NoOverlap` and `MinimumRest`, plus unconditional
@@ -55,14 +55,82 @@ pub fn evaluate_assignment_rules(
     )?;
     let input = AssignmentInput::new(document, &mut budget)?;
     input.validate_selection(selected_pairs, &mut budget)?;
-    let selected = Selected::new(&input, selected_pairs, &mut budget)?;
     let (evaluations, obligations) =
-        evaluate_prepared(&input, &selected, &document.settings, &mut budget)?;
+        evaluate_validated_selection(&input, selected_pairs, &document.settings, &mut budget)?;
     Ok(AssignmentRuleEvaluation {
         source_document_hash: input.source_document_hash,
         evaluations,
         obligations,
     })
+}
+
+/// Reuses prepared source data after the caller has checked pair identities, uniqueness and bounds.
+pub(super) fn evaluate_validated_selection(
+    input: &AssignmentInput,
+    selected_pairs: &[AssignmentPair],
+    settings: &ScenarioSettings,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(Vec<RuleEvaluation>, RequiredRulePartition), AssignmentRuleError> {
+    let selected = Selected::new(input, selected_pairs, budget)?;
+    evaluate_prepared(input, &selected, settings, budget)
+}
+
+/// Rechecks this recorded decision only; never certifies aggregate coverage, overlap, or rest.
+pub(super) fn evaluate_pair(
+    input: &AssignmentInput,
+    pair: AssignmentPair,
+    enabled: bool,
+    settings: &ScenarioSettings,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<RuleEvaluation>, AssignmentRuleError> {
+    let person = input.person(pair.person_id).ok_or_else(invalid)?;
+    let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
+    let one = [shift];
+    let shifts = if enabled { &one[..] } else { &[] };
+    let pairs = if enabled {
+        std::slice::from_ref(&pair)
+    } else {
+        &[]
+    };
+    let selected = Selected::new(input, pairs, budget)?;
+    let mut evaluations = vec![
+        activity(person, shifts, settings, budget)?
+            .finish(RuleId::from_uuid(pair.person_id.as_uuid()), budget)?,
+    ];
+    if let Some(records) = input.availability_by_person.get(&pair.person_id) {
+        for id in records {
+            budget.step()?;
+            let Some(WorkforceEntity::Availability(record)) =
+                input.domain.entities.get(&id.as_entity_id())
+            else {
+                return Err(invalid());
+            };
+            if record.availability_kind == AvailabilityKind::ApprovedTimeOff {
+                evaluations.push(
+                    approved_leave(input, record, shifts, settings, budget)?.finish(
+                        RuleId::from_uuid(record.id.as_entity_id().as_uuid()),
+                        budget,
+                    )?,
+                );
+            }
+        }
+    }
+    for rule in input.domain.rules.values() {
+        budget.step()?;
+        let (id, active, _) = rule.header();
+        if active
+            && matches!(
+                rule,
+                WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. }
+            )
+        {
+            evaluations
+                .push(pair_rule(input, &selected, rule, settings, budget)?.finish(id, budget)?);
+        }
+    }
+    budget.sort_work(evaluations.len())?;
+    evaluations.sort_by_key(|evaluation| evaluation.rule_id);
+    Ok(evaluations)
 }
 
 // The semantic phase takes only validated original data and the same operation budget. Keeping

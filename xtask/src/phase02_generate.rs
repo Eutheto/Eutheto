@@ -61,7 +61,7 @@ const PACK_SOURCES: [PackSource; 2] = [
         command_schemas: "schemas/generated/workforce.command-schemas.json",
         internal_schema: "schemas/generated/workforce.internal.schema.json",
         portable_schema: "schemas/generated/workforce.portable.schema.json",
-        share_schema: None,
+        share_schema: Some("schemas/generated/workforce.share-result.schema.json"),
         ai_tools: "xtask/generated/workforce-ai-tools.json",
         ui_manifest: "xtask/generated/workforce-ui-manifest.json",
         docs: "docs/generated/workforce-pack-contract.md",
@@ -1317,20 +1317,6 @@ mod tests {
             pack.internal_schema = json!({"$ref":format!("#/$defs/Level{levels}")});
             assert!(expand_pack_schemas(&mut pack).is_err());
         }
-        Ok(())
-    }
-
-    #[test]
-    fn pack_staging_does_not_fabricate_or_remove_share_result_authority() -> Result<()> {
-        let mut synthetic = parse_pack(&PACK_SOURCES[0])?;
-        let share = synthetic.share_result_schema.take();
-        synthetic.pack.share_result_schema_version = None;
-        assert!(validate_pack(&synthetic, &PACK_SOURCES[0]).is_err());
-        let mut workforce = parse_pack(&PACK_SOURCES[1])?;
-        expand_pack_schemas(&mut workforce)?;
-        workforce.share_result_schema = share;
-        workforce.pack.share_result_schema_version = Some(1);
-        assert!(validate_pack(&workforce, &PACK_SOURCES[1]).is_err());
         Ok(())
     }
 

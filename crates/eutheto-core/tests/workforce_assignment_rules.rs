@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
-//! Cross-layer evidence for WF-003/WF-004 contributions, not registered-pack acceptance or scoring.
+//! Cross-layer WF-003 through WF-007 evidence; production pack registration remains out of scope.
 
 #[path = "../../../domains/workforce/core/tests/support/mod.rs"]
 mod workforce_fixture;
+
+#[path = "workforce_assignment_rules/authority.rs"]
+mod authority;
 
 use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::AssignmentValue;
@@ -237,7 +240,12 @@ fn original_accepts(
             .collect::<Vec<_>>(),
         result.obligations.handled
     );
-    Ok(result.evaluations.iter().all(|item| item.satisfied))
+    let report = authority::verify_selection(document, selected)?;
+    assert_eq!(
+        report.accepted,
+        result.evaluations.iter().all(|item| item.satisfied)
+    );
+    Ok(report.accepted)
 }
 
 fn qualification_coverage_fixture() -> Result<Value, Box<dyn Error>> {
@@ -347,26 +355,28 @@ fn exhaustive_rest_mathematics_matches_original_direction_and_boundary() -> Test
     empty["domain"]["rules"][id(34)]["scope"]["people"] =
         json!({"kind":"selected","personIds":[id(21)]});
     for (name, value, expected) in [
-        ("one nanosecond short", base, 1),
-        ("exact ten hours", equal, 2),
-        ("one nanosecond above", above, 2),
-        ("reverse chronological roles", reverse, 2),
-        ("inactive rest", inactive, 2),
-        ("no eligible scoped person", empty, 2),
+        ("one nanosecond short", base, &[9_usize][..]),
+        ("exact ten hours", equal, &[3, 9][..]),
+        ("one nanosecond above", above, &[3, 9][..]),
+        ("reverse chronological roles", reverse, &[3, 9][..]),
+        ("inactive rest", inactive, &[3, 9][..]),
+        ("no eligible scoped person", empty, &[3, 9][..]),
     ] {
         let document: ScenarioDocument = serde_json::from_value(value)?;
         let compiled = compile_assignment_rules(&document, &context())?;
         assert!(compiled.obligations.remaining.is_empty());
         summarize(&problem(&document, &compiled)?, PlanningIrLimitsV1::DEFAULT)?;
-        let mut accepted = 0;
-        for selected in selections()? {
+        let mut accepted = Vec::new();
+        for (mask, selected) in selections()?.into_iter().enumerate() {
             let original = original_accepts(&document, &selected)?;
             assert_eq!(
                 mathematics_accepts(&compiled, &selected)?,
                 original,
                 "{name}: {selected:?}"
             );
-            accepted += usize::from(original);
+            if original {
+                accepted.push(mask);
+            }
         }
         assert_eq!(accepted, expected, "{name}");
     }
@@ -762,13 +772,10 @@ async fn real_worker_solves_and_rejects_minimum_rest_models() -> TestResult {
 #[test]
 fn rest_command_inverse_and_portable_roundtrip_preserve_assignment_semantics() -> TestResult {
     use eutheto_domain_api::{
-        DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, PortableImportContext,
+        DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPack, PortableImportContext,
     };
     use eutheto_types::{DomainCommandEnvelope, ScenarioDomain};
-    use eutheto_workforce::{
-        commands,
-        portable::{export_portable, import_portable},
-    };
+    use eutheto_workforce::{WorkforcePack, commands};
 
     let original: ScenarioDocument = serde_json::from_value(rest_fixture()?)?;
     let selected = [pair(1, 8)?, pair(1, 22)?];
@@ -780,7 +787,7 @@ fn rest_command_inverse_and_portable_roundtrip_preserve_assignment_semantics() -
         .ok_or("rest rule")?
         .clone();
     relaxed["minimumMinutes"] = json!(599);
-    let change = commands::apply_batch(
+    let change = WorkforcePack.apply_batch(
         &original,
         &DomainBatchCommand {
             schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
@@ -794,16 +801,16 @@ fn rest_command_inverse_and_portable_roundtrip_preserve_assignment_semantics() -
         },
     )?;
     assert!(original_accepts(&change.document, &selected)?);
-    let undone = commands::apply_batch(&change.document, &change.inverse)?;
+    let undone = WorkforcePack.apply_batch(&change.document, &change.inverse)?;
     assert_eq!(undone.document, original);
     assert!(!original_accepts(&undone.document, &selected)?);
 
-    let portable = export_portable(&original)?;
+    let portable = WorkforcePack.export_portable(&original)?;
     let wire = serde_json::to_vec(&portable)?;
     let mut shell = original.clone();
     shell.domain = ScenarioDomain::default();
     shell.extensions.clear();
-    let restored = import_portable(
+    let restored = WorkforcePack.import_portable(
         &serde_json::from_slice(&wire)?,
         &PortableImportContext {
             scenario_shell: shell,
@@ -937,8 +944,16 @@ async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> T
         &candidate.values,
         &solution,
     );
+    assert_real_workforce_acceptance(
+        &document,
+        &compiled.problem,
+        candidate,
+        &solution,
+        &model_hash,
+    )?;
+    assert_real_worker_coverage_mutant_quarantined(&document, &compiled.problem).await?;
     eprintln!(
-        "WF006 unregistered worker evidence: rank=5 bounds=[0,7] selected=(1,8),(20,22), model_hash={model_hash}, summary={summary:?}"
+        "WF007 unregistered worker evidence: accepted rank=5 feasibility=0, source-bound share, weakened-coverage candidate quarantined, model_hash={model_hash}, summary={summary:?}"
     );
 
     value["domain"]["entities"][id(20)]["eligibleAssignmentTypeIds"] = json!([]);
@@ -950,6 +965,93 @@ async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> T
         BackendTerminationReason::InfeasibilityClaimed
     );
     assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+fn assert_real_workforce_acceptance(
+    document: &ScenarioDocument,
+    problem: &PlanningProblem,
+    candidate: &eutheto_solver_api::BackendCandidate,
+    solution: &eutheto_domain_ir::NormalizedSolution,
+    model_hash: &str,
+) -> TestResult {
+    let clock = eutheto_verify::SystemVerificationClock::default();
+    let reviewer = eutheto_verify::AcceptanceReviewer::new(
+        &eutheto_workforce::WorkforcePack,
+        document,
+        17,
+        problem,
+        &clock,
+    )
+    .map_err(|alarm| alarm.diagnostic_code)?;
+    let eutheto_verify::AcceptanceDecision::Accepted {
+        result,
+        objective_reconciliation,
+        ..
+    } = reviewer.review(candidate, solution.solution_id)
+    else {
+        return Err("real Workforce candidate was not independently accepted".into());
+    };
+    assert_eq!(
+        objective_reconciliation,
+        eutheto_verify::BackendObjectiveReconciliation::Matched
+    );
+    assert_eq!(result.solution, *solution);
+    assert_eq!(result.verification.score.feasibility, 0);
+    assert_eq!(result.verification.score.levels[0].value, 5);
+    assert_eq!(result.verification.planning_model_hash, model_hash);
+    for include_evidence_references in [false, true] {
+        let share = eutheto_workforce::assignment_rules::build_workforce_share_result(
+            document,
+            &result,
+            eutheto_domain_api::ShareResultOptions {
+                include_evidence_references,
+            },
+        )?;
+        assert_eq!(
+            share.payload["assignments"]
+                .as_array()
+                .ok_or("share assignments")?
+                .len(),
+            2
+        );
+        assert_eq!(
+            share.payload.get("evidenceReferences").is_some(),
+            include_evidence_references
+        );
+    }
+    Ok(())
+}
+
+async fn assert_real_worker_coverage_mutant_quarantined(
+    document: &ScenarioDocument,
+    original: &PlanningProblem,
+) -> TestResult {
+    let mut problem = original.clone();
+    authority::weaken_coverage(&mut problem)?;
+    let output = solve_with_real_worker(problem.clone()).await?;
+    let candidate = output
+        .candidates
+        .first()
+        .ok_or("mutant must yield a real candidate")?;
+    let clock = eutheto_verify::SystemVerificationClock::default();
+    let reviewer = eutheto_verify::AcceptanceReviewer::new(
+        &eutheto_workforce::WorkforcePack,
+        document,
+        17,
+        &problem,
+        &clock,
+    )
+    .map_err(|alarm| alarm.diagnostic_code)?;
+    let eutheto_verify::AcceptanceDecision::Quarantined { alarm, .. } =
+        reviewer.review(candidate, id(501).parse()?)
+    else {
+        return Err("bad compiler semantics crossed real-worker acceptance".into());
+    };
+    assert_eq!(
+        alarm.category,
+        eutheto_verify::CorrectnessAlarmCategory::RequiredRuleRejected
+    );
     Ok(())
 }
 
