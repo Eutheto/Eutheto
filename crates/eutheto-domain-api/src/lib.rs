@@ -32,6 +32,12 @@ use thiserror::Error;
 pub const DOMAIN_BATCH_SCHEMA_VERSION: u32 = 1;
 /// Largest number of commands accepted in one pack batch.
 pub const MAX_DOMAIN_BATCH_COMMANDS: usize = 1_000;
+/// Maximum change records emitted by one atomic mutation.
+pub const MAX_DOMAIN_MUTATION_CHANGES: usize = 85_536;
+/// Maximum compact JSON bytes in an atomic mutation's change records.
+pub const MAX_DOMAIN_MUTATION_CHANGE_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum compact JSON bytes in an atomic mutation's result values.
+pub const MAX_DOMAIN_MUTATION_RESULT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Localizable data. `default_text` is safe fallback text, not identity.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -383,6 +389,27 @@ impl DomainBatchCommand {
     /// Returns an error when a version is unsupported, the batch or label exceeds its bound,
     /// the command list is empty, a command identity is invalid, or serialization fails.
     pub fn validate_bounds(&self) -> Result<(), DomainPackError> {
+        self.validate_header()?;
+        self.validate_encoded_size()
+            .map_err(|_| DomainPackError::InvalidPayload {
+                path: "/".to_owned(),
+                message: "batch serialized size exceeds scenario limit".to_owned(),
+            })
+    }
+
+    /// Validates a generated inverse, distinguishing a size limit from a malformed envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DomainPackError::BatchInverseTooLarge`] only when a structurally valid
+    /// inverse exceeds the existing pack-batch byte ceiling.
+    pub fn validate_inverse_bounds(&self) -> Result<(), DomainPackError> {
+        self.validate_header()?;
+        self.validate_encoded_size()
+            .map_err(|_| DomainPackError::BatchInverseTooLarge)
+    }
+
+    fn validate_header(&self) -> Result<(), DomainPackError> {
         if self.schema_version != DOMAIN_BATCH_SCHEMA_VERSION {
             return Err(DomainPackError::UnsupportedVersion(self.schema_version));
         }
@@ -404,26 +431,26 @@ impl DomainBatchCommand {
         for command in &self.commands {
             validate_id(&command.command_type, "command")?;
         }
+        Ok(())
+    }
+
+    fn validate_encoded_size(&self) -> Result<(), DomainPackError> {
         let limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES).map_err(|error| {
             DomainPackError::InvalidPayload {
                 path: "/".to_owned(),
                 message: error.to_string(),
             }
         })?;
-        bounded_json_size(self, limit)
-            .map(|_| ())
-            .map_err(|_| DomainPackError::InvalidPayload {
-                path: "/".to_owned(),
-                message: "batch serialized size exceeds scenario limit".to_owned(),
-            })
+        bounded_json_size(self, limit).map(|_| ())
     }
 }
 
-/// One inert change record validated against the command's generated change schema.
+/// One inert change attributed to an input command and checked against its change schema.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DomainChange {
-    pub command_id: String,
+    /// Zero-based input position; records are ordered by nondecreasing command index.
+    pub command_index: u32,
     pub value: Value,
 }
 
@@ -505,13 +532,19 @@ pub trait DomainPack: Send + Sync {
 
     /// Applies an atomic command batch to a document.
     ///
+    /// Every prefix must satisfy the pack's mutation validity rules. Host-owned document
+    /// fields are immutable. Return one result and inverse per input command, ordered
+    /// changes attributed by input index, and inverses in reverse execution order.
+    /// Check cancellation between prefixes; failure leaves the caller's document unchanged.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the document or batch is invalid, unsupported, or cannot be applied.
+    /// Returns an error for invalid/unsupported input, bounded output failure or cancellation.
     fn apply_batch(
         &self,
         document: &ScenarioDocument,
         batch: &DomainBatchCommand,
+        cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError>;
 
     /// Compiles a scenario document into a planning problem.
@@ -666,6 +699,50 @@ pub trait DomainPack: Send + Sync {
     ) -> Result<PlanningProblem, DomainPackError>;
 }
 
+/// A borrowed command whose catalog schemas were checked during registry construction.
+#[derive(Clone, Copy)]
+pub struct RegisteredCommand<'a> {
+    descriptor: &'a CommandDescriptor,
+}
+
+impl RegisteredCommand<'_> {
+    /// Checks an input without rechecking or copying the registered schema.
+    ///
+    /// # Errors
+    /// Returns a contract error for unsafe, oversized or schema-invalid data.
+    pub fn validate_payload(&self, value: &Value) -> Result<(), DomainPackError> {
+        schema::validate_value_with_schema(
+            &self.descriptor.payload_schema,
+            value,
+            ContractJsonLimits::DEFAULT,
+        )
+    }
+
+    /// Checks the corresponding command result.
+    ///
+    /// # Errors
+    /// Returns a contract error for unsafe, oversized or schema-invalid data.
+    pub fn validate_result(&self, value: &Value) -> Result<(), DomainPackError> {
+        schema::validate_value_with_schema(
+            &self.descriptor.result_schema,
+            value,
+            ContractJsonLimits::DEFAULT,
+        )
+    }
+
+    /// Checks one change value attributed to this input command.
+    ///
+    /// # Errors
+    /// Returns a contract error for unsafe, oversized or schema-invalid data.
+    pub fn validate_change(&self, value: &Value) -> Result<(), DomainPackError> {
+        schema::validate_value_with_schema(
+            &self.descriptor.change_schema,
+            value,
+            ContractJsonLimits::DEFAULT,
+        )
+    }
+}
+
 struct Registration {
     descriptor: DomainPackDescriptor,
     catalog: DomainCatalog,
@@ -704,6 +781,28 @@ impl DomainPackRegistry {
     #[must_use]
     pub fn catalog(&self, id: &PackId) -> Option<&DomainCatalog> {
         self.registrations.get(id).map(|entry| &entry.catalog)
+    }
+
+    /// Resolves an exact command in the current registered pack catalog.
+    ///
+    /// # Errors
+    /// Rejects malformed identities, unavailable packs and unknown commands.
+    pub fn command(
+        &self,
+        pack_id: &PackId,
+        command_id: &str,
+    ) -> Result<RegisteredCommand<'_>, DomainPackError> {
+        validate_id(command_id, "command")?;
+        let catalog = self
+            .catalog(pack_id)
+            .ok_or_else(|| DomainPackError::PackUnavailable(pack_id.to_string()))?;
+        let index = catalog
+            .commands
+            .binary_search_by(|command| command.id.as_str().cmp(command_id))
+            .map_err(|_| DomainPackError::UnknownCommand(command_id.to_owned()))?;
+        Ok(RegisteredCommand {
+            descriptor: &catalog.commands[index],
+        })
     }
 }
 
@@ -840,6 +939,10 @@ pub enum DomainPackError {
     UnknownCommand(String),
     #[error("invalid domain payload at {path}: {message}")]
     InvalidPayload { path: String, message: String },
+    #[error("domain batch inverse exceeds its byte bound")]
+    BatchInverseTooLarge,
+    #[error("domain mutation output exceeds its bound")]
+    MutationOutputLimit,
     #[error("domain operation was cancelled")]
     Cancelled,
     #[error("domain operation budget expired")]

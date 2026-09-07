@@ -370,7 +370,7 @@ fn forward_batch_is_rejected_if_its_inverse_would_not_be_replayable() -> Result<
     let before_hash = hash(&original)?;
     assert!(matches!(
         commands::apply_batch(&original, &forward),
-        Err(DomainPackError::InvalidPayload { .. })
+        Err(DomainPackError::BatchInverseTooLarge)
     ));
     assert_eq!(hash(&original)?, before_hash);
     Ok(())

@@ -14,8 +14,9 @@ use crate::validation::{
 };
 use eutheto_domain_api::{
     DomainBatchCommand, DomainMutation, DomainPackError, MAX_DOMAIN_BATCH_COMMANDS,
+    MAX_DOMAIN_MUTATION_RESULT_BYTES, bounded_json_size,
 };
-use eutheto_types::{CancellationToken, ScenarioDocument};
+use eutheto_types::{CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, ScenarioDocument};
 use serde_json::Value;
 
 /// Applies typed record operations atomically to an owned working document.
@@ -55,6 +56,7 @@ fn apply_batch_inner(
     check_cancellation(cancellation)?;
     let mut working = document.clone();
     let mut results = Vec::with_capacity(batch.commands.len());
+    let mut result_bytes = 2_usize;
     let mut changes = effect::Changes::new(batch.commands.len());
     let mut inverse = DomainBatchCommand {
         schema_version: batch.schema_version,
@@ -63,18 +65,33 @@ fn apply_batch_inner(
         label: batch.label.clone(),
         commands: Vec::with_capacity(batch.commands.len()),
     };
-    for envelope in &batch.commands {
+    let inverse_limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES)
+        .map_err(|_| DomainPackError::BatchInverseTooLarge)?;
+    let mut inverse_bytes = bounded_json_size(&inverse, inverse_limit)
+        .map_err(|_| DomainPackError::BatchInverseTooLarge)?;
+    for (index, envelope) in batch.commands.iter().enumerate() {
         check_cancellation(cancellation)?;
+        changes.begin_command(index)?;
         schemas.validate_payload(envelope)?;
         let effect = dispatch::apply_one(&mut working, envelope, &mut changes, cancellation)?;
         validate_document_with_schemas(&working, &schemas)?;
+        let separator = usize::from(!results.is_empty());
+        let remaining = MAX_DOMAIN_MUTATION_RESULT_BYTES
+            .checked_sub(result_bytes + separator)
+            .ok_or(DomainPackError::MutationOutputLimit)?;
+        result_bytes += separator
+            + bounded_json_size(&effect.result, remaining)
+                .map_err(|_| DomainPackError::MutationOutputLimit)?;
         results.push(effect.result);
+        let remaining = inverse_limit
+            .checked_sub(inverse_bytes + separator)
+            .ok_or(DomainPackError::BatchInverseTooLarge)?;
+        inverse_bytes += separator
+            + bounded_json_size(&effect.inverse, remaining)
+                .map_err(|_| DomainPackError::BatchInverseTooLarge)?;
         inverse.commands.push(effect.inverse);
     }
     inverse.commands.reverse();
-    // Before-records come from the bounded original document or an earlier bounded input
-    // record. The constructed inverse is bounded by their sum; require replayability too.
-    inverse.validate_bounds()?;
     check_cancellation(cancellation)?;
     Ok(DomainMutation {
         document: working,

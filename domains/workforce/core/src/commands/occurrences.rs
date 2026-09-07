@@ -8,7 +8,7 @@ use crate::ids::{ShiftId, ShiftTemplateId};
 use crate::model::{OccurrenceIdentity, ShiftOrigin, WorkforceEntity};
 use crate::validation::common::{Result, invalid, require};
 use crate::validation::{MAX_DOCUMENT_OCCURRENCES, MAX_REFERENCE_ITEMS, MAX_TEMPLATE_OCCURRENCES};
-use eutheto_domain_api::{DomainChange, DomainPackError, bounded_json_size};
+use eutheto_domain_api::{DomainPackError, bounded_json_size};
 use eutheto_types::{
     CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, ScenarioDocument,
 };
@@ -110,21 +110,12 @@ fn check_entries(
     Ok(())
 }
 
-fn change(
-    changes: &mut Changes,
-    command: &str,
-    path: String,
-    before: Value,
-    after: Value,
-) -> Result {
-    changes.push(DomainChange {
-        command_id: command.to_owned(),
-        value: Value::Object(Map::from_iter([
-            ("path".to_owned(), Value::String(path)),
-            ("before".to_owned(), before),
-            ("after".to_owned(), after),
-        ])),
-    })
+fn change(changes: &mut Changes, path: String, before: Value, after: Value) -> Result {
+    changes.push(Value::Object(Map::from_iter([
+        ("path".to_owned(), Value::String(path)),
+        ("before".to_owned(), before),
+        ("after".to_owned(), after),
+    ])))
 }
 
 fn entry_path(template_id: ShiftTemplateId, key: &str) -> String {
@@ -193,7 +184,6 @@ fn add(
             )?;
             change(
                 changes,
-                ADD_OCCURRENCE_IDENTITIES,
                 entry_path(target.template_id, key),
                 Value::Null,
                 value.clone(),
@@ -248,7 +238,6 @@ fn remove(
                 .ok_or_else(|| invalid("occurrenceIdentities", "occurrence does not exist"))?;
             change(
                 changes,
-                REMOVE_OCCURRENCE_IDENTITIES,
                 entry_path(target.template_id, &key),
                 value.clone(),
                 Value::Null,
@@ -321,7 +310,6 @@ fn detach(
         .ok_or_else(|| invalid("occurrenceIdentities", "occurrence does not exist"))?;
     change(
         changes,
-        DETACH_SHIFT,
         entry_path(template_id, &key),
         original.clone(),
         Value::Null,
@@ -332,7 +320,6 @@ fn detach(
         .ok_or_else(|| invalid("/payload/instance", "missing instance"))?;
     change(
         changes,
-        DETACH_SHIFT,
         format!("/domain/entities/{}", instance.id),
         Value::Null,
         raw_instance.clone(),
@@ -411,7 +398,6 @@ fn reattach(
         .ok_or_else(|| invalid("/payload/occurrenceIdentities", "missing occurrence"))?;
     change(
         changes,
-        REATTACH_SHIFT,
         entry_path(payload.template_id, key),
         Value::Null,
         value.clone(),
@@ -429,7 +415,6 @@ fn reattach(
         })?;
     change(
         changes,
-        REATTACH_SHIFT,
         format!("/domain/entities/{}", occurrence.id),
         original.clone(),
         Value::Null,

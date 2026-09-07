@@ -3,8 +3,6 @@ use crate::counterfactual::{
     SolutionCancelCounterfactualDtoV1, SolutionCancelCounterfactualRequestV1,
     SolutionStartCounterfactualDtoV1, SolutionStartCounterfactualRequestV1,
 };
-#[cfg(debug_assertions)]
-use eutheto_command::official_registry;
 use eutheto_command::{CommandError, apply_command_with_registry, validate_document_shape};
 use eutheto_domain_api::{
     DomainCatalog, DomainPackDescriptor, DomainPackError, DomainPackRegistry, DomainView,
@@ -70,6 +68,10 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
+#[path = "people_csv.rs"]
+mod people_csv;
+pub use people_csv::*;
+
 const EVENT_VERSION: u32 = 1;
 /// Current application solution-read wire schema.
 pub const SOLUTION_API_SCHEMA_VERSION: u32 = 1;
@@ -90,22 +92,11 @@ fn collision_plan_sha256(collision_plan: &CollisionPlan) -> Result<String, AppEr
     domain_separated.extend_from_slice(&canonical);
     Ok(eutheto_export::sha256_hex(&domain_separated))
 }
-#[cfg(debug_assertions)]
 fn validated_static_pack_registry() -> Result<DomainPackRegistry, AppError> {
-    // The synthetic conformance pack is available only to debug/test binaries. Release binaries
-    // start without domain packs until a real pack is explicitly supplied.
-    official_registry().map_err(|_| {
-        protocol_error(
-            "application.pack_registry_invalid",
-            "Compiled domain-pack metadata failed its startup invariant.",
-            false,
-        )
-    })
-}
-
-#[cfg(not(debug_assertions))]
-fn validated_static_pack_registry() -> Result<DomainPackRegistry, AppError> {
-    DomainPackRegistry::builder().build().map_err(|_| {
+    let builder = DomainPackRegistry::builder().register(eutheto_workforce::WorkforcePack);
+    #[cfg(debug_assertions)]
+    let builder = builder.register(eutheto_command::OfficialTestPack);
+    builder.build().map_err(|_| {
         protocol_error(
             "application.pack_registry_invalid",
             "Compiled domain-pack metadata failed its startup invariant.",
@@ -858,13 +849,17 @@ fn pending_tree_memory_charge(items: usize, item_size: usize) -> Option<usize> {
 enum PendingPortablePreview {
     Import(Box<PendingImportPreview>),
     Unopened(UnopenedBundle),
+    PeopleCsv(PendingPeopleCsvPreview),
 }
 
 impl PendingPortablePreview {
     fn retained_bytes(&self) -> usize {
         match self {
             Self::Import(preview) => preview.retained_bytes,
-            Self::Unopened(bundle) => bundle.retained_memory_bytes(),
+            Self::Unopened(bundle) => bundle.retained_memory_bytes().saturating_add(
+                pending_tree_memory_charge(1, size_of::<(RequestId, Self)>()).unwrap_or(usize::MAX),
+            ),
+            Self::PeopleCsv(preview) => preview.retained_bytes(),
         }
     }
 }
@@ -1083,10 +1078,15 @@ impl EuthetoApp {
                 request_id,
                 envelope,
                 truncate_redo,
-            } => {
-                self.apply_scenario(request_id, envelope, truncate_redo)
-                    .await
-            }
+            } => self
+                .apply_scenario(
+                    request_id,
+                    envelope,
+                    truncate_redo,
+                    self.cancellation.clone(),
+                )
+                .await
+                .map(AppCommandResult::ScenarioCommand),
             AppCommand::Undo {
                 request_id,
                 scenario_id,
@@ -2176,11 +2176,15 @@ impl EuthetoApp {
         request_id: RequestId,
         envelope: CommandEnvelope,
         truncate_redo: bool,
-    ) -> Result<AppCommandResult, AppError> {
+        cancellation: CancellationToken,
+    ) -> Result<CommandResult, AppError> {
         let scenario_id = envelope.scenario_id;
         let mutation = self.scenario_lock(scenario_id).await;
         let _guard = mutation.lock().await;
-        let journal_envelope = envelope.clone();
+        if cancellation.is_cancelled() {
+            return Err(store_error(StoreError::OperationCancelled));
+        }
+        let mutation_cancellation = cancellation.clone();
         let applied_at = self.clock.now();
         let pack_registry = Arc::clone(&self.pack_registry);
         let result = self
@@ -2193,6 +2197,7 @@ impl EuthetoApp {
                 } else {
                     RedoBranchPolicy::Reject
                 },
+                cancellation,
                 move |document| {
                     ensure_supported_document(document, &pack_registry)?;
                     let mut applied = apply_command_with_registry(
@@ -2200,12 +2205,13 @@ impl EuthetoApp {
                         envelope.expected_revision,
                         &envelope,
                         &pack_registry,
+                        &mutation_cancellation,
                     )
                     .map_err(|error| command_store_error(&error))?;
                     applied.document.metadata.updated_at = applied_at;
-                    let result = applied.result.clone();
-                    let command = serde_json::to_value(&journal_envelope.command)
-                        .map_err(StoreError::Json)?;
+                    let result = applied.result;
+                    let command =
+                        serde_json::to_value(&envelope.command).map_err(StoreError::Json)?;
                     let inverse = result
                         .inverse
                         .as_ref()
@@ -2217,10 +2223,10 @@ impl EuthetoApp {
                         journal: JournalWrite {
                             command_type: applied.command_type,
                             command,
-                            command_id: journal_envelope.command_id,
+                            command_id: envelope.command_id,
                             inverse,
-                            actor: journal_envelope.actor.clone(),
-                            source: journal_envelope.source,
+                            actor: envelope.actor,
+                            source: envelope.source,
                             summary: applied.summary,
                             created_at: applied_at,
                         },
@@ -2233,7 +2239,7 @@ impl EuthetoApp {
         let mut output = result.output;
         output.new_revision = result.new_revision;
         self.publish_scenario_events(scenario_id, request_id, &output);
-        Ok(AppCommandResult::ScenarioCommand(output))
+        Ok(output)
     }
 
     async fn move_history(
@@ -2252,8 +2258,15 @@ impl EuthetoApp {
             CommandSource::Redo
         };
         let pack_registry = Arc::clone(&self.pack_registry);
+        let cancellation = self.cancellation.clone();
         let apply = move |history: HistoryCommand| {
-            history_apply(history, expected_revision, source, &pack_registry)
+            history_apply(
+                history,
+                expected_revision,
+                source,
+                &pack_registry,
+                &cancellation,
+            )
         };
         let committed = if undo {
             self.store
@@ -2391,20 +2404,19 @@ impl EuthetoApp {
             portable_settings.retain(|key, imported| local_settings.get(key) != Some(&*imported));
         }
         self.check_cancelled()?;
-        let preview_id = RequestId::new(self.ids.as_ref()).map_err(id_error)?;
-        self.check_cancelled()?;
-        self.retain_portable_preview(
-            preview_id,
-            PendingImportPreview {
-                inspected,
-                preview: preview.clone(),
-                options,
-                portable_settings,
-                safety_backup_failure: None,
-                retained_bytes: 0,
-            },
-        )
-        .await?;
+        let preview_id = self
+            .retain_portable_preview(
+                None,
+                PendingImportPreview {
+                    inspected,
+                    preview: preview.clone(),
+                    options,
+                    portable_settings,
+                    safety_backup_failure: None,
+                    retained_bytes: 0,
+                },
+            )
+            .await?;
         Ok(AppQueryResult::PortablePreview {
             preview_id,
             preview: Box::new(preview),
@@ -2418,7 +2430,9 @@ impl EuthetoApp {
         .map_err(join_error)?
         .map_err(|error| import_error(&error))?;
         self.check_cancelled()?;
-        let retained_bytes = unopened.retained_memory_bytes();
+        let metadata = unopened.metadata().clone();
+        let pending = PendingPortablePreview::Unopened(unopened);
+        let retained_bytes = pending.retained_bytes();
         if retained_bytes > MAX_PENDING_PREVIEW_BYTES {
             return Err(protocol_error(
                 "portable.preview_too_large",
@@ -2426,10 +2440,12 @@ impl EuthetoApp {
                 false,
             ));
         }
-        let metadata = unopened.metadata().clone();
-        let preview_id = RequestId::new(self.ids.as_ref()).map_err(id_error)?;
         self.check_cancelled()?;
         let mut previews = self.previews.lock().await;
+        let preview_id = self
+            .next_preview_id(&previews)?
+            .ok_or_else(Self::preview_id_unavailable)?;
+        self.check_cancelled()?;
         while previews.len() >= MAX_PENDING_PREVIEWS
             || preview_total_bytes(&previews)
                 .checked_add(retained_bytes)
@@ -2440,7 +2456,7 @@ impl EuthetoApp {
             };
             previews.remove(&oldest);
         }
-        previews.insert(preview_id, PendingPortablePreview::Unopened(unopened));
+        previews.insert(preview_id, pending);
         drop(previews);
         Ok(AppQueryResult::UnopenedBundlePreview {
             preview_id,
@@ -2453,23 +2469,32 @@ impl EuthetoApp {
         preview_id: RequestId,
         destination: PathBuf,
     ) -> Result<AppCommandResult, AppError> {
-        let pending = self
-            .previews
-            .lock()
-            .await
-            .remove(&preview_id)
-            .ok_or(protocol_error(
+        let mut previews = self.previews.lock().await;
+        match previews.get(&preview_id) {
+            Some(PendingPortablePreview::Unopened(_)) => {}
+            Some(_) => {
+                return Err(protocol_error(
+                    "portable.preview_capability_mismatch",
+                    "The portable preview has a different capability.",
+                    false,
+                ));
+            }
+            None => {
+                return Err(protocol_error(
+                    "portable.preview_not_found",
+                    "The portable preview is no longer available.",
+                    false,
+                ));
+            }
+        }
+        let Some(PendingPortablePreview::Unopened(unopened)) = previews.remove(&preview_id) else {
+            return Err(protocol_error(
                 "portable.preview_not_found",
                 "The portable preview is no longer available.",
                 false,
-            ))?;
-        let PendingPortablePreview::Unopened(unopened) = pending else {
-            return Err(protocol_error(
-                "portable.preview_capability_mismatch",
-                "The opaque portable capability does not authorize exact unopened re-export.",
-                false,
             ));
         };
+        drop(previews);
         self.check_cancelled()?;
         let bytes = unopened.into_exact_bytes();
         let cancellation = self.cancellation.clone();
@@ -2565,23 +2590,32 @@ impl EuthetoApp {
         &self,
         preview_id: RequestId,
     ) -> Result<(PendingImportPreview, LocalLibrarySnapshot), AppError> {
-        let pending = self
-            .previews
-            .lock()
-            .await
-            .remove(&preview_id)
-            .ok_or(protocol_error(
+        let mut previews = self.previews.lock().await;
+        match previews.get(&preview_id) {
+            Some(PendingPortablePreview::Import(_)) => {}
+            Some(_) => {
+                return Err(protocol_error(
+                    "portable.preview_capability_mismatch",
+                    "The portable preview has a different capability.",
+                    false,
+                ));
+            }
+            None => {
+                return Err(protocol_error(
+                    "portable.preview_not_found",
+                    "The portable preview is no longer available.",
+                    false,
+                ));
+            }
+        }
+        let Some(PendingPortablePreview::Import(pending)) = previews.remove(&preview_id) else {
+            return Err(protocol_error(
                 "portable.preview_not_found",
                 "The portable preview is no longer available.",
                 false,
-            ))?;
-        let PendingPortablePreview::Import(pending) = pending else {
-            return Err(protocol_error(
-                "portable.preview_capability_mismatch",
-                "The opaque portable capability cannot be used for import.",
-                false,
             ));
         };
+        drop(previews);
         let (local, _) = self.local_library_snapshot().await?;
         if pending.preview.binding.local_library_revision != local.revision {
             return Err(AppError::Conflict {
@@ -2849,7 +2883,7 @@ impl EuthetoApp {
                     proof,
                     collision_plan_sha256: collision_plan_sha256.to_owned(),
                 });
-                self.retain_portable_preview(preview_id, pending.clone())
+                self.retain_portable_preview(Some(preview_id), pending.clone())
                     .await?;
                 Err(protocol_error(
                     "restore.safety_backup_failed",
@@ -2884,9 +2918,9 @@ impl EuthetoApp {
 
     async fn retain_portable_preview(
         &self,
-        preview_id: RequestId,
+        requested_id: Option<RequestId>,
         mut pending: PendingImportPreview,
-    ) -> Result<(), AppError> {
+    ) -> Result<RequestId, AppError> {
         pending.retained_bytes = pending
             .retained_memory_charge()
             .filter(|charge| *charge <= MAX_PENDING_PREVIEW_BYTES)
@@ -2898,6 +2932,14 @@ impl EuthetoApp {
                 )
             })?;
         let mut previews = self.previews.lock().await;
+        let preview_id = match requested_id {
+            Some(id) if !previews.contains_key(&id) => id,
+            Some(_) => return Err(Self::preview_id_unavailable()),
+            None => self
+                .next_preview_id(&previews)?
+                .ok_or_else(Self::preview_id_unavailable)?,
+        };
+        self.check_cancelled()?;
         while previews.len() >= MAX_PENDING_PREVIEWS
             || preview_total_bytes(&previews)
                 .checked_add(pending.retained_bytes)
@@ -2912,7 +2954,28 @@ impl EuthetoApp {
             preview_id,
             PendingPortablePreview::Import(Box::new(pending)),
         );
-        Ok(())
+        Ok(preview_id)
+    }
+
+    fn next_preview_id(
+        &self,
+        previews: &BTreeMap<RequestId, PendingPortablePreview>,
+    ) -> Result<Option<RequestId>, AppError> {
+        for _ in 0..MAX_ID_ALLOCATION_ATTEMPTS {
+            let id = RequestId::new(self.ids.as_ref()).map_err(id_error)?;
+            if !previews.contains_key(&id) {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
+    }
+
+    fn preview_id_unavailable() -> AppError {
+        protocol_error(
+            "portable.preview_id_unavailable",
+            "The portable preview identity is unavailable; create a fresh preview.",
+            false,
+        )
     }
 
     async fn create_portable_safety_backup(&self) -> Result<String, AppError> {
@@ -2960,7 +3023,18 @@ impl EuthetoApp {
         &self,
         preview_id: RequestId,
     ) -> Result<AppCommandResult, AppError> {
-        if self.previews.lock().await.remove(&preview_id).is_none() {
+        let mut previews = self.previews.lock().await;
+        if matches!(
+            previews.get(&preview_id),
+            Some(PendingPortablePreview::PeopleCsv(_))
+        ) {
+            return Err(protocol_error(
+                "portable.preview_capability_mismatch",
+                "The portable preview has a different capability.",
+                false,
+            ));
+        }
+        if previews.remove(&preview_id).is_none() {
             return Err(protocol_error(
                 "portable.preview_not_found",
                 "The portable preview is no longer available.",
@@ -4261,6 +4335,7 @@ fn history_apply(
     current_revision: Revision,
     source: CommandSource,
     registry: &DomainPackRegistry,
+    cancellation: &CancellationToken,
 ) -> Result<(ScenarioDocument, CommandResult), StoreError> {
     let envelope = CommandEnvelope {
         command_id: history.entry.id,
@@ -4274,9 +4349,14 @@ fn history_apply(
         command: serde_json::from_value(history.command).map_err(StoreError::Json)?,
     };
     ensure_supported_document(&history.document, registry)?;
-    let mut applied =
-        apply_command_with_registry(&history.document, current_revision, &envelope, registry)
-            .map_err(|error| command_store_error(&error))?;
+    let mut applied = apply_command_with_registry(
+        &history.document,
+        current_revision,
+        &envelope,
+        registry,
+        cancellation,
+    )
+    .map_err(|error| command_store_error(&error))?;
     applied.document.metadata.updated_at = history.target_document_updated_at;
     Ok((applied.document, applied.result))
 }
@@ -4602,6 +4682,9 @@ fn directory_availability(path: Option<&Path>) -> DirectoryAvailabilityLabel {
 }
 
 fn command_store_error(error: &CommandError) -> StoreError {
+    if matches!(error, CommandError::Cancelled) {
+        return StoreError::OperationCancelled;
+    }
     StoreError::CommandApplication {
         code: error.code().to_owned(),
         message: error.to_string(),
@@ -4610,6 +4693,9 @@ fn command_store_error(error: &CommandError) -> StoreError {
 
 fn store_error(error: StoreError) -> AppError {
     match error {
+        StoreError::OperationCancelled => {
+            protocol_error("operation.cancelled", "The operation was cancelled.", false)
+        }
         StoreError::ScenarioNotFound(id) => AppError::NotFound(ResourceRef::Scenario(id)),
         StoreError::AcceptedResultNotFound(id) => AppError::NotFound(ResourceRef::Solution(id)),
         StoreError::CounterfactualJobNotFound(_) => validation_error(

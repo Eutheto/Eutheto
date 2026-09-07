@@ -1,7 +1,8 @@
 use eutheto_command::{
-    CODE_DUPLICATE_ENTITY, CODE_MISSING_ENTITY, CODE_PROHIBITED_DATA, CODE_RECORD_ID_MISMATCH,
-    CommandError, OFFICIAL_TEST_PACK_ID, apply_command, apply_command_with_registry, command_type,
-    human_summary, official_registry,
+    CODE_BATCH_DEPTH_EXCEEDED, CODE_BATCH_TOO_LARGE, CODE_DUPLICATE_ENTITY, CODE_MISSING_ENTITY,
+    CODE_PROHIBITED_DATA, CODE_RECORD_ID_MISMATCH, CommandError, MAX_BATCH_COMMANDS,
+    MAX_BATCH_DEPTH, OFFICIAL_TEST_PACK_ID, apply_command, apply_command_with_registry,
+    command_type, official_registry,
 };
 use eutheto_types::{
     ActorRef, AddEntity, AddRule, AssignmentId, CommandBatch, CommandEnvelope, CommandId,
@@ -236,7 +237,6 @@ fn batch_is_atomic_and_inverse_runs_in_reverse_order() -> Result<(), Box<dyn Err
     );
     assert_eq!(applied.result.change_set.changes.len(), 2);
     assert_eq!(applied.result.new_revision, Revision::new(5));
-    assert_eq!(applied.summary, "Add and rename person (2 commands)");
     assert_eq!(applied.command_type, "apply_batch");
 
     let Some(ScenarioCommand::ApplyBatch(inverse)) = applied.result.inverse.clone() else {
@@ -300,10 +300,6 @@ fn domain_command_uses_the_phase_02_pack_and_is_reversible() -> Result<(), Box<d
     assert_eq!(
         command_type(&command),
         "domain.official.test.configure_entity"
-    );
-    assert_eq!(
-        human_summary(&command),
-        "Apply official.test.configure_entity domain command"
     );
     let applied = apply(&scenario, revision, command)?;
     assert_eq!(
@@ -452,7 +448,13 @@ fn fast_validation_is_derived_from_the_registered_phase_02_pack() -> Result<(), 
     });
     let command_envelope = envelope(scenario.scenario_id, revision, command)?;
     let registry = official_registry()?;
-    let applied = apply_command_with_registry(&scenario, revision, &command_envelope, &registry)?;
+    let applied = apply_command_with_registry(
+        &scenario,
+        revision,
+        &command_envelope,
+        &registry,
+        &eutheto_types::CancellationToken::new(),
+    )?;
     assert!(applied.result.validation_delta.added.is_empty());
     assert!(applied.result.validation_delta.resolved.is_empty());
 
@@ -467,6 +469,7 @@ fn fast_validation_is_derived_from_the_registered_phase_02_pack() -> Result<(), 
         applied.result.new_revision,
         &inverse_envelope,
         &registry,
+        &eutheto_types::CancellationToken::new(),
     )?;
     assert!(restored.result.validation_delta.added.is_empty());
     assert!(restored.result.validation_delta.resolved.is_empty());
@@ -582,5 +585,231 @@ fn harmless_key_substrings_remain_valid_command_data() -> Result<(), Box<dyn Err
             "monkey": "capuchin"
         }))
     );
+    Ok(())
+}
+
+fn configure(entity_id: EntityId, target: u32) -> ScenarioCommand {
+    ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+        command_type: "official.test.configure_entity".to_owned(),
+        payload: json!({"entityId": entity_id, "enabled": target > 0, "target": target}),
+    })
+}
+
+fn labeled(label: &str, commands: Vec<ScenarioCommand>) -> ScenarioCommand {
+    ScenarioCommand::ApplyBatch(CommandBatch {
+        label: Some(label.to_owned()),
+        commands,
+    })
+}
+
+#[test]
+fn adjacent_domain_runs_preserve_repeated_changes_and_nested_inverse_tree()
+-> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let id: EntityId = ENTITY_ID.parse()?;
+    let record = |target| json!({"id": id, "enabled": target > 0, "target": target});
+    scenario.domain.entities.insert(id, record(0));
+    let command = labeled(
+        "outer",
+        vec![
+            configure(id, 1),
+            configure(id, 2),
+            labeled("nested", vec![configure(id, 3), configure(id, 4)]),
+            ScenarioCommand::UpdateEntity(UpdateEntity {
+                entity_id: id,
+                value: record(5),
+            }),
+            configure(id, 6),
+            configure(id, 7),
+        ],
+    );
+    let submitted = serde_json::to_value(&command)?;
+    let envelope = envelope(scenario.scenario_id, Revision::INITIAL, command)?;
+    let applied = apply_command(&scenario, Revision::INITIAL, &envelope)?;
+    assert_eq!(serde_json::to_value(&envelope.command)?, submitted);
+    let expected_inverse = labeled(
+        "outer",
+        vec![
+            configure(id, 6),
+            configure(id, 5),
+            ScenarioCommand::UpdateEntity(UpdateEntity {
+                entity_id: id,
+                value: record(4),
+            }),
+            labeled("nested", vec![configure(id, 3), configure(id, 2)]),
+            configure(id, 1),
+            configure(id, 0),
+        ],
+    );
+    assert_eq!(applied.result.inverse, Some(expected_inverse.clone()));
+    assert_eq!(applied.result.change_set.changes.len(), 7);
+    for (index, change) in applied.result.change_set.changes.iter().enumerate() {
+        assert_eq!(change.path, format!("/domain/entities/{id}"));
+        assert_eq!(change.before, Some(record(index)));
+        assert_eq!(change.after, Some(record(index + 1)));
+    }
+    let undone = apply(
+        &applied.document,
+        applied.result.new_revision,
+        expected_inverse,
+    )?;
+    assert_eq!(undone.document, scenario);
+    Ok(())
+}
+
+#[test]
+fn coalesced_leaves_obey_total_count_and_depth_on_inverse_replay() -> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let id: EntityId = ENTITY_ID.parse()?;
+    scenario
+        .domain
+        .entities
+        .insert(id, json!({"id": id, "enabled": false, "target": 0}));
+    let mut command = labeled(
+        "leaves",
+        (0..MAX_BATCH_COMMANDS)
+            .map(|index| configure(id, u32::from(index % 2 == 0)))
+            .collect(),
+    );
+    for level in 1..MAX_BATCH_DEPTH {
+        command = labeled(&format!("level {level}"), vec![command]);
+    }
+    let applied = apply(&scenario, Revision::INITIAL, command.clone())?;
+    assert_eq!(applied.result.change_set.changes.len(), MAX_BATCH_COMMANDS);
+    let undone = apply(
+        &applied.document,
+        applied.result.new_revision,
+        applied.result.inverse.ok_or("missing inverse")?,
+    )?;
+    assert_eq!(undone.document, scenario);
+    let too_deep = envelope(
+        scenario.scenario_id,
+        Revision::INITIAL,
+        labeled("too deep", vec![command]),
+    )?;
+    assert_eq!(
+        apply_command(&scenario, Revision::INITIAL, &too_deep)
+            .err()
+            .ok_or("depth overflow accepted")?
+            .code(),
+        CODE_BATCH_DEPTH_EXCEEDED
+    );
+    let too_many = envelope(
+        scenario.scenario_id,
+        Revision::INITIAL,
+        labeled(
+            "too many",
+            vec![
+                labeled("first run", vec![configure(id, 1); MAX_BATCH_COMMANDS]),
+                configure(id, 0),
+            ],
+        ),
+    )?;
+    assert_eq!(
+        apply_command(&scenario, Revision::INITIAL, &too_many)
+            .err()
+            .ok_or("leaf overflow accepted")?
+            .code(),
+        CODE_BATCH_TOO_LARGE
+    );
+    Ok(())
+}
+
+#[test]
+fn domain_schema_lookahead_preserves_earlier_semantic_failure() -> Result<(), Box<dyn Error>> {
+    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let id: EntityId = ENTITY_ID.parse()?;
+    let first = configure(id, 1);
+    let first_error = apply_command(
+        &scenario,
+        Revision::INITIAL,
+        &envelope(scenario.scenario_id, Revision::INITIAL, first.clone())?,
+    )
+    .err()
+    .ok_or("missing entity accepted")?;
+    for later in [
+        ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+            command_type: "official.test.configure_entity".to_owned(),
+            payload: json!({"entityId": id, "enabled": true, "target": "invalid"}),
+        }),
+        ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+            command_type: "official.test.unknown".to_owned(),
+            payload: json!({}),
+        }),
+    ] {
+        let input = envelope(
+            scenario.scenario_id,
+            Revision::INITIAL,
+            labeled("ordered failures", vec![first.clone(), later]),
+        )?;
+        assert_eq!(
+            apply_command(&scenario, Revision::INITIAL, &input),
+            Err(first_error.clone())
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn late_domain_failure_is_atomic_without_false_first_leaf_attribution() -> Result<(), Box<dyn Error>>
+{
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let id: EntityId = ENTITY_ID.parse()?;
+    scenario
+        .domain
+        .entities
+        .insert(id, json!({"id": id, "enabled": false, "target": 0}));
+    let original = scenario.clone();
+    let missing: EntityId = "0195a5e4-7c00-7000-8000-000000000099".parse()?;
+    let input = envelope(
+        scenario.scenario_id,
+        Revision::INITIAL,
+        labeled(
+            "late failure",
+            vec![configure(id, 1), configure(missing, 2)],
+        ),
+    )?;
+    let error = apply_command(&scenario, Revision::INITIAL, &input)
+        .err()
+        .ok_or("missing entity accepted")?;
+    assert_eq!(error.code(), "command.invalid_domain_payload");
+    assert!(
+        matches!(error, CommandError::InvalidDomainBatchPayload { ref path, .. }
+        if path == &format!("/domain/entities/{missing}"))
+    );
+    assert_eq!(scenario, original);
+    Ok(())
+}
+
+#[test]
+fn shallow_batch_rejects_an_inverse_that_exceeds_replay_json_depth() -> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let id: EntityId = ENTITY_ID.parse()?;
+    let mut before = json!({"leaf": true});
+    for _ in 0..123 {
+        before = json!({"child": before});
+    }
+    scenario.domain.entities.insert(id, before);
+    eutheto_command::validate_document_shape(&scenario)?;
+    let forward = ScenarioCommand::UpdateEntity(UpdateEntity {
+        entity_id: id,
+        value: json!({"id": id, "enabled": true, "target": 1}),
+    });
+    // The same old record fits both the document and an unwrapped inverse.
+    assert_round_trip(&scenario, Revision::INITIAL, forward.clone())?;
+    let original = scenario.clone();
+    let input = envelope(
+        scenario.scenario_id,
+        Revision::INITIAL,
+        labeled("one shallow update", vec![forward]),
+    )?;
+    let error = apply_command(&scenario, Revision::INITIAL, &input)
+        .err()
+        .ok_or("unreplayable inverse was accepted")?;
+    assert!(
+        matches!(error, CommandError::Validation { code: CODE_PROHIBITED_DATA, path, .. }
+        if path == "/inverse")
+    );
+    assert_eq!(scenario, original);
     Ok(())
 }

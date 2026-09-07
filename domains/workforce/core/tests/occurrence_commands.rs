@@ -69,7 +69,7 @@ fn checked(
         ContractJsonLimits::DEFAULT,
     )?;
     for change in &mutation.changes {
-        assert_eq!(change.command_id, command);
+        assert_eq!(change.command_index, 0);
         validate_contract_value(
             &descriptor.change_schema,
             &change.value,

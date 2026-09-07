@@ -27,8 +27,8 @@ use eutheto_domain_ir::{
 };
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
-    PackId, PortableDomainDocument, ScenarioDocument, ScenarioDomain, SemanticCapability,
-    SolutionId,
+    CancellationToken, PackId, PortableDomainDocument, ScenarioDocument, ScenarioDomain,
+    SemanticCapability, SolutionId,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -148,10 +148,14 @@ impl DomainPack for WorkforcePack {
         &self,
         document: &ScenarioDocument,
         batch: &DomainBatchCommand,
+        cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError> {
+        if cancellation.is_cancelled() {
+            return Err(DomainPackError::Cancelled);
+        }
         validate_input_bounds(document)?;
         validate_input_bounds(batch)?;
-        commands::apply_batch(document, batch)
+        commands::apply_batch_cancellable(document, batch, cancellation)
     }
 
     fn compile(

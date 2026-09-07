@@ -6,7 +6,8 @@ use super::{
     parsing::scan_csv,
     types::{
         CSV_LIMITS_VERSION, CSV_PARSER_VERSION, ColumnMapping, CsvError, CsvErrorCode, CsvSource,
-        MAX_CSV_PREVIEW_BYTES, PeopleCsvMapping, RejectedRow, RowDecision, RowRejectionCode,
+        MAX_CSV_PREVIEW_BYTES, MAX_CSV_VALIDATION_BYTES, MAX_CSV_VALIDATION_ISSUES,
+        PeopleCsvMapping, RejectedRow, RowDecision, RowRejectionCode,
     },
 };
 use crate::{
@@ -14,7 +15,9 @@ use crate::{
     validation::{WorkforceSchemas, validate_document_with_schemas},
 };
 use eutheto_domain_api::{DomainBatchCommand, DomainPackError, bounded_json_size};
-use eutheto_types::{CancellationToken, Revision, ScenarioDocument, ScenarioId};
+use eutheto_types::{
+    CancellationToken, Revision, ScenarioDocument, ScenarioId, ValidationIssue, ValidationSeverity,
+};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
@@ -64,6 +67,7 @@ pub struct PeopleCsvReview {
     pub decisions: Vec<RowDecision>,
     pub changes_blake3: String,
     pub rejected_blake3: String,
+    pub validation_blake3: String,
 }
 
 /// Contains proposed ordinary commands only. Durable apply/approval custody is host-owned.
@@ -76,6 +80,8 @@ pub struct PeopleImportPreview {
     pub columns: Vec<ColumnMapping>,
     pub rows: Vec<PeopleImportRow>,
     pub rejected_rows: Vec<RejectedRow>,
+    /// Safe bounded findings, ordered by rejected record followed by proposed-state failure.
+    pub validation_issues: Vec<ValidationIssue>,
     pub batch: Option<DomainBatchCommand>,
     pub review: Option<PeopleCsvReview>,
     /// Supplied independently of the review artifact when rebuilding an approved import.
@@ -92,13 +98,13 @@ pub(super) fn check_cancelled(cancellation: &CancellationToken) -> Result<(), Cs
 
 /// Streams and validates a people import without changing the supplied scenario.
 ///
-/// Fatal input/policy/resource failures return an error. Unresolved identities and
-/// duplicate targets return a blocked preview without a batch or approval artifact.
+/// Fatal input/policy/resource failures return an error. Unresolved identities,
+/// duplicate targets and invalid proposed state return a blocked preview without authority.
 ///
 /// # Errors
 ///
-/// Rejects invalid current state, source/policy limits, invalid decisions or an
-/// invalid aggregate batch. Cancellation never returns an approved batch.
+/// Rejects invalid current state, source/policy/report limits, invalid decisions and
+/// internal command failures. Cancellation never returns an approved batch.
 pub fn preview_people_csv<R: Read + ?Sized>(
     document: &ScenarioDocument,
     revision: Revision,
@@ -127,7 +133,39 @@ pub fn preview_people_csv<R: Read + ?Sized>(
     {
         return Err(CsvError::source(CsvErrorCode::InvalidDecision));
     }
-    let (outcomes, rejected_rows, batch, blocked) = rows.finish();
+    let (outcomes, rejected_rows, mut batch, mut blocked) = rows.finish();
+    let mut validation_issues: Vec<_> = rejected_rows.iter().copied().map(rejected_issue).collect();
+    if let Some(proposed) = &batch {
+        // Input envelope limits are operation failures, not invalid proposed state.
+        proposed
+            .validate_bounds()
+            .map_err(|_| CsvError::source(CsvErrorCode::InvalidBatch))?;
+        match validate_proposed_state(document, proposed, cancellation) {
+            Ok(_) => {}
+            Err(DomainPackError::InvalidPayload { .. }) => {
+                validation_issues.push(ValidationIssue {
+                    code: "invalidProposedState".to_owned(),
+                    severity: ValidationSeverity::Error,
+                    message:
+                        "The proposed import violates scenario structure, references or capacity."
+                            .to_owned(),
+                    field_path: Some("/peopleCsv/proposedState".to_owned()),
+                    resource: None,
+                });
+                blocked = true;
+                batch = None;
+            }
+            Err(DomainPackError::Cancelled) => {
+                return Err(CsvError::source(CsvErrorCode::Cancelled));
+            }
+            Err(_) => return Err(CsvError::source(CsvErrorCode::InvalidBatch)),
+        }
+    }
+    if validation_issues.len() > MAX_CSV_VALIDATION_ISSUES {
+        return Err(CsvError::source(CsvErrorCode::ValidationReportLimit));
+    }
+    bounded_json_size(&validation_issues, MAX_CSV_VALIDATION_BYTES)
+        .map_err(|_| CsvError::source(CsvErrorCode::ValidationReportLimit))?;
     let disposition = if blocked {
         PeopleImportDisposition::Blocked
     } else if batch.is_some() {
@@ -135,15 +173,6 @@ pub fn preview_people_csv<R: Read + ?Sized>(
     } else {
         PeopleImportDisposition::NoChanges
     };
-    if let Some(batch) = &batch {
-        commands::apply_batch_cancellable(document, batch, cancellation).map_err(|error| {
-            CsvError::source(if error == DomainPackError::Cancelled {
-                CsvErrorCode::Cancelled
-            } else {
-                CsvErrorCode::InvalidBatch
-            })
-        })?;
-    }
     check_cancelled(cancellation)?;
     let review = if blocked {
         None
@@ -161,6 +190,7 @@ pub fn preview_people_csv<R: Read + ?Sized>(
             decisions: decisions.to_vec(),
             changes_blake3: binding::hash(&batch)?,
             rejected_blake3: binding::hash(&rejected_rows)?,
+            validation_blake3: binding::hash(&validation_issues)?,
         })
     };
     let approval_digest = review.as_ref().map(binding::approval_digest).transpose()?;
@@ -171,6 +201,7 @@ pub fn preview_people_csv<R: Read + ?Sized>(
         columns: mapping.columns.clone(),
         rows: outcomes,
         rejected_rows,
+        validation_issues,
         batch,
         review,
         approval_digest,
@@ -179,6 +210,52 @@ pub fn preview_people_csv<R: Read + ?Sized>(
         .map_err(|_| CsvError::source(CsvErrorCode::PreviewLimit))?;
     check_cancelled(cancellation)?;
     Ok(preview)
+}
+
+fn validate_proposed_state(
+    document: &ScenarioDocument,
+    batch: &DomainBatchCommand,
+    cancellation: &CancellationToken,
+) -> Result<ScenarioDocument, DomainPackError> {
+    if cancellation.is_cancelled() {
+        return Err(DomainPackError::Cancelled);
+    }
+    match commands::apply_batch_cancellable(document, batch, cancellation) {
+        Ok(mutation) => Ok(mutation.document),
+        Err(DomainPackError::BatchInverseTooLarge) if batch.commands.len() > 1 => {
+            // The forward preview is already bounded. Only inverse amplification needs
+            // smaller private applications; retain the original batch for review binding.
+            let (left, right) = batch.commands.split_at(batch.commands.len() / 2);
+            let mut part = DomainBatchCommand {
+                schema_version: batch.schema_version,
+                pack_id: batch.pack_id.clone(),
+                scenario_schema_version: batch.scenario_schema_version,
+                label: batch.label.clone(),
+                commands: left.to_vec(),
+            };
+            let working = validate_proposed_state(document, &part, cancellation)?;
+            part.commands = right.to_vec();
+            validate_proposed_state(&working, &part, cancellation)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn rejected_issue(row: RejectedRow) -> ValidationIssue {
+    let code = match row.code {
+        RowRejectionCode::ColumnCount => "columnCount",
+        RowRejectionCode::InvalidCell => "invalidCell",
+        RowRejectionCode::InvalidReference => "invalidReference",
+        RowRejectionCode::MissingName => "missingName",
+        RowRejectionCode::InvalidPerson => "invalidPerson",
+    };
+    ValidationIssue {
+        code: code.to_owned(),
+        severity: ValidationSeverity::Warning,
+        message: "The row was rejected and is excluded from the proposed import.".to_owned(),
+        field_path: Some(format!("/peopleCsv/records/{}", row.record)),
+        resource: None,
+    }
 }
 
 /// Recomputes an approved review against fresh bytes and the actual current document.
