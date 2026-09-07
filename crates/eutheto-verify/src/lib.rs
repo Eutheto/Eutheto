@@ -392,8 +392,8 @@ impl<'a> AcceptanceReviewer<'a> {
         control: &OperationControl,
     ) -> AcceptanceDecision {
         let mut timings = AcceptancePhaseTimings::default();
-        if let Some(decision) = interrupted(control, None, timings) {
-            return decision;
+        if let Some(reason) = interrupted(control, None) {
+            return AcceptanceDecision::Interrupted { reason, timings };
         }
 
         let started = self.clock.now_milliseconds();
@@ -401,13 +401,16 @@ impl<'a> AcceptanceReviewer<'a> {
             .pack
             .project(self.problem, &candidate.values, solution_id, control);
         let finished = self.clock.now_milliseconds();
-        if let Some(decision) = interrupted(control, projection.as_ref().err(), timings) {
-            return decision;
+        let projection_elapsed = elapsed(started, finished);
+        if let Some(duration) = projection_elapsed {
+            timings.projection_milliseconds = duration;
         }
-        let Some(projection_elapsed) = elapsed(started, finished) else {
+        if let Some(reason) = interrupted(control, projection.as_ref().err()) {
+            return AcceptanceDecision::Interrupted { reason, timings };
+        }
+        if projection_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
-        };
-        timings.projection_milliseconds = projection_elapsed;
+        }
         let Ok(solution) = projection else {
             return quarantine(CorrectnessAlarmCategory::ProjectionFailed, timings);
         };
@@ -421,13 +424,16 @@ impl<'a> AcceptanceReviewer<'a> {
             &solution,
         );
         let finished = self.clock.now_milliseconds();
-        if let Some(decision) = interrupted(control, None, timings) {
-            return decision;
+        let structural_elapsed = elapsed(started, finished);
+        if let Some(duration) = structural_elapsed {
+            timings.structural_validation_milliseconds = duration;
         }
-        let Some(structural_elapsed) = elapsed(started, finished) else {
+        if let Some(reason) = interrupted(control, None) {
+            return AcceptanceDecision::Interrupted { reason, timings };
+        }
+        if structural_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
-        };
-        timings.structural_validation_milliseconds = structural_elapsed;
+        }
         let Ok(structural) = structural else {
             return quarantine(
                 CorrectnessAlarmCategory::StructuralValidationFailed,
@@ -438,13 +444,16 @@ impl<'a> AcceptanceReviewer<'a> {
         let started = finished;
         let authoritative_score = self.pack.score(self.document, &solution, control);
         let score_finished = self.clock.now_milliseconds();
-        if let Some(decision) = interrupted(control, authoritative_score.as_ref().err(), timings) {
-            return decision;
+        let score_elapsed = elapsed(started, score_finished);
+        if let Some(duration) = score_elapsed {
+            timings.score_recomputation_milliseconds = duration;
         }
-        let Some(score_elapsed) = elapsed(started, score_finished) else {
+        if let Some(reason) = interrupted(control, authoritative_score.as_ref().err()) {
+            return AcceptanceDecision::Interrupted { reason, timings };
+        }
+        if score_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
-        };
-        timings.score_recomputation_milliseconds = score_elapsed;
+        }
         let Ok(authoritative_score) = authoritative_score else {
             return quarantine(CorrectnessAlarmCategory::ScoreRecomputationFailed, timings);
         };
@@ -453,8 +462,11 @@ impl<'a> AcceptanceReviewer<'a> {
         let verification_scope =
             self.pack
                 .verification_scope(self.document, self.scenario_revision, control);
-        if let Some(decision) = interrupted(control, verification_scope.as_ref().err(), timings) {
-            return decision;
+        if let Some(reason) = interrupted(control, verification_scope.as_ref().err()) {
+            if let Some(duration) = elapsed(verification_started, self.clock.now_milliseconds()) {
+                timings.required_rule_verification_milliseconds = duration;
+            }
+            return AcceptanceDecision::Interrupted { reason, timings };
         }
         let Ok(verification_scope) = verification_scope else {
             let failed = self.clock.now_milliseconds();
@@ -489,8 +501,11 @@ impl<'a> AcceptanceReviewer<'a> {
             &authoritative_score,
             control,
         );
-        if let Some(decision) = interrupted(control, report.as_ref().err(), timings) {
-            return decision;
+        if let Some(reason) = interrupted(control, report.as_ref().err()) {
+            if let Some(duration) = elapsed(verification_started, self.clock.now_milliseconds()) {
+                timings.required_rule_verification_milliseconds = duration;
+            }
+            return AcceptanceDecision::Interrupted { reason, timings };
         }
         let Ok(report) = report else {
             let failed = self.clock.now_milliseconds();
@@ -512,13 +527,16 @@ impl<'a> AcceptanceReviewer<'a> {
             candidate.objective.as_ref(),
         );
         let verify_finished = self.clock.now_milliseconds();
-        if let Some(decision) = interrupted(control, None, timings) {
-            return decision;
+        let verify_elapsed = elapsed(verification_started, verify_finished);
+        if let Some(duration) = verify_elapsed {
+            timings.required_rule_verification_milliseconds = duration;
         }
-        let Some(verify_elapsed) = elapsed(verification_started, verify_finished) else {
+        if let Some(reason) = interrupted(control, None) {
+            return AcceptanceDecision::Interrupted { reason, timings };
+        }
+        if verify_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
-        };
-        timings.required_rule_verification_milliseconds = verify_elapsed;
+        }
         if let Some(category) = validation.as_ref().err().copied() {
             return quarantine(category, timings);
         }
@@ -526,8 +544,8 @@ impl<'a> AcceptanceReviewer<'a> {
             return quarantine(CorrectnessAlarmCategory::ReportBindingFailed, timings);
         };
         let accepted = AcceptedResult::new(solution, report);
-        if let Some(decision) = interrupted(control, None, timings) {
-            return decision;
+        if let Some(reason) = interrupted(control, None) {
+            return AcceptanceDecision::Interrupted { reason, timings };
         }
         match accepted {
             Ok(result) => AcceptanceDecision::Accepted {
@@ -543,14 +561,12 @@ impl<'a> AcceptanceReviewer<'a> {
 fn interrupted(
     control: &OperationControl,
     error: Option<&DomainPackError>,
-    timings: AcceptancePhaseTimings,
-) -> Option<AcceptanceDecision> {
-    let reason = control.check().err().or(match error {
+) -> Option<OperationInterruption> {
+    control.check().err().or(match error {
         Some(DomainPackError::Cancelled) => Some(OperationInterruption::Cancelled),
         Some(DomainPackError::BudgetExpired) => Some(OperationInterruption::DeadlineExceeded),
         _ => None,
-    })?;
-    Some(AcceptanceDecision::Interrupted { reason, timings })
+    })
 }
 
 fn validate_report(

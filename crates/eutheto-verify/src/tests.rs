@@ -982,10 +982,29 @@ fn pack_interruption_at_each_acceptance_stage_never_becomes_a_correctness_alarm(
                 interrupt_at: Some((stage, error)),
                 ..TestPack::default()
             };
-            let decision = review(&pack, Some(vec![AUTHORITATIVE_SCORE]), &[0, 1, 2, 3, 4])?;
-            assert!(
-                matches!(decision, AcceptanceDecision::Interrupted { reason, .. } if reason == expected),
-                "{stage:?}: {decision:?}"
+            let decision = review(
+                &pack,
+                Some(vec![AUTHORITATIVE_SCORE]),
+                &[10, 13, 18, 25, 36],
+            )?;
+            let AcceptanceDecision::Interrupted { reason, timings } = decision else {
+                return Err(format!("{stage:?}: interruption became {decision:?}").into());
+            };
+            assert_eq!(reason, expected);
+            let expected_timings = match stage {
+                InterruptStage::Projection => [3, 0, 0, 0],
+                InterruptStage::Score => [3, 5, 7, 0],
+                InterruptStage::Scope | InterruptStage::Verification => [3, 5, 7, 11],
+            };
+            assert_eq!(
+                [
+                    timings.projection_milliseconds.value(),
+                    timings.structural_validation_milliseconds.value(),
+                    timings.score_recomputation_milliseconds.value(),
+                    timings.required_rule_verification_milliseconds.value(),
+                ],
+                expected_timings,
+                "{stage:?}"
             );
         }
     }
