@@ -2,9 +2,11 @@
 
 ## Outcome
 
-Deliver the complete workforce-scheduling MVP vertical slice: every official required rule and preference compiles, solves through the default OR-Tools path, is independently verified and explained, appears in accessible result and repair workflows, and round-trips through the supported imports and exports. Every published or exported solution is an accepted, revision-matched, independently verified solution.
+Deliver the complete workforce-scheduling MVP vertical slice: every official required rule and preference compiles, solves through the default OR-Tools path, is independently verified and explained, appears in accessible result and repair workflows, and round-trips through the supported imports and exports. Every selected or solution-derived exported result is an accepted, independently verified solution bound to its evaluated revision; stale exports retain the explicit warning and labeling gates below.
 
 This phase completes the behavior begun in Phases 05–06. It does not weaken the separation between domain meaning, planning IR, backend translation, and independent verification.
+
+`Verified` records independent acceptance against the configured rules; `selected` identifies the user's chosen accepted local result; `locally exported` describes a generated output under its privacy and provenance gates. None means organization-approved or published. Those later collaboration states belong to [verified approval and publication](collaborative-planning-and-hosted-service.md#verified-approval-and-publication): human approval references an independently verified result and cannot waive verification. Phase 07 adds no organization-approval or publication tables, workflows, or release scope.
 
 ## Source coverage
 
@@ -25,7 +27,7 @@ Project-wide contracts and sequencing are in [README.md](README.md). Version and
 
 1. **Required means acceptance-critical.** A required rule violation always rejects a candidate. A preference is a bounded objective contribution and can never silently change required feasibility.
 2. **Verification is independent.** Backend values are projected into a normalized domain solution, structurally validated, evaluated against every original domain required rule, and rescored independently. Backend status and compiler penalty variables are not authoritative.
-3. **Verification failure is quarantined.** Store the raw result only in bounded, redacted diagnostics; fail the run; show an internal-correctness error; disable select, publish, repair-from, and assignment/result/solution-derived export actions for the candidate. Project/scenario backup bundles and diagnostic/infeasibility reports remain available when their own source data is valid and must not imply candidate acceptance.
+3. **Verification failure is quarantined.** Store the raw result only in bounded, redacted diagnostics; fail the run; show an internal-correctness error; disable select, repair-from, and assignment/result/solution-derived export actions for the candidate. The later collaboration layer must likewise reject it for organization approval or publication. Project/scenario backup bundles and diagnostic/infeasibility reports remain available when their own source data is valid and must not imply candidate acceptance.
 4. **Revision identity is explicit.** Jobs, events, solutions, verification reports, explanations, exports, and counterfactuals carry scenario revision and relevant model/solution hashes. An older-revision result remains inspectable but is visibly stale and cannot masquerade as current.
 5. **Time is unambiguous.** Rest, overlap, and actual-hours rules operate on elapsed instants unless a rule explicitly names scheduled/local hours. Recurring generation applies the scenario’s reviewed DST policy and reports wall-clock versus elapsed differences.
 6. **Fairness is configured, not asserted.** Show the chosen population, workload bucket, target/share computation, actual distribution, deviations, and spread. Never present one opaque “fairness percentage.”
@@ -248,6 +250,8 @@ Compare aggregate scores only when objective definitions, units, population/scop
 
 Phase 07's Scenario Compare scope is intentionally bounded: compare the current accepted result with the immediately preceding accepted result for the same scenario. Show the complete semantic difference above, preserve both result/run/revision identities, and let the user reopen or restore the prior accepted plan through existing revisioned commands. Arbitrary revision selection, named milestones, branching, reconciliation, generalized criticality, and cross-pack health semantics remain post-MVP.
 
+Later collaboration reuses this existing compare evidence, revisioned repair path, and privacy-filtered Share Result behavior under [reuse of existing authorities](collaborative-planning-and-hosted-service.md#reuse-of-existing-authorities). Organization publication is a separate authorized immutable projection, not a relabeling of local selection or file sharing; its detailed contract does not expand MVP comparison, repair, or export requirements.
+
 Persist compact assumption-to-rule mappings, objective contribution records, counterfactual summaries, backend bounds/status, verifier evaluations, and model/solution hashes. Full solver logs are opt-in and bounded. A later AI paraphrase never replaces the deterministic evidence view.
 
 ## Repair and manual edits
@@ -344,7 +348,7 @@ Checked-in minimum corpus:
 2. **Clinic plus overnight call:** 12 people and cross-category 10-hour rest.
 3. **Rolling-hours stress:** overlapping candidate windows and hard locks.
 4. **Qualification coverage:** one specialist required per session.
-5. **Repair after call-out:** accepted/published base schedule plus one new unavailability.
+5. **Repair after call-out:** accepted, selected local base schedule plus one new unavailability.
 6. **Provably infeasible:** insufficient eligible coverage with mapped sufficient conflict.
 7. **DST transition:** overnight work across both spring and fall transitions.
 8. **Large benchmark:** configurable 100+ people and thousands of candidate assignments.

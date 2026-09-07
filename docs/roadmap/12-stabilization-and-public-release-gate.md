@@ -6,6 +6,8 @@ Turn the immutable Phase-11 release candidates into a public release only after 
 
 Candidate construction and artifact contracts are defined in [Phase 11](11-public-mvp-packaging-and-documentation.md). Version and unresolved-decision evidence is in [the assumptions ledger](assumptions.md). Work intentionally outside the public MVP enters the applicable post-MVP branch: the platform and school roadmap in [Phase 13](13-post-mvp-roadmap.md) or the proposed household-transportation pack in [Phase 14](14-transportation-domain-pack.md).
 
+Approval here authorizes the local desktop/CLI software release, not organization approval of a schedule or launch of a collaboration/hosted service. The MVP retains offline, no-account, no-hidden-network operation within the existing optional-provider/updater boundaries, and accepted-only solution-derived outputs. Later collaboration/service releases require separate applicable identity/authorization, privacy/retention/recovery, deployment, and operational evidence under [delivery and ownership](collaborative-planning-and-hosted-service.md#delivery-and-ownership); organization approval and publication follow their own [verified-result contract](collaborative-planning-and-hosted-service.md#verified-approval-and-publication) and can never waive independent verification.
+
 ## Source coverage
 
 This phase is the implementation source of truth for blueprint Sections 22.18, 26, 32, and 33; Phase 12; Appendix K.8; the public-MVP scope in Section 6.3; the release-gate portions of Sections 24, 27, and 28; calibration/release approval of [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and final release evidence for [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). It closes `QA-001` and `MVP-001` against the exact `SEC-001`, `REL-001`, `REL-002`, and `DOC-001` outputs from Phase 11.
@@ -547,6 +549,7 @@ Phase 12 and public MVP are complete only when every definition of done and ever
 - It does not convert experimental Pumpkin into a stable default without its support/cancellation/benchmark gates.
 - It does not publish merely because a date/tag was planned; evidence controls publication.
 - Conversational experiments, voice, MCP servers, delegated reasoning, and conditional subscription-runtime support have their own post-MVP Phase-13 gates. Audio/remote-host evaluations do not become public-MVP prerequisites. When those capabilities ship later, apply the same exact-artifact, security, privacy, accessibility, recovery, and evidence discipline to their supported modes; school and transportation are not prerequisites for the MVP assistant corpus.
+- [Collaborative Planning and Hosted Service](collaborative-planning-and-hosted-service.md#status-authority-and-scope) is Branch-H workflow authority, not another numbered phase or an MVP gate. H0 read-only reuse/pilot-charter work may inform planning without production expansion; H1 enters only after Phase 12 and its relevant ADR/operating gates. Managed collaboration operations use the same open capabilities, with applicable security controls inherited by each deployment rather than the entire intake-pilot checklist. Existing school, voice, and transportation gates remain independent; eligibility does not imply simultaneous staffing or priority.
 
 ## Assumption and version gates
 

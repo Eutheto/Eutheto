@@ -48,6 +48,33 @@ Related delivery files: [Performance and Solver UX Targets](performance-and-solv
 | MVP portable scope | **Scenario bundle plus full-library backup/restore:** stable IDs and canonical units; Create copy/Replace/Skip scenario collisions; Add/Replace full restore with attempted pre-restore safety backup; no semantic merge, encryption, automatic backup, signatures, or hosted service in MVP. | Phases 01/06 own services/UI; Phase 12 owns permanent migration, malicious-archive, atomicity, and fresh-install recovery evidence. |
 | MVP result sharing | **One privacy-filtered immutable Share Result Model:** one-file offline `file://` HTML is default; direct PDF is secondary but required; exact preview drives both; zero required network; accessible list/table parity; accepted-result provenance. | Phases 07/09 implement shared renderer and official-pack payloads; Phases 11–12 close browser, CSP, privacy, print/PDF, and release evidence. |
 
+## Collaborative planning direction and pilot gates — 2026-09-07
+
+The user approved reconciliation of the 2026-09-06 collaborative-planning proposal through the [Branch-H detailed specification](collaborative-planning-and-hosted-service.md). This is an approved roadmap direction, not implementation, customer-demand, provider-selection or release evidence. The source PRODUCT-01–15 and ACCEPT-01–22 identifiers remain mapped there; phase ownership never means a scenario has passed.
+
+| Decision | Controlling disposition | Owner/gate |
+|---|---|---|
+| Current public MVP | Phases00–12 unchanged; complete Phase05 and pause for user manual testing before Phase06. No collaboration schemas, campaigns, server, account or email dependency is added to the MVP. | Index and current phase gates. |
+| Open software and deployment parity | Official implemented software capabilities remain open/local-self-hostable with explicit runtime prerequisites. No commercial feature/population caps; retain technical bounds. Semantic parity, portable exit and supported deployment/operating claims are distinct. | Index; H1/N1 deployment matrix and evidence. |
+| Initial organizational delivery | One validated Workforce workflow and complete collection→reconciliation→verified planning→approval→publication→change/repair/republication loop, documented self-hostable reference deployment and minimum production operations. An intake-only build is a prototype. | H0 charter, H1 exit; N1 adds managed operator evidence. |
+| Existing core reuse | Typed commands/scenario revisions, snapshots/runs/results, independent verification and Share Result remain the authorities. No universal person store or parallel constraint/solver authority; requested treatment and approval are future collaboration-layer concerns. | H0 gap analysis; ADR-006/007/010/011/018; no speculative current migration. |
+| Independent entry and priority | H1/N1, original school/platform wave, Branch K and Phase14 retain separate applicable entry/exit gates. Read-only H0 work may inform planning early; independent eligibility is not simultaneous staffing or a silently changed priority. | Maintainer allocation and completed Phase12 prerequisite for production. |
+| Deferred breadth | Managed AI, SMS/additional channels, hybrid workers, unrestricted APIs and coordinated cross-pack solving have demand/security/operating gates. No provider, scale, institution or household-hosting commitment is inferred. | Applicable Phase13/14 branches and separate approval. |
+
+The following decisions remain **open** until H0 records named owners, evidence and an approved disposition. They are not new blockers on the local MVP:
+
+| Gate | Evidence required before applicable organizational production work | Responsible role |
+|---|---|---|
+| COLLAB-GATE-01 | Selected repeatable workflow, planning owner/domain reviewer, representative synthetic corpus, supported rules and out-of-scope uses. Physician groups and household/institutional offerings remain hypotheses until validated. | Product maintainer and selected domain reviewer. |
+| COLLAB-GATE-02 | One reference deployment and state/credential/egress ADR; documented self-host operation and the separate managed operating boundary. No database/cloud/email vendor is selected here. | Architecture/security and future deployment owner. |
+| COLLAB-GATE-03 | Subject/account/delegation authority, invitation/session policy, exact requested/effective treatment mapping, timezone/deadline/missing/late-response and policy-version rules. | Domain/product owner and security reviewer. |
+| COLLAB-GATE-04 | Raw/normalized/decision/publication/delivery retention classes, permitted derived disclosures, deletion/re-verification consequences and recipient privacy profiles. | Privacy/security owner and domain reviewer. |
+| COLLAB-GATE-05 | Minimum email/in-app events, configured delivery approach, provider-accepted ambiguity, send-time permission checks and bounded retry/reconciliation policy; no SMS. | Delivery owner and security reviewer. |
+| COLLAB-GATE-06 | Planning interchange versus recipient output, organization migration and deployment-recovery profiles; compatibility and destination authority mapping; safe restored-service resume. | Data-integrity owner; Branch O and applicable H/N gates. |
+| COLLAB-GATE-07 | Recorded baseline and go/stop thresholds for setup, response/reconciliation effort, repeated-cycle independence, repair, restore and support burden; supported workload/deployment envelope. | Product/domain and performance owners. |
+| COLLAB-GATE-08 | Before real data: isolation, bounded jobs, monitored health, tested recovery, controlled update/rollback, retention/deletion, delivery failures and incident/support responsibility. Managed commitments additionally need actual operator capacity. | Applicable H1/N1 deployment and security owners. |
+| COLLAB-GATE-09 | Explicit allocation among eligible post-MVP tracks without removing existing school, voice or transportation commitments or disguising a release-scope change. | Maintainer. |
+
 ## Controlling recommendations
 
 | Item | Latest observed | Controlling recommendation | Reason and owner |
