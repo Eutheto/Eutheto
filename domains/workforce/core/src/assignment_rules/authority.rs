@@ -666,6 +666,10 @@ pub(crate) fn operation_error(error: &AssignmentRuleError) -> DomainPackError {
     match error {
         AssignmentRuleError::Cancelled => DomainPackError::Cancelled,
         AssignmentRuleError::BudgetExpired => DomainPackError::BudgetExpired,
+        AssignmentRuleError::LimitExceeded(_)
+        | AssignmentRuleError::InvalidDocument(DomainPackError::ResourceLimitExceeded) => {
+            DomainPackError::ResourceLimitExceeded
+        }
         _ => DomainPackError::Contract(error.code().to_owned()),
     }
 }

@@ -495,6 +495,10 @@ pub struct DomainView {
 }
 
 /// Object-safe contract implemented by compiled-in packs.
+///
+/// Fallible operations report exhausted finite work, count or retention allowances as
+/// [`DomainPackError::ResourceLimitExceeded`], separately from invalid input and elapsed deadlines.
+/// An incomplete operation establishes no semantic validity or correctness result.
 pub trait DomainPack: Send + Sync {
     /// Returns this pack's descriptor.
     ///
@@ -527,11 +531,13 @@ pub trait DomainPack: Send + Sync {
         document: ScenarioDocument,
     ) -> Result<ScenarioDocument, DomainPackError>;
 
+    /// Returns blocking readiness findings, including an explicit resource finding if incomplete.
+    /// Callers must not treat a resource finding as proof that the document is malformed.
     fn validate_fast(&self, document: &ScenarioDocument) -> DomainValidationReport;
     /// Performs full readiness validation under the caller's cancellation or solve deadline.
     ///
     /// # Errors
-    /// Interruption is returned separately from issues in a successfully completed report.
+    /// Interruption and resource exhaustion are errors, not partially completed validation reports.
     fn validate_full(
         &self,
         document: &ScenarioDocument,
@@ -559,8 +565,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the document or context is invalid, compilation fails, or the
-    /// operation is cancelled.
+    /// Returns an error if the document or context is invalid, compilation fails, or cancellation,
+    /// deadline expiry or resource exhaustion prevents completion.
     fn compile(
         &self,
         document: &ScenarioDocument,
@@ -571,7 +577,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the planning problem or candidate values violate the pack contract.
+    /// Returns an error for invalid planning problems or candidate values, interruption, or
+    /// resource exhaustion. Exhaustion before inspecting values makes no claim about their validity.
     fn project(
         &self,
         problem: &PlanningProblem,
@@ -584,7 +591,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the document is invalid or its verification scope cannot be built.
+    /// Returns an error if the document is invalid or its verification scope cannot be built,
+    /// including interruption or resource exhaustion.
     fn verification_scope(
         &self,
         document: &ScenarioDocument,
@@ -597,7 +605,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if either input is invalid or the pack cannot perform verification.
+    /// Returns an error if either input is invalid or verification cannot complete, including
+    /// interruption or resource exhaustion.
     fn verify(
         &self,
         document: &ScenarioDocument,
@@ -611,7 +620,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if either input is invalid or scoring violates the pack contract.
+    /// Returns an error if either input is invalid, scoring violates the pack contract, or
+    /// interruption or resource exhaustion prevents completion.
     fn score(
         &self,
         document: &ScenarioDocument,
@@ -668,7 +678,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the document, optional solution, or view identifier is invalid.
+    /// Returns an error if the document, optional solution, or view identifier is invalid,
+    /// or resource exhaustion prevents completing the view.
     fn build_view(
         &self,
         document: &ScenarioDocument,
@@ -684,7 +695,8 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the document or evidence request is invalid or unsupported.
+    /// Returns an error if the document or evidence request is invalid or unsupported, or
+    /// interruption or resource exhaustion prevents completing the evidence.
     fn render_evidence(
         &self,
         document: &ScenarioDocument,
@@ -701,6 +713,7 @@ pub trait DomainPack: Send + Sync {
     /// # Errors
     ///
     /// Returns [`DomainPackError::Cancelled`] or [`DomainPackError::BudgetExpired`] when observed,
+    /// [`DomainPackError::ResourceLimitExceeded`] when a finite operation allowance is exhausted,
     /// [`DomainPackError::UnsupportedExplanationCapability`] when unsupported, or another typed
     /// pack error when the document, condition, baseline, or derived model is invalid.
     fn compile_counterfactual(
@@ -959,6 +972,10 @@ pub enum DomainPackError {
     Cancelled,
     #[error("domain operation budget expired")]
     BudgetExpired,
+    /// A finite work, count or retention allowance prevented completing the operation.
+    /// This establishes neither invalid input nor an elapsed deadline.
+    #[error("domain operation exceeded its resource limit")]
+    ResourceLimitExceeded,
     #[error("unsupported explanation capability {0:?}")]
     UnsupportedExplanationCapability(ExplanationCapability),
     #[error("domain contract violation: {0}")]

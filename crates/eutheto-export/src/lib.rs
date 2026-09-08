@@ -404,6 +404,9 @@ pub enum ExportError {
     DestinationExists(PathBuf),
     #[error("bundle publication was cancelled")]
     Cancelled,
+    /// Domain conversion could not complete within a finite operation allowance.
+    #[error("domain conversion exceeded its resource limit")]
+    ResourceLimitExceeded,
 }
 
 /// Serialize as compact deterministic JSON. Struct field order is declared and

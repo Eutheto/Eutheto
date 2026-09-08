@@ -3416,7 +3416,10 @@ fn app_error(error: AppError) -> SafeCliError {
         AppError::Protocol(failure) => {
             let exit = if failure.code == "operation.cancelled" {
                 CliExitCode::Cancelled
-            } else if failure.code == "operation.deadline_exceeded" {
+            } else if matches!(
+                failure.code.as_str(),
+                "operation.deadline_exceeded" | "operation.resource_limit"
+            ) {
                 CliExitCode::NoVerifiedSolution
             } else if is_portable_artifact_error_code(&failure.code) {
                 CliExitCode::Storage

@@ -289,22 +289,20 @@ fn aggregate_metadata_bytes_are_bounded_before_generic_indexes() -> Result {
             limits,
             &OperationControl::Cancellation(CancellationToken::new())
         ),
-        Err(contract("official.workforce.limit.bytes"))
+        Err(DomainPackError::ResourceLimitExceeded)
     );
-    // Exhausting index/reference quota as well must not move it ahead of the byte gate.
-    let no_indexes = PlanningIrLimitsV1 {
-        max_total_refs: 0,
-        ..limits
-    };
+    // Exhaustion makes no validity claim about the value map left uninspected.
+    let mut unknown = candidate;
+    unknown.booleans.insert("test.unknown".parse()?, true);
     assert_eq!(
         project_workforce_candidate(
             &problem,
-            &candidate,
+            &unknown,
             solution_id()?,
-            no_indexes,
+            limits,
             &OperationControl::Cancellation(CancellationToken::new())
         ),
-        Err(contract("official.workforce.limit.bytes"))
+        Err(DomainPackError::ResourceLimitExceeded)
     );
     Ok(())
 }
@@ -326,7 +324,7 @@ fn generic_scratch_exhaustion_returns_no_partial_solution_and_does_not_poison_re
             limits,
             &OperationControl::Cancellation(CancellationToken::new())
         ),
-        Err(contract("official.workforce.limit.references"))
+        Err(DomainPackError::ResourceLimitExceeded)
     );
     let solution = project_workforce_candidate(
         &problem,

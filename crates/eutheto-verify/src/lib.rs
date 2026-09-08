@@ -296,6 +296,10 @@ pub enum AcceptanceDecision {
         reason: OperationInterruption,
         timings: AcceptancePhaseTimings,
     },
+    /// A finite allowance prevented completing review; no validity claim or alarm is made.
+    ResourceLimitExceeded {
+        timings: AcceptancePhaseTimings,
+    },
 }
 
 /// Injectable monotonic clock for deterministic acceptance timing tests.
@@ -411,6 +415,9 @@ impl<'a> AcceptanceReviewer<'a> {
         if projection_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
         }
+        if matches!(projection, Err(DomainPackError::ResourceLimitExceeded)) {
+            return AcceptanceDecision::ResourceLimitExceeded { timings };
+        }
         let Ok(solution) = projection else {
             return quarantine(CorrectnessAlarmCategory::ProjectionFailed, timings);
         };
@@ -454,6 +461,12 @@ impl<'a> AcceptanceReviewer<'a> {
         if score_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
         }
+        if matches!(
+            authoritative_score,
+            Err(DomainPackError::ResourceLimitExceeded)
+        ) {
+            return AcceptanceDecision::ResourceLimitExceeded { timings };
+        }
         let Ok(authoritative_score) = authoritative_score else {
             return quarantine(CorrectnessAlarmCategory::ScoreRecomputationFailed, timings);
         };
@@ -474,6 +487,12 @@ impl<'a> AcceptanceReviewer<'a> {
                 return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
             };
             timings.required_rule_verification_milliseconds = verification_elapsed;
+            if matches!(
+                verification_scope,
+                Err(DomainPackError::ResourceLimitExceeded)
+            ) {
+                return AcceptanceDecision::ResourceLimitExceeded { timings };
+            }
             return quarantine(CorrectnessAlarmCategory::VerificationScopeFailed, timings);
         };
 
@@ -513,6 +532,9 @@ impl<'a> AcceptanceReviewer<'a> {
                 return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
             };
             timings.required_rule_verification_milliseconds = verification_elapsed;
+            if matches!(report, Err(DomainPackError::ResourceLimitExceeded)) {
+                return AcceptanceDecision::ResourceLimitExceeded { timings };
+            }
             return quarantine(
                 CorrectnessAlarmCategory::RequiredRuleVerificationFailed,
                 timings,

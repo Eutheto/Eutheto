@@ -3333,9 +3333,19 @@ fn portable_conversion_failure() -> MigrationFailure {
     )
 }
 
+fn domain_conversion_error(error: &DomainPackError) -> MigrationFailure {
+    match error {
+        DomainPackError::ResourceLimitExceeded => MigrationFailure::ResourceLimitExceeded,
+        _ => portable_conversion_failure(),
+    }
+}
+
 fn portable_conversion_error(error: AppError) -> MigrationFailure {
     match error {
         AppError::Validation(report) => MigrationFailure::Validation(report),
+        AppError::Protocol(failure) if failure.code == "operation.resource_limit" => {
+            MigrationFailure::ResourceLimitExceeded
+        }
         _ => portable_conversion_failure(),
     }
 }
@@ -3363,8 +3373,11 @@ fn migrate_global_portable_v1(
         &mut applied_migrations,
     )
     .map_err(portable_conversion_error)?;
-    let domain = encode_portable_domain(&snapshot.document, registry)
-        .map_err(|_| portable_conversion_failure())?;
+    let domain =
+        encode_portable_domain(&snapshot.document, registry).map_err(|error| match error {
+            ExportError::ResourceLimitExceeded => MigrationFailure::ResourceLimitExceeded,
+            _ => portable_conversion_failure(),
+        })?;
     let introduced_requirements = domain
         .required_capabilities
         .difference(&snapshot.required_capabilities)
@@ -3429,7 +3442,7 @@ fn decode_portable_domain(
             .ok_or_else(portable_conversion_failure)?;
         domain = std::borrow::Cow::Owned(
             pack.migrate_portable_step(domain.into_owned())
-                .map_err(|_| portable_conversion_failure())?,
+                .map_err(|error| domain_conversion_error(&error))?,
         );
         if domain.schema_version != expected {
             return Err(portable_conversion_failure());
@@ -3463,7 +3476,7 @@ fn decode_portable_domain(
     };
     let document = pack
         .import_portable(&domain, &context)
-        .map_err(|_| portable_conversion_failure())?;
+        .map_err(|error| domain_conversion_error(&error))?;
     if document.domain_pack.schema_version != descriptor.scenario_versions.latest {
         return Err(portable_conversion_failure());
     }
@@ -3606,8 +3619,12 @@ fn migrate_import_document(
                 "The imported scenario does not have a complete sequential migration path.",
             ));
         }
-        migrated = pack.migrate_document(migrated).map_err(|_| {
-            migration_contract_error("The imported scenario domain document could not be migrated.")
+        migrated = pack.migrate_document(migrated).map_err(|error| {
+            domain_interruption(&error).unwrap_or_else(|| {
+                migration_contract_error(
+                    "The imported scenario domain document could not be migrated.",
+                )
+            })
         })?;
         if migrated.domain_pack.schema_version != expected_version
             || migrated.domain_pack.schema_version > target_version
@@ -3915,7 +3932,12 @@ fn encode_portable_domain(
     let pack = registry
         .require(&document.domain_pack.id)
         .map_err(|_| failed())?;
-    let encoded = pack.export_portable(document).map_err(|_| failed())?;
+    let encoded = pack
+        .export_portable(document)
+        .map_err(|error| match error {
+            DomainPackError::ResourceLimitExceeded => ExportError::ResourceLimitExceeded,
+            _ => failed(),
+        })?;
     if encoded.pack_id != descriptor.id
         || encoded.schema_version != descriptor.portable_versions.latest
         || !encoded
@@ -4623,18 +4645,28 @@ fn operation_interrupted(reason: OperationInterruption) -> AppError {
     }
 }
 
+fn resource_limit_error() -> AppError {
+    protocol_error(
+        "operation.resource_limit",
+        "The domain operation could not complete within its resource limit.",
+        false,
+    )
+}
+
 fn domain_interruption(error: &DomainPackError) -> Option<AppError> {
     match error {
         DomainPackError::Cancelled => Some(operation_interrupted(OperationInterruption::Cancelled)),
         DomainPackError::BudgetExpired => Some(operation_interrupted(
             OperationInterruption::DeadlineExceeded,
         )),
+        DomainPackError::ResourceLimitExceeded => Some(resource_limit_error()),
         _ => None,
     }
 }
 
 fn solution_view_error(error: &DomainPackError) -> AppError {
     match error {
+        DomainPackError::ResourceLimitExceeded => resource_limit_error(),
         DomainPackError::UnsupportedExplanationCapability(_) => explanation_unavailable("view"),
         _ => validation_error(
             "solution.view_invalid",
@@ -4646,6 +4678,7 @@ fn solution_view_error(error: &DomainPackError) -> AppError {
 
 fn explanation_render_error(error: &DomainPackError) -> AppError {
     match error {
+        DomainPackError::ResourceLimitExceeded => resource_limit_error(),
         DomainPackError::UnsupportedExplanationCapability(capability) => {
             AppError::Unsupported(UnsupportedFeature {
                 code: "solution.explanation_capability_unavailable".to_owned(),
@@ -4765,6 +4798,8 @@ fn store_error(error: StoreError) -> AppError {
                     code,
                     capability: message,
                 })
+            } else if code == "command.resource_limit" {
+                resource_limit_error()
             } else {
                 validation_error(&code, "/command", &message)
             }
@@ -5031,6 +5066,7 @@ fn import_error(error: &eutheto_import::ImportError) -> AppError {
             "The portable migration registry is invalid.",
             false,
         ),
+        ImportError::Migration(MigrationFailure::ResourceLimitExceeded) => resource_limit_error(),
         ImportError::Migration(MigrationFailure::Validation(report)) => {
             AppError::Validation(report.clone())
         }
@@ -5081,6 +5117,7 @@ fn filesystem_error(_: std::io::Error) -> AppError {
 
 fn export_error(error: &ExportError) -> AppError {
     match error {
+        ExportError::ResourceLimitExceeded => resource_limit_error(),
         ExportError::Cancelled => {
             protocol_error("operation.cancelled", "The operation was cancelled.", false)
         }

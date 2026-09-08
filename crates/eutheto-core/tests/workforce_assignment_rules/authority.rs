@@ -21,9 +21,8 @@ use eutheto_verify::{
 use eutheto_workforce::{
     WorkforcePack,
     assignment_rules::{
-        AssignmentRuleError, AssignmentRuleLimit, build_workforce_share_result,
-        render_workforce_evidence, score_workforce_solution, verify_workforce_solution,
-        workforce_verification_scope,
+        AssignmentRuleError, build_workforce_share_result, render_workforce_evidence,
+        score_workforce_solution, verify_workforce_solution, workforce_verification_scope,
     },
     model::AssignmentPair,
 };
@@ -686,11 +685,7 @@ fn typed_input_bounds_precede_generic_checksums_and_cancellation_precedes_semant
         ),
         Err(DomainPackError::Cancelled)
     );
-    let limit = DomainPackError::Contract(
-        AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::PerRecord)
-            .code()
-            .to_owned(),
-    );
+    let limit = DomainPackError::ResourceLimitExceeded;
     document.metadata.description = "\0".repeat(ContractJsonLimits::DEFAULT.max_string_bytes + 1);
     assert_eq!(
         score_workforce_solution(&document, solution, None),
@@ -824,11 +819,7 @@ fn aggregate_small_report_fields_are_bounded_before_stale_checksum_validation() 
             MetricValue::Integer(0),
         );
     }
-    let expected = DomainPackError::Contract(
-        AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::Bytes)
-            .code()
-            .to_owned(),
-    );
+    let expected = DomainPackError::ResourceLimitExceeded;
     assert_eq!(
         build_workforce_share_result(
             &document,

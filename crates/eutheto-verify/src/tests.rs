@@ -1012,6 +1012,70 @@ fn pack_interruption_at_each_acceptance_stage_never_becomes_a_correctness_alarm(
 }
 
 #[test]
+fn resource_exhaustion_retains_stage_timings_but_never_masks_clock_defects()
+-> Result<(), Box<dyn Error>> {
+    for (stage, expected_timings, regressing_clock) in [
+        (InterruptStage::Projection, [3, 0, 0, 0], &[10, 9][..]),
+        (InterruptStage::Score, [3, 5, 7, 0], &[10, 13, 18, 17][..]),
+        (
+            InterruptStage::Scope,
+            [3, 5, 7, 11],
+            &[10, 13, 18, 25, 24][..],
+        ),
+        (
+            InterruptStage::Verification,
+            [3, 5, 7, 11],
+            &[10, 13, 18, 25, 24][..],
+        ),
+    ] {
+        let pack = TestPack {
+            interrupt_at: Some((stage, DomainPackError::ResourceLimitExceeded)),
+            ..TestPack::default()
+        };
+        let decision = review(
+            &pack,
+            Some(vec![AUTHORITATIVE_SCORE]),
+            &[10, 13, 18, 25, 36],
+        )?;
+        let AcceptanceDecision::ResourceLimitExceeded { timings } = decision else {
+            return Err(format!("{stage:?}: resource exhaustion became {decision:?}").into());
+        };
+        assert_eq!(
+            [
+                timings.projection_milliseconds.value(),
+                timings.structural_validation_milliseconds.value(),
+                timings.score_recomputation_milliseconds.value(),
+                timings.required_rule_verification_milliseconds.value(),
+            ],
+            expected_timings,
+            "{stage:?}"
+        );
+        assert_quarantined(
+            review(&pack, Some(vec![AUTHORITATIVE_SCORE]), regressing_clock)?,
+            CorrectnessAlarmCategory::ClockFailed,
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn contract_text_resembling_a_resource_code_remains_a_correctness_alarm()
+-> Result<(), Box<dyn Error>> {
+    let pack = TestPack {
+        interrupt_at: Some((
+            InterruptStage::Projection,
+            DomainPackError::Contract("official.workforce.limit.work_steps".to_owned()),
+        )),
+        ..TestPack::default()
+    };
+    assert_quarantined(
+        review(&pack, Some(vec![AUTHORITATIVE_SCORE]), &[10, 13])?,
+        CorrectnessAlarmCategory::ProjectionFailed,
+    )?;
+    Ok(())
+}
+
+#[test]
 fn expiry_during_acceptance_prevents_an_accepted_result() -> Result<(), Box<dyn Error>> {
     use std::sync::Arc;
     use std::time::Duration;

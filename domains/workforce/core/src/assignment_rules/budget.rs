@@ -259,8 +259,8 @@ pub(super) fn effective_limits(
     limits: PlanningIrLimitsV1,
 ) -> Result<PlanningIrLimitsV1, AssignmentRuleError> {
     if limits.max_abs_coefficient < 0 || limits.max_abs_value < 0 {
-        return Err(AssignmentRuleError::LimitExceeded(
-            AssignmentRuleLimit::PerRecord,
+        return Err(AssignmentRuleError::InvalidConstruction(
+            AssignmentConstructionIssue::InvalidRecord,
         ));
     }
     let defaults = PlanningIrLimitsV1::DEFAULT;

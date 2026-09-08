@@ -674,9 +674,12 @@ impl Summary {
         budget.steps(count(result.affected_entities.len())?)?;
         result.affected_entities.sort_unstable();
         result.affected_entities.dedup();
-        result
-            .validate()
-            .map_err(|_| AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::PerRecord))?;
+        result.validate().map_err(|error| match error {
+            eutheto_domain_ir::DomainContractError::LimitExceeded(_) => {
+                AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::PerRecord)
+            }
+            _ => invalid(),
+        })?;
         Ok(result)
     }
 }
@@ -1086,6 +1089,24 @@ mod tests {
             assert_eq!(result.observed.len(), 9);
             Ok(())
         })
+    }
+
+    #[test]
+    fn malformed_generated_fact_is_not_resource_exhaustion() -> TestResult {
+        let witness = Witness::pair(selected_pair()?, entity_id(30)?, "availability", "");
+        let result = Summary {
+            checked: 1,
+            violations: 1,
+            first: Some(witness),
+        }
+        .finish(rule_id(20)?, &mut OperationBudget::evaluation(None));
+        assert_eq!(
+            result,
+            Err(AssignmentRuleError::InvalidConstruction(
+                AssignmentConstructionIssue::InvalidRecord
+            ))
+        );
+        Ok(())
     }
 
     fn rest_witness() -> TestResult<Witness> {

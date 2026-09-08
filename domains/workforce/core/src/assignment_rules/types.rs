@@ -197,6 +197,9 @@ impl AssignmentRuleError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::InvalidDocument(DomainPackError::ResourceLimitExceeded) => {
+                "official.workforce.limit.resource"
+            }
             Self::InvalidDocument(_) => "official.workforce.invalid_document",
             Self::Temporal(_) => "official.workforce.temporal_review",
             Self::Cancelled => "official.workforce.cancelled",
@@ -307,6 +310,7 @@ impl From<AssignmentRuleError> for DomainPackError {
             AssignmentRuleError::InvalidDocument(error) => error,
             AssignmentRuleError::Cancelled => Self::Cancelled,
             AssignmentRuleError::BudgetExpired => Self::BudgetExpired,
+            AssignmentRuleError::LimitExceeded(_) => Self::ResourceLimitExceeded,
             AssignmentRuleError::Temporal(issue) => Self::InvalidPayload {
                 path: issue.entity_id.map_or_else(
                     || "settings".to_owned(),
