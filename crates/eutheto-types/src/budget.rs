@@ -305,6 +305,7 @@ pub struct RemainingSolveBudget {
 }
 
 struct SolveBudgetState {
+    started_at: Duration,
     deadline: Duration,
     clock: Arc<dyn MonotonicClock>,
     cancellation: CancellationToken,
@@ -351,11 +352,13 @@ impl ParentSolveBudget {
         clock: Arc<dyn MonotonicClock>,
         cancellation: CancellationToken,
     ) -> Result<Self, ParentSolveBudgetError> {
-        let Some(deadline) = clock.now().checked_add(time_limit.to_duration()) else {
+        let started_at = clock.now();
+        let Some(deadline) = started_at.checked_add(time_limit.to_duration()) else {
             return Err(ParentSolveBudgetError::DeadlineOverflow);
         };
         Ok(Self {
             state: Arc::new(SolveBudgetState {
+                started_at,
                 deadline,
                 clock,
                 cancellation,
@@ -375,6 +378,15 @@ impl ParentSolveBudget {
     #[must_use]
     pub fn snapshot(&self) -> RemainingSolveBudget {
         self.state.snapshot()
+    }
+
+    /// Observes elapsed time from the original start, including time beyond the deadline.
+    ///
+    /// Returns `None` when the injected clock precedes the original start. Callers measuring
+    /// phases must also use checked subtraction between observations to reject clock regression.
+    #[must_use]
+    pub fn checked_elapsed(&self) -> Option<Duration> {
+        self.state.clock.now().checked_sub(self.state.started_at)
     }
 
     /// Returns remaining duration, saturated to zero at the deadline.
@@ -413,6 +425,15 @@ impl SolveBudgetView {
     #[must_use]
     pub fn snapshot(&self) -> RemainingSolveBudget {
         self.state.snapshot()
+    }
+
+    /// Observes elapsed time from the original parent start without clipping at the deadline.
+    ///
+    /// Returns `None` when the clock precedes that start. Phase durations require checked
+    /// subtraction between observations so an intervening clock regression remains explicit.
+    #[must_use]
+    pub fn checked_elapsed(&self) -> Option<Duration> {
+        self.state.clock.now().checked_sub(self.state.started_at)
     }
 
     /// Returns remaining duration, saturated to zero at the deadline.
@@ -577,6 +598,7 @@ mod tests {
             nested.snapshot().remaining_milliseconds,
             duration_millis(300)?
         );
+        assert_eq!(nested.checked_elapsed(), Some(Duration::from_millis(700)));
         Ok(())
     }
 
@@ -592,6 +614,35 @@ mod tests {
         assert_eq!(after.remaining_milliseconds, DurationMillis::ZERO);
         assert!(after.expired);
         assert!(!after.cancelled);
+        assert_eq!(parent.checked_elapsed(), Some(Duration::from_millis(1_250)));
+        assert_eq!(
+            parent.phase_view().checked_elapsed(),
+            parent.checked_elapsed()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn elapsed_observation_rejects_a_clock_before_the_original_start()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct RegressingClock(AtomicU64);
+        impl MonotonicClock for RegressingClock {
+            fn now(&self) -> Duration {
+                Duration::from_millis(self.0.load(Ordering::Relaxed))
+            }
+        }
+
+        let clock = Arc::new(RegressingClock(AtomicU64::new(100)));
+        let parent = ParentSolveBudget::new(
+            duration_millis(500)?,
+            clock.clone(),
+            CancellationToken::new(),
+        )?;
+        clock.0.store(99, Ordering::Relaxed);
+        assert_eq!(parent.checked_elapsed(), None);
+        assert_eq!(parent.phase_view().checked_elapsed(), None);
         Ok(())
     }
 

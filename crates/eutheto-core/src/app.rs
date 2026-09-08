@@ -12,8 +12,8 @@ use eutheto_domain_ir::{
     AcceptedResult, AcceptedResultRefV1, AssignmentEvidenceV1, ComparisonContext,
     ComparisonRunManifests, EvidenceRenderRequestV1, ExplanationEvidencePayloadV1,
     ExplanationEvidenceV1, ExplanationRequestSubjectV1, ExplanationRequestV1, ExplanationResultV1,
-    OptimalityStatusEvidenceV1, RepairCausalityV1, RepairEvidenceV1, ScoreVector,
-    SolutionComparisonV1, VerificationContextV1, VerificationReport, blake3_hex,
+    OptimalityStatusEvidenceV1, PortableAcceptedResultV2, RepairCausalityV1, RepairEvidenceV1,
+    ScoreVector, SolutionComparisonV1, VerificationContextV1, VerificationReport, blake3_hex,
     compare_accepted_results,
 };
 use eutheto_export::{
@@ -71,6 +71,10 @@ use uuid::Uuid;
 #[path = "people_csv.rs"]
 mod people_csv;
 pub use people_csv::*;
+
+#[path = "headless.rs"]
+mod headless;
+pub use headless::*;
 
 const EVENT_VERSION: u32 = 1;
 /// Current application solution-read wire schema.
@@ -1762,42 +1766,13 @@ impl EuthetoApp {
                 let stored = self
                     .load_referenced_solution(request.scenario_id, result)
                     .await?;
-                let accepted = &stored.portable.accepted_result;
-                let assignment = accepted
-                    .solution
-                    .assignments
-                    .iter()
-                    .find(|assignment| &assignment.id == assignment_id)
-                    .cloned()
-                    .ok_or(AppError::NotFound(ResourceRef::Solution(
-                        result.solution_id,
-                    )))?;
-                let related_rules = accepted
-                    .verification
-                    .required_rule_results
-                    .iter()
-                    .filter(|rule| {
-                        rule.affected_entities.contains(&assignment.entity)
-                            || rule
-                                .evidence
-                                .iter()
-                                .any(|id| assignment.evidence.contains(id))
-                    })
-                    .cloned()
-                    .collect();
+                let assignment =
+                    assignment_evidence(&stored.portable.accepted_result, assignment_id)?;
                 let revision = solution_revision(&stored)?;
                 (
                     stored.document,
                     vec![revision],
-                    ExplanationEvidencePayloadV1::Assignment {
-                        assignment: AssignmentEvidenceV1 {
-                            assignment,
-                            related_rules,
-                            score_contributions: Vec::new(),
-                            metrics: BTreeMap::new(),
-                            lock_state: None,
-                        },
-                    },
+                    ExplanationEvidencePayloadV1::Assignment { assignment },
                 )
             }
             ExplanationRequestSubjectV1::Counterfactual { job_id, base } => {
@@ -2085,27 +2060,7 @@ impl EuthetoApp {
         domain_pack: DomainPackRef,
         settings: ScenarioSettings,
     ) -> Result<AppCommandResult, AppError> {
-        if title.trim().is_empty() {
-            return Err(validation_error(
-                "project.title_required",
-                "/title",
-                "Project title must not be empty.",
-            ));
-        }
-        let Some(descriptor) = self
-            .pack_registry
-            .descriptors()
-            .find(|descriptor| descriptor.id == domain_pack.id)
-        else {
-            return Err(unsupported_project_pack(&domain_pack));
-        };
-        if domain_pack.schema_version != descriptor.scenario_versions.latest {
-            return Err(unsupported_project_pack(&domain_pack));
-        }
-        let pack = self
-            .pack_registry
-            .require(&domain_pack.id)
-            .map_err(|_| project_initialization_error())?;
+        let pack = creation_pack(&title, &domain_pack, &self.pack_registry)?;
         let library = self.store.library_snapshot().await.map_err(store_error)?;
         let LibraryUuidClosure { occupied, .. } = library_uuid_closure(&library);
         let scenario_id = ScenarioId::from_uuid(allocate_unique_uuid(
@@ -2127,34 +2082,11 @@ impl EuthetoApp {
             ScenarioDomain::default(),
             BTreeMap::new(),
         );
-        let document = pack
-            .new_document(shell.clone())
-            .map_err(|_| project_initialization_error())?;
-        if document.format != shell.format
-            || document.format_version != shell.format_version
-            || document.scenario_id != shell.scenario_id
-            || document.domain_pack != shell.domain_pack
-            || document.metadata != shell.metadata
-            || document.settings != shell.settings
-            || document.extensions != shell.extensions
-        {
-            return Err(project_initialization_error());
-        }
-        validate_document_shape(&document).map_err(|_| project_initialization_error())?;
-        if pack
-            .validate_full(
-                &document,
-                &OperationControl::Cancellation(self.cancellation.clone()),
-            )
-            .map_err(|error| {
-                domain_interruption(&error).unwrap_or_else(project_initialization_error)
-            })?
-            .issues
-            .iter()
-            .any(|issue| issue.severity == ValidationSeverity::Error)
-        {
-            return Err(project_initialization_error());
-        }
+        let document = initialize_document(
+            &shell,
+            pack,
+            &OperationControl::Cancellation(self.cancellation.clone()),
+        )?;
         let project = self
             .store
             .create_project(NewProject { document })
@@ -3225,7 +3157,7 @@ impl EuthetoApp {
             .with_publication_revision_lease(
                 expected_library_revision,
                 expected_scenario,
-                move || prepared.publish_cancellable(&cancellation),
+                move || prepared.publish_controlled(&OperationControl::Cancellation(cancellation)),
             )
             .await
             .map_err(store_error)?
@@ -3374,8 +3306,17 @@ fn inspect_application_bundle(
     bytes: &[u8],
     registry: &Arc<DomainPackRegistry>,
 ) -> Result<InspectedBundle, eutheto_import::ImportError> {
+    let migrations = application_portable_migrations(registry)?;
+    inspect_bundle(bytes, &InspectionPolicy::default(), &migrations, &|wire| {
+        decode_portable_domain(wire, registry)
+    })
+}
+
+fn application_portable_migrations(
+    registry: &Arc<DomainPackRegistry>,
+) -> Result<MigrationRegistries, eutheto_import::ImportError> {
     let migration_registry = Arc::clone(registry);
-    let migrations = MigrationRegistries::new(
+    MigrationRegistries::new(
         Vec::new(),
         vec![PortableMigrationStep {
             from_version: 1,
@@ -3383,10 +3324,7 @@ fn inspect_application_bundle(
             name: "global-portable-v1-to-v2",
             migrate: Arc::new(move |value| migrate_global_portable_v1(value, &migration_registry)),
         }],
-    )?;
-    inspect_bundle(bytes, &InspectionPolicy::default(), &migrations, &|wire| {
-        decode_portable_domain(wire, registry)
-    })
+    )
 }
 
 fn portable_conversion_failure() -> MigrationFailure {
@@ -4520,6 +4458,41 @@ fn ensure_solution_scenario(
     }
 }
 
+fn assignment_evidence(
+    accepted: &AcceptedResult,
+    assignment_id: &eutheto_domain_ir::DomainAssignmentId,
+) -> Result<AssignmentEvidenceV1, AppError> {
+    let assignment = accepted
+        .solution
+        .assignments
+        .iter()
+        .find(|assignment| &assignment.id == assignment_id)
+        .cloned()
+        .ok_or(AppError::NotFound(ResourceRef::Solution(
+            accepted.solution.solution_id,
+        )))?;
+    let related_rules = accepted
+        .verification
+        .required_rule_results
+        .iter()
+        .filter(|rule| {
+            rule.affected_entities.contains(&assignment.entity)
+                || rule
+                    .evidence
+                    .iter()
+                    .any(|id| assignment.evidence.contains(id))
+        })
+        .cloned()
+        .collect();
+    Ok(AssignmentEvidenceV1 {
+        assignment,
+        related_rules,
+        score_contributions: Vec::new(),
+        metrics: BTreeMap::new(),
+        lock_state: None,
+    })
+}
+
 fn solution_pack<'a>(
     stored: &StoredAcceptedResultV2,
     registry: &'a DomainPackRegistry,
@@ -4557,23 +4530,45 @@ fn reverify_accepted_solution(
     registry: &DomainPackRegistry,
     control: &OperationControl,
 ) -> Result<VerificationReport, AppError> {
+    reverify_portable_solution(
+        &stored.document,
+        stored.portable.scenario_revision,
+        &stored.portable,
+        registry,
+        control,
+    )
+}
+
+fn reverify_portable_solution(
+    document: &ScenarioDocument,
+    revision: u64,
+    portable: &PortableAcceptedResultV2,
+    registry: &DomainPackRegistry,
+    control: &OperationControl,
+) -> Result<VerificationReport, AppError> {
     control.check().map_err(operation_interrupted)?;
-    let accepted = &stored.portable.accepted_result;
+    portable
+        .validate()
+        .map_err(|_| solution_verification_mismatch())?;
+    let accepted = &portable.accepted_result;
     let solution = &accepted.solution;
-    let pack = solution_pack(stored, registry)?;
-    let document_hash = serde_json::to_vec(&stored.document)
+    let pack = available_pack(document, registry)
+        .ok_or_else(|| unsupported_project_pack(&document.domain_pack))?;
+    let document_hash = serde_json::to_vec(document)
         .map(|bytes| blake3_hex(&bytes))
         .map_err(|_| solution_contract_error())?;
-    if document_hash != stored.portable.run_input.snapshot_document_hash
+    if document_hash != portable.run_input.snapshot_document_hash
         || document_hash != accepted.verification.document_hash
-        || solution.pack_id != stored.document.domain_pack.id
-        || solution.scenario_id != stored.document.scenario_id
-        || solution.scenario_revision != stored.portable.scenario_revision
+        || solution.pack_id != document.domain_pack.id
+        || portable.run_input.pack_schema_version != document.domain_pack.schema_version
+        || solution.scenario_id != document.scenario_id
+        || solution.scenario_revision != revision
+        || portable.scenario_revision != revision
     {
         return Err(solution_verification_mismatch());
     }
     let scope = pack
-        .verification_scope(&stored.document, solution.scenario_revision, control)
+        .verification_scope(document, solution.scenario_revision, control)
         .map_err(|error| {
             domain_interruption(&error).unwrap_or_else(solution_verification_failed)
         })?;
@@ -4584,26 +4579,18 @@ fn reverify_accepted_solution(
         solution.scenario_id,
         solution.scenario_revision,
         document_hash,
-        stored.portable.run_input.model_hash.clone(),
+        portable.run_input.model_hash.clone(),
         solution
             .canonical_hash()
             .map_err(|_| solution_verification_mismatch())?,
         scope.checksum,
     )
     .map_err(|_| solution_verification_mismatch())?;
-    let authoritative_score = pack
-        .score(&stored.document, solution, control)
-        .map_err(|error| {
-            domain_interruption(&error).unwrap_or_else(solution_verification_failed)
-        })?;
+    let authoritative_score = pack.score(document, solution, control).map_err(|error| {
+        domain_interruption(&error).unwrap_or_else(solution_verification_failed)
+    })?;
     let report = pack
-        .verify(
-            &stored.document,
-            solution,
-            &context,
-            &authoritative_score,
-            control,
-        )
+        .verify(document, solution, &context, &authoritative_score, control)
         .map_err(|error| {
             domain_interruption(&error).unwrap_or_else(solution_verification_failed)
         })?;
@@ -4733,6 +4720,12 @@ fn command_store_error(error: &CommandError) -> StoreError {
     if matches!(error, CommandError::Cancelled) {
         return StoreError::OperationCancelled;
     }
+    if let CommandError::Conflict { expected, actual } = error {
+        return StoreError::Conflict {
+            expected: Revision::new(*expected),
+            actual: Revision::new(*actual),
+        };
+    }
     StoreError::CommandApplication {
         code: error.code().to_owned(),
         message: error.to_string(),
@@ -4756,6 +4749,11 @@ fn store_error(error: StoreError) -> AppError {
             expected_revision: expected,
             actual_revision: actual,
         },
+        StoreError::SolveRequestIdConflict { .. } => validation_error(
+            "solve.request_id_conflict",
+            "/requestId",
+            "This request identity already belongs to different solve semantics.",
+        ),
         StoreError::ScenarioAlreadyExists(_) => validation_error(
             "project.scenario_already_exists",
             "/scenarioId",

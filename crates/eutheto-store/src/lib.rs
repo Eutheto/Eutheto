@@ -724,6 +724,15 @@ pub struct StartedSolveRunV1 {
     pub reused: bool,
 }
 
+/// Validated retained request state; reading it never starts or takes ownership of work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExistingSolveRunV1 {
+    pub input: RunInputV1,
+    pub started_at: Rfc3339Timestamp,
+    /// Absent only for a still-running request.
+    pub manifest: Option<RunManifestV1>,
+}
+
 /// Exact immutable scenario snapshot and typed input for backend execution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedSolveInputV1 {
@@ -1511,6 +1520,68 @@ impl SqliteScenarioStore {
     ) -> Result<LoadedSolveInputV1, StoreError> {
         self.call(move |connection| load_solve_input_row(connection, run_id))
             .await
+    }
+
+    /// Resolves idempotent request state before a caller reads moving-current scenario data.
+    ///
+    /// # Errors
+    /// Rejects inconsistent persisted input, terminal bindings, timing columns or database errors.
+    pub async fn load_solve_run_by_request(
+        &self,
+        request_id: RequestId,
+    ) -> Result<Option<ExistingSolveRunV1>, StoreError> {
+        self.call(move |connection| {
+            let transaction = connection.transaction()?;
+            let row: Option<(String, Option<String>, Option<i64>)> = transaction
+                .query_row(
+                    "SELECT id, finished_at, elapsed_ms FROM solve_runs WHERE request_id = ?1",
+                    [request_id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((run_id, finished_at, elapsed_ms)) = row else {
+                return Ok(None);
+            };
+            let run_id: SolveRunId = run_id.parse().map_err(|_| {
+                StoreError::InvalidPersistedRun("invalid retained run ID".to_owned())
+            })?;
+            let (input, status, manifest_json, started_at) =
+                load_run_input_record(&transaction, run_id)?;
+            let manifest = manifest_json
+                .map(|json| RunManifestV1::from_json(json.as_bytes()))
+                .transpose()
+                .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+            let finished_at = finished_at
+                .map(|value| parse_timestamp(&value, "solve-run finished_at"))
+                .transpose()?;
+            let elapsed_ms = elapsed_ms.map(i64_to_u64).transpose()?;
+            let consistent = match &manifest {
+                None => status == "running" && finished_at.is_none() && elapsed_ms.is_none(),
+                Some(manifest) => {
+                    manifest.run_id == input.run_id
+                        && manifest.run_input_checksum == input.checksum
+                        && manifest.started_at == started_at
+                        && Some(manifest.finished_at) == finished_at
+                        && manifest
+                            .elapsed_milliseconds
+                            .map(eutheto_types::DurationMillis::value)
+                            == elapsed_ms
+                        && terminal_status(&manifest.outcome)? == status
+                }
+            };
+            if input.request_id != request_id || !consistent {
+                return Err(StoreError::InvalidPersistedRun(
+                    "retained request state disagrees with immutable run authority".to_owned(),
+                ));
+            }
+            transaction.commit()?;
+            Ok(Some(ExistingSolveRunV1 {
+                input,
+                started_at,
+                manifest,
+            }))
+        })
+        .await
     }
     /// Lists compact independently accepted results for a scenario, newest first.
     ///

@@ -365,6 +365,7 @@ async fn run_case(
         options.clone(),
         &parent_budget,
         None,
+        DurationMillis::ZERO,
     )?;
     let mut progress = DiscardProgress;
     let mut output = BoundedBackendOutput::new(

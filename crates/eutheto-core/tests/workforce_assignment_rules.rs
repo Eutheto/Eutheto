@@ -667,6 +667,7 @@ async fn solve_with_real_worker(
         options,
         &budget,
         None,
+        DurationMillis::ZERO,
     )?;
     let mut progress = Progress;
     let mut output = BoundedBackendOutput::new(

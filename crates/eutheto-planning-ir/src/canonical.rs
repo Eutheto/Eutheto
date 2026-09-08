@@ -4,13 +4,14 @@ use crate::analysis::{
     PlanningProblemSummary, analyze_components, feature_usage, lexicographic_strategy,
 };
 use crate::model::{
-    Constraint, IntDomain, LinearExpression, ModelError, PlanningProblem, ProjectionExpression,
-    SolveFingerprintInput, Variable,
+    Constraint, IntDomain, LinearExpression, ModelError, ObjectivePlan, PlanningProblem,
+    ProjectionExpression, SolveFingerprintInput, Variable,
 };
 use crate::validation::{PlanningIrLimitsV1, ValidationError, validate};
 use std::fmt;
 
 const SOLVE_FINGERPRINT_DOMAIN: &[u8] = b"eutheto.routed-solve-fingerprint.v1";
+const OBJECTIVE_POLICY_DOMAIN: &[u8] = b"eutheto/planning-objective-policy/v1\0";
 
 impl PlanningProblem {
     /// Canonicalizes every order-insensitive collection while preserving objective-level
@@ -32,13 +33,7 @@ impl PlanningProblem {
         }
         self.constraints
             .sort_by(|left, right| left.id.cmp(&right.id));
-        for level in &mut self.objectives.levels {
-            for term in &mut level.terms {
-                term.expression =
-                    LinearExpression::new(term.expression.terms.clone(), term.expression.constant)?;
-            }
-            level.terms.sort_by(|left, right| left.id.cmp(&right.id));
-        }
+        canonicalize_objectives(&mut self.objectives)?;
         for assumption in &mut self.assumptions {
             assumption.required_rules.sort();
         }
@@ -60,6 +55,17 @@ impl PlanningProblem {
         self.declared_capabilities = feature_usage(self).required_capabilities();
         Ok(())
     }
+}
+
+fn canonicalize_objectives(objectives: &mut ObjectivePlan) -> Result<(), ModelError> {
+    for level in &mut objectives.levels {
+        for term in &mut level.terms {
+            term.expression =
+                LinearExpression::new(term.expression.terms.clone(), term.expression.constant)?;
+        }
+        level.terms.sort_by(|left, right| left.id.cmp(&right.id));
+    }
+    Ok(())
 }
 
 fn canonicalize_constraint_expressions(constraint: &mut Constraint) -> Result<(), ModelError> {
@@ -189,6 +195,28 @@ pub fn canonical_ir_hash(
     validate(&semantic, limits)?;
     let bytes = serde_json::to_vec(&semantic)?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+/// Hashes the canonical objective policy for newly produced ordinary runs.
+///
+/// Level order is significant; term collection order is not. Nonobjective model fields
+/// are validated but excluded from this identity. Historical retained policy hashes are
+/// opaque bindings and must not be reinterpreted using this producer.
+///
+/// # Errors
+/// Rejects invalid model/objective references, normalization errors, or serialization failure.
+pub fn canonical_objective_policy_hash(
+    problem: &PlanningProblem,
+    limits: PlanningIrLimitsV1,
+) -> Result<String, CanonicalError> {
+    validate(problem, limits)?;
+    let mut objectives = problem.objectives.clone();
+    canonicalize_objectives(&mut objectives)?;
+    let bytes = serde_json::to_vec(&objectives)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(OBJECTIVE_POLICY_DOMAIN);
+    hasher.update(&bytes);
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 /// Builds a deterministic redacted model summary.

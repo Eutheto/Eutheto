@@ -215,16 +215,21 @@ pub struct SolveDispatchBudget {
 }
 
 impl SolveDispatchBudget {
-    fn from_parent(parent: &ParentSolveBudget, backend_cap: Option<DurationMillis>) -> Self {
+    fn from_parent(
+        parent: &ParentSolveBudget,
+        backend_cap: Option<DurationMillis>,
+        acceptance_reserve: DurationMillis,
+    ) -> Self {
         let parent_view = parent.phase_view();
         let remaining_at_dispatch = parent_view.snapshot().remaining_milliseconds;
-        let backend_limit = backend_cap.map_or(remaining_at_dispatch, |cap| {
-            if cap < remaining_at_dispatch {
-                cap
-            } else {
-                remaining_at_dispatch
-            }
-        });
+        // Both values derive from this one observation; a prior cap calculation could spend the reserve.
+        let available = DurationMillis::new(
+            remaining_at_dispatch
+                .value()
+                .saturating_sub(acceptance_reserve.value()),
+        )
+        .unwrap_or(DurationMillis::ZERO);
+        let backend_limit = backend_cap.map_or(available, |cap| cap.min(available));
         Self {
             parent_view,
             remaining_at_dispatch,
@@ -314,6 +319,7 @@ pub struct SolveRequest {
 
 impl SolveRequest {
     /// Constructs a routed request and binds its canonical options to backend and adapter versions.
+    /// Acceptance reserve is deducted from the same observation used for dispatch accounting.
     ///
     /// # Errors
     /// Returns a serialization error if canonical `SolveOptions` bytes cannot be produced.
@@ -329,6 +335,7 @@ impl SolveRequest {
         options: SolveOptions,
         parent_budget: &ParentSolveBudget,
         backend_cap: Option<DurationMillis>,
+        acceptance_reserve: DurationMillis,
     ) -> Result<Self, serde_json::Error> {
         let model_hash = summary.canonical_ir_hash.clone();
         let canonical_options = serde_json::to_vec(&options)?;
@@ -348,7 +355,11 @@ impl SolveRequest {
             options,
             model_hash,
             solve_fingerprint,
-            dispatch_budget: SolveDispatchBudget::from_parent(parent_budget, backend_cap),
+            dispatch_budget: SolveDispatchBudget::from_parent(
+                parent_budget,
+                backend_cap,
+                acceptance_reserve,
+            ),
         })
     }
 

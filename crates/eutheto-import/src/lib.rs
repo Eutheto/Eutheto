@@ -1501,31 +1501,9 @@ fn validate_source_requirements(
                 message: "scenario schema version does not match the source manifest".to_owned(),
             });
         }
-        let host_requirements = metadata.required_capabilities;
-        for capability in &host_requirements {
-            require_capability(capability, policy)?;
-        }
-        for namespace in metadata.semantic_extensions.keys() {
-            if !host_requirements
-                .iter()
-                .any(|capability| capability.id == *namespace)
-            {
-                return Err(ImportError::UnsupportedCapability {
-                    id: namespace.clone(),
-                    version: 0,
-                });
-            }
-        }
-        requirements.extend(host_requirements);
-        if metadata.schema_version >= 2 {
-            let domain = metadata
-                .domain
-                .ok_or_else(|| ImportError::InvalidScenario {
-                    path: path.clone(),
-                    message: "portable domain requirements are missing".to_owned(),
-                })?;
-            requirements.extend(domain.required_capabilities);
-        }
+        requirements.extend(validate_source_scenario_requirements(
+            metadata, path, policy,
+        )?);
     }
     if requirements != manifest.required_capabilities {
         return Err(ImportError::InvalidManifest(
@@ -1534,6 +1512,185 @@ fn validate_source_requirements(
         ));
     }
     Ok(())
+}
+
+fn validate_source_scenario_requirements(
+    metadata: ScenarioRequirementMetadata,
+    path: &str,
+    policy: &InspectionPolicy,
+) -> Result<BTreeSet<SemanticCapability>, ImportError> {
+    let mut requirements = metadata.required_capabilities;
+    for capability in &requirements {
+        require_capability(capability, policy)?;
+    }
+    for namespace in metadata.semantic_extensions.keys() {
+        if !requirements
+            .iter()
+            .any(|capability| capability.id == *namespace)
+        {
+            return Err(ImportError::UnsupportedCapability {
+                id: namespace.clone(),
+                version: 0,
+            });
+        }
+    }
+    if metadata.schema_version >= 2 {
+        let domain = metadata
+            .domain
+            .ok_or_else(|| ImportError::InvalidScenario {
+                path: path.to_owned(),
+                message: "portable domain requirements are missing".to_owned(),
+            })?;
+        requirements.extend(domain.required_capabilities);
+    }
+    Ok(requirements)
+}
+
+/// Checked standalone scenario data, without bundle or database authority.
+pub struct InspectedScenario {
+    pub scenario: ScenarioSnapshotV1,
+    pub applied_migrations: Vec<AppliedMigration>,
+    pub original_schema_version: u32,
+}
+
+/// Strictly decodes one portable JSON scenario, including supported historical migrations.
+///
+/// Bare JSON has no asset custody and may reference only its own scenario identity.
+/// Nonsemantic namespace maps declare themselves; bundle manifest rules remain bundle-only.
+///
+/// # Errors
+/// Rejects unsupported versions/capabilities, malformed or oversized data and missing dependencies.
+pub fn inspect_scenario(
+    bytes: &[u8],
+    policy: &InspectionPolicy,
+    registries: &MigrationRegistries,
+    decode_domain: &impl Fn(&PortableScenario) -> Result<DecodedPortableDomain, MigrationFailure>,
+) -> Result<InspectedScenario, ImportError> {
+    let policy = policy.hardened();
+    let mut applied_migrations = Vec::new();
+    let mut retained_memory_bytes = 0;
+    let (scenario, _, original_schema_version) = inspect_scenario_entry(
+        "scenario.json",
+        bytes,
+        &policy,
+        registries,
+        &mut applied_migrations,
+        &mut retained_memory_bytes,
+        decode_domain,
+    )?;
+    let mut global_migrations = Vec::new();
+    registries.record_global_portable_migrations(original_schema_version, &mut global_migrations);
+    global_migrations.append(&mut applied_migrations);
+    let applied_migrations = global_migrations;
+    let migration_metadata = serde_json::to_value(&applied_migrations)
+        .map_err(|error| ImportError::Migration(MigrationFailure::Invalid(error.to_string())))?;
+    validate_json_limits("scenario.json", &migration_metadata, &policy.limits, 0)?;
+    let metadata_charge = retained_value_memory_charge(&migration_metadata).ok_or_else(|| {
+        ImportError::JsonLimit {
+            path: "scenario.json".to_owned(),
+            limit: "representation bytes",
+        }
+    })?;
+    add_retained_memory(
+        "scenario.json",
+        &mut retained_memory_bytes,
+        metadata_charge,
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    validate_standalone_scenario(&scenario, &policy)?;
+    Ok(InspectedScenario {
+        scenario,
+        applied_migrations,
+        original_schema_version,
+    })
+}
+
+/// Validates current standalone snapshot bounds, identity and dependency closure.
+///
+/// # Errors
+/// Rejects malformed snapshots, unsupported host semantics, external scenario/asset references
+/// and resource-limit violations. Domain support is checked by the registered pack separately.
+pub fn validate_standalone_scenario(
+    scenario: &ScenarioSnapshotV1,
+    policy: &InspectionPolicy,
+) -> Result<(), ImportError> {
+    let policy = policy.hardened();
+    let charge = decoded_snapshot_memory_charge("scenario.json", scenario, &policy.limits)?;
+    add_retained_memory(
+        "scenario.json",
+        &mut 0,
+        charge,
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    validate_decoded_scenario("scenario.json", scenario, &policy)?;
+    validate_bundle_references(std::slice::from_ref(scenario), &[], &BTreeMap::new())?;
+    Ok(())
+}
+
+fn inspect_scenario_entry(
+    path: &str,
+    content: &[u8],
+    policy: &InspectionPolicy,
+    registries: &MigrationRegistries,
+    applied_migrations: &mut Vec<AppliedMigration>,
+    retained_memory_bytes: &mut usize,
+    decode_domain: &impl Fn(&PortableScenario) -> Result<DecodedPortableDomain, MigrationFailure>,
+) -> Result<(ScenarioSnapshotV1, BTreeSet<SemanticCapability>, u32), ImportError> {
+    let parsed = parse_strict_json_charged(path, content, &policy.limits)?;
+    let parsed_memory_bytes =
+        conservative_parsed_memory_charge(path, content.len(), parsed.representation_bytes)?;
+    add_retained_memory(
+        path,
+        retained_memory_bytes,
+        parsed_memory_bytes,
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    let value = parsed.value;
+    let version = required_u32(&value, "schemaVersion", path)?;
+    if version > CURRENT_PORTABLE_SCHEMA_VERSION {
+        return Err(ImportError::UnsupportedNewerVersion {
+            space: VersionSpace::PortableSchema,
+            found: version,
+            current: CURRENT_PORTABLE_SCHEMA_VERSION,
+        });
+    }
+    let metadata = ScenarioRequirementMetadata::deserialize(&value).map_err(|error| {
+        ImportError::InvalidScenario {
+            path: path.to_owned(),
+            message: error.to_string(),
+        }
+    })?;
+    validate_source_scenario_requirements(metadata, path, policy)?;
+    let current =
+        registries.migrate_portable(version, value, path, &policy.limits, applied_migrations)?;
+    let migrated_memory_bytes = conservative_parsed_memory_charge(
+        path,
+        content.len(),
+        retained_value_memory_charge(&current).ok_or_else(|| ImportError::JsonLimit {
+            path: path.to_owned(),
+            limit: "representation bytes",
+        })?,
+    )?;
+    add_retained_memory(
+        path,
+        retained_memory_bytes,
+        migrated_memory_bytes.saturating_sub(parsed_memory_bytes),
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    let wire = serde_json::from_value(current).map_err(|error| ImportError::InvalidScenario {
+        path: path.to_owned(),
+        message: error.to_string(),
+    })?;
+    let (scenario, requirements) =
+        decode_portable_snapshot(wire, path, decode_domain, applied_migrations)?;
+    let decoded_memory_bytes = decoded_snapshot_memory_charge(path, &scenario, &policy.limits)?;
+    add_retained_memory(
+        path,
+        retained_memory_bytes,
+        decoded_memory_bytes.saturating_sub(parsed_memory_bytes.max(migrated_memory_bytes)),
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    Ok((scenario, requirements, version))
 }
 
 fn decode_portable_snapshot(
@@ -1638,55 +1795,14 @@ fn inspect_logical_entries(
     for (path, content) in entries {
         if path.starts_with("scenarios/") || path.starts_with("scenario-revisions/") {
             let historical = path.starts_with("scenario-revisions/");
-            let parsed = parse_strict_json_charged(&path, &content, &policy.limits)?;
-            let parsed_memory_bytes = conservative_parsed_memory_charge(
+            let (scenario, requirements, _) = inspect_scenario_entry(
                 &path,
-                content.len(),
-                parsed.representation_bytes,
-            )?;
-            add_retained_memory(
-                &path,
-                &mut retained_memory_bytes,
-                parsed_memory_bytes,
-                policy.limits.max_total_uncompressed_bytes,
-            )?;
-            let value = parsed.value;
-            let version = required_u32(&value, "schemaVersion", &path)?;
-            let current = registries.migrate_portable(
-                version,
-                value,
-                &path,
-                &policy.limits,
+                &content,
+                policy,
+                registries,
                 applied_migrations,
-            )?;
-            let migrated_memory_bytes = conservative_parsed_memory_charge(
-                &path,
-                content.len(),
-                retained_value_memory_charge(&current).ok_or_else(|| ImportError::JsonLimit {
-                    path: path.clone(),
-                    limit: "representation bytes",
-                })?,
-            )?;
-            add_retained_memory(
-                &path,
                 &mut retained_memory_bytes,
-                migrated_memory_bytes.saturating_sub(parsed_memory_bytes),
-                policy.limits.max_total_uncompressed_bytes,
-            )?;
-            let wire: PortableScenario =
-                serde_json::from_value(current).map_err(|error| ImportError::InvalidScenario {
-                    path: path.clone(),
-                    message: error.to_string(),
-                })?;
-            let (scenario, requirements) =
-                decode_portable_snapshot(wire, &path, decode_domain, applied_migrations)?;
-            let decoded_memory_bytes =
-                decoded_snapshot_memory_charge(&path, &scenario, &policy.limits)?;
-            add_retained_memory(
-                &path,
-                &mut retained_memory_bytes,
-                decoded_memory_bytes.saturating_sub(parsed_memory_bytes.max(migrated_memory_bytes)),
-                policy.limits.max_total_uncompressed_bytes,
+                decode_domain,
             )?;
             manifest
                 .required_capabilities
@@ -2225,6 +2341,13 @@ fn validate_bundle_references(
         let value = serde_json::to_value(scenario)
             .map_err(|error| ImportError::InvalidManifest(error.to_string()))?;
         validate_asset_references(&value, &available_assets, "scenario")?;
+        let references = extract_scenario_references(&value)
+            .map_err(|error| ImportError::InvalidManifest(error.to_string()))?;
+        if !references.is_subset(&scenario_ids) {
+            return Err(ImportError::InvalidManifest(
+                "scenario references an identity absent from the bundle".to_owned(),
+            ));
+        }
     }
     validate_supplemental_bundle_references(
         entries,
@@ -2604,6 +2727,38 @@ fn validate_scenario_contents(
     manifest: &BundleManifest,
     policy: &InspectionPolicy,
 ) -> Result<(), ImportError> {
+    validate_decoded_scenario(path, scenario, policy)?;
+    for capability in &scenario.required_capabilities {
+        if !manifest.required_capabilities.contains(capability) {
+            return Err(ImportError::InvalidScenario {
+                path: path.to_owned(),
+                message: format!(
+                    "required capability {} is absent from the manifest",
+                    capability.id
+                ),
+            });
+        }
+    }
+    for namespace in scenario
+        .extensions
+        .keys()
+        .chain(scenario.document.extensions.keys())
+    {
+        if !manifest.nonsemantic_extensions.contains(namespace) {
+            return Err(ImportError::InvalidScenario {
+                path: path.to_owned(),
+                message: format!("nonsemantic extension {namespace} is undeclared"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_decoded_scenario(
+    path: &str,
+    scenario: &ScenarioSnapshotV1,
+    policy: &InspectionPolicy,
+) -> Result<(), ImportError> {
     if scenario.format != ScenarioFormat::EuthetoScenario
         || scenario.schema_version != SCENARIO_SNAPSHOT_SCHEMA_VERSION
     {
@@ -2614,15 +2769,6 @@ fn validate_scenario_contents(
     }
     for capability in &scenario.required_capabilities {
         require_capability(capability, policy)?;
-        if !manifest.required_capabilities.contains(capability) {
-            return Err(ImportError::InvalidScenario {
-                path: path.to_owned(),
-                message: format!(
-                    "required capability {} is absent from the manifest",
-                    capability.id
-                ),
-            });
-        }
     }
     validate_scenario_snapshot(scenario).map_err(|error| ImportError::InvalidScenario {
         path: path.to_owned(),
@@ -2641,18 +2787,6 @@ fn validate_scenario_contents(
             return Err(ImportError::UnsupportedCapability {
                 id: namespace.clone(),
                 version: 0,
-            });
-        }
-    }
-    for namespace in scenario
-        .extensions
-        .keys()
-        .chain(scenario.document.extensions.keys())
-    {
-        if !manifest.nonsemantic_extensions.contains(namespace) {
-            return Err(ImportError::InvalidScenario {
-                path: path.to_owned(),
-                message: format!("nonsemantic extension {namespace} is undeclared"),
             });
         }
     }
@@ -5401,6 +5535,161 @@ mod tests {
             &MigrationRegistries::current_only(),
             &portable_decode::decode_fixture_domain,
         )
+    }
+
+    #[test]
+    fn current_and_historical_bundle_payloads_require_scenario_reference_closure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut current = portable_scenario()?;
+        current.revision = Revision::new(2);
+        current.extensions.insert(
+            "example.link".to_owned(),
+            serde_json::json!({"scenarioId": current.document.scenario_id}),
+        );
+        let mut historical = current.clone();
+        historical.revision = Revision::new(1);
+        let bytes = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0001,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Reference closure".to_owned(),
+                scenario: current,
+                scenario_revisions: vec![historical],
+                sections: BackupSections::default(),
+                nonsemantic_extensions: BTreeSet::from(["example.link".to_owned()]),
+                manifest_extensions: BTreeMap::new(),
+            },
+            &portable_encode::encode_fixture_domain,
+        )?;
+        let valid = inspect(&bytes)?;
+        assert_eq!(valid.scenario_revisions.len(), 1);
+        let entries = read_archive_entries(&bytes, &InspectionPolicy::default())?;
+        for prefix in ["scenarios/", "scenario-revisions/"] {
+            let path = entries
+                .keys()
+                .find(|path| path.starts_with(prefix))
+                .ok_or("missing scenario entry")?;
+            let mut changed = entries.clone();
+            let mut value: Value = serde_json::from_slice(&changed[path])?;
+            value["extensions"]["example.link"]["scenarioId"] =
+                Value::String("018f1e2d-3c4b-7a69-8def-400000000099".to_owned());
+            let payload = canonical_json(&value)?;
+            let mut checksums: Checksums = serde_json::from_slice(&changed[CHECKSUMS_PATH])?;
+            checksums.files.insert(path.clone(), sha256_hex(&payload));
+            changed.insert(path.clone(), payload);
+            changed.insert(CHECKSUMS_PATH.to_owned(), canonical_json(&checksums)?);
+            let archive_entries = changed
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>();
+            let malformed = raw_zip(&archive_entries, CompressionMethod::Stored)?;
+            assert!(
+                matches!(inspect(&malformed), Err(ImportError::InvalidManifest(_))),
+                "{prefix} admitted an absent scenario reference"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_scenario_migrates_v1_and_preserves_nonsemantic_namespaces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut source = portable_scenario()?;
+        source.extensions.insert(
+            "example.wrapper".to_owned(),
+            serde_json::json!({"note": "kept"}),
+        );
+        source.document.extensions.insert(
+            "example.document".to_owned(),
+            serde_json::json!({"note": "also kept"}),
+        );
+        let migrations = MigrationRegistries::new(
+            Vec::new(),
+            vec![PortableMigrationStep {
+                from_version: 1,
+                to_version: 2,
+                name: "fixture-v1-to-v2",
+                migrate: Arc::new(portable_migrate::migrate_fixture_v1),
+            }],
+        )?;
+        let inspected = inspect_scenario(
+            &canonical_json(&source)?,
+            &InspectionPolicy::default(),
+            &migrations,
+            &portable_decode::decode_fixture_domain,
+        )?;
+        assert_eq!(inspected.scenario, source);
+        assert_eq!(inspected.original_schema_version, 1);
+        assert!(inspected.applied_migrations.iter().any(|migration| {
+            migration.registry == MigrationRegistryKind::Portable
+                && migration.from_version == 1
+                && migration.to_version == 2
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_scenario_rejects_external_dependencies_and_undeclared_semantics()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = portable_scenario()?;
+        let mut wire = PortableScenario::from_snapshot(
+            &source,
+            portable_encode::encode_fixture_domain(&source.document)?,
+        )?;
+        wire.extensions.insert(
+            "example.reference".to_owned(),
+            serde_json::json!({"scenarioId": "018f1e2d-3c4b-7a69-8def-200000000002"}),
+        );
+        assert!(matches!(
+            inspect_scenario(
+                &canonical_json(&wire)?,
+                &InspectionPolicy::default(),
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain,
+            ),
+            Err(ImportError::InvalidManifest(_))
+        ));
+        wire.extensions.clear();
+        wire.semantic_extensions
+            .insert("example.unknown".to_owned(), serde_json::json!({}));
+        assert!(matches!(
+            inspect_scenario(
+                &canonical_json(&wire)?,
+                &InspectionPolicy::default(),
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain,
+            ),
+            Err(ImportError::UnsupportedCapability { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_scenario_rejects_duplicate_keys_before_typed_decode()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = portable_scenario()?;
+        let wire = PortableScenario::from_snapshot(
+            &source,
+            portable_encode::encode_fixture_domain(&source.document)?,
+        )?;
+        let json = String::from_utf8(canonical_json(&wire)?)?;
+        let duplicate = json.replacen('{', "{\"schemaVersion\":2,", 1);
+        assert!(matches!(
+            inspect_scenario(
+                duplicate.as_bytes(),
+                &InspectionPolicy::default(),
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain,
+            ),
+            Err(ImportError::InvalidJson { .. })
+        ));
+        Ok(())
     }
 
     #[test]

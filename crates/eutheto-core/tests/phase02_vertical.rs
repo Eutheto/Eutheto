@@ -353,10 +353,12 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
             problem.clone(),
             options,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
 
     assert_eq!(
         execution.terminal_reason,
@@ -458,10 +460,12 @@ async fn domain_invalid_backend_candidate_is_quarantined_before_result_availabil
             problem.clone(),
             options,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
 
     assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
     assert_eq!(execution.invocation_count, 1);
@@ -518,10 +522,12 @@ async fn incompatible_backend_reports_exact_gap_and_is_never_invoked() -> TestRe
             Arc::new(problem),
             options,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_eq!(execution.invocation_count, 0);
     assert_eq!(backend.invocations.load(Ordering::SeqCst), 0);
     assert_eq!(

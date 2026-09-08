@@ -1,3 +1,6 @@
+use crate::verification::{
+    ParentVerificationClock, accepted_evidence, runtime_evidence_matches, terminal_phase_timings,
+};
 use crate::{AppEvent, RouterCandidateReviewer};
 use eutheto_domain_api::{
     CompileContext, CounterfactualCompileContext, DomainPackError, DomainPackRegistry,
@@ -17,7 +20,9 @@ use eutheto_planning_ir::{PLANNING_IR_SCHEMA_VERSION, PlanningIrLimitsV1, canoni
 use eutheto_solver_api::{
     BackendRuntimeIdentity, OutputError, ProgressSink, SolveProgressEvent, SolverRegistry,
 };
-use eutheto_solver_router::{ExecutionTerminalReason, RouterExecutionRecord, SolverRouter};
+use eutheto_solver_router::{
+    ExecutionTerminalReason, RouterExecutionRecord, RouterObservations, SolverRouter,
+};
 use eutheto_store::{
     CandidateDiagnosticsV1, CounterfactualCancelOutcomeV1, CounterfactualJobTransitionV1,
     CounterfactualRunFinalizationV1, NewSolveRunV1, SqliteScenarioStore, StoreError,
@@ -30,10 +35,11 @@ use eutheto_types::{
     Revision, Rfc3339Timestamp, ScenarioId, SolutionId, SolveRunId, SolveStatus, SolverFailure,
     StorageFailure, ValidationIssue, ValidationReport, ValidationSeverity,
 };
-use eutheto_verify::{AcceptanceDecision, AcceptancePhaseTimings, VerificationClock};
+use eutheto_verify::AcceptanceDecision;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::sync::{Mutex, broadcast};
 
 pub const COUNTERFACTUAL_API_SCHEMA_VERSION: u32 = 1;
@@ -124,7 +130,7 @@ struct FinalizeJobContext<'a> {
     input: &'a eutheto_domain_ir::RunInputV1,
     terminal: TerminalMaterial,
     budget: &'a ParentSolveBudget,
-    total: DurationMillis,
+    previous_elapsed: Duration,
 }
 
 impl CounterfactualRuntime {
@@ -467,7 +473,7 @@ impl CounterfactualRuntime {
         if self.stop_before_run(request.job_id, &budget).await? {
             return Ok(());
         }
-        let compile_started = elapsed(&budget, total);
+        let compile_started = elapsed(&budget).map_err(|_| ())?;
         let Ok(pack) = self.packs.require(&base.portable.run_input.pack_id) else {
             self.fail_running_before_run(request.job_id, CounterfactualFailureKind::InvalidBinding)
                 .await?;
@@ -550,8 +556,10 @@ impl CounterfactualRuntime {
             .await?;
             return Ok(());
         };
-        let compile_finished = elapsed(&budget, total);
-        let compile_elapsed = subtract_duration(compile_finished, compile_started);
+        let compile_finished = elapsed(&budget).map_err(|_| ())?;
+        let compile_elapsed = subtract_duration(compile_finished, compile_started)
+            .and_then(observed_milliseconds)
+            .map_err(|_| ())?;
         let identity = backend.runtime_identity().clone();
         if !base_runtime_matches(&base.portable.run_input, &identity) {
             self.fail_running_before_run(request.job_id, CounterfactualFailureKind::InvalidBinding)
@@ -643,12 +651,8 @@ impl CounterfactualRuntime {
             CounterfactualProgressPhase::Solving,
         );
 
-        let pre_dispatch = elapsed(&budget, total);
         let derived_problem = Arc::new(derived_problem);
-        let verification_clock = ParentVerificationClock {
-            budget: budget.clone(),
-            total,
-        };
+        let verification_clock = ParentVerificationClock::new(&budget);
         let event_runtime = self.clone();
         let event_request = request.clone();
         let event_run_id = loaded.input.run_id;
@@ -674,26 +678,34 @@ impl CounterfactualRuntime {
             }
         });
         let mut progress = IgnoreSolverProgress;
-        let router_record = SolverRouter::new(&self.solvers)
+        let execution = SolverRouter::new(&self.solvers)
             .execute(
                 Arc::clone(&derived_problem),
                 options.clone(),
                 &budget,
+                DurationMillis::ZERO,
                 &mut progress,
                 &mut reviewer,
             )
             .await;
-        let decision = reviewer.decision().cloned();
+        let decision = reviewer.into_decision();
+        if verification_clock.has_failed() {
+            return Err(());
+        }
         let finished_at = self.clock.now();
-        let elapsed_total = elapsed(&budget, total);
+        let elapsed_total = elapsed(&budget).map_err(|_| ())?;
+        subtract_duration(elapsed_total, compile_finished).map_err(|_| ())?;
+        let observations = execution.observations.as_ref().ok_or(())?;
+        subtract_duration(observations.started_after, compile_finished).map_err(|_| ())?;
+        subtract_duration(elapsed_total, observations.finished_after).map_err(|_| ())?;
         let terminal = build_terminal(TerminalBuildContext {
-            record: &router_record,
+            record: &execution.record,
+            observations,
             decision: decision.as_ref(),
             identity: &identity,
             options: &options,
-            pre_dispatch,
             compile_elapsed,
-            elapsed_total,
+            elapsed_total: observed_milliseconds(elapsed_total).map_err(|_| ())?,
             started_at: started.started_at,
             finished_at,
             input: &started.input,
@@ -712,7 +724,7 @@ impl CounterfactualRuntime {
             input: &started.input,
             terminal,
             budget: &budget,
-            total,
+            previous_elapsed: elapsed_total,
         })
         .await
         .map(|_| ())
@@ -730,14 +742,16 @@ impl CounterfactualRuntime {
             input,
             terminal,
             budget,
-            total,
+            previous_elapsed,
         } = context;
-        let evidence_started = elapsed(budget, total);
+        let evidence_started = elapsed(budget)?;
+        subtract_duration(evidence_started, previous_elapsed)?;
         let prepared_evidence = terminal.alternative.as_ref().map(accepted_evidence);
+        let evidence_finished = elapsed(budget)?;
         let evidence_preparation_elapsed =
-            subtract_duration(elapsed(budget, total), evidence_started);
+            observed_milliseconds(subtract_duration(evidence_finished, evidence_started)?)?;
         let terminal = terminal.retime(
-            elapsed(budget, total),
+            observed_milliseconds(evidence_finished)?,
             self.clock.now(),
             budget.is_expired(),
             evidence_preparation_elapsed,
@@ -764,11 +778,13 @@ impl CounterfactualRuntime {
                 if current.state == CounterfactualJobState::Running
                     && current.cancel_request_id.is_some()
                 {
+                    let cancelled_elapsed = elapsed(budget)?;
+                    subtract_duration(cancelled_elapsed, evidence_finished)?;
                     let manifest = cancelled_manifest(
                         input,
                         manifest_started_at,
                         self.clock.now(),
-                        elapsed(budget, total),
+                        observed_milliseconds(cancelled_elapsed)?,
                     )?;
                     let record = self
                         .store
@@ -882,16 +898,17 @@ impl CounterfactualRuntime {
         let derived = lock_live_state(&live.state).derived.clone();
         let result = if let Some(derived) = &derived {
             if current.cancel_request_id.is_some() {
-                let elapsed = elapsed(
-                    &derived.budget,
-                    current.request.semantics.total_budget_milliseconds,
-                );
-                match cancelled_manifest(
-                    &derived.input,
-                    derived.started_at,
-                    self.clock.now(),
-                    elapsed,
-                ) {
+                // An unmeasurable cancellation must remain recoverable, not acquire invented time.
+                match elapsed(&derived.budget)
+                    .and_then(observed_milliseconds)
+                    .and_then(|elapsed| {
+                        cancelled_manifest(
+                            &derived.input,
+                            derived.started_at,
+                            self.clock.now(),
+                            elapsed,
+                        )
+                    }) {
                     Ok(manifest) => {
                         self.store
                             .finalize_counterfactual_run(
@@ -1053,18 +1070,6 @@ fn prepare_finalization(
     Ok((finalization, manifest_started_at))
 }
 
-#[derive(Clone)]
-struct ParentVerificationClock {
-    budget: ParentSolveBudget,
-    total: DurationMillis,
-}
-
-impl VerificationClock for ParentVerificationClock {
-    fn now_milliseconds(&self) -> DurationMillis {
-        elapsed(&self.budget, self.total)
-    }
-}
-
 struct IgnoreSolverProgress;
 impl ProgressSink for IgnoreSolverProgress {
     fn emit(&mut self, _event: SolveProgressEvent) -> Result<(), OutputError> {
@@ -1147,7 +1152,7 @@ struct TerminalBuildContext<'a> {
     decision: Option<&'a AcceptanceDecision>,
     identity: &'a BackendRuntimeIdentity,
     options: &'a eutheto_types::SolveOptions,
-    pre_dispatch: DurationMillis,
+    observations: &'a RouterObservations,
     compile_elapsed: DurationMillis,
     elapsed_total: DurationMillis,
     started_at: Rfc3339Timestamp,
@@ -1162,7 +1167,7 @@ fn build_terminal(context: TerminalBuildContext<'_>) -> Result<TerminalMaterial,
         decision,
         identity,
         options,
-        pre_dispatch,
+        observations,
         compile_elapsed,
         elapsed_total,
         started_at,
@@ -1171,16 +1176,29 @@ fn build_terminal(context: TerminalBuildContext<'_>) -> Result<TerminalMaterial,
         condition,
     } = context;
     let attempt = record.attempts.last();
-    let backend_elapsed = attempt
-        .and_then(|attempt| attempt.outcome.as_ref())
-        .map(|outcome| outcome.evidence.elapsed_milliseconds);
-    let first_incumbent = attempt
-        .and_then(|attempt| attempt.outcome.as_ref())
-        .and_then(|outcome| outcome.evidence.first_incumbent_milliseconds)
-        .map(|value| add_duration(pre_dispatch, value));
-    let first_verified = record
-        .first_verified_feasible_milliseconds
-        .map(|value| add_duration(pre_dispatch, value));
+    let backend_elapsed = (record.invocation_count > 0)
+        .then(|| observed_milliseconds(observations.backend_elapsed))
+        .transpose()?;
+    let first_incumbent = observations
+        .first_candidate_after
+        .map(|offset| {
+            observations
+                .started_after
+                .checked_add(offset)
+                .ok_or_else(|| StoreError::InvalidPersistedRun("parent clock overflow".to_owned()))
+                .and_then(observed_milliseconds)
+        })
+        .transpose()?;
+    let first_verified = observations
+        .first_verified_feasible_after
+        .map(|offset| {
+            observations
+                .started_after
+                .checked_add(offset)
+                .ok_or_else(|| StoreError::InvalidPersistedRun("parent clock overflow".to_owned()))
+                .and_then(observed_milliseconds)
+        })
+        .transpose()?;
     let phase_timings = terminal_phase_timings(decision, compile_elapsed, backend_elapsed);
     let (outcome, alternative, intended, verified_timing) = select_terminal(
         record,
@@ -1217,27 +1235,6 @@ type TerminalSelection = (
     IntendedTerminal,
     Option<DurationMillis>,
 );
-
-fn terminal_phase_timings(
-    decision: Option<&AcceptanceDecision>,
-    compile_elapsed: DurationMillis,
-    backend_elapsed: Option<DurationMillis>,
-) -> RunPhaseTimingsV1 {
-    let acceptance = decision.map(decision_timings).unwrap_or_default();
-    RunPhaseTimingsV1 {
-        compile_milliseconds: Some(compile_elapsed),
-        backend_milliseconds: backend_elapsed,
-        projection_milliseconds: decision.map(|_| acceptance.projection_milliseconds),
-        structural_validation_milliseconds: decision
-            .map(|_| acceptance.structural_validation_milliseconds),
-        score_recomputation_milliseconds: decision
-            .map(|_| acceptance.score_recomputation_milliseconds),
-        required_rule_verification_milliseconds: decision
-            .map(|_| acceptance.required_rule_verification_milliseconds),
-        evidence_persistence_milliseconds: None,
-        optional_explanation_milliseconds: None,
-    }
-}
 
 fn select_terminal(
     record: &RouterExecutionRecord,
@@ -1375,45 +1372,10 @@ fn status_terminal(
     }
 }
 
-fn decision_timings(decision: &AcceptanceDecision) -> AcceptancePhaseTimings {
-    match decision {
-        AcceptanceDecision::Accepted { timings, .. }
-        | AcceptanceDecision::Quarantined { timings, .. }
-        | AcceptanceDecision::Interrupted { timings, .. } => *timings,
-        AcceptanceDecision::Awaiting => AcceptancePhaseTimings::default(),
-    }
-}
-
-fn runtime_evidence_matches(
-    record: &RouterExecutionRecord,
-    identity: &BackendRuntimeIdentity,
-    options: &eutheto_types::SolveOptions,
-) -> bool {
-    let Some(attempt) = record.attempts.last() else {
-        return record.invocation_count == 0;
-    };
-    let Some(outcome) = &attempt.outcome else {
-        return false;
-    };
-    let Some(execution) = &outcome.evidence.execution else {
-        return false;
-    };
-    let reproducibility = &execution.reproducibility;
-    attempt.backend_id == *identity.backend_id()
-        && attempt.backend_version == identity.backend_version()
-        && attempt.adapter_version == identity.adapter_version()
-        && reproducibility.backend_version == identity.backend_version()
-        && reproducibility.adapter_version == identity.adapter_version()
-        && reproducibility.worker_version == identity.worker_version()
-        && reproducibility.engine_version == identity.solver_version()
-        && reproducibility.protocol_major == identity.protocol_major()
-        && reproducibility.protocol_minor == identity.protocol_minor()
-        && reproducibility.applied_options == *options
-}
-
-fn subtract_duration(later: DurationMillis, earlier: DurationMillis) -> DurationMillis {
-    DurationMillis::new(later.value().saturating_sub(earlier.value()))
-        .unwrap_or(DurationMillis::MAX)
+fn subtract_duration(later: Duration, earlier: Duration) -> Result<Duration, StoreError> {
+    later
+        .checked_sub(earlier)
+        .ok_or_else(|| StoreError::InvalidPersistedRun("parent clock moved backwards".to_owned()))
 }
 
 fn base_runtime_matches(
@@ -1429,33 +1391,23 @@ fn base_runtime_matches(
         && input.protocol_minor == identity.protocol_minor()
 }
 
-fn accepted_evidence(
-    accepted: &AcceptedResult,
-) -> BTreeMap<eutheto_domain_ir::DomainEvidenceId, VerificationValue> {
-    accepted
-        .solution
-        .assignments
-        .iter()
-        .flat_map(|assignment| assignment.evidence.iter())
-        .chain(
-            accepted
-                .verification
-                .required_rule_results
-                .iter()
-                .flat_map(|rule| rule.evidence.iter()),
-        )
-        .cloned()
-        .map(|id| (id, VerificationValue::Boolean(true)))
-        .collect()
+fn observed_milliseconds(duration: Duration) -> Result<DurationMillis, StoreError> {
+    u64::try_from(duration.as_millis())
+        .ok()
+        .and_then(|milliseconds| DurationMillis::new(milliseconds).ok())
+        .ok_or_else(|| StoreError::InvalidPersistedRun("parent clock overflow".to_owned()))
 }
 
-fn elapsed(budget: &ParentSolveBudget, total: DurationMillis) -> DurationMillis {
-    let remaining = budget.snapshot().remaining_milliseconds.value();
-    DurationMillis::new(total.value().saturating_sub(remaining)).unwrap_or(DurationMillis::MAX)
-}
-
-fn add_duration(left: DurationMillis, right: DurationMillis) -> DurationMillis {
-    DurationMillis::new(left.value().saturating_add(right.value())).unwrap_or(DurationMillis::MAX)
+fn elapsed(budget: &ParentSolveBudget) -> Result<Duration, StoreError> {
+    let duration = budget.checked_elapsed().ok_or_else(|| {
+        StoreError::InvalidPersistedRun("parent clock moved backwards".to_owned())
+    })?;
+    if duration.as_millis() > u128::from(DurationMillis::MAX.value()) {
+        return Err(StoreError::InvalidPersistedRun(
+            "parent clock overflow".to_owned(),
+        ));
+    }
+    Ok(duration)
 }
 
 fn cancelled_manifest(
@@ -1687,7 +1639,72 @@ mod tests {
     use eutheto_domain_ir::{
         AssignmentValue, CounterfactualConditionPayloadV1, DomainAssignmentId,
     };
+    use eutheto_verify::AcceptancePhaseTimings;
+    use eutheto_verify::VerificationClock;
     use serde_json::Value;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct ReturningClock(AtomicU64);
+
+    impl MonotonicClock for ReturningClock {
+        fn now(&self) -> Duration {
+            Duration::from_millis(self.0.load(Ordering::Relaxed))
+        }
+    }
+
+    #[test]
+    fn phase_spans_reject_backwards_time_before_quantizing_the_completed_span()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let started = Duration::from_nanos(999_999);
+        let finished = Duration::from_nanos(1_000_001);
+        let span = subtract_duration(finished, started)?;
+        assert_eq!(span, Duration::from_nanos(2));
+        assert_eq!(observed_milliseconds(span)?, DurationMillis::ZERO);
+        // Both samples round to zero milliseconds; the backwards span must still fail.
+        assert!(matches!(
+            subtract_duration(Duration::from_nanos(1), started),
+            Err(StoreError::InvalidPersistedRun(_))
+        ));
+        assert!(matches!(
+            observed_milliseconds(Duration::from_secs(u64::MAX)),
+            Err(StoreError::InvalidPersistedRun(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_parent_samples_fail_and_verification_failure_survives_clock_recovery()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let clock = Arc::new(ReturningClock(AtomicU64::new(100)));
+        let budget = ParentSolveBudget::new(
+            DurationMillis::new(1_000)?,
+            clock.clone(),
+            CancellationToken::default(),
+        )?;
+        let verification_clock = ParentVerificationClock::new(&budget);
+        clock.0.store(99, Ordering::Relaxed);
+        assert!(matches!(
+            elapsed(&budget),
+            Err(StoreError::InvalidPersistedRun(_))
+        ));
+        assert_eq!(verification_clock.now_milliseconds(), DurationMillis::MAX);
+        assert!(verification_clock.has_failed());
+
+        clock.0.store(110, Ordering::Relaxed);
+        assert_eq!(elapsed(&budget)?, Duration::from_millis(10));
+        assert_eq!(
+            verification_clock.now_milliseconds(),
+            DurationMillis::new(10)?
+        );
+        assert!(verification_clock.has_failed());
+
+        clock.0.store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            elapsed(&budget),
+            Err(StoreError::InvalidPersistedRun(_))
+        ));
+        Ok(())
+    }
 
     fn start_request() -> Result<SolutionStartCounterfactualRequestV1, Box<dyn std::error::Error>> {
         Ok(SolutionStartCounterfactualRequestV1 {

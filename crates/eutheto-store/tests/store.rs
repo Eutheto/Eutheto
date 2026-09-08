@@ -4421,6 +4421,41 @@ async fn persisted_raw_secret_sentinel_is_rejected_on_snapshot_load() -> Result<
 }
 
 #[tokio::test]
+async fn retained_request_lookup_rejects_terminal_column_substitution() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempdir()?;
+    let path = directory.path().join("lookup.sqlite3");
+    let scenario_id = scenario_id(301)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+    let request = solve_request(scenario_id, 1, 1)?;
+    let started = store.start_solve_run(request.clone()).await?;
+    store
+        .finalize_terminal_run(terminal_manifest(
+            &started.input,
+            started.started_at,
+            RunTerminalOutcomeV1::NoResult {
+                status: SolveStatus::BackendFailed,
+            },
+        )?)
+        .await?;
+    let connection = Connection::open(&path)?;
+    connection.execute(
+        "UPDATE solve_runs SET elapsed_ms = elapsed_ms + 1 WHERE id = ?1",
+        [started.input.run_id.to_string()],
+    )?;
+    assert!(matches!(
+        store.load_solve_run_by_request(request.request_id).await,
+        Err(StoreError::InvalidPersistedRun(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn solve_start_is_idempotent_and_loads_only_the_exact_snapshot() -> Result<(), Box<dyn Error>>
 {
     let directory = tempdir()?;
@@ -4435,6 +4470,12 @@ async fn solve_start_is_idempotent_and_loads_only_the_exact_snapshot() -> Result
         .await?;
 
     let request = solve_request(scenario_id, 1, 1)?;
+    assert!(
+        store
+            .load_solve_run_by_request(request.request_id)
+            .await?
+            .is_none()
+    );
     let started = store.start_solve_run(request.clone()).await?;
     assert!(!started.reused);
     assert_eq!(started.started_at, request.started_at);
@@ -4451,6 +4492,13 @@ async fn solve_start_is_idempotent_and_loads_only_the_exact_snapshot() -> Result
     assert!(reused.reused);
     assert_eq!(reused.input, started.input);
     assert_eq!(reused.started_at, started.started_at);
+    let retained = store
+        .load_solve_run_by_request(request.request_id)
+        .await?
+        .ok_or("running request was not found")?;
+    assert_eq!(retained.input, started.input);
+    assert_eq!(retained.started_at, started.started_at);
+    assert!(retained.manifest.is_none());
 
     let mut conflicting = request.clone();
     conflicting.model_hash = blake3_hex(b"different-model");
@@ -4660,6 +4708,18 @@ async fn terminal_finalizers_are_compare_and_set_and_atomic() -> Result<(), Box<
                 RunTerminalOutcomeV1::NoResult { status },
             )?)
             .await?;
+        let retained = store
+            .load_solve_run_by_request(input.request_id)
+            .await?
+            .ok_or("terminal request was not found")?;
+        assert_eq!(retained.input, input);
+        assert_eq!(
+            retained
+                .manifest
+                .ok_or("terminal manifest was not retained")?
+                .outcome,
+            RunTerminalOutcomeV1::NoResult { status }
+        );
         let connection = Connection::open(&path)?;
         let stored_status: String = connection.query_row(
             "SELECT status FROM solve_runs WHERE id = ?1",

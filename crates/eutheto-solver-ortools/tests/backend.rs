@@ -319,6 +319,7 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         options,
         &parent_budget,
         None,
+        DurationMillis::ZERO,
     )?;
     let mut progress = Progress(Vec::new());
     let mut output = BoundedBackendOutput::new(
