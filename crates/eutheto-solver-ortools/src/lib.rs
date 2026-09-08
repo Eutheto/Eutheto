@@ -1179,12 +1179,14 @@ async fn verify_path_and_digest(
 }
 
 fn add_no_follow_flags(options: &mut tokio::fs::OpenOptions) {
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     #[cfg(windows)]
     {
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(unix, windows)))]
     let _ = options;
 }
 

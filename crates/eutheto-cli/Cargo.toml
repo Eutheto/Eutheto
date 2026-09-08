@@ -20,12 +20,24 @@ eutheto-core = { path = "../eutheto-core" }
 eutheto-domain-ir = { path = "../eutheto-domain-ir" }
 eutheto-export = { path = "../eutheto-export" }
 eutheto-import = { path = "../eutheto-import" }
+eutheto-planning-ir = { path = "../eutheto-planning-ir" }
+eutheto-solver-api = { path = "../eutheto-solver-api" }
+eutheto-solver-ortools = { path = "../eutheto-solver-ortools" }
 eutheto-types = { path = "../eutheto-types" }
 serde = "=1.0.229"
 serde_json = "=1.0.151"
-tokio = { version = "=1.53.1", features = ["fs", "io-util", "rt-multi-thread", "signal"] }
+tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync"] }
 
 [dev-dependencies]
 eutheto-command = { path = "../eutheto-command" }
 eutheto-store = { path = "../eutheto-store" }
 tempfile = "=3.27.0"
+
+[build-dependencies]
+sha2 = "=0.10.9"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[target.'cfg(unix)'.build-dependencies]
+libc = "=0.2.189"

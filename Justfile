@@ -152,6 +152,14 @@ worker-install-from-nix:
 worker-build-desktop:
     cargo xtask solver build-desktop
 
+# Assemble the CLI executable beside its approved worker and manifest-bound resources.
+worker-build-cli:
+    cargo xtask solver build-cli
+
+# Exercise a relocated CLI image, real file/stored solves, exports, and tamper rejection.
+worker-smoke-cli image="target/cli-package":
+    cargo xtask solver smoke-cli --image "{{ image }}"
+
 # Validate one manifest-bound packaged OR-Tools worker/resource pair through a trivial solve.
 worker-smoke executable resource_root manifest_sha256:
     cargo xtask solver smoke --executable "{{ executable }}" --resource-root "{{ resource_root }}" --manifest-sha256 "{{ manifest_sha256 }}"

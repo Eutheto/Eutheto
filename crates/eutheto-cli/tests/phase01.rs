@@ -451,6 +451,41 @@ fn committed_apply_returns_success_warning_when_output_publication_fails()
     Ok(())
 }
 
+#[test]
+fn closed_warning_stderr_does_not_reverse_a_committed_command_disposition()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let id = create_project(directory.path(), "Closed diagnostic sink")?;
+    let commands = directory.path().join("closed-stderr-command.json");
+    let entity_id = "018f47f2-e880-7000-8000-00000000000b";
+    fs::write(
+        &commands,
+        serde_json::to_vec(&json!({
+            "type": "addEntity",
+            "payload": {"entityId": entity_id, "value": {"id": entity_id, "name": "Retained"}}
+        }))?,
+    )?;
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
+        .arg("--data-dir")
+        .arg(directory.path())
+        .args(["scenario", "apply", &id, "--commands"])
+        .arg(&commands)
+        .args(["--expected-revision", "0", "--output"])
+        .arg(directory.path())
+        .stderr(writer)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let (_, view) = run_json(directory.path(), &["scenario", "show", &id])?;
+    assert_eq!(view["result"]["revision"], 1);
+    assert_eq!(
+        view["result"]["document"]["domain"]["entities"][entity_id]["name"],
+        "Retained"
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 #[test]
 fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), Box<dyn Error>> {
@@ -1098,13 +1133,13 @@ fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
             "scenario",
             "solution",
             "--format",
-            "csv",
+            "ics",
         ],
     )?;
     assert_eq!(unavailable_output.status.code(), Some(6));
     assert_eq!(
         unavailable["error"]["code"],
-        "capability.solution_unavailable"
+        "solution.export_format_unavailable"
     );
     Ok(())
 }

@@ -218,6 +218,14 @@ jobs:
         shell: bash
         run: cargo xtask solver build-desktop
 
+      - name: Assemble manifest-bound CLI image
+        shell: bash
+        run: cargo xtask solver build-cli
+
+      - name: Verify relocated CLI file and stored Workforce flows
+        shell: bash
+        run: cargo xtask solver smoke-cli --image target/cli-package
+
       - name: Retain trusted desktop-build manifest digest
         shell: bash
         run: |
@@ -464,6 +472,14 @@ jobs:
       - name: Build approved native worker and unsigned desktop package
         shell: pwsh
         run: cargo xtask solver build-desktop
+
+      - name: Assemble manifest-bound native CLI image
+        shell: pwsh
+        run: cargo xtask solver build-cli
+
+      - name: Verify relocated native CLI file and stored Workforce flows
+        shell: pwsh
+        run: cargo xtask solver smoke-cli --image target/cli-package
 
       - name: Verify MSI payload, worker lifecycle, and application launch
         shell: pwsh

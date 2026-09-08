@@ -12,21 +12,6 @@ fn private_tempdir() -> Result<tempfile::TempDir, Box<dyn Error>> {
 }
 
 #[test]
-fn status_truthfully_reports_phase_01_capability() -> Result<(), Box<dyn Error>> {
-    let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
-        .arg("status")
-        .output()?;
-
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    let stdout = str::from_utf8(&output.stdout)?;
-    assert!(stdout.contains("optimizer (provisional development name)"));
-    assert!(stdout.contains("capability: phase_01_core"));
-    assert!(!stdout.contains("phase_00_foundation"));
-    Ok(())
-}
-
-#[test]
 fn legacy_status_json_uses_the_single_cli_result_envelope() -> Result<(), Box<dyn Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
         .args(["status", "--json"])
@@ -52,7 +37,7 @@ fn legacy_status_json_uses_the_single_cli_result_envelope() -> Result<(), Box<dy
 }
 
 #[test]
-fn later_solver_command_is_catalogued_but_typed_unavailable() -> Result<(), Box<dyn Error>> {
+fn file_solve_requires_destination_before_input_or_database_access() -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
         .args(["--format", "json", "--data-dir"])
@@ -60,13 +45,13 @@ fn later_solver_command_is_catalogued_but_typed_unavailable() -> Result<(), Box<
         .args(["solve", "scenario.eutheto"])
         .output()?;
 
-    assert_eq!(output.status.code(), Some(6));
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let value: Value = serde_json::from_slice(&output.stderr)?;
     assert_eq!(value["apiVersion"], "eutheto/cli-result/v1");
     assert_eq!(value["command"], "solve");
     assert_eq!(value["ok"], false);
-    assert_eq!(value["error"]["code"], "capability.solve_unavailable");
-    assert!(!str::from_utf8(&output.stderr)?.contains("unrecognized subcommand"));
+    assert_eq!(value["error"]["code"], "solve.output_required");
+    assert!(fs::read_dir(directory.path())?.next().is_none());
     Ok(())
 }

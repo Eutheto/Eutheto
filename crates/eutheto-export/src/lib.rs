@@ -2189,19 +2189,70 @@ pub fn prepare_json_atomic_controlled<T: Serialize>(
     value: &T,
     control: &OperationControl,
 ) -> Result<PreparedPublication, ExportError> {
+    let bytes = encode_json_controlled(value, control)?;
+    let mut cancelled = || control.check().is_err();
+    prepare_atomic_with_control(
+        destination,
+        &bytes,
+        PublicationFailpoint::None,
+        &mut cancelled,
+    )
+}
+
+/// Encodes canonical, bounded, nonsecret JSON without granting domain acceptance authority.
+///
+/// # Errors
+/// Rejects prohibited or oversized JSON, serialization failure and operation interruption.
+pub fn encode_json_controlled<T: Serialize>(
+    value: &T,
+    control: &OperationControl,
+) -> Result<Vec<u8>, ExportError> {
     let mut cancelled = || control.check().is_err();
     check_cancelled(&mut cancelled)?;
     let value = serde_json::to_value(value)?;
     validate_safe_value(&value, 0)?;
     let bytes = canonical_json(&value)?;
-    if u64::try_from(bytes.len()).map_or(true, |length| length > PORTABLE_LIMITS.max_json_bytes) {
+    if bytes.len() as u64 > PORTABLE_LIMITS.max_json_bytes {
         return Err(ExportError::InvalidModel(
             "JSON document byte limit exceeded".to_owned(),
         ));
     }
+    check_cancelled(&mut cancelled)?;
+    Ok(bytes)
+}
+
+/// Stages bounded inert UTF-8 text using the same checked no-clobber publication as JSON.
+///
+/// This is a byte-publication boundary, not a domain, acceptance, or privacy authority.
+/// The application must validate the typed source and permitted export fields before encoding.
+///
+/// # Errors
+/// Rejects excessive text, non-text controls, interruption, or staging I/O failure.
+pub fn prepare_text_atomic_controlled(
+    destination: &Path,
+    text: &str,
+    control: &OperationControl,
+) -> Result<PreparedPublication, ExportError> {
+    let mut cancelled = || control.check().is_err();
+    check_cancelled(&mut cancelled)?;
+    if text.len() as u64 > PORTABLE_LIMITS.max_json_bytes {
+        return Err(ExportError::InvalidModel(
+            "text document byte limit exceeded".to_owned(),
+        ));
+    }
+    for (index, character) in text.chars().enumerate() {
+        if index % 4096 == 0 {
+            check_cancelled(&mut cancelled)?;
+        }
+        if character.is_control() && !matches!(character, '\t' | '\r' | '\n') {
+            return Err(ExportError::InvalidModel(
+                "text document contains non-text controls".to_owned(),
+            ));
+        }
+    }
     prepare_atomic_with_control(
         destination,
-        &bytes,
+        text.as_bytes(),
         PublicationFailpoint::None,
         &mut cancelled,
     )
@@ -3339,6 +3390,41 @@ mod tests {
                 .is_err()
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn text_publication_rejects_controls_and_honors_cancellation_before_commit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let destination = directory.path().join("assignments.csv");
+        let cancellation = CancellationToken::new();
+        let control = OperationControl::Cancellation(cancellation.clone());
+        assert!(matches!(
+            prepare_text_atomic_controlled(&destination, "value,\u{1b}[31mred\n", &control),
+            Err(ExportError::InvalidModel(_))
+        ));
+        assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+
+        let text = "header,other\r\nrésumé,\tvalue\n";
+        let staged = prepare_text_atomic_controlled(&destination, text, &control)?;
+        assert!(!destination.exists());
+        cancellation.cancel();
+        assert!(matches!(
+            staged.publish_controlled(&control),
+            Err(ExportError::Cancelled)
+        ));
+        assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+
+        let live = OperationControl::Cancellation(CancellationToken::new());
+        prepare_text_atomic_controlled(&destination, text, &live)?.publish_controlled(&live)?;
+        assert_eq!(std::fs::read(&destination)?, text.as_bytes());
+        assert!(matches!(
+            prepare_text_atomic_controlled(&destination, "replacement", &live)
+                .and_then(|prepared| prepared.publish_controlled(&live)),
+            Err(ExportError::DestinationExists(path)) if path == destination
+        ));
+        assert_eq!(std::fs::read(&destination)?, text.as_bytes());
         Ok(())
     }
 

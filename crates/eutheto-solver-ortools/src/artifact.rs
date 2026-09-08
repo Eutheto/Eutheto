@@ -480,3 +480,62 @@ pub enum BundledWorkerArtifactError {
     #[error(transparent)]
     Executable(#[from] ExecutableIdentityError),
 }
+
+#[cfg(all(test, unix))]
+mod read_custody_tests {
+    use super::{BundledWorkerArtifactError, read_bounded_manifest, verify_direct_regular_file};
+    use std::os::unix::fs::{OpenOptionsExt, symlink};
+    use std::time::Duration;
+
+    #[test]
+    fn checked_manifest_replaced_by_fifo_rejects_without_waiting_for_a_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("manifest.json");
+        std::fs::write(&path, b"{}")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(verify_direct_regular_file(&path))?;
+        std::fs::remove_file(&path)?;
+        let status = std::process::Command::new("mkfifo").arg(&path).status()?;
+        assert!(status.success());
+        // Exercise the actual read after the successful pathname precheck, not a second
+        // metadata rejection that would conceal the check/open race.
+        let result = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), read_bounded_manifest(&path)).await
+        });
+        if result.is_err() {
+            // A regressed blocking open must not strand the test process during shutdown.
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&path);
+        }
+        runtime.shutdown_timeout(Duration::from_secs(2));
+        assert!(matches!(
+            result,
+            Ok(Err(BundledWorkerArtifactError::InvalidManifestFile))
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manifest_handle_reads_regular_bytes_and_rejects_symlink_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("manifest.json");
+        let other = directory.path().join("other.json");
+        std::fs::write(&path, b"{\"checked\":true}")?;
+        assert_eq!(read_bounded_manifest(&path).await?, b"{\"checked\":true}");
+        verify_direct_regular_file(&path).await?;
+        std::fs::write(&other, b"{\"substituted\":true}")?;
+        std::fs::remove_file(&path)?;
+        symlink(&other, &path)?;
+        assert!(matches!(
+            read_bounded_manifest(&path).await,
+            Err(BundledWorkerArtifactError::Io(_))
+        ));
+        Ok(())
+    }
+}

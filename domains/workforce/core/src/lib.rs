@@ -4,6 +4,7 @@
 //! persistence, approval custody or client lifecycle.
 
 pub mod assignment_rules;
+pub mod assignments_csv;
 pub mod commands;
 pub mod generated_workforce_pack_contract;
 pub mod ids;

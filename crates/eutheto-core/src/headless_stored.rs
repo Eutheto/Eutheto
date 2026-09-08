@@ -28,7 +28,9 @@ use std::sync::Arc;
 pub struct StoredSolveRequest {
     pub request_id: RequestId,
     pub scenario_id: ScenarioId,
-    pub expected_revision: Revision,
+    /// Some checks a caller-observed revision; None captures the current revision under the
+    /// original parent budget. Neither permits rebasing after compilation or run admission.
+    pub expected_revision: Option<Revision>,
     pub options: SolveOptions,
 }
 
@@ -187,10 +189,12 @@ impl EuthetoApp {
             .get_project(request.scenario_id)
             .await
             .map_err(|error| StoredSolveFailure::BeforeStart(store_error(error)))?;
-        if project.summary.revision != request.expected_revision {
+        if let Some(expected_revision) = request.expected_revision
+            && project.summary.revision != expected_revision
+        {
             return Err(StoredSolveFailure::BeforeStart(store_error(
                 StoreError::Conflict {
-                    expected: request.expected_revision,
+                    expected: expected_revision,
                     actual: project.summary.revision,
                 },
             )));
@@ -439,7 +443,9 @@ fn validate_retry(
     }
     if existing.input.request_id != request.request_id
         || existing.input.scenario_id != request.scenario_id
-        || existing.input.scenario_revision != request.expected_revision.value()
+        || request
+            .expected_revision
+            .is_some_and(|revision| existing.input.scenario_revision != revision.value())
         || existing.input.temporary_condition_hash.is_some()
         || existing.input.solve_options != options
     {

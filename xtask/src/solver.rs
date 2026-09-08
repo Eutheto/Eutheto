@@ -20,6 +20,9 @@ use eutheto_protocol::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+mod cli;
+pub(crate) use cli::{build_cli, smoke_cli};
 const NATIVE_BUILD_SCRIPT: &str = "workers/ortools/cmake/native_windows_build.cmake";
 const NATIVE_BUILD_ROOT: &str = ".cache/ortools-native/windows-x86_64";
 const NATIVE_WORK: &str = ".cache/ortools-native/windows-x86_64/work";
@@ -31,8 +34,11 @@ const NATIVE_CURRENT: &str = ".cache/ortools-native/windows-x86_64/current";
 const NATIVE_WORKER: &str = ".cache/ortools-native/windows-x86_64/current/bin/ortools-worker.exe";
 
 const SIDECAR_ROOT: &str = "apps/desktop/src-tauri/sidecar";
+#[cfg(test)]
 const SIDECAR_STAGING: &str = "sidecar.staging";
+#[cfg(test)]
 const SIDECAR_PREVIOUS: &str = "sidecar.previous";
+#[cfg(test)]
 const SIDECAR_LOCK: &str = "sidecar.lock";
 #[cfg(not(windows))]
 const SIDECAR_BUILD_INSTRUCTION: &str = "cargo xtask solver build-desktop";
@@ -894,7 +900,17 @@ fn decode_sha256(value: &str) -> Result<[u8; 32]> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
-    let mut reader = BufReader::new(open_regular_file_no_follow(path)?);
+    let file = open_regular_file_no_follow(path)?;
+    let length = file
+        .metadata()
+        .context("failed to inspect file before hashing")?
+        .len();
+    ensure!(
+        length <= MAX_SIDECAR_FILE_BYTES,
+        "packaged file exceeds hash byte limit"
+    );
+    let mut reader = BufReader::new(file.take(length + 1));
+    let mut bytes = 0u64;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 16 * 1024];
     loop {
@@ -905,7 +921,9 @@ fn sha256_file(path: &Path) -> Result<String> {
             break;
         }
         digest.update(&buffer[..count]);
+        bytes += u64::try_from(count).context("hash byte count exceeds u64")?;
     }
+    ensure!(bytes == length, "packaged file changed while hashing");
     Ok(format!("{:x}", digest.finalize()))
 }
 #[allow(clippy::too_many_arguments)]
@@ -1209,7 +1227,7 @@ fn sidecar_target(target_triple: &str) -> Result<SidecarTarget> {
 fn stage_solver_artifact(
     repository: &Path,
     artifact_root: &Path,
-) -> Result<(String, SidecarStageGuard)> {
+) -> Result<(String, PackageStageGuard)> {
     let source_manifest_sha256 =
         crate::solver_manifest::validate(crate::solver_manifest::ValidateOptions {
             source_contract: &repository.join("workers/ortools/source-contract.json"),
@@ -1222,7 +1240,7 @@ fn stage_solver_artifact(
     let parent = current
         .parent()
         .context("solver sidecar destination has no parent")?;
-    let stage = SidecarStageGuard::acquire(repository, parent)?;
+    let stage = PackageStageGuard::acquire(repository, parent)?;
     stage.prepare()?;
     copy_artifact_tree(artifact_root, &stage.staging(), target)?;
     let staged_manifest_sha256 = validate_staged_artifact(repository, &stage.staging(), target)?;
@@ -1271,6 +1289,16 @@ fn read_manifest_target(artifact_root: &Path) -> Result<String> {
 }
 
 fn copy_artifact_tree(artifact_root: &Path, staging: &Path, target: SidecarTarget) -> Result<()> {
+    copy_artifact_to_layout(artifact_root, staging, "bin", "resources", target).map(|_| ())
+}
+
+fn copy_artifact_to_layout(
+    artifact_root: &Path,
+    staging: &Path,
+    bin_relative: &str,
+    resources_relative: &str,
+    target: SidecarTarget,
+) -> Result<CopyState> {
     let metadata = fs::symlink_metadata(artifact_root).with_context(|| {
         format!(
             "failed to inspect solver artifact root {}",
@@ -1288,16 +1316,10 @@ fn copy_artifact_tree(artifact_root: &Path, staging: &Path, target: SidecarTarge
             staging.display()
         )
     })?;
-    let bin = staging.join("bin");
-    let resources = staging.join("resources");
-    fs::create_dir(&bin)
-        .with_context(|| format!("failed to create sidecar bin directory {}", bin.display()))?;
-    fs::create_dir(&resources).with_context(|| {
-        format!(
-            "failed to create sidecar resources directory {}",
-            resources.display()
-        )
-    })?;
+    let bin = staging.join(bin_relative);
+    let resources = staging.join(resources_relative);
+    ensure_destination_parent(staging, &bin.join(target.bundled_worker))?;
+    ensure_destination_parent(staging, &resources.join("solver-manifest.json"))?;
 
     let mut state = CopyState::default();
     copy_artifact_directory(
@@ -1313,7 +1335,7 @@ fn copy_artifact_tree(artifact_root: &Path, staging: &Path, target: SidecarTarge
         "validated solver artifact is missing {}",
         target.artifact_worker
     );
-    Ok(())
+    Ok(state)
 }
 
 fn validate_staged_artifact(
@@ -1323,7 +1345,16 @@ fn validate_staged_artifact(
 ) -> Result<String> {
     let resources = staging.join("resources");
     let staged_worker = staging.join("bin").join(target.bundled_worker);
-    let worker_metadata = fs::symlink_metadata(&staged_worker).with_context(|| {
+    validate_staged_layout(repository, &resources, &staged_worker, target)
+}
+
+fn validate_staged_layout(
+    repository: &Path,
+    resources: &Path,
+    staged_worker: &Path,
+    target: SidecarTarget,
+) -> Result<String> {
+    let worker_metadata = fs::symlink_metadata(staged_worker).with_context(|| {
         format!(
             "failed to inspect staged sidecar worker {}",
             staged_worker.display()
@@ -1336,8 +1367,8 @@ fn validate_staged_artifact(
     );
     let transient_worker = resources.join(target.artifact_worker);
     copy_regular_file(
-        &staged_worker,
-        &resources,
+        staged_worker,
+        resources,
         &transient_worker,
         &worker_metadata,
         true,
@@ -1346,7 +1377,7 @@ fn validate_staged_artifact(
         source_contract: &repository.join("workers/ortools/source-contract.json"),
         protocol_schema: &repository.join("protocol/solver-worker.proto"),
         protocol_policy: &repository.join("protocol/version.json"),
-        artifact_root: &resources,
+        artifact_root: resources,
     });
     let cleanup = remove_path_no_follow(&transient_worker)
         .context("failed to remove transient staged worker after manifest validation");
@@ -1580,9 +1611,10 @@ fn add_no_follow_flags(options: &mut OpenOptions) -> Result<()> {
     {
         use std::os::unix::fs::OpenOptionsExt;
 
-        let no_follow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
-            .context("platform O_NOFOLLOW flag does not fit i32")?;
-        options.custom_flags(no_follow);
+        let flags =
+            i32::try_from((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits())
+                .context("platform no-follow/nonblocking flags do not fit i32")?;
+        options.custom_flags(flags);
     }
     #[cfg(windows)]
     {
@@ -1598,59 +1630,78 @@ fn open_regular_file_no_follow(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     add_no_follow_flags(&mut options)?;
-    options
+    let file = options
         .open(path)
-        .with_context(|| format!("failed to open regular artifact file {}", path.display()))
+        .with_context(|| format!("failed to open regular artifact file {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .context("failed to inspect opened artifact file")?;
+    ensure!(
+        metadata.is_file() && !is_link_like(&metadata),
+        "opened artifact must be a direct regular file: {}",
+        path.display()
+    );
+    Ok(file)
 }
 
 #[derive(Debug)]
-struct SidecarStageGuard {
+struct PackageStageGuard {
     parent: PathBuf,
+    package_name: &'static str,
     lock: Option<File>,
     committed: bool,
 }
 
-impl SidecarStageGuard {
+impl PackageStageGuard {
     fn acquire(repository: &Path, parent: &Path) -> Result<Self> {
+        Self::acquire_package(repository, parent, "sidecar")
+    }
+
+    fn acquire_package(
+        repository: &Path,
+        parent: &Path,
+        package_name: &'static str,
+    ) -> Result<Self> {
         create_private_directory_chain(repository, parent)?;
-        let lock_path = parent.join(SIDECAR_LOCK);
+        let lock_path = parent.join(format!("{package_name}.lock"));
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         add_no_follow_flags(&mut options)?;
         let lock = options.open(&lock_path).with_context(|| {
             format!(
-                "failed to open solver sidecar staging lock {}",
+                "failed to open {package_name} staging lock {}",
                 lock_path.display()
             )
         })?;
-        let metadata = lock.metadata().context("failed to inspect sidecar lock")?;
+        let metadata = lock.metadata().context("failed to inspect package lock")?;
         ensure!(
             metadata.is_file() && !is_link_like(&metadata),
-            "solver sidecar staging lock must be a direct regular file"
+            "package staging lock must be a direct regular file"
         );
         lock.try_lock().with_context(|| {
             format!(
-                "solver sidecar staging is already locked at {}",
+                "{package_name} staging is already locked at {}",
                 lock_path.display()
             )
         })?;
         Ok(Self {
             parent: parent.to_path_buf(),
+            package_name,
             lock: Some(lock),
             committed: false,
         })
     }
 
     fn staging(&self) -> PathBuf {
-        self.parent.join(SIDECAR_STAGING)
+        self.parent.join(format!("{}.staging", self.package_name))
     }
 
     fn previous(&self) -> PathBuf {
-        self.parent.join(SIDECAR_PREVIOUS)
+        self.parent.join(format!("{}.previous", self.package_name))
     }
 
     fn prepare(&self) -> Result<()> {
-        let current = self.parent.join("sidecar");
+        let current = self.parent.join(self.package_name);
         let previous = self.previous();
         recover_publication(&current, &previous)?;
         remove_path_no_follow(&self.staging())
@@ -1662,7 +1713,7 @@ impl SidecarStageGuard {
     }
 }
 
-impl Drop for SidecarStageGuard {
+impl Drop for PackageStageGuard {
     fn drop(&mut self) {
         if !self.committed {
             let _ = remove_path_no_follow(&self.staging());
@@ -1999,10 +2050,39 @@ mod tests {
     #[cfg(not(windows))]
     use super::verify_current_nix_result;
     use super::{
-        NativeBuildGuard, SIDECAR_LOCK, SIDECAR_PREVIOUS, SIDECAR_STAGING, SidecarStageGuard,
+        NativeBuildGuard, PackageStageGuard, SIDECAR_LOCK, SIDECAR_PREVIOUS, SIDECAR_STAGING,
         copy_artifact_tree, publish_staging, read_compiler_version, require_native_target,
         sidecar_target, verify_generated_build_input,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_fifo_substitution_before_copy_without_waiting_for_a_writer() {
+        use std::{process::Command, sync::mpsc, thread, time::Duration};
+
+        let root = TempDir::new().unwrap();
+        let source = root.path().join("source");
+        fs::write(&source, b"regular").unwrap();
+        let metadata = fs::symlink_metadata(&source).unwrap();
+        fs::remove_file(&source).unwrap();
+        assert!(
+            Command::new("mkfifo")
+                .arg(&source)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let destination = root.path().join("copied");
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let task = thread::spawn(move || {
+            let result =
+                super::copy_regular_file(&source, root.path(), &destination, &metadata, false);
+            sender.send(result.is_err()).unwrap();
+        });
+        assert!(receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+        task.join().unwrap();
+    }
+
     #[test]
     fn accepts_only_native_windows_x86_64() {
         assert!(require_native_target("windows", "x86_64").is_ok());
@@ -2232,13 +2312,13 @@ mod tests {
         let lock_path = parent.join(SIDECAR_LOCK);
         fs::write(&lock_path, b"stale owner metadata").unwrap();
 
-        let first = SidecarStageGuard::acquire(repository.path(), &parent).unwrap();
-        let error = SidecarStageGuard::acquire(repository.path(), &parent).unwrap_err();
+        let first = PackageStageGuard::acquire(repository.path(), &parent).unwrap();
+        let error = PackageStageGuard::acquire(repository.path(), &parent).unwrap_err();
         assert!(error.to_string().contains("already locked"));
         drop(first);
 
         assert!(lock_path.is_file());
-        let _next = SidecarStageGuard::acquire(repository.path(), &parent).unwrap();
+        let _next = PackageStageGuard::acquire(repository.path(), &parent).unwrap();
     }
 
     #[test]
@@ -2255,7 +2335,7 @@ mod tests {
         fs::create_dir(&staging).unwrap();
         fs::write(staging.join("payload"), b"partial").unwrap();
 
-        let guard = SidecarStageGuard::acquire(repository.path(), &parent).unwrap();
+        let guard = PackageStageGuard::acquire(repository.path(), &parent).unwrap();
         guard.prepare().unwrap();
 
         assert!(!previous.exists());

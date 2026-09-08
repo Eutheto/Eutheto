@@ -114,10 +114,12 @@ Phases 00–04 established a working, deliberately bounded optimization foundati
   architecture checks, license inventories, SPDX SBOM generation, and
   cross-platform hosted validation.
 
-This is a real generic optimization and acceptance foundation, not yet a
-production planner. Workforce and Seating domain behavior, complete product
-flows, AI integration, and installable or signed release artifacts remain
-future roadmap work.
+Phase 05 adds the registered Workforce domain, independent original-domain
+verification and scoring, and real headless file/stored optimization through the
+approved OR-Tools worker. The CLI can fully validate scenarios, retain verified
+results, explain recorded assignments, and export accepted JSON or assignment CSV.
+This remains a bounded development planner: the complete Workforce desktop flow,
+Seating, repair/comparison product flows, AI, and signed releases remain roadmap work.
 
 ## Quick start
 
@@ -152,6 +154,65 @@ Run `just` to list every supported command. In particular,
 `just generate-check`, `just protocol-check`, and `just fixtures-check` verify
 checked-in generated and protocol artifacts, while `just licenses` and
 `just sbom` produce the Phase 01 supply-chain inventories.
+
+### Headless Workforce
+
+The source-built CLI is deliberately unbundled. On an approved worker target,
+assemble and exercise the manifest-bound image before solving:
+
+```sh
+just worker-build-cli
+just worker-smoke-cli
+target/cli-package/optimizer --help
+```
+
+Use `optimizer.exe` on Windows. Keep the executable, sibling worker, and
+`solver/ortools` resources together when relocating the image. Runtime environment
+variables cannot replace its build-bound worker identity. An unbundled build
+reports backend unavailability rather than searching for or downloading a worker.
+
+`projects create --pack official.workforce --title "Plan" --output ./scenario.json`
+creates a standalone portable scenario without a local library. Omit `--output`
+to create a stored project. `scenario show`, `validate`, `apply`, and `batch`
+accept stored IDs or explicit files; mutations require `--expected-revision`,
+and file mutations also require a new no-clobber `--output` path.
+Bare UUIDv7 values always mean stored IDs; use `./name` for an extensionless or
+UUID-shaped filename. File errors never fall back to SQLite. Read-only operations
+also accept checked single-scenario bundles, not full-library backups.
+
+```sh
+optimizer scenario validate ./scenario.json
+optimizer solve ./scenario.json --output ./result.json --progress human
+optimizer solutions verify ./scenario.json ./result.json
+optimizer solutions explain ./scenario.json ./result.json --assignment-id "$assignment_id"
+optimizer solutions export ./scenario.json ./result.json --format csv --output ./assignments.csv
+```
+
+Full validation returns its complete report and exit 3 for errors; an obvious
+coverage contradiction is not itself a solver feasibility result. Solve defaults
+are Balanced, 30 seconds, automatic backend selection, one worker thread, and seed 1.
+`--max-time` accepts a positive integer followed by `ms`, `s`, `m`, or `h`.
+Progress goes to stderr while work runs; candidates are not accepted results.
+File solves require an output destination. Stored solves retain their result in
+the library first; a later optional output failure is a warning, not rollback.
+Results always belong to their solved revision and are never silently applied.
+
+Verification and export recheck the complete accepted result against its original
+scenario. External solver history, optimality, and timing remain unverified source
+metadata. JSON preserves the full accepted artifact, including false decisions;
+CSV preserves only selected assignment identities in canonical order. Assignment
+CSV v1 begins with `eutheto/assignments,1`, then
+`assignment_id,person_id,shift_id`; it is bounded to 16 MiB, 100,000 rows, and
+160 UTF-8 bytes per cell. CSV decoding is not an accepted-assignment import API.
+
+Without `--output`, human-format export writes exact raw bytes to stdout.
+Global `--format json` requires an export destination so data cannot mix with
+the one terminal result envelope. Exits are 0 success, 2 usage, 3 validation,
+4 proven infeasible, 5 no verified result within limits, 6 unavailable/incompatible
+backend or capability, 7 verification alarm, 8 file/storage failure, 10 revision
+conflict, and 130 cancellation. Repair, service cancellation, standalone migration,
+configuration files for these new operations, and non-JSON/CSV result exports
+remain explicitly unavailable.
 
 ## Contributing
 

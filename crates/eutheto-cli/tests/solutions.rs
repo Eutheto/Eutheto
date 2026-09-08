@@ -170,8 +170,8 @@ fn verify_compare_and_explain_dispatch_to_core_authority() -> Result<(), Box<dyn
 }
 
 #[test]
-fn solution_export_remains_typed_unavailable_without_reading_placeholder_paths()
--> Result<(), Box<dyn Error>> {
+fn json_export_requires_destination_before_input_or_database_access() -> Result<(), Box<dyn Error>>
+{
     let directory = private_tempdir()?;
     let missing_scenario_path = directory.path().join("secret-scenario-path");
     let missing_solution_path = directory.path().join("secret-solution-path");
@@ -189,13 +189,14 @@ fn solution_export_remains_typed_unavailable_without_reading_placeholder_paths()
         ],
     )?;
 
-    assert_eq!(output.status.code(), Some(6), "{envelope}");
+    assert_eq!(output.status.code(), Some(2), "{envelope}");
     assert_eq!(envelope["command"], "solutions.export");
-    assert_eq!(envelope["error"]["code"], "capability.solution_unavailable");
+    assert_eq!(envelope["error"]["code"], "solution.export_output_required");
     let serialized = serde_json::to_string(&envelope)?;
     assert!(!serialized.contains(scenario));
     assert!(!serialized.contains(solution));
     assert!(!missing_scenario_path.exists());
     assert!(!missing_solution_path.exists());
+    assert!(fs::read_dir(directory.path())?.next().is_none());
     Ok(())
 }
