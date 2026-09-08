@@ -318,11 +318,31 @@ async fn auto_worker_result_is_portable_but_requires_fresh_source_verification()
     let forged = reseal_forged_score(&portable)?;
     forged.validate()?;
     assert!(service.verify_result(&snapshot, &forged, &control).is_err());
+    assert!(
+        service
+            .export_result_json(&snapshot, &forged, &control)
+            .is_err()
+    );
+    assert!(
+        service
+            .export_assignments_csv(&snapshot, &forged, &control)
+            .is_err()
+    );
     let mut changed_source = snapshot.clone();
     changed_source.document = self::snapshot(2)?.document;
     assert!(
         service
             .verify_result(&changed_source, &portable, &control)
+            .is_err()
+    );
+    assert!(
+        service
+            .export_result_json(&changed_source, &portable, &control)
+            .is_err()
+    );
+    assert!(
+        service
+            .export_assignments_csv(&changed_source, &portable, &control)
             .is_err()
     );
     Ok(())
@@ -424,7 +444,7 @@ async fn stored_worker_acceptance_survives_reopen_edits_retries_and_secondary_ou
     let request = StoredSolveRequest {
         request_id: RequestId::new(&SystemIdGenerator)?,
         scenario_id,
-        expected_revision: original.revision,
+        expected_revision: Some(original.revision),
         options: options()?,
     };
     let outcome = Box::pin(app.solve_stored(request.clone(), &mut Progress))
@@ -526,6 +546,33 @@ async fn stored_worker_acceptance_survives_reopen_edits_retries_and_secondary_ou
         return Err("editing the scenario must not create or replace accepted results".into());
     };
     assert!(result.stale && !result.selected);
+
+    // Export must reverify against the retained solved document, not the now-infeasible current one.
+    let exported = app
+        .export_solution_json(scenario_id, result_id)
+        .await
+        .map_err(boxed)?;
+    assert_eq!(exported.scenario_revision, original.revision);
+    assert_eq!(exported.current_revision, current.summary.revision);
+    assert_eq!(
+        PortableAcceptedResultV2::from_json(&exported.bytes)?,
+        reopened.portable
+    );
+    let exported = app
+        .export_solution_assignments_csv(scenario_id, result_id)
+        .await
+        .map_err(boxed)?;
+    assert_eq!(exported.scenario_revision, original.revision);
+    assert_eq!(exported.current_revision, current.summary.revision);
+    let pairs = eutheto_workforce::assignments_csv::decode_assignments_csv(
+        &mut exported.bytes.as_slice(),
+        &verification_control,
+    )?;
+    let [pair] = pairs.as_slice() else {
+        return Err("export lost the sole retained person/shift assignment".into());
+    };
+    assert_eq!(pair.person_id.to_string(), id(1));
+    assert_eq!(pair.shift_id.to_string(), id(8));
 
     // Even a now-cancelled application and a changed current revision must not rerun a
     // committed request. The original request retains its exact bound run and result.
@@ -742,7 +789,7 @@ async fn accepted_insert_rollback_finalizes_failed_run_and_retry_does_not_redisp
     let request = StoredSolveRequest {
         request_id: RequestId::new(&SystemIdGenerator)?,
         scenario_id,
-        expected_revision: original.revision,
+        expected_revision: Some(original.revision),
         options: options()?,
     };
     // This failpoint is reached only after a real accepted result enters the transaction.
@@ -986,7 +1033,7 @@ async fn real_worker_coverage_mutation_is_independently_quarantined_and_retained
     let request = StoredSolveRequest {
         request_id: RequestId::new(&SystemIdGenerator)?,
         scenario_id,
-        expected_revision: original.revision,
+        expected_revision: Some(original.revision),
         options: options()?,
     };
     let outcome = Box::pin(app.solve_stored(request.clone(), &mut Progress))

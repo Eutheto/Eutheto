@@ -1,5 +1,13 @@
 //! Headless command-line adapter over [`eutheto_core::EuthetoApp`].
 
+mod bundled_solver;
+mod files;
+mod native_file;
+mod progress;
+mod scenario_files;
+mod solutions;
+mod solve;
+
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
@@ -29,7 +37,6 @@ use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
 
 const API_VERSION: &str = "eutheto/cli-result/v1";
 const COMMAND_JSON_LIMIT: u64 = 16 * 1024 * 1024;
@@ -174,7 +181,7 @@ enum Command {
     Scenario(ScenarioArgs),
     /// Read and mutate application settings.
     Settings(SettingsArgs),
-    /// Solve a scenario (catalogued but unavailable in Phase 02).
+    /// Optimize a stored scenario or an explicit portable scenario file.
     Solve(SolveArgs),
     /// Inspect and independently verify accepted solutions.
     Solutions(SolutionsArgs),
@@ -310,6 +317,9 @@ struct CreateProjectArgs {
     horizon_start: String,
     #[arg(long, default_value = "2100-01-01T00:00:00Z")]
     horizon_end: String,
+    /// Create a standalone portable scenario without opening the project database.
+    #[arg(long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -367,15 +377,15 @@ struct ScenarioArgs {
 
 #[derive(Debug, Subcommand)]
 enum ScenarioCommandArgs {
-    /// Open and print a persisted scenario.
+    /// Open and print a stored scenario or an explicit portable scenario file.
     Show { input: String },
-    /// Migrate a portable scenario (catalogued; no older schema exists in Phase 01).
+    /// Standalone migration command (unavailable; checked loading handles supported migrations).
     Migrate {
         input: PathBuf,
         #[arg(long)]
         output: PathBuf,
     },
-    /// Validate a persisted scenario.
+    /// Fully validate a stored scenario or an explicit portable scenario file.
     Validate { input: String },
     /// Apply one strict command JSON document, or an array as one atomic batch.
     Apply(ApplyArgs),
@@ -511,12 +521,18 @@ enum SolutionsCommand {
         #[arg(long = "assignment-id", value_name = "ASSIGNMENT")]
         assignment: String,
     },
-    Export {
-        scenario: PathBuf,
-        solution: PathBuf,
-        #[arg(long, value_enum)]
-        format: SolutionExportFormat,
-    },
+    Export(ExportSolutionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExportSolutionArgs {
+    scenario: PathBuf,
+    solution: PathBuf,
+    #[arg(long, value_enum)]
+    format: SolutionExportFormat,
+    /// Publish to an explicit no-clobber destination; otherwise human mode writes raw stdout.
+    #[arg(long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -639,6 +655,8 @@ struct Outcome {
     result: Value,
     human: Vec<String>,
     warnings: Vec<SafeCliWarning>,
+    exit: CliExitCode,
+    raw: Option<Vec<u8>>,
 }
 
 impl Outcome {
@@ -649,11 +667,23 @@ impl Outcome {
             result,
             human,
             warnings: Vec::new(),
+            exit: CliExitCode::Success,
+            raw: None,
         }
     }
 
     fn with_warning(mut self, warning: SafeCliWarning) -> Self {
         self.warnings.push(warning);
+        self
+    }
+
+    fn with_exit(mut self, exit: CliExitCode) -> Self {
+        self.exit = exit;
+        self
+    }
+
+    fn with_raw(mut self, bytes: Vec<u8>) -> Self {
+        self.raw = Some(bytes);
         self
     }
 }
@@ -804,13 +834,13 @@ where
     };
     let cancellation = CancellationToken::new();
     let interrupt_signal = cancellation.clone();
-    let result = runtime.block_on(async move {
+    let result = runtime.block_on(async {
         let watcher = tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 interrupt_signal.cancel();
             }
         });
-        let result = Box::pin(execute_cli(cli, cancellation)).await;
+        let result = progress::run(cli, cancellation, &mut stderr).await;
         watcher.abort();
         result
     });
@@ -819,7 +849,7 @@ where
             if render_success(&mut stdout, &mut stderr, format, &outcome).is_err() {
                 CliExitCode::Application
             } else {
-                CliExitCode::Success
+                outcome.exit
             }
         }
         Err((command, error)) => {
@@ -849,6 +879,7 @@ fn requests_json(args: &[OsString]) -> bool {
 async fn execute_cli(
     cli: Cli,
     cancellation: CancellationToken,
+    progress: &mut dyn eutheto_solver_api::ProgressSink,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let _ = (cli.log_level, cli.no_color, &cli.config, cli.offline);
     match cli.command {
@@ -874,10 +905,14 @@ async fn execute_cli(
             ),
         )),
         Command::Solutions(args) => {
-            let app = open_app(cli.data_dir, &cancellation)
-                .await
-                .map_err(|error| ("solutions", error))?;
-            execute_solutions(&app, args).await
+            solutions::execute(
+                cli.data_dir,
+                args,
+                &cancellation,
+                cli.format,
+                cli.config.is_some(),
+            )
+            .await
         }
         Command::Solvers(args) => {
             let app = open_app(cli.data_dir, &cancellation)
@@ -894,12 +929,13 @@ async fn execute_cli(
             )
             .await
         }
-        Command::Solve(_) => {
-            execute_deferred(
+        Command::Solve(args) => {
+            solve::execute(
                 cli.data_dir,
-                "solve",
-                DeferredCapability::Solve,
+                args,
                 &cancellation,
+                cli.config.is_some(),
+                progress,
             )
             .await
         }
@@ -907,21 +943,20 @@ async fn execute_cli(
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("bundle", error))?;
-            execute_bundle(&app, args).await
+            execute_bundle(&app, args, &cancellation).await
         }
         Command::Doctor => execute_doctor(cli.data_dir, &cancellation).await,
-        Command::Projects(args) => execute_projects_cli(cli.data_dir, args, &cancellation).await,
+        Command::Projects(args) => {
+            execute_projects_cli(cli.data_dir, args, &cancellation, cli.config.is_some()).await
+        }
         Command::Backup(args) => {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("backup", error))?;
-            execute_backup(&app, args).await
+            execute_backup(&app, args, &cancellation).await
         }
         Command::Scenario(args) => {
-            let app = open_app(cli.data_dir, &cancellation)
-                .await
-                .map_err(|error| ("scenario", error))?;
-            execute_scenario(&app, args).await
+            scenario_files::execute(cli.data_dir, args, &cancellation, cli.config.is_some()).await
         }
         Command::Settings(args) => {
             let app = open_app(cli.data_dir, &cancellation)
@@ -951,14 +986,24 @@ async fn execute_projects_cli(
     data_dir: Option<PathBuf>,
     args: ProjectsArgs,
     cancellation: &CancellationToken,
+    has_config: bool,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let command = match args.command {
+        ProjectsCommand::Create(create) if create.output.is_some() => {
+            scenario_files::reject_config(has_config)
+                .map_err(|error| ("projects.create", error))?;
+            return scenario_files::create(create, cancellation);
+        }
+        command => command,
+    };
+    let args = ProjectsArgs { command };
     if cancellation.is_cancelled() && matches!(&args.command, ProjectsCommand::Export { .. }) {
         return Err(("projects.export", SafeCliError::cancelled()));
     }
     let app = open_app(data_dir, cancellation)
         .await
         .map_err(|error| ("projects", error))?;
-    execute_projects(&app, args).await
+    execute_projects(&app, args, cancellation).await
 }
 
 fn info_outcome(command: &'static str) -> Outcome {
@@ -1134,34 +1179,10 @@ async fn execute_solvers(
     }
 }
 
-async fn execute_solutions(
-    app: &EuthetoApp,
-    args: SolutionsArgs,
-) -> Result<Outcome, (&'static str, SafeCliError)> {
-    match args.command {
-        SolutionsCommand::List { scenario } => execute_solution_list(app, &scenario).await,
-        SolutionsCommand::Verify { scenario, solution } => {
-            execute_solution_verify(app, &scenario, &solution).await
-        }
-        SolutionsCommand::Compare {
-            scenario,
-            solution_a,
-            solution_b,
-        } => execute_solution_compare(app, &scenario, &solution_a, &solution_b).await,
-        SolutionsCommand::Explain {
-            scenario,
-            solution,
-            assignment,
-        } => execute_solution_explain(app, &scenario, &solution, &assignment).await,
-        SolutionsCommand::Export { .. } => execute_solution_export(app).await,
-    }
-}
-
 async fn execute_solution_list(
     app: &EuthetoApp,
-    scenario: &str,
+    scenario_id: ScenarioId,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.list", error))?;
     let AppQueryResult::SolutionList(list) = app
         .query(AppQuery::SolutionList(SolutionListRequestV1 {
             schema_version: SOLUTION_API_SCHEMA_VERSION,
@@ -1204,11 +1225,9 @@ async fn execute_solution_list(
 
 async fn execute_solution_verify(
     app: &EuthetoApp,
-    scenario: &str,
-    solution: &str,
+    scenario_id: ScenarioId,
+    solution_id: SolutionId,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.verify", error))?;
-    let solution_id = solution_id(solution).map_err(|error| ("solutions.verify", error))?;
     let AppQueryResult::SolutionVerification(verified) = app
         .query(AppQuery::SolutionVerify(SolutionVerifyRequestV1 {
             schema_version: SOLUTION_API_SCHEMA_VERSION,
@@ -1220,7 +1239,7 @@ async fn execute_solution_verify(
     else {
         return Err(("solutions.verify", unexpected_result()));
     };
-    let warnings = verified
+    let mut warnings: Vec<SafeCliWarning> = verified
         .verification
         .warnings
         .iter()
@@ -1233,6 +1252,10 @@ async fn execute_solution_verify(
             })),
         })
         .collect();
+    warnings.extend(solutions::stale_warning(
+        verified.scenario_revision,
+        verified.current_revision,
+    ));
     let human = vec![format!(
         "Solution {} independently verified for scenario {} revision {}.",
         verified.result.solution_id,
@@ -1296,12 +1319,10 @@ async fn execute_solution_compare(
 
 async fn execute_solution_explain(
     app: &EuthetoApp,
-    scenario: &str,
-    solution: &str,
-    assignment: &str,
+    scenario_id: ScenarioId,
+    solution_id: SolutionId,
+    assignment_id: DomainAssignmentId,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.explain", error))?;
-    let solution_id = solution_id(solution).map_err(|error| ("solutions.explain", error))?;
     let AppQueryResult::SolutionSummary(detail) = app
         .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
             schema_version: SOLUTION_API_SCHEMA_VERSION,
@@ -1313,15 +1334,6 @@ async fn execute_solution_explain(
     else {
         return Err(("solutions.explain", unexpected_result()));
     };
-    let assignment_id = assignment.parse::<DomainAssignmentId>().map_err(|_| {
-        (
-            "solutions.explain",
-            SafeCliError::validation(
-                "solution.explanation_request_invalid",
-                "The explanation request contains an invalid assignment identifier.",
-            ),
-        )
-    })?;
     let result = AcceptedResultRefV1::from_result(&detail.result)
         .map_err(|_| ("solutions.explain", unexpected_result()))?;
     let request = SolutionExplainRequestV1 {
@@ -1348,28 +1360,21 @@ async fn execute_solution_explain(
     else {
         return Err(("solutions.explain", unexpected_result()));
     };
-    let human = vec![format!(
-        "Generated an explanation for assignment {assignment} in solution {solution_id} ({} messages).",
-        explanation.explanation.rendered.messages.len(),
-    )];
-    Ok(Outcome::new(
+    let human = solutions::explanation_human(&explanation.explanation.rendered)
+        .map_err(|error| ("solutions.explain", error))?;
+    let mut outcome = Outcome::new(
         "solutions.explain",
         "explained",
         to_value(&explanation).map_err(|error| ("solutions.explain", error))?,
         human,
-    ))
-}
-
-async fn execute_solution_export(
-    app: &EuthetoApp,
-) -> Result<Outcome, (&'static str, SafeCliError)> {
-    match app
-        .query(AppQuery::Deferred(DeferredCapability::Solution))
-        .await
-    {
-        Ok(_) => Err(("solutions.export", unexpected_result())),
-        Err(error) => Err(("solutions.export", app_error(error))),
+    );
+    for revision in &explanation.scenario_revisions {
+        outcome.warnings.extend(solutions::stale_warning(
+            *revision,
+            explanation.current_revision,
+        ));
     }
+    Ok(outcome)
 }
 
 async fn describe_solver(
@@ -1417,11 +1422,12 @@ async fn describe_solver(
 async fn execute_bundle(
     app: &EuthetoApp,
     args: BundleArgs,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     match args.command {
         BundleCommand::Inspect { bundle } => {
             let (preview_id, metadata) =
-                inspect_unopened_bundle(app, &bundle, "bundle.inspect").await?;
+                inspect_unopened_bundle(app, &bundle, "bundle.inspect", cancellation).await?;
             let result = app
                 .execute(AppCommand::CancelPortablePreview { preview_id })
                 .await
@@ -1438,7 +1444,8 @@ async fn execute_bundle(
         }
         BundleCommand::ExactReexport { bundle, output } => {
             let (preview_id, metadata) =
-                inspect_unopened_bundle(app, &bundle, "bundle.exact-reexport").await?;
+                inspect_unopened_bundle(app, &bundle, "bundle.exact-reexport", cancellation)
+                    .await?;
             let result = app
                 .execute(AppCommand::ExactReexportUnopenedBundle {
                     preview_id,
@@ -1463,8 +1470,9 @@ async fn inspect_unopened_bundle(
     app: &EuthetoApp,
     bundle: &Path,
     command: &'static str,
+    cancellation: &CancellationToken,
 ) -> Result<(RequestId, PreservedBundleMetadata), (&'static str, SafeCliError)> {
-    let bytes = read_bounded(bundle, BUNDLE_LIMIT, "bundle.too_large")
+    let bytes = read_bounded(bundle, BUNDLE_LIMIT, "bundle.too_large", cancellation)
         .await
         .map_err(|error| (command, error))?;
     match app
@@ -1561,6 +1569,15 @@ async fn open_app(
     data_dir: Option<PathBuf>,
     cancellation: &CancellationToken,
 ) -> Result<EuthetoApp, SafeCliError> {
+    EuthetoApp::open(app_dependencies(data_dir, cancellation)?)
+        .await
+        .map_err(app_error)
+}
+
+fn app_dependencies(
+    data_dir: Option<PathBuf>,
+    cancellation: &CancellationToken,
+) -> Result<AppDependencies, SafeCliError> {
     let root = match data_dir {
         Some(path) => path,
         None => dirs::data_local_dir()
@@ -1572,7 +1589,7 @@ async fn open_app(
                 )
             })?,
     };
-    EuthetoApp::open(AppDependencies {
+    Ok(AppDependencies {
         paths: AppPaths {
             database: root.join("eutheto.sqlite"),
             safety_backups: root.join("safety-backups"),
@@ -1582,13 +1599,12 @@ async fn open_app(
         ids: Arc::new(SystemIdGenerator),
         cancellation: cancellation.clone(),
     })
-    .await
-    .map_err(app_error)
 }
 
 async fn execute_projects(
     app: &EuthetoApp,
     args: ProjectsArgs,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     match args.command {
         ProjectsCommand::List { scope } => list_projects(app, scope).await,
@@ -1668,6 +1684,7 @@ async fn execute_projects(
                 !exclude_results,
                 !exclude_assets,
                 collision_plan.as_deref(),
+                cancellation,
             )
             .await
         }
@@ -1802,8 +1819,9 @@ async fn import_project(
     include_results: bool,
     include_assets: bool,
     collision_plan: Option<&str>,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let bytes = read_bounded(bundle, BUNDLE_LIMIT, "bundle.too_large")
+    let bytes = read_bounded(bundle, BUNDLE_LIMIT, "bundle.too_large", cancellation)
         .await
         .map_err(|error| ("projects.import", error))?;
     let options = ImportOptions {
@@ -1922,10 +1940,11 @@ fn id_outcome(command: &'static str, status: &'static str, id: ScenarioId) -> Ou
 async fn execute_backup(
     app: &EuthetoApp,
     args: BackupArgs,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     match args.command {
         BackupCommand::Inspect { bundle, mode } => {
-            let bytes = read_bounded(&bundle, BUNDLE_LIMIT, "bundle.too_large")
+            let bytes = read_bounded(&bundle, BUNDLE_LIMIT, "bundle.too_large", cancellation)
                 .await
                 .map_err(|error| ("backup.inspect", error))?;
             let options = ImportOptions {
@@ -1961,9 +1980,12 @@ async fn execute_backup(
             review_token,
             without_backup_token,
         } => {
+            let bytes = read_bounded(&bundle, BUNDLE_LIMIT, "bundle.too_large", cancellation)
+                .await
+                .map_err(|error| ("backup.restore", error))?;
             execute_backup_restore(
                 app,
-                bundle,
+                bytes,
                 mode,
                 collision_plan,
                 confirm_replace,
@@ -2048,16 +2070,13 @@ async fn execute_backup_create(
 
 async fn execute_backup_restore(
     app: &EuthetoApp,
-    bundle: PathBuf,
+    bytes: Vec<u8>,
     mode: RestoreModeArg,
     collision_plan: Option<String>,
     confirm_replace: bool,
     review_token: Option<String>,
     without_backup_token: Option<String>,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let bytes = read_bounded(&bundle, BUNDLE_LIMIT, "bundle.too_large")
-        .await
-        .map_err(|error| ("backup.restore", error))?;
     let restore_mode = match mode {
         RestoreModeArg::Add => RestoreMode::AddBackup,
         RestoreModeArg::Replace => RestoreMode::ReplaceLibrary,
@@ -2734,12 +2753,13 @@ fn preview_value(preview: &eutheto_import::ImportPreview) -> Value {
 async fn execute_scenario(
     app: &EuthetoApp,
     args: ScenarioArgs,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     match args.command {
         ScenarioCommandArgs::Show { input } => show_scenario(app, &input).await,
         ScenarioCommandArgs::Validate { input } => validate_scenario(app, &input).await,
-        ScenarioCommandArgs::Apply(apply) => apply_commands(app, apply, false).await,
-        ScenarioCommandArgs::Batch(apply) => apply_commands(app, apply, true).await,
+        ScenarioCommandArgs::Apply(apply) => apply_commands(app, apply, false, cancellation).await,
+        ScenarioCommandArgs::Batch(apply) => apply_commands(app, apply, true, cancellation).await,
         ScenarioCommandArgs::Undo {
             scenario_id,
             expected_revision,
@@ -2755,7 +2775,7 @@ async fn execute_scenario(
                 "scenario.migrate",
                 SafeCliError::unavailable(
                     "scenario.migrate_unavailable",
-                    "No older portable scenario schema is supported by the Phase-01 migration registry.",
+                    "Use checked scenario loading for supported migrations; standalone migration is unavailable.",
                 ),
             ))
         }
@@ -2794,38 +2814,11 @@ async fn validate_scenario(
     input: &str,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let id = scenario_id(input).map_err(|error| ("scenario.validate", error))?;
-    let result = app
-        .query(AppQuery::ValidateScenario(id))
+    let (revision, report) = app
+        .validate_stored_full(id)
         .await
         .map_err(|error| ("scenario.validate", app_error(error)))?;
-    let AppQueryResult::Validation(report) = result else {
-        return Err(("scenario.validate", unexpected_result()));
-    };
-    let errors = report
-        .issues
-        .iter()
-        .filter(|issue| issue.severity == eutheto_types::ValidationSeverity::Error)
-        .count();
-    let human = if report.issues.is_empty() {
-        vec!["Scenario is valid.".to_owned()]
-    } else {
-        report
-            .issues
-            .iter()
-            .map(|issue| {
-                let severity = issue.severity;
-                let code = &issue.code;
-                let message = &issue.message;
-                format!("{severity:?}: {code}: {message}")
-            })
-            .collect()
-    };
-    Ok(Outcome::new(
-        "scenario.validate",
-        if errors == 0 { "valid" } else { "invalid" },
-        to_value(report).map_err(|error| ("scenario.validate", error))?,
-        human,
-    ))
+    Ok(scenario_files::validation_outcome(revision, &report.issues))
 }
 
 async fn scenario_history(
@@ -2886,6 +2879,7 @@ async fn apply_commands(
     app: &EuthetoApp,
     args: ApplyArgs,
     require_batch: bool,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let command_name = if require_batch {
         "scenario.batch"
@@ -2893,9 +2887,14 @@ async fn apply_commands(
         "scenario.apply"
     };
     let id = scenario_id(&args.input).map_err(|error| (command_name, error))?;
-    let bytes = read_bounded(&args.commands, COMMAND_JSON_LIMIT, "commands.too_large")
-        .await
-        .map_err(|error| (command_name, error))?;
+    let bytes = read_bounded(
+        &args.commands,
+        COMMAND_JSON_LIMIT,
+        "commands.too_large",
+        cancellation,
+    )
+    .await
+    .map_err(|error| (command_name, error))?;
     let value = parse_strict_json(&bytes).map_err(|error| (command_name, error))?;
     let envelope = command_envelope(id, args.expected_revision, value, require_batch)
         .map_err(|error| (command_name, error))?;
@@ -3225,26 +3224,15 @@ async fn read_bounded(
     path: &Path,
     limit: u64,
     code: &'static str,
+    cancellation: &CancellationToken,
 ) -> Result<Vec<u8>, SafeCliError> {
-    let file = tokio::fs::File::open(path).await.map_err(|_| {
-        SafeCliError::storage("storage.read_failed", "An input file could not be read.")
-    })?;
-    let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|_| {
-            SafeCliError::storage("storage.read_failed", "An input file could not be read.")
-        })?;
-    let byte_count = u64::try_from(bytes.len())
-        .map_err(|_| SafeCliError::storage(code, "The input file exceeds its allowed size."))?;
-    if byte_count > limit {
-        return Err(SafeCliError::storage(
-            code,
-            "The input file exceeds its allowed size.",
-        ));
-    }
-    Ok(bytes)
+    files::read_controlled(
+        path,
+        limit,
+        code,
+        &eutheto_types::OperationControl::Cancellation(cancellation.clone()),
+    )
+    .await
 }
 
 fn parse_strict_json(bytes: &[u8]) -> Result<Value, SafeCliError> {
@@ -3360,6 +3348,7 @@ fn is_portable_artifact_error_code(code: &str) -> bool {
                 | "portable.capability_unsupported"
                 | "portable.migration_registry_invalid"
                 | "restore.safety_backup_failed"
+                | "scenario.single_export_required"
         )
 }
 
@@ -3427,6 +3416,8 @@ fn app_error(error: AppError) -> SafeCliError {
         AppError::Protocol(failure) => {
             let exit = if failure.code == "operation.cancelled" {
                 CliExitCode::Cancelled
+            } else if failure.code == "operation.deadline_exceeded" {
+                CliExitCode::NoVerifiedSolution
             } else if is_portable_artifact_error_code(&failure.code) {
                 CliExitCode::Storage
             } else {
@@ -3490,15 +3481,20 @@ fn render_success(
 ) -> std::io::Result<()> {
     match format {
         OutputFormat::Human => {
-            for line in &outcome.human {
-                writeln!(stdout, "{line}")?;
+            if let Some(bytes) = &outcome.raw {
+                stdout.write_all(bytes)?;
+            } else {
+                for line in &outcome.human {
+                    writeln!(stdout, "{line}")?;
+                }
             }
             for warning in &outcome.warnings {
-                writeln!(
+                // A diagnostic sink cannot undo the successful data/commit disposition.
+                let _ = writeln!(
                     stderr,
                     "optimizer: warning: {}: {}",
                     warning.code, warning.message
-                )?;
+                );
             }
             Ok(())
         }
@@ -3564,7 +3560,7 @@ fn write_error_json(
 mod tests {
     use super::{
         Cli, CliExitCode, OutputFormat, RestoreModeArg, SafeCliError, app_error,
-        collision_plan_value, execute_cli, is_safety_backup_failure, render_error,
+        collision_plan_value, is_safety_backup_failure, progress, render_error,
         replace_review_token, restore_authorization,
     };
     use clap::Parser;
@@ -3679,7 +3675,9 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        let Err((command, error)) = runtime.block_on(execute_cli(cli, cancellation)) else {
+        let Err((command, error)) =
+            runtime.block_on(progress::run(cli, cancellation, &mut std::io::sink()))
+        else {
             return Err("pre-cancelled export unexpectedly succeeded".into());
         };
         assert_eq!(command, "projects.export");

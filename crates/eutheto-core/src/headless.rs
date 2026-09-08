@@ -30,6 +30,10 @@ use std::sync::Arc;
 mod solve;
 pub use solve::*;
 
+#[path = "headless_export.rs"]
+mod export;
+pub use export::StoredResultExport;
+
 /// Database-independent scenario operations. All identity, time and pack authority is injected.
 #[derive(Clone)]
 pub struct HeadlessService {
@@ -363,4 +367,32 @@ pub(super) fn initialize_document(
     }
     control.check().map_err(operation_interrupted)?;
     Ok(document)
+}
+
+impl super::EuthetoApp {
+    /// Fully validates one captured stored revision without exporting unrelated retained data.
+    ///
+    /// The returned revision identifies the immutable input of the report. Fast live validation
+    /// and the public query DTO remain unchanged.
+    ///
+    /// # Errors
+    /// Rejects missing, malformed or unsupported input and operation interruption.
+    pub async fn validate_stored_full(
+        &self,
+        scenario_id: ScenarioId,
+    ) -> Result<(Revision, DomainValidationReport), AppError> {
+        let control = OperationControl::Cancellation(self.cancellation.clone());
+        control.check().map_err(operation_interrupted)?;
+        let mutation = self.scenario_lock(scenario_id).await;
+        let _guard = mutation.lock().await;
+        let project = self
+            .store
+            .get_project(scenario_id)
+            .await
+            .map_err(store_error)?;
+        control.check().map_err(operation_interrupted)?;
+        let snapshot = super::portable_scenario(&project, false);
+        let report = self.headless_service().validate_full(&snapshot, &control)?;
+        Ok((snapshot.revision, report))
+    }
 }

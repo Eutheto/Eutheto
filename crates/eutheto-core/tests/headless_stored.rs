@@ -113,14 +113,17 @@ impl Fixture {
         Ok(StoredSolveRequest {
             request_id: id(300).parse()?,
             scenario_id: self.document.scenario_id,
-            expected_revision: Revision::INITIAL,
+            expected_revision: Some(Revision::INITIAL),
             options: options()?,
         })
     }
 
     fn seed_run(&self, request: &StoredSolveRequest) -> TestResult<NewSolveRunV1> {
+        let expected_revision = request
+            .expected_revision
+            .ok_or("seed requires an explicit revision")?;
         let context = CompileContext {
-            scenario_revision: request.expected_revision.value(),
+            scenario_revision: expected_revision.value(),
             semantic_metadata: BTreeMap::new(),
             control: OperationControl::Cancellation(CancellationToken::default()),
             planning_limits: PlanningIrLimitsV1::DEFAULT,
@@ -135,7 +138,7 @@ impl Fixture {
             run_id: id(400).parse()?,
             request_id: request.request_id,
             scenario_id: request.scenario_id,
-            expected_revision: request.expected_revision,
+            expected_revision,
             planning_ir_schema_version: problem.schema_version,
             compiler_version: problem.metadata.compiler_version.clone(),
             application_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -270,14 +273,14 @@ async fn running_and_terminal_retries_preserve_original_authority_before_current
     assert!(running.report.is_none());
     assert!(running.portable_result().is_none());
     assert!(running.accepted_result_id().is_none());
-    assert_eq!(
-        fixture
-            .store
-            .load_solve_input(started.input.run_id)
-            .await?
-            .document,
-        fixture.document
-    );
+    let frozen = fixture.store.load_solve_input(started.input.run_id).await?;
+    assert_eq!(frozen.document, fixture.document);
+    let mut capture_request = request.clone();
+    capture_request.expected_revision = None;
+    let captured_retry = Box::pin(app.solve_stored(capture_request.clone(), &mut Progress))
+        .await
+        .map_err(boxed)?;
+    assert_eq!(captured_retry.state(), running.state());
 
     let mut changed_options = request.clone();
     changed_options.options.random_seed += 1;
@@ -321,6 +324,10 @@ async fn running_and_terminal_retries_preserve_original_authority_before_current
     assert!(terminal.report.is_none());
     assert!(terminal.portable_result().is_none());
     assert!(terminal.accepted_result_id().is_none());
+    let captured_terminal = Box::pin(app.solve_stored(capture_request, &mut Progress))
+        .await
+        .map_err(boxed)?;
+    assert_eq!(captured_terminal.state(), terminal.state());
     assert!(matches!(
         Box::pin(app.solve_stored(changed_options, &mut Progress)).await,
         Err(StoredSolveFailure::BeforeStart(AppError::Validation(_)))
@@ -511,5 +518,40 @@ async fn backend_failure_and_post_start_cancellation_commit_truthful_terminal_st
         assert!(retry.report.is_none());
         assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_revision_capture_is_explicit_and_observed_revision_conflicts_never_rebase()
+-> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture.advance_revision().await?;
+    let mut dependencies = fixture.dependencies()?;
+    dependencies.ids = Arc::new(FixedIdGenerator::new([id(400).parse()?, id(401).parse()?]));
+    let (registry, backend) = failing_registry(None)?;
+    let app = fixture.app(registry, dependencies);
+    let mut request = fixture.request()?;
+    assert!(matches!(
+        Box::pin(app.solve_stored(request.clone(), &mut Progress)).await,
+        Err(StoredSolveFailure::BeforeStart(AppError::Conflict {
+            expected_revision,
+            actual_revision,
+        })) if expected_revision == Revision::INITIAL && actual_revision == Revision::new(1)
+    ));
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 0);
+    request.expected_revision = None;
+    let outcome = Box::pin(app.solve_stored(request, &mut Progress))
+        .await
+        .map_err(boxed)?;
+    assert_eq!(outcome.state().input.scenario_revision, 1);
+    let captured = fixture
+        .store
+        .load_solve_input(outcome.state().input.run_id)
+        .await?;
+    assert_eq!(
+        captured.document.domain.entities[&id(1).parse()?]["name"],
+        "River at the newer revision"
+    );
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
     Ok(())
 }

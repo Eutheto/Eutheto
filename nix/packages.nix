@@ -14,6 +14,7 @@ let
   eutheto-cli = import ./eutheto-cli.nix {
     pkgs = packagePkgs;
     inherit src;
+    ortools-worker = if supportsOrtoolsWorker then ortools-worker else null;
   };
   solver-artifact-tool = import ./solver-artifact-tool.nix {
     pkgs = packagePkgs;

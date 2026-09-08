@@ -93,6 +93,13 @@ enum SolverCommand {
     BuildNative,
     /// Build a desktop bundle from one trusted, manifest-bound sidecar handoff.
     BuildDesktop,
+    /// Build and atomically publish a manifest-bound CLI and worker image.
+    BuildCli,
+    /// Exercise a relocated packaged CLI through real file and stored Workforce solves.
+    SmokeCli {
+        #[arg(long)]
+        image: PathBuf,
+    },
     /// Build the pinned Nix worker and atomically stage its Tauri sidecar.
     InstallFromNix,
     /// Validate and handshake with one exact packaged worker/resource pair.
@@ -248,6 +255,8 @@ fn run_solver(command: SolverCommand) -> Result<()> {
         ),
         SolverCommand::BuildNative => solver::build_native(&repository_root()?),
         SolverCommand::BuildDesktop => solver::build_desktop(&repository_root()?),
+        SolverCommand::BuildCli => solver::build_cli(&repository_root()?),
+        SolverCommand::SmokeCli { image } => solver::smoke_cli(&repository_root()?, &image),
         SolverCommand::InstallFromNix => solver::install_from_nix(&repository_root()?),
         SolverCommand::Smoke {
             executable,
