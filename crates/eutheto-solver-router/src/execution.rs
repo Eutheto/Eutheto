@@ -21,6 +21,7 @@ pub enum CandidateReview {
     Verified { objective_matches: bool },
     VerificationFailed { diagnostic_code: String },
     Interrupted(OperationInterruption),
+    ResourceLimitExceeded,
 }
 
 /// Authority injected by the application layer after projection and independent verification exist.
@@ -71,6 +72,7 @@ pub enum AttemptTermination {
     VerificationQuarantined { diagnostic_code: String },
     ReviewCancelled,
     ReviewDeadlineExceeded,
+    ReviewResourceLimitExceeded,
     ParentCancelled,
     ParentDeadlineExceeded,
 }
@@ -110,6 +112,7 @@ pub enum ExecutionTerminalReason {
     CandidateVerified,
     VerificationQuarantined,
     SharedOutputLimitExhausted,
+    ReviewResourceLimitExceeded,
     ParentDeadlineExceeded,
     Cancelled,
 }
@@ -1121,6 +1124,20 @@ fn review_candidates(
                 };
             }
             CandidateReview::Interrupted(reason) => return interrupted_review(reason),
+            CandidateReview::ResourceLimitExceeded => {
+                return CandidateDisposition {
+                    termination: AttemptTermination::ReviewResourceLimitExceeded,
+                    status: SolveStatus::NoSolutionWithinLimit,
+                    reason: ExecutionTerminalReason::ReviewResourceLimitExceeded,
+                    selected_candidate: None,
+                    diagnostic: Some(RouterDiagnostic {
+                        code: "verification.resource_limit".to_owned(),
+                        message:
+                            "Independent verification could not complete within its resource limit."
+                                .to_owned(),
+                    }),
+                };
+            }
             CandidateReview::Verified { objective_matches } => {
                 return CandidateDisposition {
                     termination: AttemptTermination::CandidateVerified,

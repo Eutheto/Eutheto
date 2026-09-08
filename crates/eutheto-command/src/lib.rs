@@ -69,6 +69,9 @@ pub enum CommandError {
     /// Cancellation observed before the pure mutation completed.
     #[error("command application was cancelled")]
     Cancelled,
+    /// A domain operation exhausted a finite allowance without completing the mutation.
+    #[error("command application exceeded its resource limit")]
+    ResourceLimitExceeded,
     /// The command targets a different scenario.
     #[error(
         "command scenario {command_scenario_id} does not match document scenario {document_scenario_id}"
@@ -113,6 +116,7 @@ impl CommandError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Cancelled => "command.cancelled",
+            Self::ResourceLimitExceeded => "command.resource_limit",
             Self::ScenarioMismatch { .. } => "command.scenario_mismatch",
             Self::Conflict { .. } => "command.revision_conflict",
             Self::Validation { code, .. } => code,
@@ -1075,6 +1079,9 @@ fn domain_change(value: Value) -> Result<Change, CommandError> {
 fn domain_pack_error(error: &DomainPackError) -> CommandError {
     if matches!(error, DomainPackError::Cancelled) {
         return CommandError::Cancelled;
+    }
+    if matches!(error, DomainPackError::ResourceLimitExceeded) {
+        return CommandError::ResourceLimitExceeded;
     }
     validation_error(
         CODE_INVALID_RECORD_SHAPE,

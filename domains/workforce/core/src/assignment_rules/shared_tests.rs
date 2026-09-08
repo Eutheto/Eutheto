@@ -221,7 +221,7 @@ fn exact_resource_limits_fail_safely_without_claiming_expired_deadlines() -> Res
         );
         assert!(matches!(
             DomainPackError::from(error),
-            DomainPackError::Contract(_)
+            DomainPackError::ResourceLimitExceeded
         ));
     }
     let mut budget = OperationBudget::analysis(None, limits);
@@ -425,5 +425,46 @@ fn weekly_expansion_observes_real_cancellation_inside_date_iteration() -> Result
     let result = availability_intervals(&record, shift, &settings, &mut budget);
     assert!(matches!(result, Err(AssignmentRuleError::Cancelled)));
     assert!(token.is_cancelled());
+    Ok(())
+}
+
+#[test]
+fn negative_numeric_ceilings_are_invalid_configuration_not_exhaustion() {
+    for limits in [
+        PlanningIrLimitsV1 {
+            max_abs_value: -1,
+            ..PlanningIrLimitsV1::DEFAULT
+        },
+        PlanningIrLimitsV1 {
+            max_abs_coefficient: -1,
+            ..PlanningIrLimitsV1::DEFAULT
+        },
+    ] {
+        assert!(matches!(
+            super::budget::effective_limits(limits),
+            Err(AssignmentRuleError::InvalidConstruction(
+                super::AssignmentConstructionIssue::InvalidRecord
+            ))
+        ));
+    }
+}
+
+#[test]
+fn resource_bounded_validation_never_calls_the_document_malformed() -> Result {
+    let mut document = support::fixture()?;
+    document.metadata.description =
+        "x".repeat(eutheto_domain_api::ContractJsonLimits::DEFAULT.max_string_bytes + 1);
+    let report = eutheto_domain_api::DomainPack::validate_fast(&crate::WorkforcePack, &document);
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].code, "official.workforce.limit.resource");
+    assert_eq!(
+        report.issues[0].severity,
+        eutheto_types::ValidationSeverity::Error
+    );
+    let control = eutheto_types::OperationControl::Cancellation(CancellationToken::new());
+    assert_eq!(
+        eutheto_domain_api::DomainPack::validate_full(&crate::WorkforcePack, &document, &control),
+        Err(DomainPackError::ResourceLimitExceeded)
+    );
     Ok(())
 }

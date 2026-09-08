@@ -156,6 +156,9 @@ pub enum MigrationFailure {
     Invalid(String),
     #[error("domain validation failed")]
     Validation(ValidationReport),
+    /// Domain conversion could not complete within a finite operation allowance.
+    #[error("domain conversion exceeded its resource limit")]
+    ResourceLimitExceeded,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

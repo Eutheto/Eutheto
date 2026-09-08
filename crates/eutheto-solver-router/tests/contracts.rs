@@ -1885,6 +1885,110 @@ async fn candidate_review_obeys_parent_deadline_before_acceptance() -> TestResul
 }
 
 #[tokio::test]
+async fn resource_limited_review_has_no_fallback_or_result_and_parent_control_wins() -> TestResult {
+    struct ResourceReview {
+        clock: FixedMonotonicClock,
+        cancellation: CancellationToken,
+        stop: Option<eutheto_types::OperationInterruption>,
+    }
+    impl CandidateReviewer for ResourceReview {
+        fn review(&mut self, _: &BackendId, _: &BackendCandidate) -> CandidateReview {
+            match self.stop {
+                Some(eutheto_types::OperationInterruption::Cancelled) => self.cancellation.cancel(),
+                Some(eutheto_types::OperationInterruption::DeadlineExceeded)
+                    if self.clock.advance(Duration::from_secs(1)).is_err() =>
+                {
+                    return CandidateReview::VerificationFailed {
+                        diagnostic_code: "test.clock_failed".to_owned(),
+                    };
+                }
+                Some(eutheto_types::OperationInterruption::DeadlineExceeded) | None => {}
+            }
+            CandidateReview::ResourceLimitExceeded
+        }
+    }
+    for (stop, status, reason, termination) in [
+        (
+            None,
+            SolveStatus::NoSolutionWithinLimit,
+            ExecutionTerminalReason::ReviewResourceLimitExceeded,
+            AttemptTermination::ReviewResourceLimitExceeded,
+        ),
+        (
+            Some(eutheto_types::OperationInterruption::Cancelled),
+            SolveStatus::Cancelled,
+            ExecutionTerminalReason::Cancelled,
+            AttemptTermination::ReviewCancelled,
+        ),
+        (
+            Some(eutheto_types::OperationInterruption::DeadlineExceeded),
+            SolveStatus::NoSolutionWithinLimit,
+            ExecutionTerminalReason::ParentDeadlineExceeded,
+            AttemptTermination::ReviewDeadlineExceeded,
+        ),
+    ] {
+        let clock = FixedMonotonicClock::default();
+        let cancellation = CancellationToken::new();
+        let registry = registry(
+            vec![
+                (
+                    "tests.a",
+                    Behavior::Outcome(BackendTerminationReason::CandidateFound, true, 1, 0),
+                    false,
+                ),
+                (
+                    "tests.b",
+                    Behavior::Outcome(BackendTerminationReason::InfeasibilityClaimed, false, 1, 0),
+                    false,
+                ),
+            ],
+            &clock,
+        )?;
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1_000)?,
+            Arc::new(clock.clone()),
+            cancellation.clone(),
+        )?;
+        let mut reviewer = ResourceReview {
+            clock,
+            cancellation,
+            stop,
+        };
+        let result = SolverRouter::new(&registry)
+            .execute(
+                Arc::new(problem()?),
+                options(BackendSelection::Auto)?,
+                &parent,
+                DurationMillis::ZERO,
+                &mut Progress,
+                &mut reviewer,
+            )
+            .await
+            .record;
+        assert_eq!(result.invocation_count, 1);
+        assert_eq!(result.terminal_status, status);
+        assert_eq!(result.terminal_reason, reason);
+        assert_eq!(result.attempts[0].termination, termination);
+        assert!(!result.attempts[0].fallback_eligible);
+        assert!(!result.attempts[0].fallback_taken);
+        assert!(result.selected_candidate.is_none());
+        assert!(result.first_verified_feasible_milliseconds.is_none());
+        if stop.is_none() {
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "verification.resource_limit")
+            );
+            let roundtrip: RouterExecutionRecord =
+                serde_json::from_slice(&serde_json::to_vec(&result)?)?;
+            assert_eq!(roundtrip, result);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn execution_record_persists_deterministic_routed_request_and_outcome_evidence() -> TestResult
 {
     let behavior = Behavior::Outcome(BackendTerminationReason::InfeasibilityClaimed, false, 1, 0);

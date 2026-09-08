@@ -342,9 +342,9 @@ pub(super) fn initialize_document(
     control: &OperationControl,
 ) -> Result<ScenarioDocument, AppError> {
     control.check().map_err(operation_interrupted)?;
-    let document = pack
-        .new_document(shell.clone())
-        .map_err(|_| project_initialization_error())?;
+    let document = pack.new_document(shell.clone()).map_err(|error| {
+        domain_interruption(&error).unwrap_or_else(project_initialization_error)
+    })?;
     if document.format != shell.format
         || document.format_version != shell.format_version
         || document.scenario_id != shell.scenario_id

@@ -102,7 +102,11 @@ pub(crate) fn validate_workforce_full(
         Ok(analysis) => Ok(analysis.validation),
         Err(
             error @ (super::AssignmentRuleError::Cancelled
-            | super::AssignmentRuleError::BudgetExpired),
+            | super::AssignmentRuleError::BudgetExpired
+            | super::AssignmentRuleError::LimitExceeded(_)
+            | super::AssignmentRuleError::InvalidDocument(
+                DomainPackError::ResourceLimitExceeded,
+            )),
         ) => Err(operation_error(&error)),
         Err(error) => Ok(DomainValidationReport {
             issues: vec![error.validation_issue()],
@@ -125,6 +129,14 @@ fn render_validation(
     }
     let report = match analyze_with_budget(document, budget, PlanningIrLimitsV1::DEFAULT) {
         Ok(analysis) => analysis.validation,
+        Err(
+            error @ (super::AssignmentRuleError::Cancelled
+            | super::AssignmentRuleError::BudgetExpired
+            | super::AssignmentRuleError::LimitExceeded(_)
+            | super::AssignmentRuleError::InvalidDocument(
+                DomainPackError::ResourceLimitExceeded,
+            )),
+        ) => return Err(operation_error(&error)),
         Err(error) => DomainValidationReport {
             issues: vec![error.validation_issue()],
         },
@@ -299,5 +311,33 @@ const fn severity(value: ValidationSeverity) -> ExplanationValidationSeverity {
         ValidationSeverity::Info => ExplanationValidationSeverity::Information,
         ValidationSeverity::Warning => ExplanationValidationSeverity::ReviewSuggested,
         ValidationSeverity::Error => ExplanationValidationSeverity::MustFix,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_validation_is_not_rendered_as_a_current_finding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let document = crate::test_support::fixture()?;
+        let code = "official.workforce.limit.work_steps";
+        let issue = ValidationIssueEvidenceV1 {
+            issue_id: eutheto_domain_ir::VerificationIssueId::new(code)?,
+            severity: ExplanationValidationSeverity::MustFix,
+            message_key: code.to_owned(),
+            parameters: BTreeMap::new(),
+            field_path: None,
+            entity: None,
+            rule_id: None,
+        };
+        let mut budget = OperationBudget::evaluation(None);
+        budget.steps(super::super::budget::MAX_WORK_STEPS)?;
+        assert!(matches!(
+            render_validation(&document, &issue, &mut budget),
+            Err(DomainPackError::ResourceLimitExceeded)
+        ));
+        Ok(())
     }
 }

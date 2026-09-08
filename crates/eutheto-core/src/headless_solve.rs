@@ -797,6 +797,9 @@ fn preparation_failure(
         AppError::Protocol(failure) if failure.code == "solve.clock_invalid" => {
             SolveStatus::BackendFailed
         }
+        AppError::Protocol(failure) if failure.code == "operation.resource_limit" => {
+            SolveStatus::NoSolutionWithinLimit
+        }
         _ => SolveStatus::InvalidModel,
     };
     Box::new(SolvePreparationFailure {

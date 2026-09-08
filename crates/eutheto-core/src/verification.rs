@@ -99,6 +99,9 @@ impl CandidateReviewer for RouterCandidateReviewer<'_> {
                     == BackendObjectiveReconciliation::Matched,
             },
             AcceptanceDecision::Interrupted { reason, .. } => CandidateReview::Interrupted(*reason),
+            AcceptanceDecision::ResourceLimitExceeded { .. } => {
+                CandidateReview::ResourceLimitExceeded
+            }
             AcceptanceDecision::Quarantined { alarm, .. } => CandidateReview::VerificationFailed {
                 diagnostic_code: alarm.diagnostic_code.clone(),
             },
@@ -167,7 +170,8 @@ fn decision_timings(decision: &AcceptanceDecision) -> AcceptancePhaseTimings {
     match decision {
         AcceptanceDecision::Accepted { timings, .. }
         | AcceptanceDecision::Quarantined { timings, .. }
-        | AcceptanceDecision::Interrupted { timings, .. } => *timings,
+        | AcceptanceDecision::Interrupted { timings, .. }
+        | AcceptanceDecision::ResourceLimitExceeded { timings } => *timings,
         AcceptanceDecision::Awaiting => AcceptancePhaseTimings::default(),
     }
 }

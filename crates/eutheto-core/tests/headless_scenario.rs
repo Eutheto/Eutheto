@@ -207,6 +207,66 @@ fn standalone_ingress_preserves_opaque_data_and_reports_migration_but_requires_d
 }
 
 #[test]
+fn bounded_domain_work_is_operational_during_portable_io_and_mutation() -> Result<(), Box<dyn Error>>
+{
+    let service = HeadlessService::new(
+        Arc::new(FixedClock::new("2026-09-07T12:00:00Z".parse()?)),
+        Arc::new(FixedMonotonicClock::default()),
+        Arc::new(FixedIdGenerator::new([id(400).parse()?])),
+    )
+    .boxed()?;
+    let cancellation = CancellationToken::default();
+    let control = OperationControl::Cancellation(cancellation.clone());
+    let mut source = snapshot()?;
+    let mut wire: Value =
+        serde_json::from_slice(&service.encode_scenario(&source, &control).boxed()?)?;
+    // Valid host metadata can exceed a pack's smaller finite inspection allowance.
+    source.document.metadata.description =
+        "x".repeat(eutheto_domain_api::ContractJsonLimits::DEFAULT.max_string_bytes + 1);
+    wire["metadata"]["description"] = json!(source.document.metadata.description);
+    let envelope = rename_person(&source, "River revised")?;
+    for (operation, error) in [
+        (
+            "decode",
+            service
+                .decode_scenario(&serde_json::to_vec(&wire)?, &control)
+                .err(),
+        ),
+        (
+            "legacy decode",
+            service
+                .decode_scenario(&serde_json::to_vec(&source)?, &control)
+                .err(),
+        ),
+        (
+            "creation",
+            service
+                .create_scenario(
+                    source.document.metadata.title.clone(),
+                    source.document.metadata.description.clone(),
+                    source.document.domain_pack.clone(),
+                    source.document.settings.clone(),
+                    &control,
+                )
+                .err(),
+        ),
+        ("encode", service.encode_scenario(&source, &control).err()),
+        (
+            "mutation",
+            service
+                .apply_scenario(source, &envelope, &cancellation)
+                .err(),
+        ),
+    ] {
+        assert!(
+            matches!(&error, Some(AppError::Protocol(failure)) if failure.code == "operation.resource_limit"),
+            "{operation}: {error:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn full_readiness_reports_impossible_coverage_as_a_finding_not_malformed_input()
 -> Result<(), Box<dyn Error>> {
     let service = service()?;

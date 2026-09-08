@@ -522,6 +522,50 @@ async fn backend_failure_and_post_start_cancellation_commit_truthful_terminal_st
 }
 
 #[tokio::test]
+async fn compilation_resource_limit_starts_no_run_and_preserves_stored_revision() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let (registry, backend) = failing_registry(None)?;
+    let app = fixture.app(registry, fixture.dependencies()?);
+    let mut request = fixture.request()?;
+    request.options.resource_limits.max_variables = 1;
+    let Err(StoredSolveFailure::Preparation(failure)) =
+        Box::pin(app.solve_stored(request.clone(), &mut Progress)).await
+    else {
+        return Err("resource-limited compilation did not fail before admission".into());
+    };
+    assert_eq!(failure.status, SolveStatus::NoSolutionWithinLimit);
+    assert!(matches!(
+        failure.error,
+        AppError::Protocol(ref error) if error.code == "operation.resource_limit"
+    ));
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 0);
+    assert!(
+        fixture
+            .store
+            .load_solve_run_by_request(request.request_id)
+            .await?
+            .is_none()
+    );
+    assert!(
+        fixture
+            .store
+            .list_accepted_results(request.scenario_id)
+            .await?
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_project(request.scenario_id)
+            .await?
+            .summary
+            .revision,
+        Revision::INITIAL
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn current_revision_capture_is_explicit_and_observed_revision_conflicts_never_rebase()
 -> TestResult {
     let fixture = Fixture::new().await?;
