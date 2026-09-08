@@ -1077,6 +1077,60 @@ fn serialization_hash_is_canonical_context_sensitive_and_display_independent()
 }
 
 #[test]
+fn objective_policy_hash_binds_priority_but_not_unrelated_model_structure()
+-> Result<(), Box<dyn Error>> {
+    let mut problem = base_problem()?;
+    for name in ["x", "y"] {
+        problem.objectives.levels.push(ObjectiveLevel {
+            id: ObjectiveLevelId::new(format!("level.{name}"))?,
+            direction: OptimizationDirection::Minimize,
+            lower_bound: 0,
+            upper_bound: 20,
+            terms: vec![ObjectiveTerm {
+                id: ObjectiveTermId::new(format!("objective.{name}"))?,
+                expression: LinearExpression::new(
+                    vec![LinearTerm {
+                        variable: int_id(name)?,
+                        coefficient: 1,
+                    }],
+                    10,
+                )?,
+                kind: ObjectiveTermKind::Penalty,
+                category: ScoreCategoryId::new("score.preference")?,
+                provenance: provenance_id()?,
+            }],
+            provenance: provenance_id()?,
+        });
+    }
+    problem.canonicalize()?;
+    let hash = canonical_objective_policy_hash(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    problem
+        .constraints
+        .push(record("extra", Constraint::bool_and(Vec::new()))?);
+    problem.metadata.scenario_revision += 1;
+    problem.canonicalize()?;
+    assert_eq!(
+        hash,
+        canonical_objective_policy_hash(&problem, PlanningIrLimitsV1::DEFAULT)?
+    );
+    problem.objectives.levels.reverse();
+    assert_ne!(
+        hash,
+        canonical_objective_policy_hash(&problem, PlanningIrLimitsV1::DEFAULT)?
+    );
+    problem.objectives.levels.reverse();
+    problem.objectives.levels[0].terms[0].expression.terms[0].coefficient = 0;
+    assert!(canonical_objective_policy_hash(&problem, PlanningIrLimitsV1::DEFAULT).is_err());
+    problem.objectives.levels[0].terms[0].expression.terms[0].coefficient = 1;
+    problem.objectives.levels[0].direction = OptimizationDirection::Maximize;
+    assert_ne!(
+        hash,
+        canonical_objective_policy_hash(&problem, PlanningIrLimitsV1::DEFAULT)?
+    );
+    Ok(())
+}
+
+#[test]
 fn strict_parser_rejects_unsupported_versions_and_field() -> Result<(), Box<dyn Error>> {
     let problem = base_problem()?;
     let mut value = serde_json::to_value(&problem)?;

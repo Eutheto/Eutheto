@@ -1,10 +1,10 @@
 use crate::decision::{DecisionStatus, RouterDiagnostic, RouterPolicy, RoutingDecision};
 use eutheto_planning_ir::{PlanningProblem, PlanningProblemSummary};
 use eutheto_solver_api::{
-    BackendCandidate, BackendError, BackendSolveOutcome, BackendStopReason,
-    BackendTerminationReason, BoundedBackendOutput, CompatibilityReport, OutcomeError, OutputError,
-    PreflightError, ProgressSink, SolveProgressEvent, SolveRequest, SolverApiLimits, SolverBackend,
-    SolverRegistry, preflight, validate_outcome,
+    BackendCandidate, BackendError, BackendOutputSink, BackendSolveOutcome, BackendStopReason,
+    BackendTerminationReason, BoundedBackendOutput, CandidateSubmission, CompatibilityReport,
+    OutcomeError, OutputError, PreflightError, ProgressSink, SolveProgressEvent, SolveRequest,
+    SolverApiLimits, SolverBackend, SolverRegistry, preflight, validate_outcome,
 };
 use eutheto_types::{
     BackendId, BackendSelection, DurationMillis, OperationInterruption, ParentSolveBudget,
@@ -12,6 +12,7 @@ use eutheto_types::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// External verification decision. The router never manufactures this evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,6 +130,83 @@ pub struct RouterExecutionRecord {
     pub diagnostics: Vec<RouterDiagnostic>,
 }
 
+/// Parent-clock observations, deliberately separate from the serialized routing record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RouterObservations {
+    /// Elapsed parent time at router entry, for translation to the operation origin.
+    pub started_after: Duration,
+    /// Elapsed parent time at router completion, including no-dispatch terminal paths.
+    pub finished_after: Duration,
+    /// Sum of backend invocation spans only; independent review is excluded.
+    pub backend_elapsed: Duration,
+    /// First retained candidate offset from router entry, not a backend-supplied timestamp.
+    pub first_candidate_after: Option<Duration>,
+    /// Full-precision verified offset; consumers translate to their operation origin before rounding.
+    pub first_verified_feasible_after: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RouterExecution {
+    pub record: RouterExecutionRecord,
+    /// Absent on a regressing or unrepresentable parent-clock observation.
+    /// Such an execution cannot supply authoritative timing for accepted persistence.
+    pub observations: Option<RouterObservations>,
+}
+
+struct ObservationState {
+    observations: Option<RouterObservations>,
+    last_elapsed: Duration,
+}
+
+impl ObservationState {
+    fn new(parent: &ParentSolveBudget) -> Self {
+        let start = parent.checked_elapsed();
+        Self {
+            observations: start.map(|started_after| RouterObservations {
+                started_after,
+                finished_after: started_after,
+                backend_elapsed: Duration::ZERO,
+                first_candidate_after: None,
+                first_verified_feasible_after: None,
+            }),
+            last_elapsed: start.unwrap_or(Duration::ZERO),
+        }
+    }
+
+    fn sample(&mut self, parent: &ParentSolveBudget) -> Option<Duration> {
+        let elapsed = parent
+            .checked_elapsed()
+            .filter(|time| *time >= self.last_elapsed);
+        if let Some(elapsed) = elapsed {
+            self.last_elapsed = elapsed;
+        } else {
+            self.observations = None;
+        }
+        elapsed
+    }
+
+    fn retain_candidate(&mut self, parent: &ParentSolveBudget) {
+        let elapsed = self.sample(parent);
+        if let Some(observations) = &mut self.observations
+            && observations.first_candidate_after.is_none()
+        {
+            observations.first_candidate_after =
+                elapsed.and_then(|time| time.checked_sub(observations.started_after));
+        }
+    }
+
+    fn finish_backend(&mut self, parent: &ParentSolveBudget, start: Option<Duration>) {
+        let end = self.sample(parent);
+        let elapsed = start
+            .zip(end)
+            .and_then(|(start, end)| end.checked_sub(start));
+        self.observations = self.observations.take().and_then(|mut observations| {
+            observations.backend_elapsed = observations.backend_elapsed.checked_add(elapsed?)?;
+            Some(observations)
+        });
+    }
+}
+
 pub struct SolverRouter<'a> {
     registry: &'a SolverRegistry,
     policy: RouterPolicy,
@@ -141,10 +219,15 @@ struct ExecutionState {
     attempts: Vec<AttemptRecord>,
     counter: BackendInvocationCounter,
     diagnostics: Vec<RouterDiagnostic>,
+    observation: ObservationState,
 }
 
 impl ExecutionState {
-    fn new(decision: RoutingDecision, solve_options: SolveOptions) -> Self {
+    fn new(
+        decision: RoutingDecision,
+        solve_options: SolveOptions,
+        observation: ObservationState,
+    ) -> Self {
         let diagnostics = decision.diagnostics.clone();
         Self {
             decision,
@@ -152,20 +235,34 @@ impl ExecutionState {
             attempts: Vec::new(),
             counter: BackendInvocationCounter::default(),
             diagnostics,
+            observation,
         }
     }
 
-    fn finish(self, policy: RouterPolicy, terminal: Terminal) -> RouterExecutionRecord {
-        RouterExecutionRecord {
-            decision: self.decision,
-            solve_options: self.solve_options,
-            attempts: self.attempts,
-            invocation_count: self.counter.value(),
-            terminal_status: terminal.status,
-            terminal_reason: terminal.reason,
-            selected_candidate: terminal.selected_candidate,
-            first_verified_feasible_milliseconds: None,
-            diagnostics: policy.bounded_diagnostics(self.diagnostics),
+    fn finish(
+        mut self,
+        policy: RouterPolicy,
+        terminal: Terminal,
+        parent: &ParentSolveBudget,
+    ) -> RouterExecution {
+        if let Some(finished_after) = self.observation.sample(parent)
+            && let Some(observations) = &mut self.observation.observations
+        {
+            observations.finished_after = finished_after;
+        }
+        RouterExecution {
+            observations: self.observation.observations,
+            record: RouterExecutionRecord {
+                decision: self.decision,
+                solve_options: self.solve_options,
+                attempts: self.attempts,
+                invocation_count: self.counter.value(),
+                terminal_status: terminal.status,
+                terminal_reason: terminal.reason,
+                selected_candidate: terminal.selected_candidate,
+                first_verified_feasible_milliseconds: None,
+                diagnostics: policy.bounded_diagnostics(self.diagnostics),
+            },
         }
     }
 }
@@ -207,6 +304,7 @@ struct AttemptInputs<'a> {
     problem: &'a Arc<PlanningProblem>,
     summary: &'a PlanningProblemSummary,
     parent_budget: &'a ParentSolveBudget,
+    acceptance_reserve: DurationMillis,
     progress: &'a mut dyn ProgressSink,
     reviewer: &'a mut dyn CandidateReviewer,
     position: usize,
@@ -232,6 +330,7 @@ impl AttemptInputs<'_> {
             attempt_options,
             self.parent_budget,
             profile.map(super::profile::RoutingProfile::backend_cap),
+            self.acceptance_reserve,
         )
         .ok()
     }
@@ -402,14 +501,15 @@ impl<'a> SolverRouter<'a> {
         problem: Arc<PlanningProblem>,
         options: SolveOptions,
         parent_budget: &ParentSolveBudget,
+        acceptance_reserve: DurationMillis,
         progress: &mut dyn ProgressSink,
         reviewer: &mut dyn CandidateReviewer,
-    ) -> RouterExecutionRecord {
-        let initial_remaining = parent_budget.snapshot().remaining_milliseconds;
+    ) -> RouterExecution {
+        let observation = ObservationState::new(parent_budget);
         let decision = self.decide(&problem, &options);
-        let mut state = ExecutionState::new(decision, options);
+        let mut state = ExecutionState::new(decision, options, observation);
         if let Some(terminal) = initial_terminal(state.decision.status) {
-            return state.finish(self.policy, terminal);
+            return state.finish(self.policy, terminal, parent_budget);
         }
         let Some(summary) = state.decision.summary.clone() else {
             return state.finish(
@@ -418,6 +518,7 @@ impl<'a> SolverRouter<'a> {
                     SolveStatus::InvalidModel,
                     ExecutionTerminalReason::InvalidModel,
                 ),
+                parent_budget,
             );
         };
         let order = backend_order(&state.decision);
@@ -428,6 +529,7 @@ impl<'a> SolverRouter<'a> {
                 problem: &problem,
                 summary: &summary,
                 parent_budget,
+                acceptance_reserve,
                 progress,
                 reviewer,
                 position,
@@ -440,14 +542,19 @@ impl<'a> SolverRouter<'a> {
                 AttemptControl::Continue => {}
                 AttemptControl::Finish(terminal) => {
                     let verified = terminal.reason == ExecutionTerminalReason::CandidateVerified;
-                    let mut record = state.finish(self.policy, terminal);
+                    let elapsed = state.observation.sample(parent_budget).and_then(|time| {
+                        time.checked_sub(state.observation.observations.as_ref()?.started_after)
+                    });
+                    let mut execution = state.finish(self.policy, terminal, parent_budget);
                     if verified {
-                        record.first_verified_feasible_milliseconds = Some(elapsed_since(
-                            initial_remaining,
-                            parent_budget.snapshot().remaining_milliseconds,
-                        ));
+                        if let Some(observations) = &mut execution.observations {
+                            observations.first_verified_feasible_after = elapsed;
+                        }
+                        execution.record.first_verified_feasible_milliseconds = elapsed
+                            .and_then(|time| u64::try_from(time.as_millis()).ok())
+                            .and_then(|time| DurationMillis::new(time).ok());
                     }
-                    return record;
+                    return execution;
                 }
             }
         }
@@ -458,9 +565,12 @@ impl<'a> SolverRouter<'a> {
                 SolveStatus::BackendUnavailable,
                 ExecutionTerminalReason::NoCompatibleBackend,
             ),
+            parent_budget,
         )
     }
 
+    // Keep one attempt's preflight, invocation, review and fallback ownership together.
+    #[allow(clippy::too_many_lines)]
     async fn run_attempt(
         &self,
         backend_id: &BackendId,
@@ -495,6 +605,11 @@ impl<'a> SolverRouter<'a> {
                 ExecutionTerminalReason::PreflightRejected,
             ));
         };
+        if let Some(terminal) =
+            pre_dispatch_terminal(request.dispatch_budget(), &mut state.diagnostics)
+        {
+            return AttemptControl::Finish(terminal);
+        }
         let preflight_report =
             match preflight(self.registry.matrix(), backend.descriptor(), &request) {
                 Ok(report) => report,
@@ -506,17 +621,28 @@ impl<'a> SolverRouter<'a> {
                     return AttemptControl::Finish(Terminal::new(status, reason));
                 }
             };
+        if let Some(terminal) =
+            pre_dispatch_terminal(request.dispatch_budget(), &mut state.diagnostics)
+        {
+            return AttemptControl::Finish(terminal);
+        }
         let invocation_index = state.counter.mark_invocation();
         let attempt_limits = remaining_output.limits(self.limits);
         let attempt = AttemptBase::new(backend_id, &request, invocation_index, preflight_report);
+        let backend_started = state.observation.sample(inputs.parent_budget);
         let backend_run = run_backend(
             backend.as_ref(),
             &request,
             inputs.problem,
             &mut *inputs.progress,
             attempt_limits,
+            inputs.parent_budget,
+            &mut state.observation,
         )
         .await;
+        state
+            .observation
+            .finish_backend(inputs.parent_budget, backend_started);
         let output_error = backend_run.as_ref().err().map(ToString::to_string);
         let Ok(backend_run) = backend_run else {
             let Some(error_code) = output_error else {
@@ -606,6 +732,33 @@ fn stopped_after_backend(
     }
 }
 
+fn pre_dispatch_terminal(
+    budget: &eutheto_solver_api::SolveDispatchBudget,
+    diagnostics: &mut Vec<RouterDiagnostic>,
+) -> Option<Terminal> {
+    match budget.stop_reason()? {
+        BackendStopReason::Cancelled => Some(Terminal::new(
+            SolveStatus::Cancelled,
+            ExecutionTerminalReason::Cancelled,
+        )),
+        BackendStopReason::DeadlineExceeded => Some(Terminal::new(
+            SolveStatus::NoSolutionWithinLimit,
+            ExecutionTerminalReason::ParentDeadlineExceeded,
+        )),
+        BackendStopReason::BackendLimitExceeded => {
+            diagnostics.push(RouterDiagnostic {
+                code: "solver.dispatch_budget_exhausted".to_owned(),
+                message: "No backend execution time remains within the original operation budget."
+                    .to_owned(),
+            });
+            Some(Terminal::new(
+                SolveStatus::NoSolutionWithinLimit,
+                ExecutionTerminalReason::PreflightRejected,
+            ))
+        }
+    }
+}
+
 fn pre_attempt_terminal(
     parent_budget: &ParentSolveBudget,
     remaining_output: RemainingOutput,
@@ -686,6 +839,8 @@ async fn run_backend(
     problem: &PlanningProblem,
     progress: &mut dyn ProgressSink,
     limits: SolverApiLimits,
+    parent: &ParentSolveBudget,
+    observation: &mut ObservationState,
 ) -> Result<BackendRun, OutputError> {
     let mut counting_progress = CountingProgress::new(progress);
     let mut output = BoundedBackendOutput::new(
@@ -694,9 +849,14 @@ async fn run_backend(
         request.dispatch_budget(),
         limits,
     )?;
+    let mut observed_output = ObservedOutput {
+        output: &mut output,
+        parent,
+        observation,
+    };
     let completion = match tokio::time::timeout(
         request.dispatch_budget().remaining_backend_duration(),
-        backend.solve(request, &mut output),
+        backend.solve(request, &mut observed_output),
     )
     .await
     {
@@ -728,6 +888,27 @@ async fn run_backend(
         progress_used,
         diagnostic_used: counting_progress.diagnostic_count,
     })
+}
+
+struct ObservedOutput<'a, 'b> {
+    output: &'a mut BoundedBackendOutput<'b>,
+    parent: &'a ParentSolveBudget,
+    observation: &'a mut ObservationState,
+}
+
+impl BackendOutputSink for ObservedOutput<'_, '_> {
+    fn emit_progress(&mut self, event: SolveProgressEvent) -> Result<(), OutputError> {
+        self.output.emit_progress(event)
+    }
+
+    fn submit_candidate(
+        &mut self,
+        candidate: CandidateSubmission,
+    ) -> Result<BackendCandidate, OutputError> {
+        let retained = self.output.submit_candidate(candidate)?;
+        self.observation.retain_candidate(self.parent);
+        Ok(retained)
+    }
 }
 
 fn finish_candidate_attempt(
@@ -1148,9 +1329,4 @@ fn safe_backend_code(error: &BackendError) -> String {
     } else {
         "solver.backend_failure".to_owned()
     }
-}
-
-fn elapsed_since(start: DurationMillis, current: DurationMillis) -> DurationMillis {
-    DurationMillis::new(start.value().saturating_sub(current.value()))
-        .unwrap_or(DurationMillis::MAX)
 }

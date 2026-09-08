@@ -11,14 +11,15 @@ extern crate self as eutheto_export;
 mod portable_encode;
 
 use eutheto_types::{
-    BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, PORTABLE_LARGE_ASSET_BYTES_V1,
-    PortableAsset, PortableDomainDocument, PortableJsonLimits, PortableProjectMetadata, Revision,
-    Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument,
-    ScenarioFormat, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
-    SemanticCapability, collect_scenario_owned_uuids, collect_self_declared_uuids,
-    extract_asset_references, extract_result_dependency, extract_result_id,
-    extract_scenario_references, validate_nonsecret_portable_json,
-    validate_nonsecret_portable_json_bytes, validate_scenario_owned_uuid_uniqueness,
+    BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl,
+    PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PortableDomainDocument, PortableJsonLimits,
+    PortableProjectMetadata, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
+    SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument, ScenarioFormat, ScenarioId,
+    ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, SemanticCapability,
+    collect_scenario_owned_uuids, collect_self_declared_uuids, extract_asset_references,
+    extract_result_dependency, extract_result_id, extract_scenario_references,
+    validate_nonsecret_portable_json, validate_nonsecret_portable_json_bytes,
+    validate_scenario_owned_uuid_uniqueness,
 };
 use image::{ImageFormat, ImageReader, Limits as ImageLimits};
 use serde::de::{IgnoredAny, MapAccess, Visitor};
@@ -2135,22 +2136,22 @@ fn read_zip_entry<R: Read + Seek>(
     Ok(bytes)
 }
 
-/// A verified, owner-private temporary bundle awaiting its atomic no-clobber
+/// A checked, owner-private temporary output awaiting its atomic no-clobber
 /// publication commit point.
-pub struct PreparedBundlePublication {
+pub struct PreparedPublication {
     destination: PathBuf,
     temporary: NamedTempFile,
 }
 
-impl PreparedBundlePublication {
-    /// Atomically publishes the prepared exact bytes unless cancellation was
+impl PreparedPublication {
+    /// Atomically publishes the prepared exact bytes unless operation interruption was
     /// observed before the filesystem commit point.
     ///
     /// # Errors
     ///
     /// Returns a destination, cancellation, or filesystem publication error.
-    pub fn publish_cancellable(self, cancellation: &CancellationToken) -> Result<(), ExportError> {
-        let mut cancelled = || cancellation.is_cancelled();
+    pub fn publish_controlled(self, control: &OperationControl) -> Result<(), ExportError> {
+        let mut cancelled = || control.check().is_err();
         publish_prepared_with_control(self, PublicationFailpoint::None, &mut cancelled)
     }
 }
@@ -2166,11 +2167,41 @@ pub fn prepare_bundle_atomic_cancellable(
     destination: &Path,
     bytes: &[u8],
     cancellation: &CancellationToken,
-) -> Result<PreparedBundlePublication, ExportError> {
+) -> Result<PreparedPublication, ExportError> {
     let mut cancelled = || cancellation.is_cancelled();
     prepare_bundle_atomic_with_control(
         destination,
         bytes,
+        PublicationFailpoint::None,
+        &mut cancelled,
+    )
+}
+
+/// Stages canonical, bounded, nonsecret JSON without publishing it.
+///
+/// This checks portable JSON safety, not domain validity or accepted-result authority;
+/// the application service must supply a semantically validated typed value.
+///
+/// # Errors
+/// Rejects prohibited or oversized JSON, cancellation and temporary-file I/O failure.
+pub fn prepare_json_atomic_controlled<T: Serialize>(
+    destination: &Path,
+    value: &T,
+    control: &OperationControl,
+) -> Result<PreparedPublication, ExportError> {
+    let mut cancelled = || control.check().is_err();
+    check_cancelled(&mut cancelled)?;
+    let value = serde_json::to_value(value)?;
+    validate_safe_value(&value, 0)?;
+    let bytes = canonical_json(&value)?;
+    if u64::try_from(bytes.len()).map_or(true, |length| length > PORTABLE_LIMITS.max_json_bytes) {
+        return Err(ExportError::InvalidModel(
+            "JSON document byte limit exceeded".to_owned(),
+        ));
+    }
+    prepare_atomic_with_control(
+        destination,
+        &bytes,
         PublicationFailpoint::None,
         &mut cancelled,
     )
@@ -2230,7 +2261,21 @@ fn prepare_bundle_atomic_with_control<F>(
     bytes: &[u8],
     failpoint: PublicationFailpoint,
     cancelled: &mut F,
-) -> Result<PreparedBundlePublication, ExportError>
+) -> Result<PreparedPublication, ExportError>
+where
+    F: FnMut() -> bool,
+{
+    check_cancelled(cancelled)?;
+    verify_assembled_bundle(bytes)?;
+    prepare_atomic_with_control(destination, bytes, failpoint, cancelled)
+}
+
+fn prepare_atomic_with_control<F>(
+    destination: &Path,
+    bytes: &[u8],
+    failpoint: PublicationFailpoint,
+    cancelled: &mut F,
+) -> Result<PreparedPublication, ExportError>
 where
     F: FnMut() -> bool,
 {
@@ -2239,11 +2284,9 @@ where
     #[cfg(not(test))]
     let _ = failpoint;
     check_cancelled(cancelled)?;
-    verify_assembled_bundle(bytes)?;
-    check_cancelled(cancelled)?;
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     let mut temporary = TempFileBuilder::new()
-        .prefix(".eutheto-bundle-")
+        .prefix(".eutheto-publication-")
         .suffix(".tmp")
         .tempfile_in(parent)?;
     for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
@@ -2282,14 +2325,14 @@ where
         )));
     }
 
-    Ok(PreparedBundlePublication {
+    Ok(PreparedPublication {
         destination: destination.to_path_buf(),
         temporary,
     })
 }
 
 fn publish_prepared_with_control<F>(
-    prepared: PreparedBundlePublication,
+    prepared: PreparedPublication,
     failpoint: PublicationFailpoint,
     cancelled: &mut F,
 ) -> Result<(), ExportError>
@@ -2312,7 +2355,7 @@ where
     };
 
     // Publication is the commit point: cancellation after this cannot turn a
-    // successfully published bundle into an ambiguous failure.
+    // successfully published output into an ambiguous failure.
     drop(published);
     #[cfg(test)]
     if failpoint == PublicationFailpoint::AfterPublish {
@@ -3404,12 +3447,10 @@ mod tests {
         ));
         assert_eq!(std::fs::read(&during)?, b"sentinel");
         assert_eq!(checks, 4);
-        assert!(std::fs::read_dir(directory.path())?.all(|entry| {
-            entry
-                .ok()
-                .and_then(|entry| entry.file_name().into_string().ok())
-                .is_none_or(|name| !name.starts_with(".eutheto-bundle-"))
-        }));
+        let retained = std::fs::read_dir(directory.path())?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        assert_eq!(retained, BTreeSet::from([before, during]));
 
         let normal = directory.path().join("normal.eutheto");
         write_bundle_atomic_cancellable(&normal, &bundle, &CancellationToken::new())?;

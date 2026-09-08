@@ -235,6 +235,7 @@ fn request(
             options,
             &parent,
             Some(DurationMillis::new(800)?),
+            DurationMillis::ZERO,
         )?,
         clock,
         cancellation,
@@ -574,6 +575,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         options,
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &mismatched),
@@ -590,6 +592,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         solve_options(other)?,
         &other_parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &wrong_request),
@@ -605,6 +608,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         solve_options(descriptor.id.clone())?,
         &version_parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &wrong_version),
@@ -620,6 +624,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         solve_options(descriptor.id.clone())?,
         &adapter_parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &wrong_adapter),
@@ -662,6 +667,7 @@ fn preflight_maps_shared_invalid_solve_options() -> TestResult {
             options,
             &parent,
             None,
+            DurationMillis::ZERO,
         )?;
         assert!(matches!(
             preflight(&matrix, &descriptor, &request),
@@ -687,6 +693,7 @@ fn cancellation_and_timeout_remain_distinct() -> TestResult {
         options.clone(),
         &cancel_parent,
         None,
+        DurationMillis::ZERO,
     )?;
     cancellation.cancel();
     assert_eq!(
@@ -704,6 +711,7 @@ fn cancellation_and_timeout_remain_distinct() -> TestResult {
         options,
         &timeout_parent,
         None,
+        DurationMillis::ZERO,
     )?;
     timeout_clock.advance(Duration::from_millis(100))?;
     assert_eq!(
@@ -730,6 +738,7 @@ fn child_budget_inherits_the_absolute_parent_deadline() -> TestResult {
         options,
         &parent,
         Some(DurationMillis::new(500)?),
+        DurationMillis::ZERO,
     )?;
     assert_eq!(
         request.dispatch_budget().remaining_at_dispatch().value(),
@@ -832,6 +841,7 @@ fn candidate_crossing_backend_cap_during_validation_is_not_retained() -> TestRes
         options,
         &parent,
         Some(DurationMillis::new(800)?),
+        DurationMillis::ZERO,
     )?;
     let mut progress = VecProgress(Vec::new());
     let mut output = BoundedBackendOutput::new(
@@ -1107,6 +1117,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     let repeated = SolveRequest::new(
         backend.clone(),
@@ -1117,6 +1128,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), repeated.model_hash());
     assert_eq!(base.solve_fingerprint(), repeated.solve_fingerprint());
@@ -1130,6 +1142,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), backend_version_changed.model_hash());
     assert_ne!(
@@ -1146,6 +1159,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), adapter_changed.model_hash());
     assert_ne!(
@@ -1164,6 +1178,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         changed_options,
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), options_changed.model_hash());
     assert_ne!(
@@ -1183,6 +1198,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         other_options,
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), route_changed.model_hash());
     assert_ne!(base.solve_fingerprint(), route_changed.solve_fingerprint());
@@ -1200,6 +1216,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options,
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     assert_ne!(base.model_hash(), compiler_changed.model_hash());
     assert_ne!(
@@ -1534,6 +1551,7 @@ fn final_backend_evidence_matches_objective_dimension() -> TestResult {
         options,
         &parent,
         None,
+        DurationMillis::ZERO,
     )?;
     let outcome = BackendSolveOutcome {
         backend_id: backend,

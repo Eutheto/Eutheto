@@ -592,6 +592,22 @@ The [contribution documentation](../../domains/workforce/core/README.md#assignme
 
 `project_workforce_candidate` reuses generic projection and decodes every result as a canonical typed person/shift pair, retaining required false decisions and rejecting malformed/missing/unknown values. It does not confer original-scenario correctness or acceptance. Real-worker rank/infeasibility and structural-verification checks run with the existing `just workforce-rule-worker-test` command. WF-007 supplies independent score/evidence and acceptance, and the application explicitly registers the complete pack. WF-008 complete CLI/fixtures/product benchmarks and every Phase05 exit gate remain separate requirements. The dense 100-person × 28-coincident-shift probe reaches the current work limit; no large-workload acceptance is claimed.
 
+### WF-008 shared headless-service contract
+
+`eutheto-core::HeadlessService` provides database-independent creation, checked portable decode/encode, typed exact-revision command application, full validation, immutable solve preparation/execution, fresh result verification and assignment explanation. It reuses the registered packs, planning IR, router and independent acceptance bridge; it is not a second optimizer or a new Tauri command. Full-readiness contradictions remain findings and do not prevent a supported model from reaching the backend for an actual infeasibility proof.
+
+`SolveOperation` begins before input capture and retains one parent deadline through decoding, validation, compilation, dispatch, independent review and result preparation. The finite acceptance reserve is `min(1000ms, max(1ms, total/4))`; dispatch accounting subtracts it from the same observation used for the backend limit. Parent-observed spans retain full precision until final millisecond conversion, reject backwards/unrepresentable timing, and omit milestones or phases that did not occur.
+
+Ordinary file and stored runs resolve Auto once, bind the selected runtime and effective Specific options into immutable `RunInputV1`, and never fall back across backends within that run. Generic router fallback remains a separately tested capability; [Phase 08](08-pumpkin-backend-and-router.md#deliberate-fallback-policy) owns the durable multi-attempt gate. New ordinary runs hash canonical objective-only policy with the `eutheto/planning-objective-policy/v1\0` domain; retained historical objective hashes remain opaque bindings.
+
+`EuthetoApp::solve_stored` resolves the caller-stable request before reading moving-current state, allocating identities, resetting time or routing. Matching retries return retained running/terminal authority without redispatch; changed semantics conflict. Only the fresh owner finalizes. Known precommit rejection enters terminal cleanup; database/actor uncertainty remains explicit for recovery. Accepted results stay attached to their solved revision and are never automatically applied.
+
+Authoritative run input, terminal manifest and retained result identity are read-only at the service boundary. Nonaccepted candidates cannot escape through execution reports. File output uses bounded prepared no-clobber publication under the original operation control. Database acceptance is the primary commit; secondary publication uses the reloaded stored portable result and preserves its identity on output failure.
+
+Fresh verification recomputes original-domain scope, score and the full verification report. Imported backend proof, timings and arbitrary evidence-map text are not fresh authority; assignment explanations consume independently reproduced facts.
+
+The focused `headless_scenario` and `headless_stored` core tests cover standalone closure, typed stale edits, readiness contradictions and durable retry/failure behavior. `headless_worker` explicitly requires `EUTHETO_TEST_ORTOOLS_ARTIFACT` to name a canonical approved installed artifact and runs with `cargo test --locked -p eutheto-core --test headless_worker -- --ignored --test-threads=1`; there is no helper fallback. These services do not complete WF-008's CLI parser, installed-worker host adapter, CSV codecs, required corpus or product benchmarks. The Phase05 exit gates and manual-testing pause before Phase06 remain open until their own evidence is complete.
+
 ## Rule-completion discipline
 
 Every official rule or preference—including each initial Phase 05 rule—requires all of:

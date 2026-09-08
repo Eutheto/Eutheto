@@ -15,8 +15,9 @@ use eutheto_solver_api::*;
 use eutheto_solver_router::*;
 use eutheto_types::{
     BackendId, BackendSelection, CancellationToken, DurationMillis, ExplanationMode,
-    FixedMonotonicClock, PackId, ParentSolveBudget, PreservationPolicy, ReproducibilityMode,
-    ResourceLimits, ScenarioId, SolveMode, SolveOptions, SolveStatus, WorkerThreadPolicy,
+    FixedMonotonicClock, MonotonicClock, PackId, ParentSolveBudget, PreservationPolicy,
+    ReproducibilityMode, ResourceLimits, ScenarioId, SolveMode, SolveOptions, SolveStatus,
+    WorkerThreadPolicy,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -30,7 +31,7 @@ enum Behavior {
     Outcome(BackendTerminationReason, bool, u64, u64),
     Error(bool, u64),
     AssignmentFlood,
-    LateCandidate(BackendTerminationReason, u64, u64),
+    LateCandidate(BackendTerminationReason, u64, Duration),
     Never,
     Proof {
         termination: BackendTerminationReason,
@@ -85,7 +86,7 @@ impl SolverBackend for TestBackend {
             }
             if let Behavior::LateCandidate(termination, elapsed, advance) = &self.behavior {
                 self.clock
-                    .advance(Duration::from_millis(*advance))
+                    .advance(*advance)
                     .map_err(|_| BackendError::from(OutputError::UnsafeDiagnosticLine))?;
                 output.submit_candidate(CandidateSubmission {
                     values: candidate_values()?,
@@ -283,6 +284,15 @@ impl CandidateReviewer for ExpiringReview {
         CandidateReview::Verified {
             objective_matches: false,
         }
+    }
+}
+
+struct AdvancingClock(FixedMonotonicClock);
+impl MonotonicClock for AdvancingClock {
+    fn now(&self) -> Duration {
+        let now = self.0.now();
+        assert!(self.0.advance(Duration::from_millis(1)).is_ok());
+        now
     }
 }
 
@@ -500,10 +510,12 @@ async fn run(
             Arc::new(problem),
             options(BackendSelection::Auto)?,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             reviewer,
         )
-        .await)
+        .await
+        .record)
 }
 
 #[test]
@@ -975,10 +987,12 @@ async fn invalid_ir_and_unsupported_override_have_zero_invocations() -> TestResu
                 "tests.unsupported",
             )?))?,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_eq!(unsupported.invocation_count, 0);
     let mut invalid = problem()?;
     invalid.variables.push(invalid.variables[0].clone());
@@ -987,10 +1001,12 @@ async fn invalid_ir_and_unsupported_override_have_zero_invocations() -> TestResu
             Arc::new(invalid),
             options(BackendSelection::Auto)?,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_invalid_model_without_invocations(&invalid);
     assert_eq!(invalid.decision.component_analysis.edge_count, 0);
     assert!(
@@ -1018,10 +1034,12 @@ async fn invalid_ir_and_unsupported_override_have_zero_invocations() -> TestResu
             Arc::new(undeclared),
             options(BackendSelection::Auto)?,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_invalid_model_without_invocations(&undeclared);
 
     let mut noncanonical = problem()?;
@@ -1039,10 +1057,12 @@ async fn invalid_ir_and_unsupported_override_have_zero_invocations() -> TestResu
             Arc::new(noncanonical),
             options(BackendSelection::Auto)?,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_invalid_model_without_invocations(&noncanonical);
     Ok(())
 }
@@ -1104,6 +1124,247 @@ async fn fallback_is_candidate_aware_and_shares_parent_deadline() -> TestResult 
 }
 
 #[tokio::test]
+async fn acceptance_reserve_survives_fallback_without_resetting_the_parent() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let registry = registry(
+        vec![
+            (
+                "tests.a",
+                Behavior::Outcome(BackendTerminationReason::Unavailable, false, 400, 400),
+                false,
+            ),
+            (
+                "tests.b",
+                Behavior::Outcome(BackendTerminationReason::TimeLimit, false, 250, 250),
+                false,
+            ),
+        ],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        millis(1_000)?,
+        Arc::new(clock.clone()),
+        CancellationToken::new(),
+    )?;
+    clock.advance(Duration::from_millis(100))?;
+    let mut progress = Progress;
+    let mut reviewer = RequireIndependentVerification;
+    let execution = SolverRouter::new(&registry)
+        .execute(
+            Arc::new(problem()?),
+            options(BackendSelection::Auto)?,
+            &parent,
+            millis(250)?,
+            &mut progress,
+            &mut reviewer,
+        )
+        .await;
+    assert_eq!(execution.record.invocation_count, 2);
+    assert_eq!(
+        execution.record.attempts[0].backend_limit_milliseconds,
+        millis(650)?
+    );
+    assert_eq!(
+        execution.record.attempts[1].backend_limit_milliseconds,
+        millis(250)?
+    );
+    assert_eq!(parent.snapshot().remaining_milliseconds, millis(250)?);
+    assert_eq!(
+        execution.record.terminal_status,
+        SolveStatus::NoSolutionWithinLimit
+    );
+
+    let stopped = SolverRouter::new(&registry)
+        .execute(
+            Arc::new(problem()?),
+            options(BackendSelection::Auto)?,
+            &parent,
+            millis(250)?,
+            &mut progress,
+            &mut reviewer,
+        )
+        .await;
+    assert_eq!(stopped.record.invocation_count, 0);
+    assert_eq!(
+        stopped.record.terminal_status,
+        SolveStatus::NoSolutionWithinLimit
+    );
+    assert!(!parent.is_expired());
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_observations_retain_crash_candidates_and_exclude_independent_review() -> TestResult
+{
+    let clock = FixedMonotonicClock::default();
+    let registry = registry(
+        vec![
+            (
+                "tests.a",
+                Behavior::Outcome(BackendTerminationReason::Unavailable, false, 400, 400),
+                false,
+            ),
+            ("tests.b", Behavior::Error(true, 100), false),
+        ],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        millis(3_000)?,
+        Arc::new(clock.clone()),
+        CancellationToken::new(),
+    )?;
+    clock.advance(Duration::from_millis(200))?;
+    let mut progress = Progress;
+    let mut reviewer = ExpiringReview {
+        clock: clock.clone(),
+    };
+    let execution = SolverRouter::new(&registry)
+        .execute(
+            Arc::new(problem()?),
+            options(BackendSelection::Auto)?,
+            &parent,
+            DurationMillis::ZERO,
+            &mut progress,
+            &mut reviewer,
+        )
+        .await;
+    assert_eq!(execution.record.terminal_status, SolveStatus::Feasible);
+    assert!(execution.record.attempts[1].outcome.is_none());
+    let observations = execution
+        .observations
+        .ok_or("missing parent observations")?;
+    assert_eq!(observations.started_after, Duration::from_millis(200));
+    assert_eq!(observations.backend_elapsed, Duration::from_millis(500));
+    assert_eq!(
+        observations.first_candidate_after,
+        Some(Duration::from_millis(400))
+    );
+    assert_eq!(
+        execution.record.first_verified_feasible_milliseconds,
+        Some(millis(1_500)?)
+    );
+    assert_eq!(parent.checked_elapsed(), Some(Duration::from_millis(1_700)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn fractional_operation_origin_preserves_incumbent_before_verified_order() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::LateCandidate(
+                BackendTerminationReason::CandidateFound,
+                1,
+                Duration::from_micros(600),
+            ),
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        millis(20)?,
+        Arc::new(clock.clone()),
+        CancellationToken::new(),
+    )?;
+    clock.advance(Duration::from_micros(900))?;
+    let execution = SolverRouter::new(&registry)
+        .execute(
+            Arc::new(problem()?),
+            options(BackendSelection::Auto)?,
+            &parent,
+            DurationMillis::ZERO,
+            &mut Progress,
+            &mut Verify,
+        )
+        .await;
+    assert_eq!(execution.record.terminal_status, SolveStatus::Feasible);
+    let observed = execution.observations.ok_or("missing observations")?;
+    let incumbent = (observed.started_after
+        + observed.first_candidate_after.ok_or("missing candidate")?)
+    .as_millis();
+    let verified = (observed.started_after
+        + observed
+            .first_verified_feasible_after
+            .ok_or("missing verified candidate")?)
+    .as_millis();
+    assert!(
+        incumbent <= verified,
+        "verified {verified}ms precedes incumbent {incumbent}ms"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn advancing_dispatch_clock_cannot_consume_acceptance_reserve() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let registry = registry(vec![("tests.a", Behavior::Error(false, 5), false)], &clock)?;
+    let parent = ParentSolveBudget::new(
+        millis(1_000)?,
+        Arc::new(AdvancingClock(clock)),
+        CancellationToken::new(),
+    )?;
+    let execution = SolverRouter::new(&registry)
+        .execute(
+            Arc::new(problem()?),
+            options(BackendSelection::Auto)?,
+            &parent,
+            millis(250)?,
+            &mut Progress,
+            &mut RequireIndependentVerification,
+        )
+        .await;
+    assert_eq!(execution.record.invocation_count, 1);
+    let attempt = execution
+        .record
+        .attempts
+        .first()
+        .ok_or("no dispatched attempt")?;
+    assert!(
+        attempt.backend_limit_milliseconds.value() + 250
+            <= attempt.remaining_at_dispatch_milliseconds.value()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn early_terminal_rejects_clock_regression_before_returning_observations() -> TestResult {
+    struct RegressAtFinish(std::sync::atomic::AtomicU32);
+    impl MonotonicClock for RegressAtFinish {
+        fn now(&self) -> Duration {
+            Duration::from_millis(
+                match self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) {
+                    0 => 100,
+                    1 => 110,
+                    _ => 99,
+                },
+            )
+        }
+    }
+    let parent = ParentSolveBudget::new(
+        millis(1_000)?,
+        Arc::new(RegressAtFinish(std::sync::atomic::AtomicU32::new(0))),
+        CancellationToken::new(),
+    )?;
+    let mut invalid = problem()?;
+    invalid.schema_version = 0;
+    let execution = SolverRouter::new(&SolverRegistry::production()?)
+        .execute(
+            Arc::new(invalid),
+            options(BackendSelection::Auto)?,
+            &parent,
+            DurationMillis::ZERO,
+            &mut Progress,
+            &mut RequireIndependentVerification,
+        )
+        .await;
+    assert_eq!(execution.record.terminal_status, SolveStatus::InvalidModel);
+    assert_eq!(execution.record.invocation_count, 0);
+    assert!(execution.observations.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn late_empty_proof_claims_cannot_outlive_the_parent_deadline() -> TestResult {
     for claimed in [
         BackendTerminationReason::InfeasibilityClaimed,
@@ -1153,7 +1414,11 @@ async fn shorter_backend_cap_rejects_late_proof_and_candidate() -> TestResult {
             1,
             1_500,
         ),
-        Behavior::LateCandidate(BackendTerminationReason::OptimalityClaimed, 1, 1_500),
+        Behavior::LateCandidate(
+            BackendTerminationReason::OptimalityClaimed,
+            1,
+            Duration::from_millis(1_500),
+        ),
     ] {
         let clock = FixedMonotonicClock::default();
         let registry = registry(vec![("tests.a", behavior, false)], &clock)?;
@@ -1172,10 +1437,12 @@ async fn shorter_backend_cap_rejects_late_proof_and_candidate() -> TestResult {
                 Arc::new(problem()?),
                 solve_options,
                 &parent,
+                DurationMillis::ZERO,
                 &mut progress,
                 &mut reviewer,
             )
-            .await;
+            .await
+            .record;
         assert_eq!(result.invocation_count, 1);
         assert_eq!(result.terminal_status, SolveStatus::NoSolutionWithinLimit);
         assert_eq!(
@@ -1206,10 +1473,12 @@ async fn nonreturning_backend_is_bounded_by_router_timeout() -> TestResult {
             Arc::new(problem()?),
             solve_options,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_eq!(result.invocation_count, 1);
     assert_eq!(result.terminal_status, SolveStatus::NoSolutionWithinLimit);
     assert_eq!(
@@ -1240,10 +1509,12 @@ async fn cumulative_assignment_overflow_is_a_bounded_resource_terminal() -> Test
             Arc::new(problem()?),
             options(BackendSelection::Auto)?,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     let expected = OutputError::CandidateAssignmentLimitExceeded.to_string();
     assert_eq!(result.invocation_count, 1);
     assert_eq!(result.terminal_status, SolveStatus::BackendFailed);
@@ -1350,10 +1621,12 @@ async fn time_limit_falls_back_only_with_no_candidate_and_parent_time_remaining(
             Arc::new(problem()?),
             solve_options,
             &parent,
+            DurationMillis::ZERO,
             &mut progress,
             &mut reviewer,
         )
-        .await;
+        .await
+        .record;
     assert_eq!(result.invocation_count, 2);
     assert!(result.attempts[0].fallback_taken);
     assert_eq!(

@@ -108,6 +108,8 @@ A proof artifact records component hashes and each passed criterion. Fairness, s
 
 ### Deliberate fallback policy
 
+**Durable multi-attempt gate:** Phase05 ordinary file/stored runs bind one selected backend/runtime before immutable run creation; their Auto request is recorded as effective Specific options and cannot silently become another backend's execution. Before enabling the fallback policy below for ordinary persisted runs, this phase must define and verify the durable attempt representation, exact per-attempt runtime/options/proof binding, compatibility/migration behavior and one-parent-budget accounting. Never archive backend B under backend A's immutable input or reinterpret retained historical hashes. Existing generic router fallback tests do not, by themselves, close this application/persistence gate.
+
 - **Unavailable or crash before any candidate:** a configured compatible fallback may run.
 - **Invalid model:** never silently fall back; surface a compiler/adapter defect and preserve bounded diagnostics.
 - **Proven infeasible:** do not treat this as a performance failure. Another backend is available only as an explicit advanced diagnostic cross-check.
