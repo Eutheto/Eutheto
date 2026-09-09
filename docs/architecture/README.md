@@ -2,7 +2,7 @@
 
 # Architecture
 
-This directory summarizes the approved target architecture. The repository is in [Phase 00](../roadmap/00-repository-and-reproducible-tooling.md): it establishes reproducible tooling, legal and security policy, boundaries, and a minimal real desktop shell. It does **not** yet provide domain behavior, a solver worker, independent verification, an AI provider, an updater, or a production release. The [roadmap index](../roadmap/README.md) owns delivery order and detailed acceptance gates.
+This directory summarizes the approved architecture. Phases 00–05 have implemented reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the bounded Workforce core with real CLI solving and export. Automated acceptance and the maintainer's manual-testing pass are complete; [Phase 06](../roadmap/06-desktop-design-system-and-workforce-setup.md) desktop design-system and Workforce setup work is the active scope, not completed behavior. Pumpkin, remaining domain features, AI, the updater, and a production release remain roadmap work. The [roadmap index](../roadmap/README.md) owns delivery order and detailed acceptance gates.
 
 ## System shape
 
@@ -22,7 +22,7 @@ CLI ─────────────────────────�
                                       │             │
                                       v             v
                               in-process adapter   worker-protocol adapter
-                               (future Pumpkin)      (future OR-Tools child)
+                               (future Pumpkin)      (OR-Tools child)
                                       │             │
                                       └──── candidates ────┐
                                                            v
@@ -35,9 +35,9 @@ Dependency direction and ownership are normative in [dependency boundaries](depe
 
 Rust application services own authoritative scenario state, validation, transactions, persistence, routing, solving, projection, independent verification, scoring, explanations, and import/export. Tauri and the CLI are clients of those services. Vue/Pinia/query state is a presentation cache. A backend produces candidates, never trusted domain results. Optional AI can propose typed commands but is never persistence, solver, verifier, or routing authority.
 
-## Planned solve data flow
+## Solve data flow
 
-The solve path is a contract for later phases, not a Phase-00 capability:
+The Workforce CLI implements this path for the Phase 05 supported rule set; later domain and desktop flows must preserve the same authority boundaries:
 
 1. capture immutable scenario revision $R$;
 2. domain-validate $R$;
@@ -54,7 +54,7 @@ A failed or cancelled solve never mutates the scenario. Persisting an accepted s
 
 ## State and external formats
 
-SQLite is the planned local authority; OS credential storage alone holds credential values ([ADR-010](../adr/010-local-state-and-credentials.md)). Every mutation uses the typed command/journal contract ([ADR-011](../adr/011-command-journal-and-undo.md)). The public interchange contract is the versioned eutheto scenario document/bundle, never a backend model ([ADR-018](../adr/018-public-scenario-representation.md)).
+SQLite is the implemented local authority; credential values remain restricted to OS credential storage ([ADR-010](../adr/010-local-state-and-credentials.md)), not a claim that provider credential workflows already exist. Every mutation uses the typed command/journal contract ([ADR-011](../adr/011-command-journal-and-undo.md)). The public interchange contract is the versioned eutheto scenario document/bundle, never a backend model ([ADR-018](../adr/018-public-scenario-representation.md)).
 
 All public scenario, bundle, database, command, event, schema, and worker-protocol formats require explicit versions and compatibility rules. Unknown newer versions fail safely. Canonical serialization and hashing require stable ordering and checked arithmetic. Contributor rules are in [generated code and contracts](../contributors/generated-code-and-contracts.md).
 
