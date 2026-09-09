@@ -168,6 +168,22 @@ worker-smoke executable resource_root manifest_sha256:
 workforce-rule-worker-test:
     cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_ -- --ignored
 
+
+# Reject Workforce generation drift and validate all original-domain fixture semantics.
+workforce-corpus-check:
+    cargo xtask workforce check
+
+# Generate a bounded synthetic portable scenario with explicit sizes and fixed seed zero.
+workforce-corpus-generate people shifts output:
+    cargo xtask workforce synthetic --people "{{ people }}" --shifts "{{ shifts }}" --output "{{ output }}"
+
+# Measure real headless Workforce cases against one explicitly trusted worker artifact.
+bench-workforce artifact_root manifest_sha256 output:
+    cargo xtask workforce run --artifact-root "{{ artifact_root }}" --manifest-sha256 "{{ manifest_sha256 }}" --output "{{ output }}"
+
+# Exercise the same corpus through an already assembled, manifest-bound optimizer image.
+workforce-corpus-smoke-cli image manifest_sha256 output:
+    cargo xtask workforce smoke-cli --image "{{ image }}" --manifest-sha256 "{{ manifest_sha256 }}" --output "{{ output }}"
 # Run the real Phase-01 CLI status command.
 cli:
     cargo run --locked --package eutheto-cli -- status
@@ -252,11 +268,12 @@ fuzz-check: fuzz-build
         env RUSTC="$FUZZ_RUSTC" RUSTDOC="$FUZZ_RUSTDOC" "$FUZZ_CARGO" fuzz run --fuzz-dir {{ fuzz_dir }} "$target" "$scratch_corpus/$target" -- -seed=0 -jobs=1 -workers=1 -timeout=5 -max_total_time=30 -rss_limit_mb=4096 -artifact_prefix="$scratch_artifacts/$target/"
     done
 
-# Build the exact worker and emit raw Phase-03 microbenchmark evidence.
+# Run Phase03, authoritative Workforce and packaged CLI evidence against one worker artifact.
 bench:
     #!/usr/bin/env bash
     set -euo pipefail
-    artifact_root="$(nix build --no-link --print-out-paths .#ortools-worker)"
+    just workforce-corpus-check
+    artifact_root="$(nix build --no-update-lock-file --no-link --print-out-paths .#ortools-worker)"
     if [[ ! -d "$artifact_root" ]]; then
         printf 'error: expected one native OR-Tools worker artifact, got %q\n' "$artifact_root" >&2
         exit 1
@@ -266,13 +283,17 @@ bench:
     manifest_sha256="${digest_line%% *}"
     output_root="$(realpath -m "{{ benchmark_artifacts }}")"
     mkdir -p "$output_root"
-    output="$output_root/phase03-primitives.json"
+    run_root="$(mktemp -d "$output_root/run-XXXXXXXX")"
+    output="$run_root/phase03-primitives.json"
     cargo run --locked --release --package eutheto-phase03-benchmark -- \
         --artifact-root "$artifact_root" \
         --manifest-sha256 "$manifest_sha256" \
         --corpus benchmarks/corpus/solver/phase03-primitives.json \
         --output "$output"
-    cat "$output"
+    just bench-workforce "$artifact_root" "$manifest_sha256" "$run_root/workforce.json"
+    cargo xtask solver build-cli --artifact-root "$artifact_root" --manifest-sha256 "$manifest_sha256"
+    just workforce-corpus-smoke-cli target/cli-package "$manifest_sha256" "$run_root/workforce-cli.json"
+    printf 'Benchmark evidence: %s\n' "$run_root"
 
 # Build and exercise real Linux desktop persistence through WebKit WebDriver.
 e2e:

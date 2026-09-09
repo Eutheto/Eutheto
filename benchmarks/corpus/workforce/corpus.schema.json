@@ -1,0 +1,991 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Private synthetic corpus record. Structural validation does not prove source fidelity, safe filesystem custody, cross-file digest binding, accepted-result authority, historical execution authenticity or timing relationships; the corpus runner performs those applicable checks.",
+  "properties": {
+    "cases": {
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "appendix-f"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "clinic-tiny"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "clinic-initial"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "clinic-full"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "clinic-overnight"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "rolling-hours"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "specialist-coverage"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "repair-before"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "infeasible-coverage"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "dst-spring"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "dst-fall"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "large-supported"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "large-pressure"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        }
+      ],
+      "items": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": null
+              },
+              "id": {
+                "const": "appendix-f"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/appendix-f.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "clinic-small"
+              },
+              "id": {
+                "const": "clinic-tiny"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/clinic-tiny.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "A"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "clinic-small"
+              },
+              "id": {
+                "const": "clinic-initial"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/clinic-initial.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "clinic-small"
+              },
+              "id": {
+                "const": "clinic-full"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/clinic-full.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "clinic-overnight"
+              },
+              "id": {
+                "const": "clinic-overnight"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/clinic-overnight.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "rolling-hours"
+              },
+              "id": {
+                "const": "rolling-hours"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/rolling-hours.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "specialist-coverage"
+              },
+              "id": {
+                "const": "specialist-coverage"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/specialist-coverage.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "repair-callout"
+              },
+              "id": {
+                "const": "repair-before"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/repair-before.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "infeasible-coverage"
+              },
+              "id": {
+                "const": "infeasible-coverage"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/infeasible-coverage.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "A"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "dst"
+              },
+              "id": {
+                "const": "dst-spring"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/dst-spring.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "A"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "dst"
+              },
+              "id": {
+                "const": "dst-fall"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/dst-fall.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "A"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "large-synthetic"
+              },
+              "id": {
+                "const": "large-supported"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/large-supported.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "C"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "large-synthetic"
+              },
+              "id": {
+                "const": "large-pressure"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v1/large-pressure.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "D"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "maxItems": 13,
+      "minItems": 13,
+      "type": "array"
+    },
+    "corpusVersion": {
+      "const": 1
+    },
+    "expectations": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "const": "benchmarks/expected/workforce/v1.json"
+        },
+        "sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "fixtureClock": {
+      "const": "2026-08-28T23:00:00Z"
+    },
+    "format": {
+      "const": "eutheto/workforce-corpus"
+    },
+    "generator": {
+      "additionalProperties": false,
+      "properties": {
+        "license": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "method": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "seed": {
+          "const": 0
+        },
+        "sourceSha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "maximum": 16777216,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "path": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "type": "string"
+              },
+              "sha256": {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "method",
+        "sourceSha256",
+        "sources",
+        "seed",
+        "license"
+      ],
+      "type": "object"
+    },
+    "profile": {
+      "additionalProperties": false,
+      "properties": {
+        "budgetMilliseconds": {
+          "const": 60000
+        },
+        "firstOperationSamples": {
+          "const": 1
+        },
+        "mode": {
+          "const": "deep"
+        },
+        "postWarmupSamples": {
+          "const": 3
+        },
+        "randomSeed": {
+          "const": 1
+        },
+        "stopAfterFirstFeasible": {
+          "const": true
+        },
+        "warmupRuns": {
+          "const": 1
+        },
+        "workerThreads": {
+          "const": 1
+        }
+      },
+      "required": [
+        "budgetMilliseconds",
+        "mode",
+        "randomSeed",
+        "workerThreads",
+        "stopAfterFirstFeasible",
+        "firstOperationSamples",
+        "warmupRuns",
+        "postWarmupSamples"
+      ],
+      "type": "object"
+    },
+    "repair": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "const": "domains/workforce/fixtures/v1/repair-callout.json"
+        },
+        "sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": 1
+    }
+  },
+  "required": [
+    "format",
+    "schemaVersion",
+    "corpusVersion",
+    "generator",
+    "fixtureClock",
+    "profile",
+    "cases",
+    "expectations",
+    "repair"
+  ],
+  "title": "Workforce corpus v1 corpus",
+  "type": "object"
+}

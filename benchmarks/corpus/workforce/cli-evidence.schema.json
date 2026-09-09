@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Private synthetic corpus record. Structural validation does not prove source fidelity, safe filesystem custody, cross-file digest binding, accepted-result authority, historical execution authenticity or timing relationships; the corpus runner performs those applicable checks.",
+  "properties": {
+    "checks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "artifactSha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "caseId": {
+            "enum": [
+              "appendix-f",
+              "clinic-tiny",
+              "clinic-initial",
+              "clinic-full",
+              "clinic-overnight",
+              "rolling-hours",
+              "specialist-coverage",
+              "repair-before",
+              "infeasible-coverage",
+              "dst-spring",
+              "dst-fall",
+              "large-supported",
+              "large-pressure"
+            ],
+            "type": "string"
+          },
+          "exitCode": {
+            "enum": [
+              0,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              10,
+              130
+            ],
+            "type": "integer"
+          },
+          "observedCode": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observedStatus": {
+            "anyOf": [
+              {
+                "enum": [
+                  "optimal",
+                  "feasible",
+                  "infeasible",
+                  "unbounded",
+                  "noSolutionWithinLimit",
+                  "cancelled",
+                  "invalidModel",
+                  "backendUnavailable",
+                  "backendFailed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "caseId",
+          "operation",
+          "exitCode",
+          "observedStatus",
+          "observedCode",
+          "artifactSha256"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "cliSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "corpusSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "corpusVersion": {
+      "const": 1
+    },
+    "format": {
+      "const": "eutheto/workforce-cli-corpus-evidence"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "workerManifestSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "format",
+    "schemaVersion",
+    "corpusVersion",
+    "corpusSha256",
+    "cliSha256",
+    "workerManifestSha256",
+    "checks"
+  ],
+  "title": "Workforce corpus v1 cli-evidence",
+  "type": "object"
+}

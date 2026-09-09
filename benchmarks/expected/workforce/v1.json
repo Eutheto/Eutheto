@@ -1,0 +1,344 @@
+{
+  "format": "eutheto/workforce-corpus-expectations",
+  "schemaVersion": 1,
+  "corpusVersion": 1,
+  "generatorSourceSha256": "ad6c8126e09211574c2b9439b2a4dd1fe2803ef6458a8752b574412f706fef8c",
+  "cases": [
+    {
+      "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
+      "expected": {
+        "id": "appendix-f",
+        "disposition": "compileRejected",
+        "people": 3,
+        "horizonDays": 30,
+        "resolvedShifts": 52,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": null,
+        "deferredObligations": [
+          {
+            "kind": "rule",
+            "ruleId": "01a04a99-f980-701b-801e-739766e14e8b",
+            "ruleKind": "maximumHours"
+          },
+          {
+            "kind": "rule",
+            "ruleId": "01a04a99-f980-7d09-9a27-6ea768a298f9",
+            "ruleKind": "maximumConsecutive"
+          },
+          {
+            "kind": "preference",
+            "ruleId": "01a04a99-f980-74fd-abdc-547a6f74a762",
+            "preferenceKind": "workloadBalance"
+          },
+          {
+            "kind": "preference",
+            "ruleId": "01a04a99-f980-742b-b44d-6124858f3506",
+            "preferenceKind": "time"
+          }
+        ],
+        "semantics": [
+          "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later rules/preferences require Phase07; no claim of feasibility"
+        ]
+      }
+    },
+    {
+      "inputSha256": "0326ab03e1589efa7cb73b260b60234d90086ed9749b4bf42302c424075c1cb4",
+      "expected": {
+        "id": "clinic-tiny",
+        "disposition": "accepted",
+        "people": 3,
+        "horizonDays": 7,
+        "resolvedShifts": 5,
+        "selectedAssignments": 10,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 150
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Three clinicians, five four-hour weekday shifts, exact two physicians, one full local day unavailable; basic Required rules only"
+        ]
+      }
+    },
+    {
+      "inputSha256": "0408a81ccd2f25ca77490eb781cd51e524d07611d129d1784c3b5fb61a443789",
+      "expected": {
+        "id": "clinic-initial",
+        "disposition": "accepted",
+        "people": 8,
+        "horizonDays": 28,
+        "resolvedShifts": 20,
+        "selectedAssignments": 40,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 6400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Eight clinicians/four weeks; availability and exact two physicians; explicitly omits clinic-full workload balance and Friday preference"
+        ]
+      }
+    },
+    {
+      "inputSha256": "80f3035b79e7b02294043d9eff1b62bfd5d76809e90e67dc13421273e13dde47",
+      "expected": {
+        "id": "clinic-full",
+        "disposition": "compileRejected",
+        "people": 8,
+        "horizonDays": 28,
+        "resolvedShifts": 20,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": null,
+        "deferredObligations": [
+          {
+            "kind": "preference",
+            "ruleId": "01a04a99-f980-7278-9309-8c1b6e68e657",
+            "preferenceKind": "workloadBalance"
+          },
+          {
+            "kind": "preference",
+            "ruleId": "01a04a99-f980-7f97-9cc2-1516e15bca3a",
+            "preferenceKind": "time"
+          }
+        ],
+        "semantics": [
+          "Eight clinicians/four weeks; same clinical obligations plus active whole-plan weighted equal-share balance and whole-Friday avoidance; Phase07 compilation gate"
+        ]
+      }
+    },
+    {
+      "inputSha256": "cafac7775abba59f5176b102b8bf7633f48afb6c0b6dfe98f3472617c70090a9",
+      "expected": {
+        "id": "clinic-overnight",
+        "disposition": "accepted",
+        "people": 12,
+        "horizonDays": 28,
+        "resolvedShifts": 48,
+        "selectedAssignments": 68,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 39168
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Twelve clinicians;20 clinic shifts and28 overnight calls; exact2/1 qualified coverage; unavailable day intersects preceding overnight;600 elapsed minutes call-to-clinic rest"
+        ]
+      }
+    },
+    {
+      "inputSha256": "1eaba8574541d3ac335ec30838d8c3651ca85705adfc750c2b5dfd4d1da5a452",
+      "expected": {
+        "id": "rolling-hours",
+        "disposition": "compileRejected",
+        "people": 8,
+        "horizonDays": 28,
+        "resolvedShifts": 20,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": null,
+        "deferredObligations": [
+          {
+            "kind": "rule",
+            "ruleId": "01a04a99-f980-7d27-b33f-00154d9992c3",
+            "ruleKind": "maximumHours"
+          },
+          {
+            "kind": "rule",
+            "ruleId": "01a04a99-f980-7371-8e25-0ec1eb2fbe6b",
+            "ruleKind": "maximumHours"
+          },
+          {
+            "kind": "lock",
+            "assignmentId": "01a04a99-f980-718a-a9ec-92b833bd0246"
+          }
+        ],
+        "semantics": [
+          "Eight clinicians/four weeks; overlapping7-day1200-minute and14-day2400-minute Intersection hour limits plus a concrete first-clinic hard lock; Phase07"
+        ]
+      }
+    },
+    {
+      "inputSha256": "1336f005281153d36396ec229d99d9c9a7f199567d35d78e87b58892d7a90b68",
+      "expected": {
+        "id": "specialist-coverage",
+        "disposition": "accepted",
+        "people": 6,
+        "horizonDays": 7,
+        "resolvedShifts": 5,
+        "selectedAssignments": 10,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 300
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Six physicians, exactly two also specialists; each shift requires exactly two physicians including at least one specialist through Coverage.qualification_minimums; no RequiredSkillMix"
+        ]
+      }
+    },
+    {
+      "inputSha256": "008e4a66850fc3cf5b97a668b26715e88c111a5fe38294460f95afcc4d53808f",
+      "expected": {
+        "id": "repair-before",
+        "disposition": "accepted",
+        "people": 4,
+        "horizonDays": 7,
+        "resolvedShifts": 5,
+        "selectedAssignments": 10,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 200
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Four clinicians ordinary supported before-input; no BaseSchedule or accepted/selected authority; separately typed call-out mutation requires genuine accepted and selected Phase07 baseline"
+        ]
+      }
+    },
+    {
+      "inputSha256": "3c83a3042c9854c681035595cda7ba24969318d7b311294608ceab3c3a4c9ed6",
+      "expected": {
+        "id": "infeasible-coverage",
+        "disposition": "infeasible",
+        "people": 3,
+        "horizonDays": 1,
+        "resolvedShifts": 1,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Three active qualified people but only one eligible for a clinic needing exactly two; structurally valid model must reach backend infeasible termination"
+        ]
+      }
+    },
+    {
+      "inputSha256": "9067997adc9dafaf677f3f1f4787ce969f65c50cf9947ad1d8c5c90d35932bcd",
+      "expected": {
+        "id": "dst-spring",
+        "disposition": "accepted",
+        "people": 2,
+        "horizonDays": 1,
+        "resolvedShifts": 1,
+        "selectedAssignments": 1,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 2
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Chicago2026-03-08 gap02:30 moved forward;03:30 actual start/04:30 end;60 elapsed and120 scheduled minutes; Reject fails with Gap"
+        ]
+      }
+    },
+    {
+      "inputSha256": "9a30d8e7f5aa456b37243b6491a403fa81ff4b0b839a5b30c43fbd61a70f3087",
+      "expected": {
+        "id": "dst-fall",
+        "disposition": "accepted",
+        "people": 2,
+        "horizonDays": 1,
+        "resolvedShifts": 1,
+        "selectedAssignments": 1,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 2
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Chicago2026-11-01 first01:30 to02:30;120 elapsed and60 scheduled minutes; Later gives60 elapsed; Reject fails with Overlap"
+        ]
+      }
+    },
+    {
+      "inputSha256": "ef3edf583839ea1d6170a2b186632168c54c61ff11187b6dab9485ff11feaf1d",
+      "expected": {
+        "id": "large-supported",
+        "disposition": "accepted",
+        "people": 100,
+        "horizonDays": 12,
+        "resolvedShifts": 12,
+        "selectedAssignments": 12,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 14400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 2400,
+          "maximumVariables": 2600,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Exactly100 active universally eligible people by12 independent daily one-hour shifts:1200 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
+        ]
+      }
+    },
+    {
+      "inputSha256": "58c58cca2eb85712a0d80f79eb50a331da295c32ff07a62bc1fba6347ba15933",
+      "expected": {
+        "id": "large-pressure",
+        "disposition": "resourceLimit",
+        "people": 100,
+        "horizonDays": 20,
+        "resolvedShifts": 20,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": null,
+        "deferredObligations": [],
+        "semantics": [
+          "Exactly100 active universally eligible people by20 independent daily one-hour shifts:2000 unpruned pairs; expected typed resource limit, never infeasible or accepted; metrics unavailable unless actually produced"
+        ]
+      }
+    }
+  ]
+}

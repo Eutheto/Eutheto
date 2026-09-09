@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Private synthetic corpus record. Structural validation does not prove source fidelity, safe filesystem custody, cross-file digest binding, accepted-result authority, historical execution authenticity or timing relationships; the corpus runner performs those applicable checks.",
+  "properties": {
+    "corpusSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "runnerSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "samples": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "consumerChecks": {
+                    "items": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "feasibility": {
+                    "maximum": 9223372036854775807,
+                    "minimum": -9223372036854775808,
+                    "type": "integer"
+                  },
+                  "portableSha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "selectedAssignments": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "stableRank": {
+                    "maximum": 9223372036854775807,
+                    "minimum": -9223372036854775808,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "portableSha256",
+                  "selectedAssignments",
+                  "feasibility",
+                  "stableRank",
+                  "consumerChecks"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "backend": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "appliedParametersSha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "backendBestBoundValues": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "maximum": 9223372036854775807,
+                          "minimum": -9223372036854775808,
+                          "type": "integer"
+                        },
+                        "maxItems": 64,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "backendId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "backendLimitMilliseconds": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "backendObjectiveValues": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "maximum": 9223372036854775807,
+                          "minimum": -9223372036854775808,
+                          "type": "integer"
+                        },
+                        "maxItems": 64,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "infeasibilityCore": {
+                    "anyOf": [
+                      {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "modelFingerprintSha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "remainingAtDispatchMilliseconds": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "termination": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "timings": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "milliseconds": {
+                        "additionalProperties": {
+                          "maximum": 18446744073709551615,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxProperties": 64,
+                        "propertyNames": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "unavailable": {
+                        "additionalProperties": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxProperties": 64,
+                        "propertyNames": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "milliseconds",
+                      "unavailable"
+                    ],
+                    "type": "object"
+                  },
+                  "translatedConstraints": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "translatedVariables": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "versions": {
+                    "additionalProperties": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxProperties": 32,
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                      "type": "string"
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "backendId",
+                  "termination",
+                  "versions",
+                  "remainingAtDispatchMilliseconds",
+                  "backendLimitMilliseconds",
+                  "timings",
+                  "translatedVariables",
+                  "translatedConstraints",
+                  "appliedParametersSha256",
+                  "modelFingerprintSha256",
+                  "backendObjectiveValues",
+                  "backendBestBoundValues",
+                  "infeasibilityCore"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "caseId": {
+            "enum": [
+              "appendix-f",
+              "clinic-tiny",
+              "clinic-initial",
+              "clinic-full",
+              "clinic-overnight",
+              "rolling-hours",
+              "specialist-coverage",
+              "repair-before",
+              "infeasible-coverage",
+              "dst-spring",
+              "dst-fall",
+              "large-supported",
+              "large-pressure"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "canonicalIrBlake3": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "constraints": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "domainFilterCounts": {
+                    "additionalProperties": {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxProperties": 16,
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "variables": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "variables",
+                  "constraints",
+                  "canonicalIrBlake3",
+                  "domainFilterCounts"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ordinal": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "preparationErrorCode": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runnerProcessState": {
+            "enum": [
+              "firstOperation",
+              "postWarmup"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "optimal",
+              "feasible",
+              "infeasible",
+              "unbounded",
+              "noSolutionWithinLimit",
+              "cancelled",
+              "invalidModel",
+              "backendUnavailable",
+              "backendFailed"
+            ],
+            "type": "string"
+          },
+          "timings": {
+            "additionalProperties": false,
+            "properties": {
+              "milliseconds": {
+                "additionalProperties": {
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxProperties": 64,
+                "propertyNames": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "unavailable": {
+                "additionalProperties": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxProperties": 64,
+                "propertyNames": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "milliseconds",
+              "unavailable"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "caseId",
+          "runnerProcessState",
+          "ordinal",
+          "status",
+          "preparationErrorCode",
+          "model",
+          "timings",
+          "backend",
+          "acceptance"
+        ],
+        "type": "object"
+      },
+      "maxItems": 52,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "workerManifestSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "corpusSha256",
+    "workerManifestSha256",
+    "runnerSha256",
+    "samples"
+  ],
+  "title": "Workforce corpus v1 sample-batch",
+  "type": "object"
+}

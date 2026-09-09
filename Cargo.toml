@@ -20,6 +20,7 @@ members = [
   "domains/workforce/core",
   "apps/desktop/src-tauri",
   "benchmarks/runner",
+  "benchmarks/workforce-runner",
   "xtask",
 ]
 

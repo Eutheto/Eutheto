@@ -12,16 +12,25 @@ use std::process::Command;
 const IMAGE_NAME: &str = "cli-package";
 const MANIFEST_PATH_ENV: &str = "EUTHETO_ORTOOLS_MANIFEST_PATH";
 
-pub(crate) fn build_cli(repository: &Path) -> Result<()> {
+pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> Result<()> {
     ensure_repository_root(repository)?;
     let (host_target, _) = host_solver_target()?;
     let parent = repository.join("target");
     let mut stage = PackageStageGuard::acquire_package(repository, &parent, IMAGE_NAME)?;
     stage.prepare()?;
     #[cfg(windows)]
-    let (artifact, mut native_lease) = super::build_native_artifact(repository)?;
+    let (artifact, mut native_lease) = match supplied {
+        Some((root, _)) => (root.to_path_buf(), None),
+        None => {
+            let (artifact, lease) = super::build_native_artifact(repository)?;
+            (artifact, Some(lease))
+        }
+    };
     #[cfg(not(windows))]
-    let artifact = super::build_pinned_nix_artifact(repository)?;
+    let artifact = match supplied {
+        Some((root, _)) => root.to_path_buf(),
+        None => super::build_pinned_nix_artifact(repository)?,
+    };
     let manifest_sha256 =
         crate::solver_manifest::validate(crate::solver_manifest::ValidateOptions {
             source_contract: &repository.join("workers/ortools/source-contract.json"),
@@ -29,6 +38,12 @@ pub(crate) fn build_cli(repository: &Path) -> Result<()> {
             protocol_policy: &repository.join("protocol/version.json"),
             artifact_root: &artifact,
         })?;
+    if let Some((_, expected_sha256)) = supplied {
+        ensure!(
+            manifest_sha256 == expected_sha256,
+            "supplied CLI worker manifest differs from the trusted artifact digest"
+        );
+    }
     let artifact_target = read_manifest_target(&artifact)?;
     ensure!(
         artifact_target == host_target,
@@ -83,7 +98,9 @@ pub(crate) fn build_cli(repository: &Path) -> Result<()> {
         "CLI solver resources changed during the build"
     );
     #[cfg(windows)]
-    native_lease.commit()?;
+    if let Some(lease) = &mut native_lease {
+        lease.commit()?;
+    }
     let current = parent.join(IMAGE_NAME);
     publish_directory(&staging, &current, &stage.previous())?;
     stage.commit();

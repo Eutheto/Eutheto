@@ -1,0 +1,39 @@
+[package]
+name = "eutheto-workforce-benchmark"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "=1.0.104"
+clap = { version = "=4.6.6", features = ["derive"] }
+eutheto-core = { path = "../../crates/eutheto-core" }
+eutheto-domain-api = { path = "../../crates/eutheto-domain-api" }
+eutheto-domain-ir = { path = "../../crates/eutheto-domain-ir" }
+eutheto-export = { path = "../../crates/eutheto-export" }
+eutheto-import = { path = "../../crates/eutheto-import" }
+eutheto-planning-ir = { path = "../../crates/eutheto-planning-ir" }
+eutheto-solver-api = { path = "../../crates/eutheto-solver-api" }
+eutheto-solver-ortools = { path = "../../crates/eutheto-solver-ortools" }
+eutheto-solver-router = { path = "../../crates/eutheto-solver-router" }
+eutheto-types = { path = "../../crates/eutheto-types" }
+eutheto-workforce = { path = "../../domains/workforce/core" }
+jiff = { version = "=0.2.35", features = ["serde", "tzdb-bundle-always"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "process", "rt", "signal", "time"] }
+uuid = "=1.26.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+process-wrap = { version = "=10.0.0", default-features = false, features = ["std", "tokio1", "kill-on-drop", "process-group"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "=10.0.0", default-features = false, features = ["std", "tokio1", "kill-on-drop", "job-object", "creation-flags"] }

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Private synthetic corpus record. Structural validation does not prove source fidelity, safe filesystem custody, cross-file digest binding, accepted-result authority, historical execution authenticity or timing relationships; the corpus runner performs those applicable checks.",
+  "properties": {
+    "baselineRequirement": {
+      "const": "Phase07: obtain a genuine independently accepted solution of repair-before containing person-0 on the September2 clinic and select it as the baseline before applying this call-out"
+    },
+    "beforeCase": {
+      "const": "repair-before"
+    },
+    "commandId": {
+      "const": "official.workforce.add_entity"
+    },
+    "corpusVersion": {
+      "const": 1
+    },
+    "executionPhase": {
+      "const": 7
+    },
+    "format": {
+      "const": "eutheto/workforce-repair-fixture"
+    },
+    "payload": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "additionalProperties": false,
+          "properties": {
+            "availabilityKind": {
+              "const": "unavailable"
+            },
+            "effectiveRange": {
+              "additionalProperties": false,
+              "properties": {
+                "endDateExclusive": {
+                  "const": "2026-09-08"
+                },
+                "startDate": {
+                  "const": "2026-09-01"
+                }
+              },
+              "required": [
+                "startDate",
+                "endDateExclusive"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "format": "uuid",
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "availability"
+            },
+            "note": {
+              "const": "Synthetic unexpected call-out"
+            },
+            "personId": {
+              "format": "uuid",
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "source": {
+              "const": "synthetic-callout"
+            },
+            "timeWindow": {
+              "additionalProperties": false,
+              "properties": {
+                "endsAt": {
+                  "const": "2026-09-03T05:00:00Z"
+                },
+                "kind": {
+                  "const": "instant"
+                },
+                "startsAt": {
+                  "const": "2026-09-02T05:00:00Z"
+                }
+              },
+              "required": [
+                "kind",
+                "startsAt",
+                "endsAt"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "personId",
+            "availabilityKind",
+            "timeWindow",
+            "effectiveRange",
+            "source",
+            "note"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "repairRequirement": {
+      "const": "Phase07: repair from that accepted and selected baseline after this single unavailable-person mutation; pure mutation validation is not repair execution"
+    },
+    "schemaVersion": {
+      "const": 1
+    }
+  },
+  "required": [
+    "format",
+    "schemaVersion",
+    "corpusVersion",
+    "beforeCase",
+    "executionPhase",
+    "baselineRequirement",
+    "commandId",
+    "payload",
+    "repairRequirement"
+  ],
+  "title": "Workforce corpus v1 repair",
+  "type": "object"
+}
