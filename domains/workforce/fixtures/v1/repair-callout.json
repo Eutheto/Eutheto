@@ -1,0 +1,29 @@
+{
+  "format": "eutheto/workforce-repair-fixture",
+  "schemaVersion": 1,
+  "corpusVersion": 1,
+  "beforeCase": "repair-before",
+  "executionPhase": 7,
+  "baselineRequirement": "Phase07: obtain a genuine independently accepted solution of repair-before containing person-0 on the September2 clinic and select it as the baseline before applying this call-out",
+  "commandId": "official.workforce.add_entity",
+  "payload": {
+    "entity": {
+      "kind": "availability",
+      "id": "01a04a99-f980-7066-8181-b678636d5eed",
+      "personId": "01a04a99-f980-7053-bc48-2894af573a99",
+      "availabilityKind": "unavailable",
+      "timeWindow": {
+        "kind": "instant",
+        "startsAt": "2026-09-02T05:00:00Z",
+        "endsAt": "2026-09-03T05:00:00Z"
+      },
+      "effectiveRange": {
+        "startDate": "2026-09-01",
+        "endDateExclusive": "2026-09-08"
+      },
+      "source": "synthetic-callout",
+      "note": "Synthetic unexpected call-out"
+    }
+  },
+  "repairRequirement": "Phase07: repair from that accepted and selected baseline after this single unavailable-person mutation; pure mutation validation is not repair execution"
+}

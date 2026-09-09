@@ -42,7 +42,7 @@ env:
 
 jobs:
   benchmark:
-    name: Discover and run approved benchmarks
+    name: Run approved benchmarks
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -51,92 +51,49 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Discover real corpus cases and runner sources
-        id: discover
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          mapfile -d '' cases < <(
-            find benchmarks/corpus -type f \
-              ! -iname 'README.md' \
-              ! -iname 'LICENSE' \
-              ! -iname 'LICENSE.*' \
-              ! -name '.gitkeep' \
-              -print0 | sort -z
-          )
-          mapfile -d '' runner_sources < <(
-            find benchmarks/runner -type f \
-              ! -iname 'README.md' \
-              ! -iname 'LICENSE' \
-              ! -iname 'LICENSE.*' \
-              ! -name '.gitkeep' \
-              -print0 | sort -z
-          )
-
-          case_count=${#cases[@]}
-          runner_count=${#runner_sources[@]}
-          printf 'case_count=%s\n' "$case_count" >> "$GITHUB_OUTPUT"
-          printf 'runner_count=%s\n' "$runner_count" >> "$GITHUB_OUTPUT"
-
-          if (( case_count > 0 && runner_count > 0 )); then
-            printf 'ready=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'ready=false\n' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Report unavailable benchmark evidence
-        if: steps.discover.outputs.ready != 'true'
-        shell: bash
-        env:
-          CASE_COUNT: ${{ steps.discover.outputs.case_count }}
-          RUNNER_COUNT: ${{ steps.discover.outputs.runner_count }}
-        run: |
-          set -euo pipefail
-          {
-            echo '## Benchmark evidence'
-            echo
-            echo 'No benchmark evidence was produced.'
-            echo
-            echo "Discovered real corpus cases: ${CASE_COUNT}"
-            echo "Discovered runner source files: ${RUNNER_COUNT}"
-            echo
-            echo 'Phase 00 reserves these directories but does not provide a solver benchmark corpus or runner. Directory placeholders are not passing evidence.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Install locked Nix
-        if: steps.discover.outputs.ready == 'true'
         uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
         with:
           github-token: ""
           diagnostic-endpoint: ""
 
       - name: Run the canonical benchmark command
-        if: steps.discover.outputs.ready == 'true'
+        id: bench
         shell: bash
         env:
           TMPDIR: ${{ runner.temp }}/eutheto-benchmark
+          EUTHETO_BENCHMARK_ARTIFACTS: ${{ runner.temp }}/eutheto-benchmark-evidence
         run: |
           set -euo pipefail
           mkdir -p "$TMPDIR"
           nix develop --no-update-lock-file .#full --command just bench
 
+      - name: Retain bounded synthetic benchmark reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/eutheto-benchmark-evidence/*/phase03-primitives.json
+            ${{ runner.temp }}/eutheto-benchmark-evidence/*/workforce.json
+            ${{ runner.temp }}/eutheto-benchmark-evidence/*/workforce-cli.json
+          if-no-files-found: warn
+          retention-days: 7
+          include-hidden-files: false
+
       - name: Record benchmark evidence status
-        if: steps.discover.outputs.ready == 'true' && success()
+        if: always()
         shell: bash
         env:
-          CASE_COUNT: ${{ steps.discover.outputs.case_count }}
-          RUNNER_COUNT: ${{ steps.discover.outputs.runner_count }}
+          BENCHMARK_OUTCOME: ${{ steps.bench.outcome }}
         run: |
           set -euo pipefail
           {
             echo '## Benchmark evidence'
             echo
-            echo 'The canonical benchmark command completed.'
+            printf 'Canonical command outcome: %s\n' "$BENCHMARK_OUTCOME"
             echo
-            echo "Discovered real corpus cases: ${CASE_COUNT}"
-            echo "Discovered runner source files: ${RUNNER_COUNT}"
-            echo
-            echo 'Only the runner output from this execution is evidence; scheduling or directory presence alone is not.'
+            echo 'Phase03 is raw backend evidence. Workforce acceptance requires original-domain verification and final admission; packaged CLI checks exercise the same corpus and worker digest.'
+            echo 'Missing stage metrics remain explicitly unavailable. Unexpected semantic outcomes fail the command; resource refusal passes only its named pressure expectation.'
+            echo 'These synthetic observations have unmanaged OS caches and no provider enrichment. No Phase12 performance threshold or release baseline is claimed.'
           } >> "$GITHUB_STEP_SUMMARY"

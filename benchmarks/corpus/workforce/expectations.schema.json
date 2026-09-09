@@ -1,0 +1,586 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Private synthetic corpus record. Structural validation does not prove source fidelity, safe filesystem custody, cross-file digest binding, accepted-result authority, historical execution authenticity or timing relationships; the corpus runner performs those applicable checks.",
+  "properties": {
+    "cases": {
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "appendix-f"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "clinic-tiny"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "clinic-initial"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "clinic-full"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "clinic-overnight"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "rolling-hours"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "specialist-coverage"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "repair-before"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "infeasible-coverage"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "dst-spring"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "dst-fall"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "large-supported"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "large-pressure"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        }
+      ],
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "additionalProperties": false,
+            "properties": {
+              "deferredObligations": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "rule"
+                        },
+                        "ruleId": {
+                          "format": "uuid",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "ruleKind": {
+                          "enum": [
+                            "maximumHours",
+                            "maximumConsecutive"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "ruleId",
+                        "ruleKind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "preference"
+                        },
+                        "preferenceKind": {
+                          "enum": [
+                            "workloadBalance",
+                            "time"
+                          ],
+                          "type": "string"
+                        },
+                        "ruleId": {
+                          "format": "uuid",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "ruleId",
+                        "preferenceKind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "assignmentId": {
+                          "format": "uuid",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "lock"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "assignmentId"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 16,
+                "minItems": 0,
+                "type": "array"
+              },
+              "disposition": {
+                "enum": [
+                  "accepted",
+                  "infeasible",
+                  "compileRejected",
+                  "resourceLimit"
+                ],
+                "type": "string"
+              },
+              "horizonDays": {
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "id": {
+                "enum": [
+                  "appendix-f",
+                  "clinic-tiny",
+                  "clinic-initial",
+                  "clinic-full",
+                  "clinic-overnight",
+                  "rolling-hours",
+                  "specialist-coverage",
+                  "repair-before",
+                  "infeasible-coverage",
+                  "dst-spring",
+                  "dst-fall",
+                  "large-supported",
+                  "large-pressure"
+                ],
+                "type": "string"
+              },
+              "modelEnvelope": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "maximumConstraints": {
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "maximumVariables": {
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "minimumVariables": {
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "minimumVariables",
+                      "maximumVariables",
+                      "maximumConstraints"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "people": {
+                "maximum": 256,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "resolvedShifts": {
+                "maximum": 128,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "feasibility": {
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "type": "integer"
+                      },
+                      "maximumStableRank": {
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "type": "integer"
+                      },
+                      "minimumStableRank": {
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "feasibility",
+                      "minimumStableRank",
+                      "maximumStableRank"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "selectedAssignments": {
+                "anyOf": [
+                  {
+                    "maximum": 32768,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "semantics": {
+                "items": {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "disposition",
+              "people",
+              "horizonDays",
+              "resolvedShifts",
+              "selectedAssignments",
+              "score",
+              "modelEnvelope",
+              "deferredObligations",
+              "semantics"
+            ],
+            "type": "object"
+          },
+          "inputSha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "inputSha256",
+          "expected"
+        ],
+        "type": "object"
+      },
+      "maxItems": 13,
+      "minItems": 13,
+      "type": "array"
+    },
+    "corpusVersion": {
+      "const": 1
+    },
+    "format": {
+      "const": "eutheto/workforce-corpus-expectations"
+    },
+    "generatorSourceSha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    }
+  },
+  "required": [
+    "format",
+    "schemaVersion",
+    "corpusVersion",
+    "generatorSourceSha256",
+    "cases"
+  ],
+  "title": "Workforce corpus v1 expectations",
+  "type": "object"
+}

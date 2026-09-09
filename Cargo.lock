@@ -1224,6 +1224,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "eutheto-workforce-benchmark"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "eutheto-core",
+ "eutheto-domain-api",
+ "eutheto-domain-ir",
+ "eutheto-export",
+ "eutheto-import",
+ "eutheto-planning-ir",
+ "eutheto-solver-api",
+ "eutheto-solver-ortools",
+ "eutheto-solver-router",
+ "eutheto-types",
+ "eutheto-workforce",
+ "jiff",
+ "libc",
+ "process-wrap",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

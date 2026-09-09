@@ -32,6 +32,11 @@ enum Command {
     Generate,
     /// Verify that checked-in generated sources have no drift.
     GenerateCheck,
+    /// Run the versioned Workforce corpus tool without adding application dependencies to xtask.
+    Workforce {
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<std::ffi::OsString>,
+    },
     /// Verify versioned worker-protocol assets.
     Protocol {
         #[command(subcommand)]
@@ -94,7 +99,12 @@ enum SolverCommand {
     /// Build a desktop bundle from one trusted, manifest-bound sidecar handoff.
     BuildDesktop,
     /// Build and atomically publish a manifest-bound CLI and worker image.
-    BuildCli,
+    BuildCli {
+        #[arg(long, requires = "manifest_sha256")]
+        artifact_root: Option<PathBuf>,
+        #[arg(long, requires = "artifact_root")]
+        manifest_sha256: Option<String>,
+    },
     /// Exercise a relocated packaged CLI through real file and stored Workforce solves.
     SmokeCli {
         #[arg(long)]
@@ -175,11 +185,15 @@ fn main() -> Result<()> {
         command => {
             let root = repository_root()?;
             match command {
-                Command::Generate => generate::generate(&root),
+                Command::Generate => {
+                    generate::generate(&root)?;
+                    workforce(&root, &["generate".into()])
+                }
                 Command::GenerateCheck => {
                     generate::check(&root)?;
                     supply_chain::check_licenses(&root)?;
                     supply_chain::check_sbom(&root)?;
+                    workforce(&root, &["check".into()])?;
                     Ok(())
                 }
                 Command::Protocol {
@@ -187,10 +201,14 @@ fn main() -> Result<()> {
                 } => protocol::verify(&root),
                 Command::Fixtures {
                     command: FixturesCommand::Validate,
-                } => fixtures::validate(&root),
+                } => {
+                    fixtures::validate(&root)?;
+                    workforce(&root, &["check".into()])
+                }
                 Command::Architecture {
                     command: ArchitectureCommand::Verify,
                 } => architecture::verify(&root),
+                Command::Workforce { arguments } => workforce(&root, &arguments),
                 Command::Solver { .. } => {
                     unreachable!("solver commands are handled before root lookup")
                 }
@@ -255,7 +273,17 @@ fn run_solver(command: SolverCommand) -> Result<()> {
         ),
         SolverCommand::BuildNative => solver::build_native(&repository_root()?),
         SolverCommand::BuildDesktop => solver::build_desktop(&repository_root()?),
-        SolverCommand::BuildCli => solver::build_cli(&repository_root()?),
+        SolverCommand::BuildCli {
+            artifact_root,
+            manifest_sha256,
+        } => {
+            let supplied = match (artifact_root.as_deref(), manifest_sha256.as_deref()) {
+                (Some(root), Some(digest)) => Some((root, digest)),
+                (None, None) => None,
+                _ => anyhow::bail!("artifact-root and manifest-sha256 must be supplied together"),
+            };
+            solver::build_cli(&repository_root()?, supplied)
+        }
         SolverCommand::SmokeCli { image } => solver::smoke_cli(&repository_root()?, &image),
         SolverCommand::InstallFromNix => solver::install_from_nix(&repository_root()?),
         SolverCommand::Smoke {
@@ -276,4 +304,27 @@ fn repository_root() -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .context("xtask manifest directory has no repository parent")
+}
+
+fn workforce(root: &Path, arguments: &[std::ffi::OsString]) -> Result<()> {
+    let status = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "--locked",
+            "--release",
+            "--package",
+            "eutheto-workforce-benchmark",
+            "--",
+            "--repository",
+        ])
+        .arg(root)
+        .args(arguments)
+        .current_dir(root)
+        .status()
+        .context("failed to start Workforce corpus tool")?;
+    anyhow::ensure!(
+        status.success(),
+        "Workforce corpus tool failed with {status}"
+    );
+    Ok(())
 }

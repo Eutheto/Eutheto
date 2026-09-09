@@ -107,6 +107,7 @@
         "domains/workforce/core",
         "apps/desktop/src-tauri",
         "benchmarks/runner",
+        "benchmarks/workforce-runner",
         "xtask",
     ]
     assert cargo["workspace"]["package"]["rust-version"] == "1.97.1"
@@ -284,7 +285,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 20 and
+      (.workspace_members | length) == 21 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -305,6 +306,7 @@
         "eutheto-types",
         "eutheto-verify",
         "eutheto-workforce",
+        "eutheto-workforce-benchmark",
         "xtask"
       ] | sort)
     ' "$TMPDIR/cargo-metadata.json" > /dev/null

@@ -2,8 +2,8 @@
 
 # Expected benchmark results
 
-This directory will hold reviewed benchmark expectations after real corpora and runners exist. Correctness expectations and performance baselines must remain distinguishable and must identify the corpus/input version plus the scenario, domain, planning, protocol, backend/build, runner, and expected-result versions that affect interpretation.
+[`workforce/v1.json`](workforce/v1.json) contains generated, reviewed correctness expectations for the synthetic Phase05 Workforce corpus. Each expectation binds an exact input digest and records original-domain dimensions, semantic obligations, expected disposition and applicable score/model bounds. Changing a fixture does not make its new outcome correct merely by regenerating the expected file; the semantic change requires review.
 
 A performance baseline must also record the toolchain, target and eligible runner class, fixed clock/time zone/locale/seed/thread count/temp policy, warm-up and sampling method, metric, and review-approved threshold. Creating or replacing a baseline requires review of the measured and semantic difference; regenerating or accepting changed output is not sufficient.
 
-Phase 00 intentionally contains no expected answer, timing, threshold, baseline, or claim of a passing benchmark. See the [fixture contract](../../docs/architecture/test-fixtures.md).
+These expectations are not performance baselines. The implemented runner records observations without Phase12 timing thresholds. Raw Phase03 backend evidence and independently accepted Workforce outcomes remain distinct. See the [fixture contract](../../docs/architecture/test-fixtures.md).
