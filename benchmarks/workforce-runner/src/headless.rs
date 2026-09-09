@@ -771,7 +771,7 @@ pub(crate) async fn run(
     let artifact_root = artifact_root.canonicalize()?;
     let scratch = tempfile::Builder::new()
         .prefix("workforce-evidence-")
-        .tempdir_in(root.join("target"))?;
+        .tempdir()?;
     let runner = SampleRunner {
         root,
         artifact_root: &artifact_root,

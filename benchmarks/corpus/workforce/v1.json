@@ -4,7 +4,7 @@
   "corpusVersion": 1,
   "generator": {
     "method": "role-keyed-uuidv7-fixed-clock;source-sha256-framing-v1",
-    "sourceSha256": "ad6c8126e09211574c2b9439b2a4dd1fe2803ef6458a8752b574412f706fef8c",
+    "sourceSha256": "cc6a47b508c17f8302ef3e6674daab0398539849f734b04cc971e5a196491517",
     "sources": [
       {
         "path": "benchmarks/workforce-runner/Cargo.toml",
@@ -53,8 +53,8 @@
       },
       {
         "path": "benchmarks/workforce-runner/src/headless.rs",
-        "sha256": "c3fd692a083f4794d48195ab267b65c5b224139b6da5cac23f29dbbace4c6d53",
-        "bytes": 39218
+        "sha256": "95aaabac1d6d513bac2c96ecff3d580f97da5525dd02cb79b577c17e21ef6bf7",
+        "bytes": 39196
       },
       {
         "path": "benchmarks/workforce-runner/src/main.rs",
@@ -215,7 +215,7 @@
   ],
   "expectations": {
     "path": "benchmarks/expected/workforce/v1.json",
-    "sha256": "33c50739741be51e65f8e2660edacbff6893aee7dad6e1cf17bd08c48e573a01",
+    "sha256": "5fdfe2a37edffadf77fedf0d6efa8350cd6c580cc06271e14b1c0fab43eec4a7",
     "bytes": 11440
   },
   "repair": {
