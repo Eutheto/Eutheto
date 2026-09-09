@@ -21,6 +21,7 @@ node_modules/
 .nyc_output/
 test-results/
 playwright-report/
+.vitest-attachments/
 allure-results/
 
 # Native and CMake builds

@@ -93,12 +93,19 @@ jobs:
           nix develop --no-update-lock-file --command just check
           test -z "$(git status --porcelain --untracked-files=all)"
 
+      - name: Verify browser keyboard focus and accessibility behavior
+        id: browser
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/eutheto-playwright
+        run: nix develop --no-update-lock-file --command just frontend-browser-install frontend-browser-test
+
       - name: Write sanitized check report
         if: always()
         env:
           FLAKE_OUTCOME: ${{ steps.flake.outcome }}
           INSTALL_OUTCOME: ${{ steps.install.outcome }}
           CHECK_OUTCOME: ${{ steps.check.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
         run: |
           report_dir="$RUNNER_TEMP/eutheto-pr-report"
           mkdir -p "$report_dir"
@@ -107,6 +114,7 @@ jobs:
             "flake_check=$FLAKE_OUTCOME" \
             "locked_install=$INSTALL_OUTCOME" \
             "non_mutating_check=$CHECK_OUTCOME" \
+            "browser_components=$BROWSER_OUTCOME" \
             > "$report_dir/status.txt"
 
       - name: Upload sanitized check report

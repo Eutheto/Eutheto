@@ -1,4 +1,6 @@
-import { reactive } from "vue";
+import { onScopeDispose, shallowReactive, watch } from "vue";
+import { useQuery, useQueryCache } from "@pinia/colada";
+import { useWorkspaceStore } from "./stores/workspace";
 
 import {
   applyImport,
@@ -112,7 +114,7 @@ const generatedProjectHomeApi: ProjectHomeApi = {
 
 export interface ProjectHomeState {
   phase: ProjectPhase;
-  projects: readonly ProjectSummary[];
+  readonly projects: readonly ProjectSummary[];
   selectedId: string | null;
   busyAction: string | null;
   errorMessage: string | null;
@@ -262,10 +264,29 @@ function collisionPlan(
 export function createProjectHomeController(
   api: ProjectHomeApi = generatedProjectHomeApi,
 ): ProjectHomeController {
-  const state = reactive<ProjectHomeState>({
+  const workspace = useWorkspaceStore();
+  const queryCache = useQueryCache();
+  const projectKey = ["projects", "all"] as const;
+  const emptyProjects: readonly ProjectSummary[] = [];
+  const projects = useQuery({
+    key: projectKey,
+    query: async () => (await api.listProjects("all")).result,
+    enabled: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const state = shallowReactive<ProjectHomeState>({
     phase: "loading",
-    projects: [],
-    selectedId: null,
+    get projects() {
+      return projects.data.value ?? emptyProjects;
+    },
+    get selectedId() {
+      return workspace.selectedProjectId;
+    },
+    set selectedId(value: string | null) {
+      workspace.selectedProjectId = value;
+    },
     busyAction: null,
     errorMessage: null,
     announcement: "",
@@ -279,29 +300,38 @@ export function createProjectHomeController(
   });
   const eventUnlisteners: Array<() => void> = [];
   let listenersStarted = false;
+  let disposed = false;
+
+  // Native awaits can outlive the controller; read the current lifetime each time.
+  const isDisposed = (): boolean => disposed;
+
+  // Colada only publishes the current fetch, even when native IPC ignores abort.
+  // Observe that publication, never the settlement of an older refetch promise.
+  watch(
+    projects.state,
+    (result) => {
+      if (isDisposed()) return;
+      if (result.status === "success") {
+        if (!result.data.some(({ scenarioId }) => scenarioId === state.selectedId)) {
+          state.selectedId = result.data[0]?.scenarioId ?? null;
+        }
+        state.phase = "ready";
+        state.errorMessage = null;
+      } else if (result.status === "error") {
+        state.phase = "error";
+        state.errorMessage = `${safeMessage(result.error)} Try again to refresh the saved project library.`;
+      }
+    },
+    { flush: "sync" },
+  );
 
   async function reload(showLoading = true): Promise<boolean> {
-    if (showLoading) {
-      state.phase = "loading";
-    }
+    if (isDisposed()) return false;
+    state.announcement = "";
+    if (showLoading) state.phase = "loading";
     state.errorMessage = null;
-
-    try {
-      const response = await api.listProjects("all");
-      state.projects = response.result;
-      if (
-        !state.selectedId ||
-        !response.result.some(({ scenarioId }) => scenarioId === state.selectedId)
-      ) {
-        state.selectedId = response.result[0]?.scenarioId ?? null;
-      }
-      state.phase = "ready";
-      return true;
-    } catch (error) {
-      state.phase = "error";
-      state.errorMessage = safeMessage(error);
-      return false;
-    }
+    const result = await projects.refetch();
+    return !isDisposed() && result.status === "success";
   }
 
   function refreshFromEvent(event: ScenarioChangedEvent | ScenarioValidationChangedEvent): void {
@@ -310,73 +340,106 @@ export function createProjectHomeController(
     }
   }
 
-  async function startEventListeners(): Promise<void> {
-    if (listenersStarted) return;
-    listenersStarted = true;
+  function releaseListener(unlisten: () => void): void {
     try {
-      const [changed, validationChanged, notification, refreshRequired] = await Promise.all([
-        api.onScenarioChanged(refreshFromEvent),
-        api.onScenarioValidationChanged(refreshFromEvent),
-        api.onAppNotification(() => {
-          void reload(false);
-        }),
-        api.onLibraryRefreshRequired(() => {
-          void reload(false);
-        }),
-      ]);
-      eventUnlisteners.push(changed, validationChanged, notification, refreshRequired);
-    } catch (error) {
-      listenersStarted = false;
-      state.errorMessage = safeMessage(error);
+      unlisten();
+    } catch {
+      // One failed release must not strand the other acquired listeners.
+    }
+  }
+
+  async function startEventListeners(): Promise<void> {
+    if (isDisposed() || listenersStarted) return;
+    listenersStarted = true;
+    let registrationFailed = false;
+    await Promise.all(
+      [
+        () => api.onScenarioChanged(refreshFromEvent),
+        () => api.onScenarioValidationChanged(refreshFromEvent),
+        () =>
+          api.onAppNotification(() => {
+            void reload(false);
+          }),
+        () =>
+          api.onLibraryRefreshRequired(() => {
+            void reload(false);
+          }),
+      ].map(async (register) => {
+        try {
+          const unlisten = await register();
+          if (isDisposed() || registrationFailed) releaseListener(unlisten);
+          else eventUnlisteners.push(unlisten);
+        } catch (error) {
+          registrationFailed = true;
+          for (const unlisten of eventUnlisteners.splice(0)) releaseListener(unlisten);
+          if (!isDisposed()) state.errorMessage = safeMessage(error);
+        }
+      }),
+    );
+    listenersStarted = eventUnlisteners.length > 0;
+  }
+
+  async function discardPreview(previewId: string): Promise<void> {
+    try {
+      await api.cancelPortablePreview(previewId);
+    } catch {
+      // A consumed or evicted preview is already unavailable.
     }
   }
 
   async function dispose(): Promise<void> {
-    for (const unlisten of eventUnlisteners.splice(0)) unlisten();
-    listenersStarted = false;
-    const previewIds = [state.importPreview?.previewId, state.restorePreview?.previewId].filter(
-      (previewId): previewId is string => previewId !== undefined,
-    );
+    if (isDisposed()) return;
+    disposed = true;
+    // cancel() also detaches pending writes; scope untracking alone only aborts.
+    const entry = queryCache.get(projectKey);
+    if (entry) queryCache.cancel(entry);
+    for (const unlisten of eventUnlisteners.splice(0)) releaseListener(unlisten);
+    const previewIds = [
+      state.importPreview?.previewId,
+      state.backupPreview?.previewId,
+      state.restorePreview?.previewId,
+    ].filter((previewId): previewId is string => previewId !== undefined);
     state.importPreview = null;
     state.importWarnings = [];
+    state.backupPreview = null;
     state.restorePreview = null;
     state.restoreWarnings = [];
     state.restoreSafetyBackupFailure = null;
-    await Promise.all(
-      previewIds.map(async (previewId) => {
-        try {
-          await api.cancelPortablePreview(previewId);
-        } catch {
-          // A preview consumed by apply or server eviction is already safely unavailable.
-        }
-      }),
-    );
+    await Promise.all(previewIds.map(discardPreview));
   }
+
+  onScopeDispose(() => {
+    void dispose();
+  });
 
   async function mutate(
     action: string,
     operation: () => Promise<ApiResponseDto<unknown>>,
     successAnnouncement: string,
   ): Promise<boolean> {
+    if (isDisposed() || state.busyAction) return false;
     state.busyAction = action;
     state.errorMessage = null;
     try {
       await operation();
-      const reloaded = await reload(false);
-      if (!reloaded) return false;
-      state.announcement = successAnnouncement;
+      if (isDisposed()) return true;
+      await reload(false);
+      if (!isDisposed()) state.announcement = successAnnouncement;
       return true;
     } catch (error) {
+      if (isDisposed()) return false;
       if (isRevisionConflict(error)) {
-        state.announcement =
-          "The project changed in another window. The latest saved version has been reloaded.";
-        await reload(false);
+        const reloaded = await reload(false);
+        if (!isDisposed())
+          state.announcement = reloaded
+            ? "The project changed in another window. The latest saved version has been reloaded."
+            : "The project changed in another window. Refresh the library before trying the change again.";
       } else {
         state.errorMessage = safeMessage(error);
       }
       return false;
     } finally {
-      state.busyAction = null;
+      if (!isDisposed()) state.busyAction = null;
     }
   }
 
@@ -388,7 +451,7 @@ export function createProjectHomeController(
       await reload();
     },
     selectProject(scenarioId) {
-      state.selectedId = scenarioId;
+      if (!isDisposed() && !state.busyAction) state.selectedId = scenarioId;
     },
     createProject(input) {
       return mutate("create", () => api.createProject(input), `Created ${input.title}.`);
@@ -426,6 +489,7 @@ export function createProjectHomeController(
       );
     },
     async previewImport(selection) {
+      if (isDisposed() || state.busyAction) return false;
       const previousError = state.errorMessage;
       state.busyAction = "preview-import";
       state.errorMessage = null;
@@ -436,21 +500,28 @@ export function createProjectHomeController(
           includeResults: selection.includeResults,
           includeAssets: selection.includeAssets,
         });
+        if (isDisposed()) {
+          await discardPreview(response.result.previewId);
+          return false;
+        }
         state.importPreview = response.result;
         state.importWarnings = response.warnings;
         if (previousPreview && previousPreview.previewId !== response.result.previewId) {
-          await api.cancelPortablePreview(previousPreview.previewId).catch(() => undefined);
+          await discardPreview(previousPreview.previewId);
         }
+        if (isDisposed()) return false;
         state.announcement = "Import preview ready. Review every collision before applying it.";
         return true;
       } catch (error) {
+        if (isDisposed()) return false;
         state.errorMessage = isFileSelectionCancelled(error) ? previousError : safeMessage(error);
         return false;
       } finally {
-        state.busyAction = null;
+        if (!isDisposed()) state.busyAction = null;
       }
     },
     applyImport(collisions, supplemental) {
+      if (isDisposed() || state.busyAction) return Promise.resolve(false);
       const preview = state.importPreview;
       if (!preview) {
         return Promise.resolve(false);
@@ -467,29 +538,43 @@ export function createProjectHomeController(
             previewId: preview.previewId,
             collisionPlan: plan,
           }),
-        "Import applied. The saved project library has been reloaded.",
+        "Import applied.",
       ).then((applied) => {
-        state.importPreview = null;
-        state.importWarnings = [];
+        if (!isDisposed()) {
+          state.importPreview = null;
+          state.importWarnings = [];
+        }
         return applied;
       });
     },
     async previewBackup(title) {
+      if (isDisposed() || state.busyAction) return false;
       state.busyAction = "preview-backup";
       state.errorMessage = null;
       try {
+        const previousPreview = state.backupPreview;
         const response = await api.previewBackup(title);
+        if (isDisposed()) {
+          await discardPreview(response.result.previewId);
+          return false;
+        }
         state.backupPreview = response.result;
+        if (previousPreview && previousPreview.previewId !== response.result.previewId) {
+          await discardPreview(previousPreview.previewId);
+        }
+        if (isDisposed()) return false;
         state.announcement = "Backup preview ready.";
         return true;
       } catch (error) {
+        if (isDisposed()) return false;
         state.errorMessage = safeMessage(error);
         return false;
       } finally {
-        state.busyAction = null;
+        if (!isDisposed()) state.busyAction = null;
       }
     },
     async createBackup(title) {
+      if (isDisposed() || state.busyAction) return false;
       const preview = state.backupPreview;
       if (!preview) return false;
       const previousError = state.errorMessage;
@@ -497,27 +582,33 @@ export function createProjectHomeController(
       state.errorMessage = null;
       try {
         const response = await api.createBackup(title, preview.previewId);
-        const reloaded = await reload(false);
-        if (!reloaded) return false;
-        state.announcement = `Backup saved as ${response.result.artifactName}.`;
+        if (isDisposed()) return true;
+        await reload(false);
+        if (!isDisposed()) state.announcement = `Backup saved as ${response.result.artifactName}.`;
         return true;
       } catch (error) {
+        if (isDisposed()) return false;
         if (isFileSelectionCancelled(error)) {
           state.errorMessage = previousError;
         } else if (isRevisionConflict(error)) {
-          state.announcement =
-            "The project changed in another window. The latest saved version has been reloaded.";
-          await reload(false);
+          const reloaded = await reload(false);
+          if (!isDisposed())
+            state.announcement = reloaded
+              ? "The project changed in another window. The latest saved version has been reloaded."
+              : "The project changed in another window. Refresh the library before trying the change again.";
         } else {
           state.errorMessage = safeMessage(error);
         }
         return false;
       } finally {
-        state.backupPreview = null;
-        state.busyAction = null;
+        if (!isDisposed()) {
+          state.backupPreview = null;
+          state.busyAction = null;
+        }
       }
     },
     async previewRestore(mode) {
+      if (isDisposed() || state.busyAction) return false;
       const previousError = state.errorMessage;
       state.busyAction = "preview-restore";
       state.errorMessage = null;
@@ -528,23 +619,30 @@ export function createProjectHomeController(
           includeResults: true,
           includeAssets: true,
         });
+        if (isDisposed()) {
+          await discardPreview(response.result.previewId);
+          return false;
+        }
         state.restoreSafetyBackupFailure = null;
         state.restorePreview = response.result;
         state.restoreWarnings = response.warnings;
         if (previousPreview && previousPreview.previewId !== response.result.previewId) {
-          await api.cancelPortablePreview(previousPreview.previewId).catch(() => undefined);
+          await discardPreview(previousPreview.previewId);
         }
+        if (isDisposed()) return false;
         state.restoreMode = mode;
         state.announcement = `${mode === "replace-library" ? "Replace" : "Add"} restore preview ready.`;
         return true;
       } catch (error) {
+        if (isDisposed()) return false;
         state.errorMessage = isFileSelectionCancelled(error) ? previousError : safeMessage(error);
         return false;
       } finally {
-        state.busyAction = null;
+        if (!isDisposed()) state.busyAction = null;
       }
     },
     async applyRestore(collisions, supplemental, safetyBackupBypassPhrase = "") {
+      if (isDisposed() || state.busyAction) return false;
       const preview = state.restorePreview;
       if (!preview) return false;
       const plan = collisionPlan(
@@ -568,13 +666,15 @@ export function createProjectHomeController(
             safetyBackupBypassPhrase: safetyBackupBypassPhrase || null,
           },
         });
+        if (isDisposed()) return true;
         state.restorePreview = null;
         state.restoreWarnings = [];
         state.restoreSafetyBackupFailure = null;
-        if (!(await reload(false))) return false;
-        state.announcement = "Restore applied. The saved project library has been reloaded.";
+        await reload(false);
+        if (!isDisposed()) state.announcement = "Restore applied.";
         return true;
       } catch (error) {
+        if (isDisposed()) return false;
         if ((error as ApiFailure).code === "restore.safety_backup_failed") {
           state.restoreSafetyBackupFailure = safeMessage(error);
           state.errorMessage = null;
@@ -585,16 +685,18 @@ export function createProjectHomeController(
           state.restoreWarnings = [];
           state.restoreSafetyBackupFailure = null;
           if (isRevisionConflict(error)) {
-            state.announcement =
-              "The project changed in another window. The latest saved version has been reloaded.";
-            await reload(false);
+            const reloaded = await reload(false);
+            if (!isDisposed())
+              state.announcement = reloaded
+                ? "The project changed in another window. The latest saved version has been reloaded."
+                : "The project changed in another window. Refresh the library before trying the change again.";
           } else {
             state.errorMessage = safeMessage(error);
           }
         }
         return false;
       } finally {
-        state.busyAction = null;
+        if (!isDisposed()) state.busyAction = null;
       }
     },
   };

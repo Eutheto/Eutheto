@@ -20,6 +20,7 @@ Shared contracts are in [README.md](README.md), version evidence and unresolved 
 - The independent verifier rejects malformed or semantically invalid candidates irrespective of backend.
 - Official workforce fixtures and benchmarks provide a representative compatibility and performance corpus.
 - The typed experimental feature registry and advanced settings UI exist; experimental enablement is not an arbitrary local-storage flag.
+- The user has accepted the Phase-07 complete Workforce checkpoint and explicitly authorized Phase-08 implementation under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates).
 
 ## Decisions and invariants
 

@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
+import { RouterLink, RouterView } from "vue-router";
 
-import ProjectHome from "./components/ProjectHome.vue";
+import { messages } from "./messages";
 import { createProjectHomeController } from "./project-home";
+import { useWorkspaceStore } from "./stores/workspace";
 
 const home = createProjectHomeController();
+const workspace = useWorkspaceStore();
+const selectedProjectTitle = computed(() =>
+  home.state.phase === "ready"
+    ? home.state.projects.find(({ scenarioId }) => scenarioId === workspace.selectedProjectId)
+        ?.title
+    : undefined,
+);
 
 onMounted(async () => {
   await home.startEventListeners();
@@ -19,18 +28,26 @@ onUnmounted(() => {
   <main>
     <header class="app-header">
       <div>
-        <p class="eyebrow">Phase 01 · local-first workspace</p>
-        <h1>Eutheto</h1>
+        <p class="eyebrow">{{ messages.app.eyebrow }}</p>
+        <h1>
+          <RouterLink :to="{ name: 'projects' }">{{ messages.app.title }}</RouterLink>
+        </h1>
       </div>
       <div>
-        <p class="lede">Plan carefully. Keep the authoritative work on your machine.</p>
-        <p class="boundary-note">
-          Solver features and the <code>.eutheto</code> extension remain provisional development
-          capabilities.
-        </p>
+        <p class="lede">{{ messages.app.lede }}</p>
+        <p class="boundary-note">{{ messages.app.boundary }}</p>
       </div>
     </header>
+    <p class="workspace-context">
+      {{
+        selectedProjectTitle
+          ? messages.app.selectedProject(selectedProjectTitle)
+          : messages.app.noSelection
+      }}
+    </p>
 
-    <ProjectHome :home="home" />
+    <RouterView v-slot="{ Component }">
+      <component :is="Component" :home="home" />
+    </RouterView>
   </main>
 </template>

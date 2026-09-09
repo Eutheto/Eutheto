@@ -1,0 +1,22 @@
+diff --git a/types/index.d.ts b/types/index.d.ts
+index d4edc3bfe9aa77e5ffb39c20d172d0d56aa625b6..092e39ae2db560c297da632aca003c19f2f67ec6 100644
+--- a/types/index.d.ts
++++ b/types/index.d.ts
+@@ -7,7 +7,7 @@ import {queries, EventType, BoundFunctions} from '@testing-library/dom'
+ // eslint-disable-next-line import/no-extraneous-dependencies
+ import {OptionsReceived as PrettyFormatOptions} from 'pretty-format'
+ import {ComponentProps, ComponentSlots} from 'vue-component-type-helpers'
+-import {RemoveIndexSignature} from 'type-fest'
++import {OmitIndexSignature} from 'type-fest'
+ 
+ // NOTE: fireEvent is overridden below
+ export * from '@testing-library/dom'
+@@ -52,7 +52,7 @@ type AllowNonFunctionSlots<Slots> = {
+   [K in keyof Slots]: Slots[K] | VNodeChild
+ }
+ type ExtractSlots<C> = AllowNonFunctionSlots<
+-  Partial<RemoveIndexSignature<ComponentSlots<C>>>
++  Partial<OmitIndexSignature<ComponentSlots<C>>>
+ >
+ 
+ export interface RenderOptions<C>

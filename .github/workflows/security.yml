@@ -103,8 +103,10 @@ jobs:
           const reviewed = new Map([
             ['@isaacs/cliui@9.0.0', 'BlueOak-1.0.0'],
             ['atob@2.1.2', '(MIT OR Apache-2.0)'],
+            ['axe-core@4.13.0', 'MPL-2.0'],
             ['caniuse-lite@1.0.30001810', 'CC-BY-4.0'],
             ['glob@11.1.0', 'BlueOak-1.0.0'],
+            ['glob@13.0.6', 'BlueOak-1.0.0'],
             ['jackspeak@4.2.3', 'BlueOak-1.0.0'],
             ['lightningcss@1.32.0', 'MPL-2.0'],
             ['lightningcss-darwin-arm64@1.32.0', 'MPL-2.0'],
@@ -161,7 +163,8 @@ jobs:
                 const id = `${pkg.name}@${pkg.version}`;
                 if (seen.has(id)) continue;
                 seen.add(id);
-                const candidate = typeof pkg.license === 'string' ? pkg.license.trim() : '';
+                const license = typeof pkg.license === 'string' ? pkg.license : pkg.license?.type;
+                const candidate = typeof license === 'string' ? license.trim() : '';
                 const lifecycleScripts = Object.fromEntries(
                   ['preinstall', 'install', 'postinstall']
                     .filter(name => typeof pkg.scripts?.[name] === 'string')

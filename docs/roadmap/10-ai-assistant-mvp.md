@@ -26,6 +26,7 @@ Section 24 ownership is intentionally split. This phase owns only AI-relevant ca
 - Workforce and seating each have complete deterministic non-AI editors and explanations.
 - The Rust application owns scenarios, solve jobs, solutions, AI conversations, credentials references, and proposal state. Vue remains a typed view/controller.
 - Minimum Tauri capabilities, restrictive CSP, structured redacted logging, safe parser limits, and application error taxonomy are in place.
+- The user has accepted the Phase-09 complete Seating checkpoint and explicitly authorized Phase-10 implementation under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates).
 
 ## Decisions and invariants
 
@@ -436,6 +437,7 @@ Pause and write an ADR if an AI flow needs arbitrary file/code/shell/network aut
 
 Phase 10 is complete only when:
 
+- the user has completed the focused AI trust/privacy checkpoint and deterministic AI-disabled workflows, feedback is resolved, and explicit checkpoint acceptance and authorization to enter Phase 11 are recorded under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates);
 - the app and CLI core work fully with AI disabled and every AI capability has a deterministic non-AI equivalent;
 - provider-neutral internal contracts and fake provider support complete CI behavior without live credentials;
 - every AI adapter enabled in a build passes recorded conformance for its exact endpoint/header/statelessness/tool/stream/error contract, including the current Gemini `/v1beta/interactions` endpoint and required OpenAI/Gemini `store: false`; excluded, disabled, stale, or failing adapters expose accurate unavailable status/reasons and do not block the core release;
