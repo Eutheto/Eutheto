@@ -4,7 +4,7 @@
 
 The planned platform will validate those requirements, translate them into a solver-neutral planning model, route the model to a compatible backend, independently verify every candidate against the original domain meaning, and present the result in human language.
 
-> **Project status:** [Phases 00–04](docs/roadmap/README.md) have established reproducible tooling, the core application shell and persistence, domain-pack and solver-neutral Planning IR contracts, the isolated bundled OR-Tools worker, and independent verification, score, persistence, explanation, and counterfactual authority. [Phase 05](docs/roadmap/05-workforce-core-vertical-slice.md), the Workforce domain core and first complete verified production-domain slice, is the active scope; production domains, accepted production results, and release artifacts remain unimplemented.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope; its editors are not yet implemented. Remaining Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
 
 ## Product direction
 
@@ -218,7 +218,7 @@ remain explicitly unavailable.
 
 Read [`AGENTS.md`](AGENTS.md) before changing the repository. It defines source authority, phase discipline, architecture boundaries, generated-code rules, security and privacy constraints, and verification expectations for human and automated contributors.
 
-Implementation now proceeds through Phase 05. Changes must preserve the
+Implementation now proceeds through Phase 06. Changes must preserve the
 applicable roadmap issue IDs and exit gates and avoid claiming later-phase
 production behavior. Contributions should prefer complete vertical paths over
 mocks, stubs, or speculative infrastructure.

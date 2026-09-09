@@ -808,7 +808,7 @@ async function confirmRestore(): Promise<void> {
               </p>
               <p>
                 Prepared library revision {{ state.backupPreview.libraryRevision }} · digest
-                <code>{{ state.backupPreview.digest }}</code>
+                <code class="identifier">{{ state.backupPreview.digest }}</code>
               </p>
               <div v-if="state.backupPreview.backupSummary" class="preview">
                 <p>
