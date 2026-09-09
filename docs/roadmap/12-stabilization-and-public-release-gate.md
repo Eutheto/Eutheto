@@ -18,6 +18,7 @@ This phase is the implementation source of truth for blueprint Sections 22.18, 2
 - Release candidates are not rebuilt during approval. Any source, lockfile, build flag, capability, worker, dependency, asset, migration, or documentation change creates a new candidate and invalidates affected evidence.
 - Official workforce and seating behavior, independent verification, persistence, CLI, desktop flows, optional AI, worker supervision, updater, backup/recovery, and support-bundle contracts are feature-complete.
 - The public release remains fully functional offline and with AI disabled.
+- The user has accepted the Phase-11 release-candidate checkpoint against recorded immutable artifact digests and explicitly authorized Phase-12 formal QA under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates). This is not authorization to publish and does not replace any gate below.
 
 ## Decisions and invariants
 

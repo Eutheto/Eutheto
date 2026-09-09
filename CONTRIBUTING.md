@@ -51,6 +51,8 @@ Before running one, inspect the checked-in `Justfile` and `just --list`; a recip
 
 Domain-pack generation and drift checking also require the locked JavaScript dependencies from `just install`: `xtask` invokes the workspace-pinned Prettier and checked-in desktop configuration for the combined TypeScript contract product. It verifies the exact formatter version and does not install dependencies or exempt generated TypeScript from formatting.
 
+UI001 browser component checks are a separate, explicit surface: run `just frontend-browser-install` once to provision the lockfile-matched headless Chromium, then `just frontend-browser-test`. `just check` runs the Node-based frontend checks; the PR workflow also runs the browser scenarios. Browser focus/keyboard/axe evidence does not replace the dependency-free W3C `just e2e` native persistence check, manual assistive-technology review, or platform/installer acceptance. Exact dependency declaration repairs and their removal conditions are recorded in the [assumption ledger](docs/roadmap/assumptions.md#ui001-exact-stack-adoption-and-declaration-repairs--2026-09-09).
+
 Report exactly what you ran and what it proved. A build does not prove product acceptance, a unit test does not prove packaging, and repository checks do not prove deferred product behavior.
 
 ## Architecture and security boundaries

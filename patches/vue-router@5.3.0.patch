@@ -1,0 +1,27 @@
+diff --git a/dist/index-DaOfZHXc.d.ts b/dist/index-DaOfZHXc.d.ts
+index c6a215f862655da8a9d4e216b14a87201b4d525e..aab8cf0087f31a77230d973286e824336ad02831 100644
+--- a/dist/index-DaOfZHXc.d.ts
++++ b/dist/index-DaOfZHXc.d.ts
+@@ -1196,11 +1196,11 @@ interface EXPERIMENTAL_ResolverRecord_Base {
+    * Name of the matcher. Unique across all matchers. If missing, this record
+    * cannot be matched. This is useful for grouping records.
+    */
+-  name?: RecordName;
++  name?: RecordName | undefined;
+   /**
+    * {@link MatcherPattern} for the path section of the URI.
+    */
+-  path?: MatcherPatternPath;
++  path?: MatcherPatternPath | undefined;
+   /**
+    * {@link MatcherPattern} for the query section of the URI.
+    */
+@@ -1208,7 +1208,7 @@ interface EXPERIMENTAL_ResolverRecord_Base {
+   /**
+    * {@link MatcherPattern} for the hash section of the URI.
+    */
+-  hash?: MatcherPatternHash;
++  hash?: MatcherPatternHash | undefined;
+   /**
+    * Parent record. The parent can be a group or a matchable record.
+    * It will be included in the `matched` array of a resolved location.

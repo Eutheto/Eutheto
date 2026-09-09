@@ -19,6 +19,7 @@ This phase is the implementation source of truth for blueprint Sections 24 and 2
 - Every accepted solver candidate passes the independent verifier.
 - Release automation, capabilities, worker manifests, license aggregation, and documentation are implemented from the same source commit and lockfiles.
 - Phase 12 consumes immutable artifact digests from this phase; it does not rebuild a different candidate and call it equivalent.
+- The user has accepted the Phase-10 AI trust/privacy and AI-disabled checkpoint and explicitly authorized Phase-11 implementation under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates).
 
 ## Decisions and invariants
 
@@ -325,6 +326,7 @@ Phase 11 supplies candidate-level evidence; Phase 12 repeats/expands release-gat
 
 Phase 11 exits only when:
 
+- the user has tested the actual immutable release candidates for install/offline/migration/backup/restore/update/recovery behavior, feedback is resolved, and explicit checkpoint acceptance and authorization to enter Phase 12 are recorded under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates);
 - all declared target-specific, one-install, exact-artifact, signing, update, license, SBOM, notices, provenance, migration, offline, and support-bundle contracts above have evidence;
 - clean-machine install/open/solve/verify/export/update/uninstall smokes pass per target and no external runtime is required;
 - current/historical portable fixtures, scenario/full-backup import, add/replace restore, safety backup, atomic recovery, CLI/desktop parity, extension/media type/file association, and malicious-archive gates pass on every declared target;

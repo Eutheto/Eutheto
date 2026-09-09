@@ -206,6 +206,29 @@ Protect these invariants in every phase:
 
 Pause work and write an ADR before continuing if a rule cannot be independently verified; a backend needs domain-specific knowledge; UI needs direct database access; AI needs arbitrary file/code/shell access; a plugin needs native in-process loading; a dependency falls outside license policy; migration cannot preserve scenarios; decomposition cannot prove independence; packaging requires disabling a major security control; or correctness relies on undocumented provider/backend behavior.
 
+## User manual checkpoint gates
+
+Approved on **2026-09-09**, the following checkpoints are mandatory phase-exit and next-phase-entry gates, in addition to the existing Phase-05 manual checkpoint. They are not optional demonstrations or substitutes for the phase's automated, independent usability, accessibility, security, or release evidence.
+
+| Boundary | User testing focus |
+|---|---|
+| Phase 06 → Phase 07 | Real desktop setup: people CSV mapping/preview/apply/rejected rows, work and availability, supported rule editing and truthful Required/Preference availability, validation and correction, keyboard/focus behavior, undo/redo, restart persistence, and scenario/backup recovery. Do not imply that Phase-07 solving or result screens already exist. |
+| Phase 07 → Phase 08 | Complete Workforce workflow: create/import, optimize, inspect independently verified results and explanations, lock/edit/repair, compare, and export/share with accurate privacy and stale-result behavior. |
+| Phase 09 → Phase 10 | Complete Seating workflow: guest/venue setup, equivalent canvas and accessible list/table editing, solve/explain, lock/repair, undo/persistence, and accepted-result export/share. |
+| Phase 10 → Phase 11 | Focused AI trust and privacy: supported profile setup, bounded context and consent, draft versus applied proposals, explicit Apply and separate solve confirmation, stale/cancel/error recovery, one-step undo, retention/deletion controls, and the complete deterministic application with AI disabled. |
+| Phase 11 → Phase 12 | Actual immutable release candidates, not a development build: installation, offline use, existing-project migration, backup/restore, update and recovery. Record the platforms and exact artifact digests personally tested; this does not replace the required supported-target matrix. |
+
+For every checkpoint:
+
+1. Complete the current phase's implementation and prerequisite verification, then **stop before starting the next phase's implementation**. Passing CI, merging a PR, or an earlier checkpoint does not clear this gate.
+2. Provide a reproducible manual-test handoff: tested source commit and applicable artifact digests, actual launch/install commands, sample data and ordered workflows, expected results, known limitations, platform coverage, and safe handling of existing user data. Never invent commands or implemented behavior, or include credentials or captured private scenarios in evidence.
+3. Wait for the user's manual testing and feedback. Fix failures in the current phase and rerun affected automated and manual checks; do not treat untested or blocked checks as passes.
+4. Record the tested candidate, results, resolved feedback and the user's **explicit checkpoint acceptance and authorization to proceed**. Silence, automated checks, merge approval and agent confidence are not acceptance.
+
+Read-only planning and investigation may continue while waiting; dependent production implementation may not. A changed candidate requires fresh evidence for affected behavior; release-candidate changes also obey Phase 12's exact-artifact evidence rules. Checkpoint acceptance does not authorize signing or public publication and cannot waive existing security, data-integrity or release gates.
+
+There is **no additional broad user pause after Phase 08**: its required focused backend, routing and cancellation regressions remain mandatory. Phase 12 still performs the full formal release QA and publication gate; the Phase-11 checkpoint is its entry condition, not release approval. The already-completed Phase-05 checkpoint is not reopened by these new gates.
+
 ## Dependency graph and delivery strategy
 
 ```text

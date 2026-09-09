@@ -130,10 +130,10 @@ All values below are from `https://registry.npmjs.org/<package>/latest` on the v
 | [`@types/node`](https://www.npmjs.com/package/@types/node) | 24.13.3 | newest Node-24 types line verified on 2026-08-29; compatible with and pinned to the Node 24 runtime; use | 0/6/12 |
 | [`vue`](https://www.npmjs.com/package/vue) | 3.5.42 | use | 0/6 |
 | [`@vue/compiler-sfc`](https://www.npmjs.com/package/@vue/compiler-sfc) | 3.5.42 | mandatory direct build pin; exact patch matches Vue | 0/6 |
-| [`vue-router`](https://www.npmjs.com/package/vue-router) | 5.3.0 | peers Vue `^3.5.34`, Vite 7/8, Pinia 3/4; use | 0/6 |
-| [`pinia`](https://www.npmjs.com/package/pinia) | 4.0.3 | peer Vue `^3.5.11`, TS `>=5.6`; ESM-only caveat reviewed | 0/6 |
-| [`@pinia/colada`](https://www.npmjs.com/package/@pinia/colada) | 1.4.2 | mandatory direct pin for server/async state; never authoritative scenario state | 0/6 |
-| [`@vue/devtools-api`](https://www.npmjs.com/package/@vue/devtools-api) | 8.2.1 | mandatory direct Pinia peer pin; production enablement reviewed | 0/6 |
+| [`vue-router`](https://www.npmjs.com/package/vue-router) | 5.3.0 | UI001: hash routing for the existing project screen; exact declaration patch below | 0/6 |
+| [`pinia`](https://www.npmjs.com/package/pinia) | 4.0.3 | UI001: consumed, transient selected-project ID only; ESM/Vue/TypeScript peers verified | 0/6 |
+| [`@pinia/colada`](https://www.npmjs.com/package/@pinia/colada) | 1.4.2 | UI001: bounded native project-list cache; explicit refresh, never authoritative scenario state | 0/6 |
+| [`@vue/devtools-api`](https://www.npmjs.com/package/@vue/devtools-api) | 8.2.1 | UI001: exact Pinia peer; no production devtools enablement | 0/6 |
 | [`vite`](https://www.npmjs.com/package/vite) | 8.2.2 | Node `^20.19 || >=22.12`; use | 0/6 |
 | [`@vitejs/plugin-vue`](https://www.npmjs.com/package/@vitejs/plugin-vue) | 6.0.8 | supports Vite through 8; use | 0/6 |
 | [`@tauri-apps/api`](https://www.npmjs.com/package/@tauri-apps/api) | 2.11.1 | use; independent of Rust crate patch | 0/6/11 |
@@ -157,18 +157,30 @@ All values below are from `https://registry.npmjs.org/<package>/latest` on the v
 | [`eslint-plugin-vue`](https://www.npmjs.com/package/eslint-plugin-vue) | 10.10.0 | supports ESLint 8/9/10 | 0/12 |
 | [`prettier`](https://www.npmjs.com/package/prettier) | 3.9.6 | use if selected formatter | 0 |
 | [`vitest`](https://www.npmjs.com/package/vitest) | 4.1.11 | Node 20/22/24+, Vite 6/7/8; use | 0/12 |
-| [`@vue/test-utils`](https://www.npmjs.com/package/@vue/test-utils) | 2.5.0 | Vue 3 peers; use | 0/12 |
-| [`@testing-library/vue`](https://www.npmjs.com/package/@testing-library/vue) | 8.1.0 | use where user-centric tests help | 12 |
-| [`axe-core`](https://www.npmjs.com/package/axe-core) | 4.13.0 | use directly; `@axe-core/vue` does not exist | 12 |
-| [`webdriverio`](https://www.npmjs.com/package/webdriverio) | 9.31.4 | Node `>=18.20`; use | 12 |
-| [`@wdio/cli`](https://www.npmjs.com/package/@wdio/cli) | 9.31.4 | align with WebDriverIO | 12 |
-| [`@wdio/tauri-service`](https://www.npmjs.com/package/@wdio/tauri-service) | 1.3.0 | peers WebDriverIO 9; packaged Tauri E2E | 12 |
-| [`playwright`](https://www.npmjs.com/package/playwright) | 1.62.1 | pure Vite UI only, not Tauri replacement | 12 |
-| [`@playwright/test`](https://www.npmjs.com/package/@playwright/test) | 1.62.1 | align with Playwright | 12 |
+| [`@vue/test-utils`](https://www.npmjs.com/package/@vue/test-utils) | 2.5.0 | UI001: real browser component mounting; Vue 3 peers verified | 0/6/12 |
+| [`@testing-library/vue`](https://www.npmjs.com/package/@testing-library/vue) | 8.1.0 | UI001: user-facing browser queries; exact declaration/dependency repair below | 6/12 |
+| [`axe-core`](https://www.npmjs.com/package/axe-core) | 4.13.0 | UI001: direct browser accessibility checks; MPL-2.0 candidate reviewed; no `@axe-core/vue` | 6/12 |
+| [`webdriverio`](https://www.npmjs.com/package/webdriverio) | 9.31.4 | not adopted; retain the existing dependency-free W3C native runner | 12 |
+| [`@wdio/cli`](https://www.npmjs.com/package/@wdio/cli) | 9.31.4 | not adopted; not a current command prerequisite | 12 |
+| [`@wdio/tauri-service`](https://www.npmjs.com/package/@wdio/tauri-service) | 1.3.0 | not adopted; existing `tauri-driver`/WebKit native coverage remains separate | 12 |
+| [`playwright`](https://www.npmjs.com/package/playwright) | 1.62.1 | UI001: pinned headless Chromium through Vitest; not Tauri/installer evidence | 6/12 |
+| [`@playwright/test`](https://www.npmjs.com/package/@playwright/test) | 1.62.1 | not adopted; the existing Vitest runner owns browser component tests | 12 |
+| [`@vitest/browser-playwright`](https://www.npmjs.com/package/@vitest/browser-playwright) | 4.1.11 | UI001: exact Vitest-matching browser provider; explicit browser installation | 6/12 |
 | [`tw-animate-css`](https://www.npmjs.com/package/tw-animate-css) | 1.4.0 | Tailwind-4/shadcn animation utility | 4/6 |
 | [`tailwind-merge`](https://www.npmjs.com/package/tailwind-merge) | 3.6.0 | one class-composition convention | 4/6 |
 | [`class-variance-authority`](https://www.npmjs.com/package/class-variance-authority) | 0.7.1 | shadcn variant utility | 4/6 |
 | [`clsx`](https://www.npmjs.com/package/clsx) | 2.1.1 | shadcn class utility | 4/6 |
+
+### UI001 exact-stack adoption and declaration repairs — 2026-09-09
+
+The exact runtime/browser versions above were rechecked against registry metadata, installed declarations, lifecycle scripts and the resolved graph. Router/Pinia/Colada composition and the real Reka delete/restore dialog scenarios run in Chromium; `just frontend-browser-install` provisions the pinned browser explicitly, and `just frontend-browser-test` runs them. This supplements, rather than replaces, the existing dependency-free W3C `just e2e` native process-restart path. It is not manual screen-reader, macOS/Windows, or installer evidence.
+
+Strict TypeScript checks exposed two upstream declaration defects. The version-bound, lockfile-hashed patches in `patches/` change declarations only:
+
+- Router 5.3.0: base `name`, `path` and `hash` optionals now admit the explicit `undefined` used by its own experimental derived declarations under `exactOptionalPropertyTypes`. The [5.3.1 published declaration](https://unpkg.com/vue-router@5.3.1/dist/experimental/index.d.mts) retains this defect; UI001 keeps its verified 5.3.0 stack rather than bundling an unrelated patch update.
+- Testing Library Vue 8.1.0: replace its nonexistent `type-fest` `RemoveIndexSignature` import with the exported `OmitIndexSignature`. `pnpm-workspace.yaml` supplies the declaration's missing exact `type-fest`, `pretty-format` and `vue-component-type-helpers` dependencies. The [published declaration](https://unpkg.com/@testing-library/vue@8.1.0/types/index.d.ts) and current upstream source still require this repair.
+
+No compiler strictness flag or library check was disabled. Remove each patch/package extension when a deliberately adopted upstream version resolves the corresponding declaration contract, then rerun frozen installation, strict typing and the browser scenarios. License/SBOM products remain canonical `just licenses` / `just sbom` outputs; metadata-candidate review is not final assembled-artifact legal approval.
 
 ## Complete direct crates.io ledger
 

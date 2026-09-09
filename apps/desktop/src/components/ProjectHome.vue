@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import type { ComponentPublicInstance } from "vue";
 import type { AppliedMigrationDto, FixedExclusion } from "../api/generated";
+import { formatDateTime, formatUnit, messages } from "../messages";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 
 import {
   defaultSupplementalCollisionChoices,
@@ -46,6 +47,7 @@ const gapPolicy = ref<"reject" | "moveForward" | "packDefined">("reject");
 const overlapPolicy = ref<"earlier" | "later" | "reject">("earlier");
 const duplicateTitle = ref("");
 const deleteCandidate = ref<ProjectSummary | null>(null);
+const confirmingDelete = ref(false);
 const importIncludeResults = ref(true);
 const importIncludeAssets = ref(true);
 const importCollisions = ref<Record<string, CollisionChoice>>({});
@@ -60,7 +62,11 @@ const safetyBackupBypassPhrase = ref("");
 const projectsHeading = ref<HTMLElement | null>(null);
 const deleteCancel = ref<HTMLButtonElement | null>(null);
 const restoreCancel = ref<HTMLButtonElement | null>(null);
-const deleteButtons = new Map<string, HTMLButtonElement>();
+const restoreReview = ref<HTMLButtonElement | null>(null);
+const restoreChoose = ref<HTMLButtonElement | null>(null);
+let deleteReturnFocus: HTMLElement | null = null;
+let restoreReturnFocus: HTMLElement | null = null;
+const deleteTrigger = ref<HTMLButtonElement | null>(null);
 
 const activeProjects = computed(() => state.projects.filter((project) => !project.archived));
 const archivedProjects = computed(() => state.projects.filter((project) => project.archived));
@@ -78,30 +84,16 @@ const restoreHasSupplementalCollisions = computed(
     state.restoreMode !== "replace-library" &&
     (state.restorePreview?.supplementalCollisions.length ?? 0) > 0,
 );
-
-function buttonElement(
-  element: Element | ComponentPublicInstance | null,
-): HTMLButtonElement | null {
-  return element instanceof HTMLButtonElement ? element : null;
-}
-
-function rememberDeleteButton(
-  scenarioId: string,
-  element: Element | ComponentPublicInstance | null,
-): void {
-  const button = buttonElement(element);
-  if (button) deleteButtons.set(scenarioId, button);
-  else deleteButtons.delete(scenarioId);
-}
-
-function formatUpdatedAt(value: string): string {
-  const instant = new Date(value);
-  if (Number.isNaN(instant.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(instant);
-}
+const restoreDescription = computed(() => {
+  if (state.restoreMode !== "replace-library") return messages.restore.addDescription;
+  if (
+    state.restoreSafetyBackupFailure &&
+    safetyBackupBypassPhrase.value.trim() === "REPLACE WITHOUT BACKUP"
+  ) {
+    return messages.restore.bypassDescription;
+  }
+  return messages.restore.replaceDescription;
+});
 
 async function submitCreate(): Promise<void> {
   const created = await props.home.createProject({
@@ -131,27 +123,42 @@ async function submitDuplicate(project: ProjectSummary): Promise<void> {
   if (await props.home.duplicateProject(project, title)) duplicateTitle.value = "";
 }
 
-async function openDeleteConfirmation(project: ProjectSummary): Promise<void> {
+function openDeleteConfirmation(project: ProjectSummary): void {
+  if (state.busyAction !== null) return;
+  deleteReturnFocus = deleteTrigger.value ?? projectsHeading.value;
   deleteCandidate.value = project;
-  await nextTick();
+  confirmingDelete.value = true;
+}
+
+function cancelDelete(): void {
+  if (state.busyAction !== null) return;
+  confirmingDelete.value = false;
+}
+
+function focusDeleteCancel(event: Event): void {
+  event.preventDefault();
   recoverFocus(deleteCancel.value);
 }
 
-async function cancelDelete(): Promise<void> {
-  const scenarioId = deleteCandidate.value?.scenarioId;
-  deleteCandidate.value = null;
+async function restoreDeleteFocus(event: Event): Promise<void> {
+  event.preventDefault();
   await nextTick();
-  if (scenarioId) recoverFocus(deleteButtons.get(scenarioId));
+  if (confirmingDelete.value) return;
+  deleteCandidate.value = null;
+  recoverFocus(deleteReturnFocus?.isConnected ? deleteReturnFocus : projectsHeading.value);
+}
+
+function preventBusyDismissal(event: Event): void {
+  if (state.busyAction !== null) event.preventDefault();
 }
 
 async function confirmDelete(): Promise<void> {
   const project = deleteCandidate.value;
-  if (!project) return;
+  if (!confirmingDelete.value || !project || state.busyAction !== null) return;
   const deleted = await props.home.deleteProject(project);
   if (deleted) {
-    deleteCandidate.value = null;
-    await nextTick();
-    recoverFocus(projectsHeading.value);
+    deleteReturnFocus = projectsHeading.value;
+    confirmingDelete.value = false;
   }
 }
 
@@ -190,26 +197,42 @@ async function submitRestorePreview(): Promise<void> {
       : defaultSupplementalCollisionChoices(state.restorePreview?.supplementalCollisions ?? []);
 }
 
-async function openRestoreConfirmation(): Promise<void> {
+function openRestoreConfirmation(): void {
+  if (state.busyAction !== null || !state.restorePreview) return;
+  restoreReturnFocus = restoreReview.value;
   confirmingRestore.value = true;
-  await nextTick();
-  recoverFocus(restoreCancel.value);
 }
 
 function cancelRestore(): void {
+  if (state.busyAction !== null) return;
   confirmingRestore.value = false;
 }
 
+function focusRestoreCancel(event: Event): void {
+  event.preventDefault();
+  recoverFocus(restoreCancel.value);
+}
+
+async function restoreRestoreFocus(event: Event): Promise<void> {
+  event.preventDefault();
+  await nextTick();
+  recoverFocus(
+    restoreReturnFocus?.isConnected
+      ? restoreReturnFocus
+      : (restoreChoose.value ?? projectsHeading.value),
+  );
+}
+
 async function confirmRestore(): Promise<void> {
+  if (!confirmingRestore.value || state.busyAction !== null) return;
   const restored = await props.home.applyRestore(
     restoreCollisions.value,
     restoreSupplementalCollisions.value,
     safetyBackupBypassPhrase.value.trim(),
   );
   if (restored) {
+    restoreReturnFocus = projectsHeading.value;
     confirmingRestore.value = false;
-    await nextTick();
-    recoverFocus(projectsHeading.value);
   }
 }
 </script>
@@ -222,37 +245,44 @@ async function confirmRestore(): Promise<void> {
   >
     <div class="section-heading">
       <div>
-        <p class="eyebrow">Local project library</p>
-        <h2 id="projects-heading" ref="projectsHeading" tabindex="-1">Projects</h2>
+        <p class="eyebrow">{{ messages.projects.library }}</p>
+        <h2 id="projects-heading" ref="projectsHeading" tabindex="-1">
+          {{ messages.projects.heading }}
+        </h2>
       </div>
       <span v-if="state.phase === 'ready'" class="count-badge">
-        {{ state.projects.length }} {{ state.projects.length === 1 ? "project" : "projects" }}
+        {{ messages.projects.count(state.projects.length) }}
       </span>
     </div>
 
-    <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+    <p
+      :class="{ 'sr-only': state.phase !== 'error' }"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       {{ state.announcement }}
     </p>
 
     <div v-if="state.phase === 'loading'" class="state-panel" role="status" aria-live="polite">
       <span class="activity-mark" aria-hidden="true" />
       <div>
-        <h3>Loading saved projects</h3>
-        <p>Reading the authoritative local library…</p>
+        <h3>{{ messages.projects.loading }}</h3>
+        <p>{{ messages.projects.loadingDescription }}</p>
       </div>
     </div>
 
     <div v-else-if="state.phase === 'error'" class="state-panel state-panel--error" role="alert">
       <div>
-        <h3>Projects could not be loaded</h3>
+        <h3>{{ messages.projects.loadFailed }}</h3>
         <p>{{ state.errorMessage }}</p>
       </div>
-      <button type="button" @click="home.load">Try again</button>
+      <button type="button" @click="home.load">{{ messages.projects.retry }}</button>
     </div>
 
     <template v-else>
       <div v-if="state.errorMessage" class="inline-alert" role="alert">
-        <strong>Request not completed.</strong>
+        <strong>{{ messages.projects.requestFailed }}</strong>
         <span>{{ state.errorMessage }}</span>
       </div>
 
@@ -261,7 +291,7 @@ async function confirmRestore(): Promise<void> {
           <div v-if="state.projects.length === 0" class="empty-state">
             <p class="empty-state__number" aria-hidden="true">01</p>
             <div>
-              <h3>Begin with a local project</h3>
+              <h3>{{ messages.projects.emptyHeading }}</h3>
               <p>
                 Create an <code>official.test</code> project below, or review an import artifact.
                 Saved projects will reappear here when Eutheto restarts.
@@ -271,40 +301,49 @@ async function confirmRestore(): Promise<void> {
 
           <template v-else>
             <section aria-labelledby="active-projects-heading">
-              <h3 id="active-projects-heading" class="list-heading">Active</h3>
+              <h3 id="active-projects-heading" class="list-heading">
+                {{ messages.projects.active }}
+              </h3>
               <ul v-if="activeProjects.length" class="project-list">
                 <li v-for="project in activeProjects" :key="project.scenarioId">
                   <button
                     type="button"
                     class="project-row"
+                    :disabled="state.busyAction !== null"
                     :class="{ 'project-row--selected': project.scenarioId === state.selectedId }"
                     :aria-pressed="project.scenarioId === state.selectedId"
-                    :aria-label="`Open project ${project.title}`"
+                    :aria-label="messages.projects.open(project.title)"
                     @click="home.selectProject(project.scenarioId)"
                   >
                     <span>
                       <strong>{{ project.title }}</strong>
                       <small>{{ project.domainPackId }} · revision {{ project.revision }}</small>
                     </span>
-                    <span class="status-label"><span aria-hidden="true">●</span> Active</span>
+                    <span class="status-label">
+                      <span aria-hidden="true">●</span>
+                      <span>{{ messages.projects.active }}</span>
+                    </span>
                   </button>
                 </li>
               </ul>
               <p v-else class="quiet-state">
-                No active projects. Archived work remains available below.
+                {{ messages.projects.noActive }}
               </p>
             </section>
 
             <section v-if="archivedProjects.length" aria-labelledby="archived-projects-heading">
-              <h3 id="archived-projects-heading" class="list-heading">Archived</h3>
+              <h3 id="archived-projects-heading" class="list-heading">
+                {{ messages.projects.archived }}
+              </h3>
               <ul class="project-list">
                 <li v-for="project in archivedProjects" :key="project.scenarioId">
                   <button
                     type="button"
                     class="project-row"
+                    :disabled="state.busyAction !== null"
                     :class="{ 'project-row--selected': project.scenarioId === state.selectedId }"
                     :aria-pressed="project.scenarioId === state.selectedId"
-                    :aria-label="`Open archived project ${project.title}`"
+                    :aria-label="messages.projects.openArchived(project.title)"
                     @click="home.selectProject(project.scenarioId)"
                   >
                     <span>
@@ -312,7 +351,7 @@ async function confirmRestore(): Promise<void> {
                       <small>{{ project.domainPackId }} · revision {{ project.revision }}</small>
                     </span>
                     <span class="status-label status-label--archived">
-                      <span aria-hidden="true">◇</span> Archived
+                      <span aria-hidden="true">◇</span> {{ messages.projects.archived }}
                     </span>
                   </button>
                 </li>
@@ -327,7 +366,7 @@ async function confirmRestore(): Promise<void> {
           >
             <div class="project-detail__heading">
               <div>
-                <p class="eyebrow">Saved metadata</p>
+                <p class="eyebrow">{{ messages.projects.savedMetadata }}</p>
                 <h3 id="selected-project-heading">{{ selectedProject.title }}</h3>
               </div>
               <span
@@ -335,24 +374,26 @@ async function confirmRestore(): Promise<void> {
                 :class="{ 'status-label--archived': selectedProject.archived }"
               >
                 <span aria-hidden="true">{{ selectedProject.archived ? "◇" : "●" }}</span>
-                {{ selectedProject.archived ? "Archived" : "Active" }}
+                {{
+                  selectedProject.archived ? messages.projects.archived : messages.projects.active
+                }}
               </span>
             </div>
             <dl class="metadata-list">
               <div>
-                <dt>Domain pack</dt>
+                <dt>{{ messages.projects.domainPack }}</dt>
                 <dd>{{ selectedProject.domainPackId }}</dd>
               </div>
               <div>
-                <dt>Revision</dt>
+                <dt>{{ messages.projects.revision }}</dt>
                 <dd>{{ selectedProject.revision }}</dd>
               </div>
               <div>
-                <dt>Last saved</dt>
-                <dd>{{ formatUpdatedAt(selectedProject.updatedAt) }}</dd>
+                <dt>{{ messages.projects.lastSaved }}</dt>
+                <dd>{{ formatDateTime(selectedProject.updatedAt) }}</dd>
               </div>
               <div>
-                <dt>Project ID</dt>
+                <dt>{{ messages.projects.id }}</dt>
                 <dd class="identifier">{{ selectedProject.scenarioId }}</dd>
               </div>
             </dl>
@@ -364,22 +405,24 @@ async function confirmRestore(): Promise<void> {
                 :disabled="state.busyAction !== null"
                 @click="home.setArchived(selectedProject)"
               >
-                {{ selectedProject.archived ? "Unarchive project" : "Archive project" }}
+                {{
+                  selectedProject.archived ? messages.projects.unarchive : messages.projects.archive
+                }}
               </button>
               <button
-                :ref="(element) => rememberDeleteButton(selectedProject!.scenarioId, element)"
+                ref="deleteTrigger"
                 type="button"
                 class="button-danger button-quiet"
                 :disabled="state.busyAction !== null"
                 @click="openDeleteConfirmation(selectedProject)"
               >
-                Delete project
+                {{ messages.projects.delete }}
               </button>
             </div>
 
             <form class="compact-form" @submit.prevent="submitDuplicate(selectedProject)">
               <label :for="`duplicate-title-${selectedProject.scenarioId}`">
-                Duplicate project as
+                {{ messages.projects.duplicateAs }}
               </label>
               <div class="inline-control">
                 <input
@@ -387,82 +430,51 @@ async function confirmRestore(): Promise<void> {
                   v-model="duplicateTitle"
                   required
                   autocomplete="off"
-                  placeholder="Copy title"
+                  :placeholder="messages.projects.copyTitle"
                 />
                 <button
                   type="submit"
                   class="button-secondary"
                   :disabled="state.busyAction !== null"
                 >
-                  Duplicate
+                  {{ messages.projects.duplicate }}
                 </button>
               </div>
             </form>
-
-            <div
-              v-if="deleteCandidate?.scenarioId === selectedProject.scenarioId"
-              class="confirmation"
-              role="alertdialog"
-              aria-labelledby="delete-heading"
-              aria-describedby="delete-description"
-            >
-              <h4 id="delete-heading">Permanently delete {{ selectedProject.title }}?</h4>
-              <p id="delete-description">
-                This removes the saved project and its history. This action cannot be undone.
-              </p>
-              <div class="action-row">
-                <button
-                  ref="deleteCancel"
-                  type="button"
-                  class="button-secondary"
-                  @click="cancelDelete"
-                >
-                  Keep project
-                </button>
-                <button
-                  type="button"
-                  class="button-danger"
-                  :disabled="state.busyAction !== null"
-                  @click="confirmDelete"
-                >
-                  Delete permanently
-                </button>
-              </div>
-            </div>
           </article>
         </div>
 
         <aside class="create-panel" aria-labelledby="create-heading">
-          <p class="eyebrow">New project</p>
+          <p class="eyebrow">{{ messages.projects.newProject }}</p>
           <h3 id="create-heading">Create official.test project</h3>
           <p class="form-intro">
-            Choose explicit scenario settings. They are saved with the project.
+            {{ messages.projects.createIntroduction }}
           </p>
           <form class="stacked-form" @submit.prevent="submitCreate">
-            <label for="create-title">Project title</label>
+            <label for="create-title">{{ messages.projects.title }}</label>
             <input id="create-title" v-model="createTitle" required autocomplete="off" />
 
-            <label for="create-description">Description <span>(optional)</span></label>
+            <label for="create-description">{{ messages.projects.description }}</label>
             <textarea id="create-description" v-model="createDescription" rows="3" />
 
             <div class="field-grid">
               <div>
-                <label for="create-time-zone">Time zone</label>
+                <label for="create-time-zone">{{ messages.projects.timeZone }}</label>
                 <input id="create-time-zone" v-model="timeZone" required autocomplete="off" />
               </div>
               <div>
-                <label for="create-locale">Locale</label>
+                <label for="create-locale">{{ messages.projects.locale }}</label>
                 <input id="create-locale" v-model="locale" required autocomplete="off" />
               </div>
             </div>
 
-            <label for="create-units">Display units</label>
+            <label for="create-units">{{ messages.projects.displayUnits }}</label>
             <select id="create-units" v-model="units">
-              <option value="metric">Metric</option>
-              <option value="us-customary">US customary</option>
+              <option value="metric">{{ messages.projects.metric }}</option>
+              <option value="us-customary">{{ messages.projects.usCustomary }}</option>
             </select>
 
-            <label for="horizon-start">Planning starts</label>
+            <label for="horizon-start">{{ messages.projects.planningStarts }}</label>
             <input
               id="horizon-start"
               v-model="horizonStart"
@@ -471,7 +483,7 @@ async function confirmRestore(): Promise<void> {
               placeholder="2026-09-01T00:00:00Z"
               aria-describedby="horizon-help"
             />
-            <label for="horizon-end">Planning ends</label>
+            <label for="horizon-end">{{ messages.projects.planningEnds }}</label>
             <input
               id="horizon-end"
               v-model="horizonEnd"
@@ -481,30 +493,34 @@ async function confirmRestore(): Promise<void> {
               aria-describedby="horizon-help"
             />
             <p id="horizon-help" class="field-help">
-              Use complete RFC 3339 timestamps, including an offset.
+              {{ messages.projects.timestampHelp }}
             </p>
 
             <div class="field-grid">
               <div>
-                <label for="gap-policy">Missing clock time</label>
+                <label for="gap-policy">{{ messages.projects.missingClockTime }}</label>
                 <select id="gap-policy" v-model="gapPolicy">
-                  <option value="reject">Reject</option>
-                  <option value="moveForward">Move forward</option>
-                  <option value="packDefined">Use domain pack policy</option>
+                  <option value="reject">{{ messages.projects.reject }}</option>
+                  <option value="moveForward">{{ messages.projects.moveForward }}</option>
+                  <option value="packDefined">{{ messages.projects.packPolicy }}</option>
                 </select>
               </div>
               <div>
-                <label for="overlap-policy">Repeated clock time</label>
+                <label for="overlap-policy">{{ messages.projects.repeatedClockTime }}</label>
                 <select id="overlap-policy" v-model="overlapPolicy">
-                  <option value="earlier">Earlier</option>
-                  <option value="later">Later</option>
-                  <option value="reject">Reject</option>
+                  <option value="earlier">{{ messages.projects.earlier }}</option>
+                  <option value="later">{{ messages.projects.later }}</option>
+                  <option value="reject">{{ messages.projects.reject }}</option>
                 </select>
               </div>
             </div>
 
             <button type="submit" :disabled="state.busyAction !== null">
-              {{ state.busyAction === "create" ? "Creating…" : "Create project" }}
+              {{
+                state.busyAction === "create"
+                  ? messages.projects.creating
+                  : messages.projects.create
+              }}
             </button>
           </form>
         </aside>
@@ -576,7 +592,7 @@ async function confirmRestore(): Promise<void> {
                   <dt>Created</dt>
                   <dd>
                     <time :datetime="state.importPreview.createdAt">
-                      {{ state.importPreview.createdAt }}
+                      {{ formatDateTime(state.importPreview.createdAt) }}
                     </time>
                   </dd>
                 </div>
@@ -697,7 +713,7 @@ async function confirmRestore(): Promise<void> {
                 <ul>
                   <li v-for="asset in state.importPreview.omittedAssets" :key="asset.assetId">
                     <strong>{{ asset.assetId }}</strong> — {{ asset.reason }};
-                    {{ asset.originalMediaType }}, {{ asset.originalSize }} bytes
+                    {{ asset.originalMediaType }}, {{ formatUnit(asset.originalSize, "byte") }}
                   </li>
                 </ul>
               </section>
@@ -804,7 +820,7 @@ async function confirmRestore(): Promise<void> {
               <h4 id="backup-preview-heading">Backup preview: {{ state.backupPreview.title }}</h4>
               <p>
                 This backup will contain
-                {{ state.backupPreview.byteLength.toLocaleString() }} bytes.
+                {{ formatUnit(state.backupPreview.byteLength, "byte") }}.
               </p>
               <p>
                 Prepared library revision {{ state.backupPreview.libraryRevision }} · digest
@@ -832,7 +848,7 @@ async function confirmRestore(): Promise<void> {
                 </p>
                 <p v-if="state.backupPreview.backupSummary.thresholdBytes !== null">
                   Threshold version {{ state.backupPreview.backupSummary.thresholdVersion }}:
-                  {{ state.backupPreview.backupSummary.thresholdBytes }} bytes.
+                  {{ formatUnit(state.backupPreview.backupSummary.thresholdBytes, "byte") }}.
                 </p>
                 <section
                   v-if="state.backupPreview.backupSummary.fixedExclusions.length"
@@ -890,6 +906,7 @@ async function confirmRestore(): Promise<void> {
                 </label>
               </fieldset>
               <button
+                ref="restoreChoose"
                 type="submit"
                 class="button-secondary"
                 aria-describedby="restore-file-help"
@@ -925,7 +942,7 @@ async function confirmRestore(): Promise<void> {
                   <dt>Created</dt>
                   <dd>
                     <time :datetime="state.restorePreview.createdAt">
-                      {{ state.restorePreview.createdAt }}
+                      {{ formatDateTime(state.restorePreview.createdAt) }}
                     </time>
                   </dd>
                 </div>
@@ -1049,7 +1066,7 @@ async function confirmRestore(): Promise<void> {
                 <ul>
                   <li v-for="asset in state.restorePreview.omittedAssets" :key="asset.assetId">
                     <strong>{{ asset.assetId }}</strong> — {{ asset.reason }};
-                    {{ asset.originalMediaType }}, {{ asset.originalSize }} bytes
+                    {{ asset.originalMediaType }}, {{ formatUnit(asset.originalSize, "byte") }}
                   </li>
                 </ul>
               </section>
@@ -1118,25 +1135,6 @@ async function confirmRestore(): Promise<void> {
                     </span>
                   </li>
                 </ul>
-                <div v-if="state.restoreSafetyBackupFailure">
-                  <p class="danger-note" role="alert">
-                    <strong>Safety backup failed:</strong>
-                    {{ state.restoreSafetyBackupFailure }}
-                  </p>
-                  <label for="safety-backup-bypass-phrase">
-                    Continue without a safety backup
-                  </label>
-                  <input
-                    id="safety-backup-bypass-phrase"
-                    v-model="safetyBackupBypassPhrase"
-                    autocomplete="off"
-                    aria-describedby="safety-backup-bypass-help"
-                  />
-                  <p id="safety-backup-bypass-help" class="field-help">
-                    After reviewing the failure, enter <code>REPLACE WITHOUT BACKUP</code> exactly
-                    to make a second request for this same preview.
-                  </p>
-                </div>
               </section>
               <ul class="preview-list">
                 <li v-for="scenario in state.restorePreview.scenarios" :key="scenario.scenarioId">
@@ -1231,55 +1229,119 @@ async function confirmRestore(): Promise<void> {
                   </li>
                 </ul>
               </section>
-              <button type="button" class="button-danger" @click="openRestoreConfirmation">
-                Review and confirm restore
-              </button>
-
-              <div
-                v-if="confirmingRestore"
-                class="confirmation"
-                role="alertdialog"
-                aria-labelledby="restore-confirm-heading"
-                aria-describedby="restore-confirm-description"
+              <button
+                ref="restoreReview"
+                type="button"
+                class="button-danger"
+                :disabled="state.busyAction !== null"
+                @click="openRestoreConfirmation"
               >
-                <h4 id="restore-confirm-heading">
-                  Confirm
-                  {{
-                    state.restoreMode === "replace-library"
-                      ? "library replacement"
-                      : "backup restore"
-                  }}
-                </h4>
-                <p id="restore-confirm-description">
-                  {{
-                    state.restoreMode === "replace-library"
-                      ? "Eutheto will create a safety backup, then replace the current library with the reviewed backup."
-                      : "Eutheto will add the reviewed projects and apply the collision choices shown above."
-                  }}
-                </p>
-                <div class="action-row">
-                  <button
-                    ref="restoreCancel"
-                    type="button"
-                    class="button-secondary"
-                    @click="cancelRestore"
-                  >
-                    Go back
-                  </button>
-                  <button
-                    type="button"
-                    class="button-danger"
-                    :disabled="state.busyAction !== null"
-                    @click="confirmRestore"
-                  >
-                    Confirm restore
-                  </button>
-                </div>
-              </div>
+                {{ messages.restore.review }}
+              </button>
             </div>
           </details>
         </div>
       </section>
     </template>
+    <Dialog :open="confirmingDelete" @update:open="(open) => !open && cancelDelete()">
+      <DialogContent
+        class="project-confirmation"
+        @open-auto-focus="focusDeleteCancel"
+        @close-auto-focus="restoreDeleteFocus"
+        @escape-key-down="preventBusyDismissal"
+        @interact-outside.prevent
+      >
+        <DialogTitle>{{ messages.deletion.title(deleteCandidate?.title ?? "") }}</DialogTitle>
+        <DialogDescription>{{ messages.deletion.description }}</DialogDescription>
+        <p v-if="state.errorMessage" class="inline-alert" role="alert">
+          <strong>{{ messages.projects.requestFailed }}</strong>
+          {{ state.errorMessage }}
+        </p>
+        <p v-if="state.busyAction !== null" role="status">{{ messages.deletion.pending }}</p>
+        <div class="action-row">
+          <button
+            ref="deleteCancel"
+            type="button"
+            class="button-secondary"
+            :aria-disabled="state.busyAction !== null"
+            @click="cancelDelete"
+          >
+            {{ messages.deletion.keep }}
+          </button>
+          <button
+            type="button"
+            class="button-danger"
+            :disabled="!confirmingDelete || state.busyAction !== null"
+            @click="confirmDelete"
+          >
+            {{ messages.deletion.confirm }}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog :open="confirmingRestore" @update:open="(open) => !open && cancelRestore()">
+      <DialogContent
+        class="project-confirmation"
+        @open-auto-focus="focusRestoreCancel"
+        @close-auto-focus="restoreRestoreFocus"
+        @escape-key-down="preventBusyDismissal"
+        @interact-outside.prevent
+      >
+        <DialogTitle>
+          {{
+            state.restoreMode === "replace-library"
+              ? messages.restore.replaceTitle
+              : messages.restore.addTitle
+          }}
+        </DialogTitle>
+        <DialogDescription>{{ restoreDescription }}</DialogDescription>
+        <p v-if="state.errorMessage" class="inline-alert" role="alert">
+          <strong>{{ messages.projects.requestFailed }}</strong>
+          {{ state.errorMessage }}
+        </p>
+        <p v-if="!state.restorePreview && state.busyAction === null" role="alert">
+          {{ messages.restore.previewExpired }}
+        </p>
+        <div v-if="state.restoreSafetyBackupFailure" class="stacked-form">
+          <p class="danger-note" role="alert">
+            <strong>{{ messages.restore.safetyBackupFailed }}</strong>
+            {{ state.restoreSafetyBackupFailure }}
+          </p>
+          <label for="safety-backup-bypass-phrase">{{ messages.restore.bypassLabel }}</label>
+          <input
+            id="safety-backup-bypass-phrase"
+            v-model="safetyBackupBypassPhrase"
+            autocomplete="off"
+            :disabled="state.busyAction !== null"
+            aria-describedby="safety-backup-bypass-help"
+          />
+          <p id="safety-backup-bypass-help" class="field-help">
+            {{ messages.restore.bypassHelpBefore }} <code>REPLACE WITHOUT BACKUP</code>
+            {{ messages.restore.bypassHelpAfter }}
+          </p>
+        </div>
+        <p v-if="state.busyAction !== null" role="status">{{ messages.restore.pending }}</p>
+        <div class="action-row">
+          <button
+            ref="restoreCancel"
+            type="button"
+            class="button-secondary"
+            :aria-disabled="state.busyAction !== null"
+            @click="cancelRestore"
+          >
+            {{ messages.restore.back }}
+          </button>
+          <button
+            type="button"
+            class="button-danger"
+            :disabled="!confirmingRestore || state.busyAction !== null || !state.restorePreview"
+            @click="confirmRestore"
+          >
+            {{ messages.restore.confirm }}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>

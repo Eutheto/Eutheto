@@ -369,6 +369,7 @@ Pause for an ADR if a geometry/rule cannot be independently recomputed, domain s
 
 Phase 09 is complete only when:
 
+- the user has tested the complete Seating workflow, including canvas/list parity, feedback is resolved, and explicit checkpoint acceptance and authorization to enter Phase 10 are recorded under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates);
 - every entity, Required rule, Preference, geometry relationship, and command above satisfies the complete rule/domain Definition of Done;
 - all eight fixtures pass validation, solve status, independent verification, scoring, explanation, geometry snapshot, and expected metrics;
 - the across-table and back-to-back cases are modeled from actual seat geometry and visibly/textually explained;

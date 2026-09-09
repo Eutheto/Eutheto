@@ -60,11 +60,19 @@ frontend-typecheck:
 frontend-test:
     pnpm --filter @eutheto/desktop run test
 
+
+# Explicitly install the pinned headless Chromium used by browser component tests.
+frontend-browser-install:
+    pnpm --filter @eutheto/desktop exec playwright install --only-shell chromium
+
+# Exercise real DOM, keyboard, focus, and accessibility behavior in Chromium.
+frontend-browser-test:
+    pnpm --filter @eutheto/desktop run test:browser
 # Build the Vue/Vite frontend.
 frontend-build:
     pnpm --filter @eutheto/desktop run build
 
-# Run every non-mutating frontend gate.
+# Run frontend formatting, lint, type, and Node component checks.
 frontend-check: frontend-format-check frontend-lint frontend-typecheck frontend-test
 
 # Format Rust, JavaScript/TypeScript, and Nix sources.

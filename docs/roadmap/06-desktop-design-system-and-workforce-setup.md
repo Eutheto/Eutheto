@@ -19,13 +19,15 @@ This phase incorporates blueprint Sections 21 and 22; Phase 6; frontend dependen
 - Phase 02: pack descriptor, setup checklist, UI manifest, command/rule catalog, typed view requests, validation DTOs, and generated TS contracts.
 - Phase 04: validation severity/evidence, conflict/explanation DTO foundations, verification-safe status language.
 - Phase 05: workforce schema, people/qualifications/types/templates/instances, eligibility/availability/initial rules, fast/full validation and view models, plus the completed people CSV detection, mapping, preview, proposed-state validation, atomic apply, undo/redo, and rejected-row services.
-- Vue never imports a domain repository or solver crate. `apps/desktop/src-tauri` is a thin adapter to `crates/application`.
+- Vue never imports a domain repository or solver crate. `apps/desktop/src-tauri` is a thin adapter to `crates/eutheto-core`.
 
 Phase 06 entry does not depend on Phase 07. Eligibility, shift, availability/time-off, and existing-assignment import formats remain accurately unavailable until Phase 07; the Phase 06 people CSV flow is fully backed by Phase 05.
 
 ## Current compatible frontend baseline
 
 Registry/API evidence was verified **2026-08-29**. Exact non-UI lockfile pins remain Phase 00 repository actions. Phase 04 owns the minimum Tailwind/shadcn-vue/Reka/Lucide foundation needed by its explanation components; Phase 06 consumes and extends that same foundation. Implementation must use this coherent set unless a newer stable set is re-verified together:
+
+UI001's adopted runtime/browser subset was reverified on **2026-09-09**; exact adoption evidence and the narrow declaration-only dependency repairs are recorded in [the assumptions ledger](assumptions.md). Later-phase or not-yet-consumed entries below remain adoption gates, not claims that those packages or features are installed.
 
 | Role | Version | Compatibility and major-version implication |
 |---|---:|---|
@@ -47,7 +49,7 @@ Registry/API evidence was verified **2026-08-29**. Exact non-UI lockfile pins re
 | Tailwind CSS / `@tailwindcss/vite` | 4.3.3 / 4.3.3 | Tailwind 4 is CSS-first and uses the Vite plugin. Audit v3 syntax; shadcn-vue uses `tw-animate-css`, and CSS variable utilities use `var(...)` semantics rather than stale v3 snippets. |
 | shadcn-vue | 2.8.2 | Component generator/source, not runtime design authority. It migrated from Radix Vue to Reka; generated code is owned/reviewed by `eutheto`. |
 | Reka UI | 2.10.4 | Current direct-registry version; use accessible headless behavior, not stale Radix Vue APIs. |
-| `@lucide/vue` | 1.37.0 | Maintained Vue icon package; icons require visible/accessible labels where meaning is not decorative. |
+| `@lucide/vue` | 1.39.0 | Preserve the installed Phase-04 foundation pin; icons require visible/accessible labels where meaning is not decorative. |
 | TanStack Vue Table | 9.2.4 | Breaking v9 API: use `useTable`, not v8 `useVueTable`, and configure features explicitly. |
 | TanStack Vue Virtual | 3.13.36 | Stable v3 `useVirtualizer` line for measured large views. |
 | Konva / vue-konva | 10.3.2 / 3.4.0 | Seating Phase 09; vue-konva supports Vue 3 and Konva `>7`. Treat Konva 10 as a breaking-major baseline. |
@@ -58,14 +60,16 @@ Registry/API evidence was verified **2026-08-29**. Exact non-UI lockfile pins re
 | Vue Test Utils | 2.5.0 | Vue 3 component tests. |
 | Testing Library Vue | 8.1.0 | User-centric accessible queries. |
 | axe-core | 4.13.0 | Automated accessibility aid; manual keyboard/screen-reader scripts remain required. |
-| `webdriverio` / `@wdio/cli` | 9.31.4 / 9.31.4 | Exact packaged-desktop E2E runner and CLI pins. |
-| `@wdio/tauri-service` | 1.3.0 | Tauri-supported WebDriverIO service for packaged application flows. |
+| `@vitest/browser-playwright` / `playwright` | 4.1.11 / 1.62.1 | Real Chromium component interaction and axe checks; not native IPC, platform or installer evidence. |
+| Native W3C WebDriver runner | Repository-owned | Existing dependency-free Node 24 runner; `just e2e` exercises Linux native unbundled Tauri/WebKit persistence across application-process restarts. |
 
-`@pinia/colada` **1.4.2**, `@vue/compiler-sfc` **3.5.42**, `@vue/devtools-api` **8.2.1**, and `@lucide/vue` **1.37.0** are mandatory direct dependencies at these exact versions, not undeclared transitive dependencies.
+`@pinia/colada` **1.4.2**, `@vue/compiler-sfc` **3.5.42**, `@vue/devtools-api` **8.2.1**, and `@lucide/vue` **1.39.0** are mandatory direct dependencies at these exact versions, not undeclared transitive dependencies.
 
 Tailwind CSS, `@tailwindcss/vite`, shadcn-vue, Reka UI, `@lucide/vue`, `tw-animate-css`, `tailwind-merge`, `class-variance-authority`, and `clsx` are locked and minimally configured by Phase 04. Phase 06 must consume and extend those exact pins, application-owned wrappers, and mapped semantic tokens rather than re-locking dependencies or introducing a parallel design convention.
 
 Tauri remains major **2**. The Rust crate patch/version set is pinned alongside npm packages after checking current compatible releases. Breaking-major adoption is clean-cut: no compatibility aliases or mixed old/new APIs in examples, generated code, configuration, or tests.
+
+WebDriverIO and `@wdio/tauri-service` were not adopted. Extend the existing native runner rather than adding a second automation stack. Use `just frontend-browser-install` and `just frontend-browser-test` for the supplemental Chromium suite; keep manual native picker/screen-reader and later exact packaged-artifact/platform evidence distinct.
 
 ## Authority and trust boundary
 
@@ -96,6 +100,8 @@ Never create a mutable long-lived Pinia copy of the scenario. Query a typed view
 
 ### Source ownership
 
+The following is an ownership illustration, not a required directory scaffold. Preserve existing entry files and consumers; add a feature path only when its owning phase implements real behavior. Project-generated frontend contracts remain under `src/api`, not a second `src/generated` tree.
+
 ```text
 apps/desktop/
 ├── src/
@@ -111,7 +117,6 @@ apps/desktop/
 │   ├── views/
 │   ├── stores/
 │   ├── composables/
-│   ├── generated/
 │   ├── styles/
 │   ├── i18n/
 │   └── test/
@@ -204,17 +209,14 @@ Only `apps/desktop/src/api` may import Tauri invoke/event APIs; ESLint import re
 
 ### Generated contracts
 
-Rust DTOs are source of truth. Generate/check in:
+Rust application DTOs and approved pack contracts remain authoritative. Extend the existing `xtask` generation pipeline and its checked-in products:
 
 ```text
-apps/desktop/src/generated/api-types.ts
-apps/desktop/src/generated/domain-workforce.ts
-apps/desktop/src/generated/domain-seating.ts
-apps/desktop/src/generated/events.ts
-apps/desktop/src/generated/schema-version.ts
+apps/desktop/src/api/generated.ts
+apps/desktop/src/api/generated-domain-pack-contracts.ts
 ```
 
-Use stable `ts-rs`-style generation plus project-owned command/client wrapper generation where needed. Generated files are never hand-edited. Contract drift fails regeneration checks. Untrusted boundary values are `unknown` and validated; application code avoids `any`.
+The existing command/client/event/version projection and pack-contract generators own these products; do not introduce a parallel generated directory or a new generator merely to match an illustrative layout. Seating contracts are added only with their Phase-09 authority. Generated files are never hand-edited; `just generate` regenerates and `just generate-check` rejects drift. Untrusted boundary values are `unknown` and validated; application code avoids `any`. Tauri-owned `src-tauri/gen/schemas/` and `permissions/autogenerated/` are ignored native build output, not checked-in `xtask` DTO products; see [generated artifact ownership](../architecture/generated-artifacts.md).
 
 ### Routes
 
@@ -544,9 +546,11 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 - representative 100-person matrices remain usable under measured render/input/scroll budgets with current Table 9/Virtual 3 APIs;
 - sub-threshold operations avoid progress flicker; longer operations show only real phases, remain cancellable, keep input/focus responsive, and coalesce screen-reader announcements;
 - raw backend incumbents never trigger verified-result copy, and optional later explanation work never blocks the already accepted result shell.
-- pure Vite UI tests do not replace packaged Tauri E2E later; Tauri-supported WebDriverIO covers packaged flows on supported platforms.
+- real Chromium component tests supplement but never replace native Tauri/WebKit coverage; `just e2e` currently exercises a Linux unbundled debug executable, not an installer. Extend the existing native W3C runner where supported and retain the later exact packaged-artifact/platform gates plus manual picker and screen-reader evidence.
 
 ### Phase exit gate
+
+**User manual checkpoint:** Before this phase exits or Phase 07 implementation starts, hand off the real desktop setup workflow for user testing, resolve feedback, and obtain explicit acceptance and authorization to proceed under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates). This is additional to the unfamiliar-user and accessibility evidence below; CI or a merged PR cannot satisfy it.
 
 Phase 06 exits only when an unfamiliar user can create the small scenario through the first-time script without Advanced mode; all key setup actions work by keyboard; proposed `.eutheto` scenario inspect/import/export and full backup/add-or-replace restore use the completed Phase-01 preview/apply services with accurate inclusion, collision, reconnection, safety-backup and recovery states; the people CSV flow uses the completed Phase 05 Rust backend and applies as one undoable batch with rejected-row retrieval; Required/Preference language is consistent; every frontend mutation uses typed commands/revisions rather than local authoritative state; progress, accessibility, webview-responsiveness, performance, and error-state gates pass; and the current breaking-major stack is pinned and used without stale conventions. No Phase 07 domain importer or report renderer is required for this gate.
 

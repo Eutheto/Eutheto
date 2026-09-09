@@ -17,5 +17,11 @@
     "types": ["node", "vite/client", "vitest/importMeta", "web-bluetooth"],
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts", "vitest.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "vitest.browser.config.ts"
+  ]
 }

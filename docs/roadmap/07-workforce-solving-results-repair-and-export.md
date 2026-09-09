@@ -21,6 +21,7 @@ Project-wide contracts and sequencing are in [README.md](README.md). Version and
 - The OR-Tools worker protocol, process supervision, cancellation, resource limits, status normalization, and candidate projection work end to end.
 - Phase 04 rejects deliberately invalid candidates and persists deterministic verification/explanation evidence.
 - The Phase 06 desktop shell, rule builder, validation UX, import preview, generated Rust-to-TypeScript API boundary, keyboard/focus infrastructure, and semantic design tokens exist.
+- The user has accepted the Phase-06 desktop setup checkpoint and explicitly authorized Phase-07 implementation under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates).
 - The working CLI executable name `optimizer` remains an unresolved example. `.eutheto` is the proposed portable extension pending the Phase-11 identity ADR; implementation and public documentation use the final decision consistently. The project/package prefix is `eutheto`.
 
 ## Decisions and invariants
@@ -387,6 +388,7 @@ Pause and write an ADR if a rule cannot be independently verified, a backend nee
 
 Phase 07 is complete only when:
 
+- the user has tested the complete Workforce workflow, feedback is resolved, and explicit checkpoint acceptance and authorization to enter Phase 08 are recorded under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates);
 - all thirteen Required rules and all eleven preference categories satisfy the rule checklist and domain-rule definition of done;
 - every practitioner clarification above has an explicit reviewed disposition, every confirmed requirement satisfies the same rule-completion discipline, and the synthetic combined workflow has acceptance evidence; no unresolved decision is presented as supported behavior;
 - every workforce fixture passes validation, expected status, independent verification, scoring, explanations, and accepted-solution export checks;
