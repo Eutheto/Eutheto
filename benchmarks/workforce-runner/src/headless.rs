@@ -769,9 +769,14 @@ pub(crate) async fn run(
     let executable_sha256 = files::hash_file(&executable, EXECUTABLE_LIMIT)?;
     files::digest(manifest_sha256)?;
     let artifact_root = artifact_root.canonicalize()?;
-    let scratch = tempfile::Builder::new()
-        .prefix("workforce-evidence-")
-        .tempdir()?;
+    let mut scratch_builder = tempfile::Builder::new();
+    scratch_builder.prefix("workforce-evidence-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        scratch_builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    let scratch = scratch_builder.tempdir()?;
     let runner = SampleRunner {
         root,
         artifact_root: &artifact_root,
