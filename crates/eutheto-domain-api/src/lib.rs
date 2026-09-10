@@ -155,6 +155,99 @@ pub struct CommandDescriptor {
     pub invalid_examples: Vec<Value>,
 }
 
+/// Immutable setup subject kinds admitted by a registered query.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupQuerySource {
+    Stored,
+    CommandPreview,
+}
+
+/// A read-only setup projection contract, distinct from commands and accepted-result views.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupQueryDescriptor {
+    pub id: String,
+    pub title: LocalizedText,
+    pub description: LocalizedText,
+    pub sources: BTreeSet<SetupQuerySource>,
+    pub supports_continuation: bool,
+    pub parameter_schema: Value,
+    pub result_schema: Value,
+    pub valid_examples: Vec<Value>,
+    pub invalid_examples: Vec<Value>,
+}
+
+impl SetupQueryDescriptor {
+    /// Validates the read-only schema contract and its parameter examples.
+    ///
+    /// # Errors
+    /// Returns a contract error for invalid metadata, schemas, or examples.
+    pub fn validate(&self) -> Result<(), DomainPackError> {
+        validate_id(&self.id, "setup query")?;
+        validate_localized(&self.title, "setup query title")?;
+        validate_localized(&self.description, "setup query description")?;
+        if self.sources.is_empty() {
+            return Err(DomainPackError::MissingMetadata(format!(
+                "setup query {} sources",
+                self.id
+            )));
+        }
+        validate_schema_complete(&self.parameter_schema, "setup query parameters")?;
+        validate_schema_complete(&self.result_schema, "setup query result")?;
+        if self.valid_examples.is_empty() || self.invalid_examples.is_empty() {
+            return Err(DomainPackError::MissingMetadata(format!(
+                "setup query {} examples",
+                self.id
+            )));
+        }
+        for example in &self.valid_examples {
+            self.validate_parameters(example, ContractJsonLimits::DEFAULT)?;
+        }
+        if self.invalid_examples.iter().any(|example| {
+            self.validate_parameters(example, ContractJsonLimits::DEFAULT)
+                .is_ok()
+        }) {
+            return Err(DomainPackError::CatalogMismatch(format!(
+                "setup query {} has an accepted invalid example",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Checks source and pagination compatibility before any scenario capture or application.
+    ///
+    /// # Errors
+    /// Rejects unsupported source kinds and continuation on an unpaged query.
+    pub fn validate_subject(
+        &self,
+        source: SetupQuerySource,
+        has_continuation: bool,
+    ) -> Result<(), DomainPackError> {
+        if !self.sources.contains(&source) || (has_continuation && !self.supports_continuation) {
+            return Err(DomainPackError::InvalidPayload {
+                path: "/query".to_owned(),
+                message: "setup query does not support this source or continuation".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Checks bounded, transient query parameters without imposing portable-document
+    /// content policy on literal search text. This cannot authorize a mutation.
+    ///
+    /// # Errors
+    /// Rejects malformed schemas, out-of-bound structures, and schema-invalid parameters.
+    pub fn validate_parameters(
+        &self,
+        value: &Value,
+        limits: ContractJsonLimits,
+    ) -> Result<(), DomainPackError> {
+        schema::validate_query_parameters(&self.parameter_schema, value, limits)
+    }
+}
+
 /// Descriptor shared by setup, entities, rules, goals, provenance, and result views.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -219,6 +312,7 @@ pub struct DomainCatalog {
     pub portable_schema: Value,
     pub share_result_schema: Value,
     pub commands: Vec<CommandDescriptor>,
+    pub setup_queries: Vec<SetupQueryDescriptor>,
     pub ai_tools: Vec<AiToolDescriptor>,
     pub ui: DomainUiManifest,
 }
@@ -273,6 +367,23 @@ impl DomainCatalog {
                     "command {} has an accepted invalid example",
                     command.id
                 )));
+            }
+        }
+        unique_ids(
+            self.setup_queries.iter().map(|item| item.id.as_str()),
+            "setup queries",
+        )?;
+        for query in &self.setup_queries {
+            query.validate()?;
+            if self.commands.iter().any(|command| command.id == query.id) {
+                return Err(DomainPackError::CatalogMismatch(
+                    "setup queries cannot be mutation commands".to_owned(),
+                ));
+            }
+            if self.ui.result_views.iter().any(|view| view.id == query.id) {
+                return Err(DomainPackError::CatalogMismatch(
+                    "setup queries cannot be accepted-result views".to_owned(),
+                ));
             }
         }
         unique_ids(
@@ -464,6 +575,13 @@ pub struct DomainMutation {
     pub inverse: DomainBatchCommand,
 }
 
+/// Settings reconciliation can return pack-owned data, never host fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DomainSettingsMutation {
+    pub domain: eutheto_types::ScenarioDomain,
+    pub inverse_payload: Option<Value>,
+}
+
 /// Import supplies an explicit scenario shell; packs cannot obtain persistence or host defaults.
 #[derive(Clone, Debug)]
 pub struct PortableImportContext {
@@ -492,6 +610,64 @@ pub struct DomainShareResult {
 pub struct DomainView {
     pub view_id: String,
     pub data: Value,
+}
+
+/// Pack-neutral setup query; the registered pack owns parameters and cursor positions.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DomainSetupQueryV1 {
+    pub schema_version: u32,
+    pub view_id: String,
+    pub parameters: Value,
+    pub continuation: Option<SetupContinuationV1>,
+}
+
+/// Revision- and query-bound continuation, never an authorization token.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupContinuationV1 {
+    pub schema_version: u32,
+    pub scenario_id: eutheto_types::ScenarioId,
+    pub revision: eutheto_types::Revision,
+    pub query_fingerprint: [u8; 32],
+    pub position: Value,
+}
+
+/// Host-captured cursor authority, absent from accepted-solution view inputs.
+#[derive(Clone, Copy, Debug)]
+pub struct SetupViewContext {
+    pub revision: eutheto_types::Revision,
+    pub query_fingerprint: [u8; 32],
+}
+
+/// Immutable subjects keep editable setup separate from accepted-solution evidence.
+#[derive(Clone, Copy, Debug)]
+pub enum DomainViewInput<'a> {
+    StoredSetup {
+        document: &'a ScenarioDocument,
+        query: &'a DomainSetupQueryV1,
+        context: SetupViewContext,
+    },
+    CommandPreviewSetup {
+        original: &'a ScenarioDocument,
+        prospective: &'a ScenarioDocument,
+        command: &'a eutheto_types::ScenarioCommand,
+        changes: &'a [eutheto_types::Change],
+        query: &'a DomainSetupQueryV1,
+        context: SetupViewContext,
+    },
+    AcceptedSolution {
+        document: &'a ScenarioDocument,
+        solution: &'a NormalizedSolution,
+        view_id: &'a str,
+    },
+}
+
+/// Internal view result; only generation review may request reconciliation preflight.
+#[derive(Debug)]
+pub struct DomainViewOutput {
+    pub view: DomainView,
+    pub reconciliation: Option<DomainBatchCommand>,
 }
 
 /// Object-safe contract implemented by compiled-in packs.
@@ -560,6 +736,23 @@ pub trait DomainPack: Send + Sync {
         batch: &DomainBatchCommand,
         cancellation: &CancellationToken,
     ) -> Result<DomainMutation, DomainPackError>;
+
+    /// Reconciles stored representations without moving explicit instants.
+    ///
+    /// Validate the source under its original settings before preparing an exact inverse.
+    /// Return only domain data; the host installs its independently supplied settings.
+    ///
+    /// # Errors
+    ///
+    /// Reject invalid source/target settings, unsupported restoration, resource exhaustion
+    /// or interruption without changing the caller's document.
+    fn reconcile_settings(
+        &self,
+        original: &ScenarioDocument,
+        settings: &eutheto_types::ScenarioSettings,
+        restoration: Option<&Value>,
+        control: &OperationControl,
+    ) -> Result<DomainSettingsMutation, DomainPackError>;
 
     /// Compiles a scenario document into a planning problem.
     ///
@@ -678,14 +871,13 @@ pub trait DomainPack: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the document, optional solution, or view identifier is invalid,
+    /// Returns an error if the subject, query, or view identifier is invalid,
     /// or resource exhaustion prevents completing the view.
     fn build_view(
         &self,
-        document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        view_id: &str,
-    ) -> Result<DomainView, DomainPackError>;
+        input: DomainViewInput<'_>,
+        control: &OperationControl,
+    ) -> Result<DomainViewOutput, DomainPackError>;
 
     /// Renders validated typed evidence as inert localization messages.
     ///

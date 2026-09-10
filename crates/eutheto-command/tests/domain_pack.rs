@@ -1066,3 +1066,71 @@ fn counterfactual_compilation_observes_shared_cancellation_and_expiry() -> Resul
     );
     Ok(())
 }
+
+#[test]
+fn accepted_result_views_cannot_be_requested_with_setup_subjects() -> Result<(), Box<dyn Error>> {
+    let document = document()?;
+    let query = eutheto_domain_api::DomainSetupQueryV1 {
+        schema_version: 1,
+        view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
+    };
+    let context = eutheto_domain_api::SetupViewContext {
+        revision: eutheto_types::Revision::INITIAL,
+        query_fingerprint: [0; 32],
+    };
+    let command = eutheto_types::ScenarioCommand::SetScenarioSettings(Box::new(
+        eutheto_types::SetScenarioSettings {
+            settings: document.settings.clone(),
+            restoration: None,
+        },
+    ));
+    for input in [
+        eutheto_domain_api::DomainViewInput::StoredSetup {
+            document: &document,
+            query: &query,
+            context,
+        },
+        eutheto_domain_api::DomainViewInput::CommandPreviewSetup {
+            original: &document,
+            prospective: &document,
+            command: &command,
+            changes: &[],
+            query: &query,
+            context,
+        },
+    ] {
+        assert!(matches!(
+            OfficialTestPack.build_view(
+                input,
+                &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+            ),
+            Err(DomainPackError::InvalidPayload { path, .. }) if path == "/source"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_cannot_advertise_a_mutation_identifier_as_read_only() -> Result<(), Box<dyn Error>> {
+    let mut catalog = OfficialTestPack.catalog()?;
+    let command = &catalog.commands[0];
+    catalog
+        .setup_queries
+        .push(eutheto_domain_api::SetupQueryDescriptor {
+            id: command.id.clone(),
+            title: command.title.clone(),
+            description: command.description.clone(),
+            sources: [eutheto_domain_api::SetupQuerySource::Stored]
+                .into_iter()
+                .collect(),
+            supports_continuation: false,
+            parameter_schema: command.payload_schema.clone(),
+            result_schema: command.result_schema.clone(),
+            valid_examples: command.valid_examples.clone(),
+            invalid_examples: command.invalid_examples.clone(),
+        });
+    assert!(catalog.validate().is_err());
+    Ok(())
+}

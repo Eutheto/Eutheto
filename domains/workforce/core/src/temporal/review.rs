@@ -8,11 +8,11 @@ use crate::{
     commands,
     ids::{ShiftId, ShiftTemplateId},
     model::{Coverage, ShiftTemplate, WorkforceDomainV1, WorkforceEntity, planning_dates},
-    validation::{common::invalid, validate_document},
+    validation::{common::invalid, validate_document_controlled},
 };
-use eutheto_domain_api::{DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand};
+use eutheto_domain_api::{DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPackError};
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, EntityId, ScenarioDocument,
+    CancellationToken, DomainCommandEnvelope, EntityId, OperationControl, ScenarioDocument,
     collect_document_owned_uuids,
 };
 use jiff::civil::Date;
@@ -32,41 +32,65 @@ pub fn preview_generation(
     prospective: &ScenarioDocument,
     cancellation: &CancellationToken,
 ) -> Result<GenerationPreview, TemporalError> {
-    check_cancelled(cancellation)?;
-    let before_domain = validate_document(before)?;
-    let prospective_domain = validate_document(prospective)?;
-    let before_dates = planning_dates(&before.settings)?;
-    let prospective_dates = planning_dates(&prospective.settings)?;
+    preview_generation_checked(
+        before,
+        prospective,
+        &OperationControl::Cancellation(cancellation.clone()),
+        &mut || check_cancelled(cancellation),
+    )
+    .map(|(preview, _, _)| preview)
+}
+
+fn checked_prospective_hash(
+    before: &ScenarioDocument,
+    prospective: &ScenarioDocument,
+) -> Result<[u8; 32], TemporalError> {
     if before.scenario_id != prospective.scenario_id {
         return Err(issue(TemporalIssueKind::DifferentScenario, None, None));
     }
     let mut hasher = blake3::Hasher::new();
     serde_json::to_writer(&mut hasher, prospective)
         .map_err(|_| invalid("document", "cannot hash prospective document"))?;
-    let prospective_hash = *hasher.finalize().as_bytes();
-    let mut checkpoint = |_| check_cancelled(cancellation);
-    let before_owners = generation::owners(&before_domain, &mut checkpoint)?;
-    let prospective_owners = generation::owners(&prospective_domain, &mut checkpoint)?;
-    check_identity_continuity(&before_owners, &prospective_owners, cancellation)?;
+    Ok(*hasher.finalize().as_bytes())
+}
+
+/// The same whole-document authority, charging caller work without changing reconciliation.
+/// Returns its decoded source models for setup metadata, avoiding another document decode.
+pub(crate) fn preview_generation_checked(
+    before: &ScenarioDocument,
+    prospective: &ScenarioDocument,
+    control: &OperationControl,
+    checkpoint: &mut impl FnMut() -> Result<(), TemporalError>,
+) -> Result<(GenerationPreview, WorkforceDomainV1, WorkforceDomainV1), TemporalError> {
+    let mut checked = || {
+        control.check().map_err(DomainPackError::from)?;
+        checkpoint()
+    };
+    let checkpoint = &mut checked;
+    checkpoint()?;
+    let before_domain = validate_document_controlled(before, Some(control))?;
+    let prospective_domain = validate_document_controlled(prospective, Some(control))?;
+    let before_dates = planning_dates(&before.settings)?;
+    let prospective_dates = planning_dates(&prospective.settings)?;
+    let prospective_hash = checked_prospective_hash(before, prospective)?;
+    checkpoint()?;
+    let before_owners = generation::owners(&before_domain, &mut |_| checkpoint())?;
+    let prospective_owners = generation::owners(&prospective_domain, &mut |_| checkpoint())?;
+    check_identity_continuity(&before_owners, &prospective_owners, checkpoint)?;
     let candidates = generation::collect_specs(
         &prospective_domain,
         &prospective.settings,
         &prospective_owners,
-        &mut checkpoint,
+        &mut |_| checkpoint(),
     )?;
-    let reconciliation = build_reconciliation(
-        before,
-        prospective,
-        &before_owners,
-        &candidates,
-        cancellation,
-    )?;
+    let reconciliation =
+        build_reconciliation(before, prospective, &before_owners, &candidates, checkpoint)?;
     // Exercise exactly the ordinary atomic command that the caller will receive.
     let reconciled_domain = reconciliation
         .as_ref()
         .map(|batch| {
-            let mutation = commands::apply_batch_cancellable(prospective, batch, cancellation)?;
-            validate_document(&mutation.document)
+            let mutation = commands::apply_batch_controlled(prospective, batch, control)?;
+            validate_document_controlled(&mutation.document, Some(control))
         })
         .transpose()?;
     let after_domain = reconciled_domain.as_ref().unwrap_or(&prospective_domain);
@@ -74,17 +98,17 @@ pub fn preview_generation(
         generation::collect_specs(
             after_domain,
             &prospective.settings,
-            &generation::owners(after_domain, &mut checkpoint)?,
-            &mut checkpoint,
+            &generation::owners(after_domain, &mut |_| checkpoint())?,
+            &mut |_| checkpoint(),
         )?
     } else {
         candidates
     };
     let prior_specs =
-        generation::collect_prior_specs(&before_domain, &before.settings, cancellation)?;
+        generation::collect_prior_specs(&before_domain, &before.settings, checkpoint)?;
     let mut prior_states = BTreeMap::new();
     for spec in prior_specs {
-        check_cancelled(cancellation)?;
+        checkpoint()?;
         let Some(id) = spec.id() else { continue };
         let state = match spec.resolve(&before.settings, before_dates) {
             Ok(shift) => PriorShift::Resolved(shift),
@@ -98,12 +122,12 @@ pub fn preview_generation(
         prior_states.insert(id, (state, spec));
     }
     // Metadata is compared once per template, never copied into each generated occurrence.
-    let unchanged_templates = unchanged_templates(&before_domain, after_domain, cancellation)?;
+    let unchanged_templates = unchanged_templates(&before_domain, after_domain, checkpoint)?;
     let mut after = Vec::with_capacity(after_specs.len());
     let mut changes = Vec::new();
     let mut seen = BTreeSet::new();
     for spec in after_specs {
-        check_cancelled(cancellation)?;
+        checkpoint()?;
         let shift = spec.resolve(&prospective.settings, prospective_dates)?;
         let kind = match prior_states.get(&shift.id) {
             None => Some(ShiftChangeKind::Added),
@@ -121,28 +145,34 @@ pub fn preview_generation(
         after.push(shift);
     }
     for id in prior_states.keys().filter(|id| !seen.contains(id)) {
+        checkpoint()?;
         push_change(&mut changes, *id, ShiftChangeKind::Removed)?;
     }
     after.sort_unstable_by_key(|shift| (shift.interval.starts_at.instant, shift.id));
     changes.sort_unstable_by_key(|change| change.id);
-    check_cancelled(cancellation)?;
-    Ok(GenerationPreview {
+    checkpoint()?;
+    let preview = GenerationPreview {
         prospective_hash,
         before: prior_states.into_values().map(|(state, _)| state).collect(),
         after,
         changes,
         reconciliation,
-    })
+    };
+    Ok((
+        preview,
+        before_domain,
+        reconciled_domain.unwrap_or(prospective_domain),
+    ))
 }
 
 fn check_identity_continuity(
     before_owners: &generation::Owners,
     prospective_owners: &generation::Owners,
-    cancellation: &CancellationToken,
+    checkpoint: &mut impl FnMut() -> Result<(), TemporalError>,
 ) -> Result<(), TemporalError> {
     // Identity continuity includes dormant and detached owners, not just generated output.
     for ((template, date), owner) in prospective_owners {
-        check_cancelled(cancellation)?;
+        checkpoint()?;
         if before_owners
             .get(&(*template, *date))
             .is_some_and(|prior| prior.id != owner.id)
@@ -166,15 +196,15 @@ fn build_reconciliation(
     prospective: &ScenarioDocument,
     before_owners: &generation::Owners,
     candidates: &[ShiftSpec<'_>],
-    cancellation: &CancellationToken,
+    checkpoint: &mut impl FnMut() -> Result<(), TemporalError>,
 ) -> Result<Option<DomainBatchCommand>, TemporalError> {
     let mut occupied = collect_document_owned_uuids(before);
     let prospective_occupied = collect_document_owned_uuids(prospective);
     occupied.extend(&prospective_occupied);
-    let raw_definitions = raw_definitions(before)?;
+    let raw_definitions = raw_definitions(before, checkpoint)?;
     let mut additions: BTreeMap<ShiftTemplateId, Map<String, Value>> = BTreeMap::new();
     for spec in candidates {
-        check_cancelled(cancellation)?;
+        checkpoint()?;
         let ShiftSpec::Generated { template, date, id } = *spec else {
             continue;
         };
@@ -260,16 +290,19 @@ fn derive_id(template: ShiftTemplateId, date: Date) -> Result<ShiftId, TemporalE
         .map_err(|_| invalid("occurrenceId", "invalid derived occurrence identity").into())
 }
 
-fn raw_definitions(
-    document: &ScenarioDocument,
-) -> Result<BTreeMap<ShiftId, (&String, &Value)>, TemporalError> {
+fn raw_definitions<'a>(
+    document: &'a ScenarioDocument,
+    checkpoint: &mut impl FnMut() -> Result<(), TemporalError>,
+) -> Result<BTreeMap<ShiftId, (&'a String, &'a Value)>, TemporalError> {
     let mut definitions = BTreeMap::new();
     for entity in document.domain.entities.values() {
+        checkpoint()?;
         if let Some(identities) = entity
             .get("occurrenceIdentities")
             .and_then(Value::as_object)
         {
             for (key, value) in identities {
+                checkpoint()?;
                 let id = key
                     .parse()
                     .map_err(|_| invalid("occurrenceIdentities", "invalid occurrence identity"))?;
@@ -295,11 +328,11 @@ fn push_change(
 fn unchanged_templates(
     before: &WorkforceDomainV1,
     after: &WorkforceDomainV1,
-    cancellation: &CancellationToken,
+    checkpoint: &mut impl FnMut() -> Result<(), TemporalError>,
 ) -> Result<BTreeSet<ShiftTemplateId>, TemporalError> {
     let mut unchanged = BTreeSet::new();
     for (id, entity) in &after.entities {
-        check_cancelled(cancellation)?;
+        checkpoint()?;
         if let (WorkforceEntity::ShiftTemplate(after), Some(WorkforceEntity::ShiftTemplate(before))) =
             (entity, before.entities.get(id))
             && template_metadata_eq(before, after)

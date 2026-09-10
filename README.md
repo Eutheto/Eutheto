@@ -180,6 +180,15 @@ Bare UUIDv7 values always mean stored IDs; use `./name` for an extensionless or
 UUID-shaped filename. File errors never fall back to SQLite. Read-only operations
 also accept checked single-scenario bundles, not full-library backups.
 
+`scenario apply` also accepts `setScenarioSettings` with complete `settings` and
+`restoration: null`. Workforce timezone/DST-policy changes preserve every stored
+manual or detached shift's instants and elapsed duration, re-expressing local
+endpoints when required; recurring templates retain local intent. The command
+uses the same revision checks and atomic history as other edits. Stored undo/redo
+restores exact endpoint representations, including DST-gap intent and timestamp
+spelling; inverse restoration payloads are pack-owned. This command authority
+does not yet provide the Phase-06 desktop settings editor.
+
 ```sh
 optimizer scenario validate ./scenario.json
 optimizer solve ./scenario.json --output ./result.json --progress human

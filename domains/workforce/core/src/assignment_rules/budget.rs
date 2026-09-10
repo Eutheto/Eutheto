@@ -20,7 +20,7 @@ struct Usage {
     bytes: u64,
 }
 
-pub(super) struct OperationBudget<'a> {
+pub(crate) struct OperationBudget<'a> {
     control: Option<&'a OperationControl>,
     limits: PlanningIrLimitsV1,
     steps: u64,
@@ -63,6 +63,10 @@ impl<'a> OperationBudget<'a> {
         budget.max_items = MAX_EVALUATION_ITEMS;
         budget.max_bytes = MAX_EVALUATION_BYTES;
         budget
+    }
+
+    pub fn control(&self) -> Option<&'a OperationControl> {
+        self.control
     }
 
     pub fn check(&self) -> Result<(), AssignmentRuleError> {

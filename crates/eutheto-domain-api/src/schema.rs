@@ -224,9 +224,9 @@ fn validate_schema_constraints(
     path: &str,
 ) -> Result<(), DomainPackError> {
     if let Some(format) = object.get("format")
-        && format.as_str() != Some("uuid")
+        && !matches!(format.as_str(), Some("uuid" | "scenario-change-path"))
     {
-        return invalid(path, "only uuid format is supported");
+        return invalid(path, "unsupported schema string format");
     }
     if let Some(pattern) = object.get("pattern") {
         let pattern = pattern
@@ -305,6 +305,53 @@ pub fn validate_contract_value(
     validate_value_with_schema(schema, value, limits)
 }
 
+pub(super) fn validate_query_parameters(
+    schema: &Value,
+    value: &Value,
+    limits: ContractJsonLimits,
+) -> Result<(), DomainPackError> {
+    validate_contract_schema(schema)?;
+    validate_query_structure(value, 0, limits)?;
+    bounded_json_size(value, limits.max_serialized_bytes)?;
+    validate_value_at(schema, value, "$", 0, limits)
+}
+
+fn validate_query_structure(
+    value: &Value,
+    depth: usize,
+    limits: ContractJsonLimits,
+) -> Result<(), DomainPackError> {
+    if depth > limits.max_depth {
+        return invalid("$", "query nesting limit exceeded");
+    }
+    match value {
+        Value::String(text) if text.len() > limits.max_string_bytes => {
+            return invalid("$", "query string byte limit exceeded");
+        }
+        Value::Array(items) => {
+            if items.len() > limits.max_collection_items {
+                return invalid("$", "query collection limit exceeded");
+            }
+            for item in items {
+                validate_query_structure(item, depth + 1, limits)?;
+            }
+        }
+        Value::Object(fields) => {
+            if fields.len() > limits.max_collection_items {
+                return invalid("$", "query collection limit exceeded");
+            }
+            for (key, item) in fields {
+                if key.len() > limits.max_string_bytes {
+                    return invalid("$", "query key byte limit exceeded");
+                }
+                validate_query_structure(item, depth + 1, limits)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn validate_value_with_schema(
     schema: &Value,
     value: &Value,
@@ -325,6 +372,11 @@ pub(super) fn validate_value_with_schema(
 }
 
 fn scrub_json_pointers(schema: &Value, value: &Value) -> Value {
+    if schema.get("format").and_then(Value::as_str) == Some("scenario-change-path")
+        && value.as_str().is_some_and(is_scenario_change_path)
+    {
+        return Value::String("scenario-field-reference".to_owned());
+    }
     if schema
         .get("pattern")
         .and_then(Value::as_str)
@@ -362,6 +414,12 @@ fn scrub_json_pointers(schema: &Value, value: &Value) -> Value {
         );
     }
     value.clone()
+}
+
+/// These are the field-reference roots emitted by the current typed scenario commands,
+/// not filesystem paths. Only a schema-declared change-path field receives this treatment.
+fn is_scenario_change_path(value: &str) -> bool {
+    value == "/settings" || value.starts_with("/domain/")
 }
 
 fn validate_value_at(
@@ -418,6 +476,11 @@ fn validate_value_at(
             .is_none()
     {
         return invalid(path, "expected UUID");
+    }
+    if object.get("format").and_then(Value::as_str) == Some("scenario-change-path")
+        && !value.as_str().is_some_and(is_scenario_change_path)
+    {
+        return invalid(path, "expected scenario change field reference");
     }
     if let Some(pattern) = object.get("pattern").and_then(Value::as_str) {
         let prefix = &pattern[1..];

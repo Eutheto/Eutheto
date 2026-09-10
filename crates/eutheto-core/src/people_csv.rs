@@ -564,18 +564,7 @@ fn validate_apply_request(request: &PeopleCsvApplyRequestV1) -> Result<(), AppEr
             .approved_digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || request.actor.display_name.len() > 256
-        || request
-            .actor
-            .actor_id
-            .as_ref()
-            .is_some_and(|id| id.len() > 256)
-        || request.actor.display_name.chars().any(char::is_control)
-        || request
-            .actor
-            .actor_id
-            .as_ref()
-            .is_some_and(|id| id.chars().any(char::is_control))
+        || !super::valid_command_actor(&request.actor)
         || request.command_id.as_uuid().get_version_num() != 7
         || request.request_id.as_uuid().get_version_num() != 7
         || request.scenario_id.as_uuid().get_version_num() != 7

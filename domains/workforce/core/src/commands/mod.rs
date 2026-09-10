@@ -4,8 +4,10 @@ mod dispatch;
 mod effect;
 mod occurrences;
 mod payload;
+mod settings;
 
 pub use payload::*;
+pub(crate) use settings::reconcile_settings;
 
 use crate::validation::{
     WorkforceSchemas,
@@ -16,7 +18,9 @@ use eutheto_domain_api::{
     DomainBatchCommand, DomainMutation, DomainPackError, MAX_DOMAIN_BATCH_COMMANDS,
     MAX_DOMAIN_MUTATION_RESULT_BYTES, bounded_json_size,
 };
-use eutheto_types::{CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, ScenarioDocument};
+use eutheto_types::{
+    CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl, ScenarioDocument,
+};
 use serde_json::Value;
 
 /// Applies typed record operations atomically to an owned working document.
@@ -41,19 +45,31 @@ pub(crate) fn apply_batch_cancellable(
     batch: &DomainBatchCommand,
     cancellation: &CancellationToken,
 ) -> Result<DomainMutation> {
-    apply_batch_inner(document, batch, Some(cancellation))
+    apply_batch_controlled(
+        document,
+        batch,
+        &OperationControl::Cancellation(cancellation.clone()),
+    )
+}
+
+pub(crate) fn apply_batch_controlled(
+    document: &ScenarioDocument,
+    batch: &DomainBatchCommand,
+    control: &OperationControl,
+) -> Result<DomainMutation> {
+    apply_batch_inner(document, batch, Some(control))
 }
 
 fn apply_batch_inner(
     document: &ScenarioDocument,
     batch: &DomainBatchCommand,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<DomainMutation> {
-    check_cancellation(cancellation)?;
+    check_control(control)?;
     validate_batch(batch)?;
     let schemas = WorkforceSchemas::load()?;
-    validate_document_with_schemas(document, &schemas)?;
-    check_cancellation(cancellation)?;
+    validate_document_with_schemas(document, &schemas, control)?;
+    check_control(control)?;
     let mut working = document.clone();
     let mut results = Vec::with_capacity(batch.commands.len());
     let mut result_bytes = 2_usize;
@@ -70,11 +86,11 @@ fn apply_batch_inner(
     let mut inverse_bytes = bounded_json_size(&inverse, inverse_limit)
         .map_err(|_| DomainPackError::BatchInverseTooLarge)?;
     for (index, envelope) in batch.commands.iter().enumerate() {
-        check_cancellation(cancellation)?;
+        check_control(control)?;
         changes.begin_command(index)?;
         schemas.validate_payload(envelope)?;
-        let effect = dispatch::apply_one(&mut working, envelope, &mut changes, cancellation)?;
-        validate_document_with_schemas(&working, &schemas)?;
+        let effect = dispatch::apply_one(&mut working, envelope, &mut changes, control)?;
+        validate_document_with_schemas(&working, &schemas, control)?;
         let separator = usize::from(!results.is_empty());
         let remaining = MAX_DOMAIN_MUTATION_RESULT_BYTES
             .checked_sub(result_bytes + separator)
@@ -92,7 +108,7 @@ fn apply_batch_inner(
         inverse.commands.push(effect.inverse);
     }
     inverse.commands.reverse();
-    check_cancellation(cancellation)?;
+    check_control(control)?;
     Ok(DomainMutation {
         document: working,
         results,
@@ -101,12 +117,11 @@ fn apply_batch_inner(
     })
 }
 
-fn check_cancellation(cancellation: Option<&CancellationToken>) -> Result {
-    if cancellation.is_some_and(CancellationToken::is_cancelled) {
-        Err(DomainPackError::Cancelled)
-    } else {
-        Ok(())
+fn check_control(control: Option<&OperationControl>) -> Result {
+    if let Some(control) = control {
+        control.check()?;
     }
+    Ok(())
 }
 
 fn validate_batch(batch: &DomainBatchCommand) -> Result {

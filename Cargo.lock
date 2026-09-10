@@ -961,6 +961,7 @@ dependencies = [
 name = "eutheto-core"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "dirs",
  "eutheto-command",
  "eutheto-domain-api",
@@ -976,6 +977,7 @@ dependencies = [
  "eutheto-types",
  "eutheto-verify",
  "eutheto-workforce",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

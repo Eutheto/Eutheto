@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
-use eutheto_domain_api::{CommandDescriptor, ContractJsonLimits, DomainUiManifest};
+use eutheto_domain_api::{
+    CommandDescriptor, ContractJsonLimits, DomainUiManifest, SetupQueryDescriptor,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,6 +29,7 @@ struct PackSource {
     typescript_prefix: &'static str,
     rust: &'static str,
     command_schemas: &'static str,
+    query_schemas: &'static str,
     internal_schema: &'static str,
     portable_schema: &'static str,
     share_schema: Option<&'static str>,
@@ -44,6 +47,7 @@ const PACK_SOURCES: [PackSource; 2] = [
         typescript_prefix: "OfficialTest",
         rust: "crates/eutheto-command/src/generated_official_test_pack_contract.rs",
         command_schemas: "schemas/generated/official-test.command-schemas.json",
+        query_schemas: "schemas/generated/official-test.setup-query-schemas.json",
         internal_schema: "schemas/generated/official-test.internal.schema.json",
         portable_schema: "schemas/generated/official-test.portable.schema.json",
         share_schema: Some("schemas/generated/official-test.share-result.schema.json"),
@@ -59,6 +63,7 @@ const PACK_SOURCES: [PackSource; 2] = [
         typescript_prefix: "Workforce",
         rust: "domains/workforce/core/src/generated_workforce_pack_contract.rs",
         command_schemas: "schemas/generated/workforce.command-schemas.json",
+        query_schemas: "schemas/generated/workforce.setup-query-schemas.json",
         internal_schema: "schemas/generated/workforce.internal.schema.json",
         portable_schema: "schemas/generated/workforce.portable.schema.json",
         share_schema: Some("schemas/generated/workforce.share-result.schema.json"),
@@ -78,6 +83,7 @@ struct PackContract {
     #[serde(rename = "$defs", default, skip_serializing)]
     definitions: BTreeMap<String, Value>,
     commands: Vec<CommandDescriptor>,
+    setup_queries: Vec<SetupQueryDescriptor>,
     internal_schema: Value,
     portable_schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +210,7 @@ pub fn generated_files(repo_root: &Path) -> Result<Vec<(&'static str, String)>> 
         files.extend([
             (source.rust, render_rust_pack(&pack, source)?),
             (source.command_schemas, render_command_schemas(&pack)?),
+            (source.query_schemas, render_query_schemas(&pack)?),
             (
                 source.internal_schema,
                 render_schema(&pack.internal_schema, source.internal_schema)?,
@@ -380,6 +387,10 @@ fn expand_pack_schemas(pack: &mut PackContract) -> Result<()> {
         command.result_schema = expander.expand(&command.result_schema, 0)?;
         command.change_schema = expander.expand(&command.change_schema, 0)?;
     }
+    for query in &mut pack.setup_queries {
+        query.parameter_schema = expander.expand(&query.parameter_schema, 0)?;
+        query.result_schema = expander.expand(&query.result_schema, 0)?;
+    }
     if expander.used.len() != pack.definitions.len() {
         bail!("local schema definitions must be reachable from emitted schemas")
     }
@@ -494,7 +505,7 @@ fn parse_matrix() -> Result<SupportMatrix> {
 }
 
 fn validate_pack(pack: &PackContract, source: &PackSource) -> Result<()> {
-    if pack.schema_version != 3 {
+    if pack.schema_version != 4 {
         bail!("unsupported pack contract source version")
     }
     if pack.pack.id != source.id
@@ -519,6 +530,7 @@ fn validate_pack(pack: &PackContract, source: &PackSource) -> Result<()> {
         _ => bail!("Share Result products do not match this pack's implementation stage"),
     }
     validate_commands(pack, source)?;
+    validate_setup_queries(pack, source)?;
     let mut ai_names = BTreeSet::new();
     let mut ai_commands = BTreeSet::new();
     let mut prior_ai_command: Option<&str> = None;
@@ -632,6 +644,47 @@ fn validate_commands(pack: &PackContract, source: &PackSource) -> Result<()> {
     Ok(())
 }
 
+fn validate_setup_queries(pack: &PackContract, source: &PackSource) -> Result<()> {
+    let mut prior_id: Option<&str> = None;
+    let mut identifiers = BTreeSet::new();
+    for suffix in [
+        "PACK_ID",
+        "PACK_VERSION",
+        "PACK_CONTRACT_JSON",
+        "COMMAND_IDS",
+        "SETUP_QUERY_IDS",
+    ] {
+        identifiers.insert(format!("{}_{suffix}", source.rust_prefix));
+    }
+    for command in &pack.commands {
+        if !identifiers.insert(command_suffix(&command.id, source)?.to_ascii_uppercase()) {
+            bail!("generated command and metadata identifiers collide")
+        }
+    }
+    for query in &pack.setup_queries {
+        let suffix = query_suffix(&query.id, source)?;
+        if suffix.bytes().any(|byte| byte.is_ascii_uppercase())
+            || !identifiers.insert(format!("SETUP_{}_QUERY_ID", suffix.to_ascii_uppercase()))
+            || prior_id.is_some_and(|prior| prior >= query.id.as_str())
+        {
+            bail!("setup queries require lowercase identifiers uniquely sorted by id")
+        }
+        prior_id = Some(&query.id);
+        if pack
+            .ui_manifest
+            .result_views
+            .iter()
+            .any(|view| view.id == query.id)
+        {
+            bail!("setup queries cannot be accepted-result views")
+        }
+        require_strict_object_schema(&query.parameter_schema, &query.id)?;
+        require_strict_object_schema(&query.result_schema, &query.id)?;
+        query.validate()?;
+    }
+    Ok(())
+}
+
 fn require_strict_object_schema(schema: &Value, owner: &str) -> Result<()> {
     let object = schema
         .as_object()
@@ -736,6 +789,26 @@ fn render_rust_pack(pack: &PackContract, source: &PackSource) -> Result<String> 
         }
         output.push_str("];\n");
     }
+    if pack.setup_queries.is_empty() {
+        writeln!(output, "pub const {prefix}_SETUP_QUERY_IDS: &[&str] = &[];")?;
+    } else {
+        writeln!(output, "pub const {prefix}_SETUP_QUERY_IDS: &[&str] = &[")?;
+        for query in &pack.setup_queries {
+            writeln!(output, "    {:?},", query.id)?;
+        }
+        output.push_str("];\n");
+    }
+    for query in &pack.setup_queries {
+        let suffix = query_suffix(&query.id, source)?.to_ascii_uppercase();
+        let declaration = format!("pub const SETUP_{suffix}_QUERY_ID: &str =");
+        let value = format!("{:?};", query.id);
+        // Match rustfmt's default 100-column constant layout.
+        if declaration.len() + 1 + value.len() > 100 {
+            writeln!(output, "{declaration}\n    {value}")?;
+        } else {
+            writeln!(output, "{declaration} {value}")?;
+        }
+    }
     Ok(output)
 }
 
@@ -744,6 +817,13 @@ fn command_suffix<'a>(id: &'a str, source: &PackSource) -> Result<&'a str> {
         .and_then(|suffix| suffix.strip_prefix('.'))
         .filter(|suffix| valid_identifier(suffix))
         .context("command cannot produce a safe generated identifier")
+}
+
+fn query_suffix<'a>(id: &'a str, source: &PackSource) -> Result<&'a str> {
+    id.strip_prefix("eutheto.setup.")
+        .or_else(|| id.strip_prefix(source.id)?.strip_prefix(".setup."))
+        .filter(|suffix| valid_identifier(suffix))
+        .context("setup query is outside its namespace or cannot produce a safe identifier")
 }
 
 fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<String> {
@@ -786,6 +866,30 @@ fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<S
             writeln!(output, "export type {prefix}{name} = {payload};")?;
         }
     }
+    if pack.setup_queries.is_empty() {
+        return Ok(output);
+    }
+    for (name, result) in [("SetupQueryParameters", false), ("SetupQueryResults", true)] {
+        if !names.insert(name.to_owned()) {
+            bail!("setup query TypeScript identifiers collide")
+        }
+        writeln!(output, "export interface {prefix}{name} {{")?;
+        for query in &pack.setup_queries {
+            let schema = if result {
+                &query.result_schema
+            } else {
+                &query.parameter_schema
+            };
+            writeln!(
+                output,
+                "{}: {};",
+                serde_json::to_string(&query.id)?,
+                typescript_schema(schema, source, 0)?
+            )?;
+        }
+        output.push_str("}\n");
+    }
+    render_typescript_setup_guards(pack, source, &mut output)?;
     Ok(output)
 }
 
@@ -887,6 +991,336 @@ fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Resul
     }
 }
 
+fn collect_guard_refs<'a>(schema: &'a Value, references: &mut BTreeSet<&'a str>) -> Result<()> {
+    match schema {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref") {
+                references.insert(
+                    reference
+                        .as_str()
+                        .and_then(|value| value.strip_prefix("#/$defs/"))
+                        .context("wire guards require local schema references")?,
+                );
+            }
+            for child in object.values() {
+                collect_guard_refs(child, references)?;
+            }
+        }
+        Value::Array(children) => {
+            for child in children {
+                collect_guard_refs(child, references)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn render_typescript_setup_guards(
+    pack: &PackContract,
+    source: &PackSource,
+    output: &mut String,
+) -> Result<()> {
+    let prefix = source.typescript_prefix;
+    for reserved in [
+        "WireObject",
+        "WireString",
+        "SetupViewId",
+        "SetupQueryResult",
+    ] {
+        if pack.definitions.contains_key(reserved) {
+            bail!("schema definition conflicts with a wire guard helper");
+        }
+    }
+    let mut references = BTreeSet::new();
+    for query in &pack.setup_queries {
+        collect_guard_refs(&query.result_schema, &mut references)?;
+    }
+    let mut expanded = BTreeSet::new();
+    loop {
+        let next = references.difference(&expanded).next().copied();
+        let Some(name) = next else { break };
+        let schema = pack
+            .definitions
+            .get(name)
+            .context("wire guard references an absent definition")?;
+        collect_guard_refs(schema, &mut references)?;
+        expanded.insert(name);
+    }
+    // Static predicates use the existing restricted schema vocabulary, not a runtime interpreter.
+    // Native typed IDs serialize canonically; broad UUID input spellings are not response spellings.
+    output.push_str(&r#"
+const __PREFIX__WireUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function is__PREFIX__WireObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function check__PREFIX__WireProperties(
+  value: Record<string, unknown>, check: (key: string, child: unknown) => boolean,
+): boolean {
+  for (const key of Object.keys(value)) {
+    if (!check(key, value[key])) return false;
+  }
+  return true;
+}
+function is__PREFIX__WireString(value: unknown, minimum: number, maximum: number): value is string {
+  if (typeof value !== "string" || value.length < minimum || value.length > maximum * 2) return false;
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const low = value.charCodeAt(index + 1);
+      if (!(low >= 0xdc00 && low <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+    count += 1;
+    if (count > maximum) return false;
+  }
+  return count >= minimum;
+}
+"#.replace("__PREFIX__", prefix));
+    for name in references {
+        let schema = pack
+            .definitions
+            .get(name)
+            .context("wire guard definition disappeared")?;
+        writeln!(
+            output,
+            "function is{prefix}{name}(value: unknown): value is {prefix}{name} {{ return {}; }}",
+            typescript_guard(schema, source, "value", 0)?
+        )?;
+    }
+    writeln!(
+        output,
+        "const {prefix}SetupResultGuards: {{ readonly [K in keyof {prefix}SetupQueryResults]: (value: unknown) => value is {prefix}SetupQueryResults[K] }} = {{"
+    )?;
+    for query in &pack.setup_queries {
+        writeln!(
+            output,
+            "{}: (value: unknown): value is {prefix}SetupQueryResults[{}] => {},",
+            serde_json::to_string(&query.id)?,
+            serde_json::to_string(&query.id)?,
+            typescript_guard(&query.result_schema, source, "value", 0)?
+        )?;
+    }
+    writeln!(
+        output,
+        "}};\nexport function is{prefix}SetupViewId(value: unknown): value is keyof {prefix}SetupQueryResults {{ return typeof value === \"string\" && Object.hasOwn({prefix}SetupResultGuards, value); }}"
+    )?;
+    writeln!(
+        output,
+        "export function is{prefix}SetupQueryResult<K extends keyof {prefix}SetupQueryResults>(query: K, value: unknown): value is {prefix}SetupQueryResults[K] {{ return Object.hasOwn({prefix}SetupResultGuards, query) && {prefix}SetupResultGuards[query](value); }}"
+    )?;
+    Ok(())
+}
+
+fn typescript_guard(
+    schema: &Value,
+    source: &PackSource,
+    value: &str,
+    depth: usize,
+) -> Result<String> {
+    if depth > 32 {
+        bail!("wire guard rendering exceeds its depth limit");
+    }
+    let object = schema
+        .as_object()
+        .context("wire guard schema must be an object")?;
+    if let Some(reference) = object.get("$ref") {
+        let name = reference
+            .as_str()
+            .and_then(|reference| reference.strip_prefix("#/$defs/"))
+            .filter(|name| valid_identifier(name))
+            .context("invalid wire guard reference")?;
+        if object.len() != 1 {
+            bail!("wire guard references cannot have siblings");
+        }
+        return Ok(format!("is{}{name}({value})", source.typescript_prefix));
+    }
+    let mut clauses = Vec::new();
+    if let Some(expected) = object.get("const") {
+        clauses.push(format!("{value} === {}", serde_json::to_string(expected)?));
+    }
+    if let Some(options) = object.get("oneOf").and_then(Value::as_array) {
+        let alternatives = options
+            .iter()
+            .map(|option| {
+                typescript_guard(option, source, value, depth + 1)
+                    .map(|guard| format!("Number({guard})"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        clauses.push(format!("({}) === 1", alternatives.join(" + ")));
+    }
+    match object.get("type").and_then(Value::as_str) {
+        Some("string") => clauses.push(typescript_guard_string(object, source, value)?),
+        Some("integer") => {
+            clauses.push(format!(
+                "typeof {value} === \"number\" && Number.isSafeInteger({value})"
+            ));
+            for (bound, operator) in [("minimum", ">="), ("maximum", "<=")] {
+                if let Some(limit) = object.get(bound) {
+                    let limit = limit.as_i64().context("wire integer bound must be exact")?;
+                    if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&limit) {
+                        bail!("wire integer requires an explicit lossless string contract");
+                    }
+                    clauses.push(format!("{value} {operator} {limit}"));
+                }
+            }
+        }
+        Some("boolean") => clauses.push(format!("typeof {value} === \"boolean\"")),
+        Some("null") => clauses.push(format!("{value} === null")),
+        Some("array") => {
+            let minimum = object.get("minItems").and_then(Value::as_u64).unwrap_or(0);
+            let maximum = object
+                .get("maxItems")
+                .and_then(Value::as_u64)
+                .unwrap_or(1_000_000);
+            let item = format!("item{depth}");
+            let child = typescript_guard(
+                object.get("items").context("wire array requires items")?,
+                source,
+                &item,
+                depth + 1,
+            )?;
+            clauses.push(format!("Array.isArray({value}) && {value}.length >= {minimum} && {value}.length <= {maximum} && {value}.every(({item}: unknown) => {child})"));
+        }
+        Some("object") => clauses.push(typescript_guard_object(object, source, value, depth)?),
+        None => {}
+        _ => bail!("unsupported wire guard schema type"),
+    }
+    // {} is intentionally opaque. The enclosing IPC reader already checks the entire JSON budget.
+    Ok(if clauses.is_empty() {
+        "true".to_owned()
+    } else {
+        format!("({})", clauses.join(" && "))
+    })
+}
+
+fn typescript_guard_string(
+    schema: &Map<String, Value>,
+    source: &PackSource,
+    value: &str,
+) -> Result<String> {
+    let prefix = source.typescript_prefix;
+    let minimum = schema.get("minLength").and_then(Value::as_u64).unwrap_or(0);
+    let maximum = schema
+        .get("maxLength")
+        .and_then(Value::as_u64)
+        .unwrap_or(1_048_576);
+    let mut clauses = vec![format!(
+        "is{prefix}WireString({value}, {minimum}, {maximum})"
+    )];
+    if let Some(format) = schema.get("format").and_then(Value::as_str) {
+        clauses.push(match format {
+            "uuid" => format!("{prefix}WireUuid.test({value})"),
+            "scenario-change-path" => {
+                format!("({value} === \"/settings\" || {value}.startsWith(\"/domain/\"))")
+            }
+            _ => bail!("unsupported wire string format"),
+        });
+    }
+    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+        let prefix = pattern
+            .strip_prefix('^')
+            .context("wire schema pattern requires a literal prefix")?;
+        clauses.push(format!(
+            "{value}.startsWith({})",
+            serde_json::to_string(prefix)?
+        ));
+    }
+    Ok(format!("({})", clauses.join(" && ")))
+}
+
+fn typescript_guard_object(
+    schema: &Map<String, Value>,
+    source: &PackSource,
+    value: &str,
+    depth: usize,
+) -> Result<String> {
+    let mut clauses = vec![format!("is{}WireObject({value})", source.typescript_prefix)];
+    let properties = schema.get("properties").and_then(Value::as_object);
+    let required = schema.get("required").and_then(Value::as_array);
+    if let Some(required) = required {
+        for name in required {
+            let name = name
+                .as_str()
+                .context("required wire property must be a string")?;
+            if properties.is_none_or(|properties| !properties.contains_key(name)) {
+                bail!("required wire property must have a declared schema");
+            }
+        }
+    }
+    if let Some(properties) = properties {
+        // Test constant tags before traversing payloads of alternatives that cannot match.
+        let ordered = properties
+            .iter()
+            .filter(|(_, child)| child.get("const").is_some())
+            .chain(
+                properties
+                    .iter()
+                    .filter(|(_, child)| child.get("const").is_none()),
+            );
+        for (name, child) in ordered {
+            let key = serde_json::to_string(name)?;
+            let member = format!("{value}[{key}]");
+            let guard = typescript_guard(child, source, &member, depth + 1)?;
+            if required
+                .is_some_and(|required| required.iter().any(|item| item.as_str() == Some(name)))
+            {
+                clauses.push(if guard == "true" {
+                    format!("Object.hasOwn({value}, {key})")
+                } else {
+                    format!("Object.hasOwn({value}, {key}) && {guard}")
+                });
+            } else if guard != "true" {
+                clauses.push(format!("(!Object.hasOwn({value}, {key}) || {guard})"));
+            }
+        }
+    }
+    let key = format!("key{depth}");
+    let mut alternatives = properties
+        .into_iter()
+        .flat_map(Map::keys)
+        .map(|name| serde_json::to_string(name).map(|name| format!("{key} === {name}")))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    match schema.get("additionalProperties") {
+        Some(Value::Bool(false)) => {}
+        Some(additional) if additional.is_object() => {
+            let member = format!("member{depth}");
+            let guard = typescript_guard(additional, source, &member, depth + 1)?;
+            if guard == "true" {
+                return Ok(format!("({})", clauses.join(" && ")));
+            }
+            let key = if alternatives.is_empty() {
+                format!("_key{depth}")
+            } else {
+                key
+            };
+            alternatives.push(guard);
+            clauses.push(format!(
+                "check{}WireProperties({value}, ({key}, {member}) => {})",
+                source.typescript_prefix,
+                alternatives.join(" || ")
+            ));
+            return Ok(format!("({})", clauses.join(" && ")));
+        }
+        None | Some(Value::Bool(true)) => return Ok(format!("({})", clauses.join(" && "))),
+        _ => bail!("invalid additionalProperties in wire guard schema"),
+    }
+    let keys_guard = if alternatives.is_empty() {
+        "false".to_owned()
+    } else {
+        alternatives.join(" || ")
+    };
+    clauses.push(format!(
+        "Object.keys({value}).every(({key}) => {keys_guard})"
+    ));
+    Ok(format!("({})", clauses.join(" && ")))
+}
+
 fn render_typescript_constants(pack: &PackContract, source: &PackSource) -> Result<String> {
     let prefix = source.rust_prefix;
     let mut output = format!(
@@ -899,6 +1333,14 @@ fn render_typescript_constants(pack: &PackContract, source: &PackSource) -> Resu
             output,
             "export const {prefix}_{suffix}_COMMAND_ID = {} as const;",
             serde_json::to_string(&command.id)?
+        )?;
+    }
+    for query in &pack.setup_queries {
+        let suffix = query_suffix(&query.id, source)?.to_ascii_uppercase();
+        writeln!(
+            output,
+            "export const {prefix}_SETUP_{suffix}_QUERY_ID = {} as const;",
+            serde_json::to_string(&query.id)?
         )?;
     }
     writeln!(
@@ -997,6 +1439,31 @@ fn render_command_schemas(pack: &PackContract) -> Result<String> {
     }))
 }
 
+fn render_query_schemas(pack: &PackContract) -> Result<String> {
+    let queries: BTreeMap<_, _> = pack
+        .setup_queries
+        .iter()
+        .map(|query| {
+            (
+                &query.id,
+                json!({
+                    "sources": query.sources,
+                    "supportsContinuation": query.supports_continuation,
+                    "parameters": query.parameter_schema,
+                    "result": query.result_schema,
+                    "validExamples": query.valid_examples,
+                    "invalidExamples": query.invalid_examples,
+                }),
+            )
+        })
+        .collect();
+    pretty_json(&json!({
+        "schemaVersion": pack.schema_version,
+        "packId": pack.pack.id,
+        "setupQueries": queries,
+    }))
+}
+
 fn render_ai_tools(pack: &PackContract, source: &PackSource) -> Result<String> {
     pretty_json(&json!({
         "schemaVersion": pack.schema_version,
@@ -1057,6 +1524,16 @@ fn render_pack_docs(pack: &PackContract, source: &PackSource) -> Result<String> 
             serde_json::to_string(&command.reversibility)?,
             command.ai_grouping_allowed
         )?;
+    }
+    if !pack.setup_queries.is_empty() {
+        output.push_str("\n\n## Read-only setup queries\n\nThese projections are not mutation commands or accepted-result views.\n\n| Query | Description |\n|---|---|\n");
+        for query in &pack.setup_queries {
+            writeln!(
+                output,
+                "| `{}` | {} |",
+                query.id, query.description.default_text
+            )?;
+        }
     }
     Ok(output)
 }
@@ -1341,6 +1818,19 @@ mod tests {
             ["schemas/generated/workforce.share-result.schema.json"]
         );
         assert_eq!(std::fs::read(directory.join("unrelated.json"))?, b"{}");
+        Ok(())
+    }
+
+    #[test]
+    fn query_constants_cannot_collide_with_command_constants() -> Result<()> {
+        let source = &PACK_SOURCES[1];
+        let mut pack = parse_pack(source)?;
+        expand_pack_schemas(&mut pack)?;
+        super::validate_setup_queries(&pack, source)?;
+        let mut command = pack.commands[0].clone();
+        command.id = "official.workforce.setup_command_changes_query_id".to_owned();
+        pack.commands.push(command);
+        assert!(super::validate_setup_queries(&pack, source).is_err());
         Ok(())
     }
 }

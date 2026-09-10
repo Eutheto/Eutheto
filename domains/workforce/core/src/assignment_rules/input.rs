@@ -6,7 +6,7 @@ use crate::{
     ids::{AssignmentTypeId, AvailabilityId, LocationId, ShiftId, ShiftTemplateId},
     model::{AssignmentPair, AssignmentType, Coverage, Person, WorkforceDomainV1, WorkforceEntity},
     temporal::{ResolvedShift, ResolvedShiftOrigin, resolve_validated_shifts},
-    validation::{validate_document, validate_value_bounds},
+    validation::{validate_document_controlled, validate_value_bounds},
 };
 use eutheto_types::{EntityId, PersonId, ScenarioDocument};
 use serde::Serialize;
@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Structural data only. No scopes, eligibility decisions, candidate graph or solver state.
-pub(super) struct AssignmentInput {
+pub(crate) struct AssignmentInput {
     pub domain: WorkforceDomainV1,
     pub shifts: Vec<ResolvedShift>,
     pub people: Vec<PersonId>,
@@ -25,7 +25,7 @@ pub(super) struct AssignmentInput {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "id", rename_all = "camelCase")]
-pub(super) enum ShiftDefinition {
+pub(crate) enum ShiftDefinition {
     Template(ShiftTemplateId),
     Instance(ShiftId),
 }
@@ -39,7 +39,7 @@ impl ShiftDefinition {
     }
 }
 
-pub(super) struct ShiftMetadata<'a> {
+pub(crate) struct ShiftMetadata<'a> {
     pub definition: ShiftDefinition,
     pub assignment_type: &'a AssignmentType,
     pub location_id: Option<LocationId>,
@@ -67,7 +67,7 @@ impl AssignmentInput {
             let bytes = add(16, budget.measure(value)?)?;
             budget.reserve(1, 1, bytes)?;
         }
-        let domain = validate_document(document)?;
+        let domain = validate_document_controlled(document, budget.control())?;
         budget.check()?;
         let shifts = resolve_validated_shifts(&domain, &document.settings, &mut |event| {
             budget.resolution_step(event)

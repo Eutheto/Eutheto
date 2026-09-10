@@ -163,6 +163,17 @@ impl DomainPack for HistoricalFixturePack {
         Ok(Self::validation_report(document))
     }
 
+    fn reconcile_settings(
+        &self,
+        _document: &ScenarioDocument,
+        _settings: &eutheto_types::ScenarioSettings,
+        _restoration: Option<&Value>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainSettingsMutation, DomainPackError> {
+        control.check()?;
+        Self::unsupported()
+    }
+
     fn apply_batch(
         &self,
         _document: &ScenarioDocument,
@@ -268,10 +279,10 @@ impl DomainPack for HistoricalFixturePack {
 
     fn build_view(
         &self,
-        _document: &ScenarioDocument,
-        _solution: Option<&NormalizedSolution>,
-        _view_id: &str,
-    ) -> Result<eutheto_domain_api::DomainView, DomainPackError> {
+        _input: eutheto_domain_api::DomainViewInput<'_>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainViewOutput, DomainPackError> {
+        control.check()?;
         Self::unsupported()
     }
 

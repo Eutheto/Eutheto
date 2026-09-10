@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Strict local capability for the Phase 01 development shell.",
+  "description": "Local desktop API and read-only event subscriptions for the main window.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-phase-01-api"]
+  "permissions": ["allow-phase-01-api", "core:event:allow-listen", "core:event:allow-unlisten"]
 }

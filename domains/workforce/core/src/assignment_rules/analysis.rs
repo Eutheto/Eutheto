@@ -1,5 +1,5 @@
 #[path = "compiler_support.rs"]
-pub(super) mod support;
+pub(crate) mod support;
 
 #[path = "compiler_rest.rs"]
 mod rest;
@@ -108,7 +108,7 @@ pub fn analyze_assignments(
     analyze_with_budget(document, &mut budget, limits)
 }
 
-pub(super) fn analyze_with_budget(
+pub(crate) fn analyze_with_budget(
     document: &ScenarioDocument,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,

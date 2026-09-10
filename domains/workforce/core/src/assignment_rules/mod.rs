@@ -1,18 +1,18 @@
 //! Bounded Workforce compilation, projection and independent original-domain authority.
 //! These APIs do not register a pack; accepted results still pass the generic acceptance reviewer.
 
-mod analysis;
+pub(crate) mod analysis;
 mod authority;
 mod boundary;
-mod budget;
+pub(crate) mod budget;
 mod compiler;
 mod compiler_model;
 mod compiler_rank;
 mod evaluation;
 mod evidence;
 mod identity;
-mod input;
-mod intervals;
+pub(crate) mod input;
+pub(crate) mod intervals;
 mod ir_cost;
 mod projection;
 mod sharing;

@@ -118,7 +118,7 @@ pub fn preview_people_csv<R: Read + ?Sized>(
     binding::validate_decisions(decisions, mapping.has_header)?;
     let (schemas, fields) = WorkforceSchemas::load_with_person_fields()
         .map_err(|_| CsvError::source(CsvErrorCode::InvalidCurrentDocument))?;
-    validate_document_with_schemas(document, &schemas)
+    validate_document_with_schemas(document, &schemas, None)
         .map_err(|_| CsvError::source(CsvErrorCode::InvalidCurrentDocument))?;
     check_cancelled(cancellation)?;
     let mut rows = rows::RowReview::new(document, mapping, decisions, schemas, fields)?;

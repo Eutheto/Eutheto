@@ -291,7 +291,7 @@ impl<'a> RowReview<'a> {
         // ordered-prefix validity is checked by the real final command batch.
         let key = EntityId::from_uuid(person_id.as_uuid());
         let previous = self.scratch.domain.entities.insert(key, candidate);
-        let valid = validate_document_with_schemas(&self.scratch, &self.schemas).is_ok();
+        let valid = validate_document_with_schemas(&self.scratch, &self.schemas, None).is_ok();
         let candidate = match previous {
             Some(previous) => self.scratch.domain.entities.insert(key, previous),
             None => self.scratch.domain.entities.remove(&key),

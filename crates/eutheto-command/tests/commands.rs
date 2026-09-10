@@ -21,6 +21,48 @@ const PREFERENCE_ID: &str = "0195a5e4-7c00-7000-8000-000000000005";
 const ASSIGNMENT_ID: &str = "0195a5e4-7c00-7000-8000-000000000006";
 const UNSUPPORTED_PACK_ID: &str = "vendor.future";
 
+#[test]
+fn setup_preflight_rejects_deep_borrowed_payload_without_stack_exhaustion()
+-> Result<(), Box<dyn Error>> {
+    const CHILD: &str = "EUTHETO_DEEP_COMMAND_PREFLIGHT";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "setup_preflight_rejects_deep_borrowed_payload_without_stack_exhaustion",
+            ])
+            .env(CHILD, "1")
+            .status()?;
+        assert!(status.success(), "deep command preflight child failed");
+        return Ok(());
+    }
+    let mut payload = Value::Null;
+    for _ in 0..20_000 {
+        payload = Value::Array(vec![payload]);
+    }
+    let command = ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+        command_type: "official.test.configure_entity".to_owned(),
+        payload,
+    });
+    let result = eutheto_command::preflight_setup_command(
+        &command,
+        "/command",
+        &eutheto_types::CancellationToken::new(),
+    );
+    let ScenarioCommand::ApplyDomainCommand(command) = command else {
+        return Err("wrong fixture command".into());
+    };
+    let mut stack = vec![command.payload];
+    while let Some(value) = stack.pop() {
+        if let Value::Array(values) = value {
+            stack.extend(values);
+        }
+    }
+    assert!(matches!(result, Err(CommandError::Validation { code, .. })
+        if code == CODE_PROHIBITED_DATA));
+    Ok(())
+}
+
 fn document(pack_id: &str) -> Result<ScenarioDocument, serde_json::Error> {
     serde_json::from_value(json!({
         "format": "eutheto/scenario",
@@ -811,5 +853,302 @@ fn shallow_batch_rejects_an_inverse_that_exceeds_replay_json_depth() -> Result<(
         if path == "/inverse")
     );
     assert_eq!(scenario, original);
+    Ok(())
+}
+
+#[test]
+fn reconciled_forward_command_preserves_the_json_replay_depth_bound() -> Result<(), Box<dyn Error>>
+{
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let existing: EntityId = ENTITY_ID.parse()?;
+    scenario.domain.entities.insert(
+        existing,
+        json!({"id":existing, "enabled":false, "target":0}),
+    );
+    let mut value = json!({"leaf": true});
+    for _ in 0..123 {
+        value = json!({"child": value});
+    }
+    let draft = ScenarioCommand::AddEntity(AddEntity {
+        entity_id: "0195a5e4-7c00-7000-8000-000000000099".parse()?,
+        value,
+    });
+    apply(&scenario, Revision::INITIAL, draft.clone())?;
+    let result = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::INITIAL,
+        Some(&draft),
+        &official_registry()?,
+        &eutheto_types::CancellationToken::new(),
+        |prospective, _| Ok(Some(configure_reconciliation(prospective, existing, 2))),
+    );
+    assert!(matches!(
+        result,
+        Err(eutheto_command::ReconciledCommandError::Command(
+            CommandError::Validation { code: CODE_PROHIBITED_DATA, path, .. }
+        )) if path == "/command"
+    ));
+    Ok(())
+}
+
+#[test]
+fn settings_leaf_byte_limit_is_enforced_inside_a_mixed_batch() -> Result<(), Box<dyn Error>> {
+    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let restoration = Value::Array(vec![Value::String("x".repeat(1024 * 1024)); 17]);
+    let input = envelope(
+        scenario.scenario_id,
+        Revision::INITIAL,
+        labeled(
+            "bounded settings",
+            vec![
+                ScenarioCommand::AddEntity(AddEntity {
+                    entity_id: ENTITY_ID.parse()?,
+                    value: json!({"name": "Ada"}),
+                }),
+                labeled(
+                    "nested settings",
+                    vec![ScenarioCommand::SetScenarioSettings(Box::new(
+                        eutheto_types::SetScenarioSettings {
+                            settings: scenario.settings.clone(),
+                            restoration: Some(restoration),
+                        },
+                    ))],
+                ),
+            ],
+        ),
+    )?;
+    assert!(matches!(
+        apply_command(&scenario, Revision::INITIAL, &input),
+        Err(CommandError::ResourceLimitExceeded)
+    ));
+    Ok(())
+}
+
+fn configure_reconciliation(
+    scenario: &ScenarioDocument,
+    entity_id: EntityId,
+    target: u32,
+) -> eutheto_domain_api::DomainBatchCommand {
+    eutheto_domain_api::DomainBatchCommand {
+        schema_version: eutheto_domain_api::DOMAIN_BATCH_SCHEMA_VERSION,
+        pack_id: scenario.domain_pack.id.clone(),
+        scenario_schema_version: scenario.domain_pack.schema_version,
+        label: Some("Reconcile configuration".to_owned()),
+        commands: vec![DomainCommandEnvelope {
+            command_type: "official.test.configure_entity".to_owned(),
+            payload: json!({"entityId":entity_id, "enabled":target > 0, "target":target}),
+        }],
+    }
+}
+
+#[test]
+fn reconciled_draft_replays_and_undoes_as_one_ordinary_command() -> Result<(), Box<dyn Error>> {
+    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
+    let draft = ScenarioCommand::AddEntity(AddEntity {
+        entity_id,
+        value: json!({"id":entity_id, "enabled":false, "target":0}),
+    });
+    let revision = Revision::new(7);
+    let prepared = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        revision,
+        Some(&draft),
+        &official_registry()?,
+        &eutheto_types::CancellationToken::new(),
+        |prospective, _| Ok(Some(configure_reconciliation(prospective, entity_id, 2))),
+    )?
+    .ok_or("the draft and reconciliation must produce one command")?;
+    assert_eq!(prepared.applied.result.new_revision, Revision::new(8));
+    assert_eq!(
+        prepared.applied.document.domain.entities[&entity_id]["target"],
+        2
+    );
+    let replayed = apply(&scenario, revision, prepared.effective_command)?;
+    assert_eq!(replayed.document, prepared.applied.document);
+    let restored = apply(
+        &prepared.applied.document,
+        prepared.applied.result.new_revision,
+        prepared
+            .applied
+            .result
+            .inverse
+            .ok_or("inverse is required")?,
+    )?;
+    assert_eq!(restored.document, scenario);
+    Ok(())
+}
+
+#[test]
+fn absent_reconciliation_does_not_consume_a_revision() -> Result<(), Box<dyn Error>> {
+    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let prepared = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::new(eutheto_types::REVISION_MAX_V1),
+        None,
+        &official_registry()?,
+        &eutheto_types::CancellationToken::new(),
+        |_, _| Ok(None),
+    )?;
+    assert!(prepared.is_none());
+    Ok(())
+}
+
+#[test]
+fn cancellation_after_reconciliation_cannot_publish_a_preparation() -> Result<(), Box<dyn Error>> {
+    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let cancellation = eutheto_types::CancellationToken::new();
+    let result = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::INITIAL,
+        None,
+        &official_registry()?,
+        &cancellation,
+        |_, _| {
+            cancellation.cancel();
+            Ok(None)
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(eutheto_command::ReconciledCommandError::Command(
+            CommandError::Cancelled
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
+fn reconciliation_wrapper_cannot_exceed_replay_depth() -> Result<(), Box<dyn Error>> {
+    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
+    let mut draft = ScenarioCommand::AddEntity(AddEntity {
+        entity_id,
+        value: json!({"id":entity_id, "enabled":false, "target":0}),
+    });
+    for _ in 0..MAX_BATCH_DEPTH {
+        draft = labeled("nested draft", vec![draft]);
+    }
+    apply(&scenario, Revision::INITIAL, draft.clone())?;
+    let result = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::INITIAL,
+        Some(&draft),
+        &official_registry()?,
+        &eutheto_types::CancellationToken::new(),
+        |prospective, _| Ok(Some(configure_reconciliation(prospective, entity_id, 2))),
+    );
+    assert!(matches!(
+        result,
+        Err(eutheto_command::ReconciledCommandError::Command(
+            CommandError::Validation {
+                code: CODE_BATCH_DEPTH_EXCEEDED,
+                ..
+            }
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
+fn reconciliation_shares_the_drafts_leaf_allowance() -> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
+    scenario.domain.entities.insert(
+        entity_id,
+        json!({"id":entity_id, "enabled":false, "target":0}),
+    );
+    let draft = labeled(
+        "full draft",
+        vec![configure(entity_id, 1); MAX_BATCH_COMMANDS],
+    );
+    apply(&scenario, Revision::INITIAL, draft.clone())?;
+    let result = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::INITIAL,
+        Some(&draft),
+        &official_registry()?,
+        &eutheto_types::CancellationToken::new(),
+        |prospective, _| Ok(Some(configure_reconciliation(prospective, entity_id, 2))),
+    );
+    assert!(matches!(
+        result,
+        Err(eutheto_command::ReconciledCommandError::Command(
+            CommandError::Validation {
+                code: CODE_BATCH_TOO_LARGE,
+                ..
+            }
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
+fn reconciliation_cannot_exceed_the_combined_forward_byte_limit() -> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
+    scenario.domain.entities.insert(
+        entity_id,
+        json!({"id":entity_id,"enabled":false,"target":0}),
+    );
+    let mut commands: Vec<_> = (0..16)
+        .map(|_| {
+            ScenarioCommand::UpdateEntity(UpdateEntity {
+                entity_id,
+                value: json!({"id":entity_id,"enabled":false,"target":0,
+            "notes":"x".repeat(1024 * 1024)}),
+            })
+        })
+        .collect();
+    // Leave a valid typed record for the real reconciliation; large prior edits still
+    // contribute to the replayable forward command rather than bloating the final document.
+    commands.push(ScenarioCommand::UpdateEntity(UpdateEntity {
+        entity_id,
+        value: json!({"id":entity_id,"enabled":false,"target":0}),
+    }));
+    let limit = usize::try_from(eutheto_types::MAX_SCENARIO_DOCUMENT_BYTES)?;
+    let initial_bytes = serde_json::to_vec(&labeled("near limit", commands.clone()))?.len();
+    let reduction = initial_bytes
+        .checked_sub(limit - 128)
+        .ok_or("fixture too small")?;
+    let Some(ScenarioCommand::UpdateEntity(last)) = commands.get_mut(15) else {
+        return Err("missing final update".into());
+    };
+    last.value["notes"] = json!("x".repeat(1024 * 1024 - reduction));
+    let draft = labeled("near limit", commands);
+    let registry = official_registry()?;
+    let cancellation = eutheto_types::CancellationToken::new();
+    let without_reconciliation = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::INITIAL,
+        Some(&draft),
+        &registry,
+        &cancellation,
+        |_, _| Ok(None),
+    )?
+    .ok_or("draft must produce an ordinary command")?;
+    assert_eq!(
+        without_reconciliation.applied.document.domain.entities[&entity_id]["target"],
+        0
+    );
+    drop(without_reconciliation);
+    let result = eutheto_command::apply_reconciled_command_with_registry(
+        &scenario,
+        Revision::INITIAL,
+        Some(&draft),
+        &registry,
+        &cancellation,
+        |prospective, _| Ok(Some(configure_reconciliation(prospective, entity_id, 2))),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(eutheto_command::ReconciledCommandError::Command(
+                CommandError::ResourceLimitExceeded
+            ))
+        ),
+        "unexpected reconciliation result: {:?}",
+        result.as_ref().err()
+    );
     Ok(())
 }

@@ -144,6 +144,17 @@ impl DomainPack for TestPack {
         Ok(DomainValidationReport::default())
     }
 
+    fn reconcile_settings(
+        &self,
+        _document: &ScenarioDocument,
+        _settings: &ScenarioSettings,
+        _restoration: Option<&serde_json::Value>,
+        control: &OperationControl,
+    ) -> Result<DomainSettingsMutation, DomainPackError> {
+        control.check()?;
+        unsupported()
+    }
+
     fn apply_batch(
         &self,
         _document: &ScenarioDocument,
@@ -403,10 +414,10 @@ impl DomainPack for TestPack {
 
     fn build_view(
         &self,
-        _document: &ScenarioDocument,
-        _solution: Option<&NormalizedSolution>,
-        _view_id: &str,
-    ) -> Result<DomainView, DomainPackError> {
+        _input: DomainViewInput<'_>,
+        control: &OperationControl,
+    ) -> Result<DomainViewOutput, DomainPackError> {
+        control.check()?;
         unsupported()
     }
 

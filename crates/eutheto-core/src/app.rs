@@ -76,6 +76,10 @@ pub use people_csv::*;
 mod headless;
 pub use headless::*;
 
+#[path = "setup.rs"]
+mod setup;
+pub use setup::*;
+
 const EVENT_VERSION: u32 = 1;
 /// Current application solution-read wire schema.
 pub const SOLUTION_API_SCHEMA_VERSION: u32 = 1;
@@ -904,6 +908,7 @@ pub struct EuthetoApp {
     monotonic_clock: Arc<dyn MonotonicClock>,
     cancellation: CancellationToken,
     mutation_locks: ScenarioLocks,
+    validation_readiness: Arc<ValidationReadiness>,
     previews: Arc<Mutex<BTreeMap<RequestId, PendingPortablePreview>>>,
     events: broadcast::Sender<AppEvent>,
     counterfactual: CounterfactualRuntime,
@@ -1034,6 +1039,7 @@ impl EuthetoApp {
             ids: dependencies.ids,
             cancellation: dependencies.cancellation,
             mutation_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            validation_readiness: Arc::default(),
             previews: Arc::new(Mutex::new(BTreeMap::new())),
             events,
             counterfactual,
@@ -1467,7 +1473,10 @@ impl EuthetoApp {
             }
             AppQuery::SolutionList(request) => self.query_solution_list(request).await,
             AppQuery::SolutionGetSummary(request) => self.query_solution_summary(request).await,
-            AppQuery::SolutionGetView(request) => self.query_solution_view(request).await,
+            AppQuery::SolutionGetView(request) => self
+                .solution_view_with_cancellation(request, self.cancellation.child())
+                .await
+                .map(|view| AppQueryResult::SolutionView(Box::new(view))),
             AppQuery::SolutionVerify(request) => self.query_solution_verify(request).await,
             AppQuery::SolutionCompare(request) => self.query_solution_compare(request).await,
             AppQuery::SolutionExplain(request) => self.query_solution_explain(request).await,
@@ -1659,30 +1668,64 @@ impl EuthetoApp {
         )?)))
     }
 
-    async fn query_solution_view(
+    /// Captures an exact accepted result/document pair before projecting off the async executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported requests, unavailable accepted results, storage or
+    /// projection failures, cancellation, or exhausted response limits.
+    pub async fn solution_view_with_cancellation(
         &self,
         request: SolutionViewRequestV1,
-    ) -> Result<AppQueryResult, AppError> {
+        cancellation: CancellationToken,
+    ) -> Result<SolutionViewDtoV1, AppError> {
+        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+        let control = OperationControl::Cancellation(cancellation);
+        self.check_cancelled()?;
+        control.check().map_err(operation_interrupted)?;
         ensure_solution_schema(request.schema_version)?;
-        let mutation = self.scenario_lock(request.scenario_id).await;
-        let _guard = mutation.lock().await;
-        let stored = self
-            .load_solution(request.scenario_id, request.solution_id)
-            .await?;
-        let current_revision = self.current_scenario_revision(request.scenario_id).await?;
-        let pack = solution_pack(&stored, &self.pack_registry)?;
-        let accepted = &stored.portable.accepted_result;
-        let view = pack
-            .build_view(&stored.document, Some(&accepted.solution), &request.view_id)
-            .map_err(|error| solution_view_error(&error))?;
-        Ok(AppQueryResult::SolutionView(Box::new(SolutionViewDtoV1 {
-            schema_version: SOLUTION_API_SCHEMA_VERSION,
-            scenario_id: request.scenario_id,
-            current_revision,
-            scenario_revision: solution_revision(&stored)?,
-            result: accepted_reference(accepted)?,
-            view,
-        })))
+        let (stored, current_revision) = {
+            let mutation = self.scenario_lock(request.scenario_id).await;
+            let _guard = mutation.lock().await;
+            control.check().map_err(operation_interrupted)?;
+            let stored = self
+                .load_solution(request.scenario_id, request.solution_id)
+                .await?;
+            let current_revision = self.current_scenario_revision(request.scenario_id).await?;
+            (stored, current_revision)
+        };
+        let registry = Arc::clone(&self.pack_registry);
+        tokio::task::spawn_blocking(move || {
+            control.check().map_err(operation_interrupted)?;
+            let pack = solution_pack(&stored, &registry)?;
+            let accepted = &stored.portable.accepted_result;
+            let output = pack
+                .build_view(
+                    eutheto_domain_api::DomainViewInput::AcceptedSolution {
+                        document: &stored.document,
+                        solution: &accepted.solution,
+                        view_id: &request.view_id,
+                    },
+                    &control,
+                )
+                .map_err(|error| solution_view_error(&error))?;
+            control.check().map_err(operation_interrupted)?;
+            if output.reconciliation.is_some() {
+                return Err(solution_view_error(&DomainPackError::Contract(
+                    "accepted-solution view returned command reconciliation".to_owned(),
+                )));
+            }
+            Ok(SolutionViewDtoV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                scenario_id: request.scenario_id,
+                current_revision,
+                scenario_revision: solution_revision(&stored)?,
+                result: accepted_reference(accepted)?,
+                view: output.view,
+            })
+        })
+        .await
+        .map_err(join_error)?
     }
 
     async fn query_solution_verify(
@@ -4665,8 +4708,10 @@ fn domain_interruption(error: &DomainPackError) -> Option<AppError> {
 }
 
 fn solution_view_error(error: &DomainPackError) -> AppError {
+    if let Some(interruption) = domain_interruption(error) {
+        return interruption;
+    }
     match error {
-        DomainPackError::ResourceLimitExceeded => resource_limit_error(),
         DomainPackError::UnsupportedExplanationCapability(_) => explanation_unavailable("view"),
         _ => validation_error(
             "solution.view_invalid",
@@ -4867,6 +4912,12 @@ fn project_initialization_error() -> AppError {
         "The selected domain pack could not initialize a valid project.",
         false,
     )
+}
+
+fn valid_command_actor(actor: &ActorRef) -> bool {
+    std::iter::once(actor.display_name.as_str())
+        .chain(actor.actor_id.as_deref())
+        .all(|value| value.len() <= 256 && !value.chars().any(char::is_control))
 }
 
 fn validation_error(code: &str, path: &str, message: &str) -> AppError {

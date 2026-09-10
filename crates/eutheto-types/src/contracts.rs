@@ -339,6 +339,16 @@ pub struct DomainCommandEnvelope {
     pub payload: Value,
 }
 
+/// Replaces host settings while reconciling pack-owned representations atomically.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetScenarioSettings {
+    /// Complete desired settings; previous values are captured by the command service.
+    pub settings: ScenarioSettings,
+    /// Pack-owned exact restoration for inverse replay, never a replacement document.
+    pub restoration: Option<Value>,
+}
+
 /// Atomic ordered command batch.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -351,7 +361,12 @@ pub struct CommandBatch {
 
 /// Canonical Phase-01 scenario mutation catalog.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+#[serde(
+    rename_all = "camelCase",
+    tag = "type",
+    content = "payload",
+    deny_unknown_fields
+)]
 pub enum ScenarioCommand {
     /// Add an entity.
     AddEntity(AddEntity),
@@ -371,6 +386,8 @@ pub enum ScenarioCommand {
     LockAssignment(LockAssignment),
     /// Unlock an assignment.
     UnlockAssignment(UnlockAssignment),
+    /// Set scenario settings with an exact pack-owned inverse.
+    SetScenarioSettings(Box<SetScenarioSettings>),
     /// Apply a pack-owned command.
     ApplyDomainCommand(DomainCommandEnvelope),
     /// Apply an ordered batch atomically.
@@ -1356,6 +1373,27 @@ mod tests {
             })
         );
         Ok(())
+    }
+
+    #[test]
+    fn command_objects_reject_unknown_fields_inside_batches() {
+        let malformed = json!({
+            "type": "removeEntity",
+            "payload": {
+                "entityId": "018f47f2-e880-7000-8000-000000000002"
+            },
+            "unexpected": true
+        });
+        let nested = json!({
+            "type": "applyBatch",
+            "payload": {
+                "label": null,
+                "commands": [malformed.clone()]
+            }
+        });
+        for input in [malformed, nested] {
+            assert!(serde_json::from_value::<ScenarioCommand>(input).is_err());
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "pack": {
     "id": "official.test",
     "packVersion": "0.1.0",
@@ -7,6 +7,7 @@
     "portableSchemaVersion": 2,
     "shareResultSchemaVersion": 1
   },
+  "setupQueries": [],
   "commands": [
     {
       "id": "official.test.configure_entity",

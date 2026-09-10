@@ -10,7 +10,7 @@ use crate::validation::common::{Result, invalid, require};
 use crate::validation::{MAX_DOCUMENT_OCCURRENCES, MAX_REFERENCE_ITEMS, MAX_TEMPLATE_OCCURRENCES};
 use eutheto_domain_api::{DomainPackError, bounded_json_size};
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, ScenarioDocument,
+    DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl, ScenarioDocument,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -20,14 +20,14 @@ pub(super) fn apply(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
     changes: &mut Changes,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<Effect> {
-    super::check_cancellation(cancellation)?;
+    super::check_control(control)?;
     match envelope.command_type.as_str() {
-        ADD_OCCURRENCE_IDENTITIES => add(document, envelope, changes, cancellation),
-        REMOVE_OCCURRENCE_IDENTITIES => remove(document, envelope, changes, cancellation),
-        DETACH_SHIFT => detach(document, envelope, changes, cancellation),
-        REATTACH_SHIFT => reattach(document, envelope, changes, cancellation),
+        ADD_OCCURRENCE_IDENTITIES => add(document, envelope, changes, control),
+        REMOVE_OCCURRENCE_IDENTITIES => remove(document, envelope, changes, control),
+        DETACH_SHIFT => detach(document, envelope, changes, control),
+        REATTACH_SHIFT => reattach(document, envelope, changes, control),
         _ => Err(DomainPackError::UnknownCommand(
             envelope.command_type.clone(),
         )),
@@ -66,11 +66,11 @@ fn ledger(
 // Parse an addressed ledger once, preserving raw keys independently from entry UUID spelling.
 fn index(
     ledger: &Map<String, Value>,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<BTreeMap<ShiftId, String>> {
     let mut keys = BTreeMap::new();
     for key in ledger.keys() {
-        super::check_cancellation(cancellation)?;
+        super::check_control(control)?;
         let id = key
             .parse::<ShiftId>()
             .map_err(|_| invalid("occurrenceIdentities", "invalid shift identity"))?;
@@ -93,14 +93,14 @@ fn check_count(count: usize, limit: usize) -> Result {
 
 fn check_entries(
     entries: &TemplateOccurrenceIdentities,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result {
     check_count(
         entries.occurrence_identities.len(),
         MAX_TEMPLATE_OCCURRENCES,
     )?;
     for (id, occurrence) in &entries.occurrence_identities {
-        super::check_cancellation(cancellation)?;
+        super::check_control(control)?;
         require(
             *id == occurrence.id,
             "/payload/occurrenceIdentities",
@@ -141,7 +141,7 @@ fn add(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
     changes: &mut Changes,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<Effect> {
     let payload: AddOccurrenceIdentitiesPayload = decode(&envelope.payload)?;
     check_count(payload.templates.len(), MAX_REFERENCE_ITEMS)?;
@@ -152,13 +152,13 @@ fn add(
     let mut total = 0;
     let mut inverse_templates = Vec::with_capacity(payload.templates.len());
     for (target, raw) in payload.templates.iter().zip(raw_templates) {
-        super::check_cancellation(cancellation)?;
+        super::check_control(control)?;
         require(
             targets.insert(target.template_id),
             "/payload/templates",
             "duplicate template target",
         )?;
-        check_entries(target, cancellation)?;
+        check_entries(target, control)?;
         total += target.occurrence_identities.len();
         check_count(total, MAX_DOCUMENT_OCCURRENCES)?;
         let ledger = ledger(document, target.template_id)?;
@@ -167,7 +167,7 @@ fn add(
             "occurrenceIdentities",
             "too many template occurrences",
         )?;
-        let existing = index(ledger, cancellation)?;
+        let existing = index(ledger, control)?;
         let raw_entries = raw["occurrenceIdentities"].as_object().ok_or_else(|| {
             invalid(
                 "/payload/occurrenceIdentities",
@@ -175,7 +175,7 @@ fn add(
             )
         })?;
         for (key, value) in raw_entries {
-            super::check_cancellation(cancellation)?;
+            super::check_control(control)?;
             let id: ShiftId = decode(&value["id"])?;
             require(
                 !existing.contains_key(&id),
@@ -203,7 +203,7 @@ fn remove(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
     changes: &mut Changes,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<Effect> {
     let payload: RemoveOccurrenceIdentitiesPayload = decode(&envelope.payload)?;
     check_count(payload.templates.len(), MAX_REFERENCE_ITEMS)?;
@@ -212,7 +212,7 @@ fn remove(
     let mut inverse_templates = Vec::with_capacity(payload.templates.len());
     let mut remaining = inverse_limit()?;
     for target in &payload.templates {
-        super::check_cancellation(cancellation)?;
+        super::check_control(control)?;
         require(
             targets.insert(target.template_id),
             "/payload/templates",
@@ -222,10 +222,10 @@ fn remove(
         total += target.shift_ids.len();
         check_count(total, MAX_DOCUMENT_OCCURRENCES)?;
         let ledger = ledger(document, target.template_id)?;
-        let mut keys = index(ledger, cancellation)?;
+        let mut keys = index(ledger, control)?;
         let mut removed = Map::new();
         for id in &target.shift_ids {
-            super::check_cancellation(cancellation)?;
+            super::check_control(control)?;
             // Taking the indexed key also rejects duplicate typed targets without rescanning.
             let key = keys.remove(id).ok_or_else(|| {
                 invalid(
@@ -260,7 +260,7 @@ fn detach(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
     changes: &mut Changes,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<Effect> {
     let payload: DetachShiftPayload = decode(&envelope.payload)?;
     let WorkforceEntity::ShiftInstance(instance) = payload.instance else {
@@ -293,7 +293,7 @@ fn detach(
         "stored identity already exists",
     )?;
     let ledger = ledger(document, template_id)?;
-    let key = index(ledger, cancellation)?
+    let key = index(ledger, control)?
         .remove(&instance.id)
         .ok_or_else(|| invalid("/payload/instance/id", "occurrence does not exist"))?;
     let original = ledger
@@ -339,10 +339,10 @@ fn reattach(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
     changes: &mut Changes,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<Effect> {
     let payload: TemplateOccurrenceIdentities = decode(&envelope.payload)?;
-    check_entries(&payload, cancellation)?;
+    check_entries(&payload, control)?;
     require(
         payload.occurrence_identities.len() == 1,
         "/payload/occurrenceIdentities",
@@ -388,7 +388,7 @@ fn reattach(
         "too many template occurrences",
     )?;
     require(
-        !index(ledger, cancellation)?.contains_key(&occurrence.id),
+        !index(ledger, control)?.contains_key(&occurrence.id),
         "occurrenceIdentities",
         "occurrence already exists",
     )?;
@@ -435,8 +435,9 @@ mod tests {
     fn cancellation_rejects_each_atomic_command_without_changes()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let original = test_support::fixture()?;
-        let cancellation = CancellationToken::new();
+        let cancellation = eutheto_types::CancellationToken::new();
         cancellation.cancel();
+        let control = OperationControl::Cancellation(cancellation);
         for command in [
             ADD_OCCURRENCE_IDENTITIES,
             REMOVE_OCCURRENCE_IDENTITIES,
@@ -450,7 +451,7 @@ mod tests {
                 payload: json!({}),
             };
             assert!(matches!(
-                apply(&mut working, &envelope, &mut changes, Some(&cancellation)),
+                apply(&mut working, &envelope, &mut changes, Some(&control)),
                 Err(DomainPackError::Cancelled)
             ));
             assert_eq!(working, original);
