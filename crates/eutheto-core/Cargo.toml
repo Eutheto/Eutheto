@@ -33,7 +33,7 @@ uuid = "=1.26.0"
 dirs = "=6.0.0"
 eutheto-solver-ortools = { path = "../eutheto-solver-ortools" }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
-sha2 = "=0.10.9"
+sha2 = "=0.11.0"
 tempfile = "=3.27.0"
 tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
