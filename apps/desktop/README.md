@@ -41,14 +41,30 @@ preview and creation. The current `ProjectHome` component does not expose
 export controls, so export is API scope rather than a claim about the visible
 home screen.
 
-Generic scenario views, validation, command application, history, undo/redo,
-and local settings are available through the Phase 01 command boundary. The
-present Vue surface is a project home, not a domain planning or solution UI.
+The native setup boundary exposes V2 summary/readiness, bounded Workforce
+views, entity detail/search, rule catalogs, command previews, and explicit full
+validation. Rust owns each projection and its immutable input revision.
+Preview does not commit; apply, history, undo/redo, and local settings retain
+their existing application-service authority. The present Vue surface remains
+a project home, not a Workforce editor.
 
-Solve, solution, and AI command names are registered in the stable command
-catalog, but they are deliberately unavailable. `app_get_capabilities` reports
-them as unavailable, and calls return typed `unsupported` errors. The desktop
-does not advertise solver or AI availability.
+Setup operations reserve a window/context-bound identity before work, use
+bounded admission and an invocation-owned progress channel, and release
+ownership on settlement or disposal. Cancellation acknowledgement is not a
+terminal result. Full readiness distinguishes not-run, running, completed,
+failed, cancelled, and stale input; an empty fast report is not full readiness.
+
+Accepted-solution listing, detail, views, selection, verification, comparison,
+explanations, and counterfactual requests are implemented at the existing V1
+native boundary. Their retained accepted document/solution pairing remains
+authoritative; nested accepted-result and verification formats retain their
+own V2 versions. These APIs do not imply completed result screens or ordinary
+live-solving controls.
+
+Live solve, deferred solution-control/export, and AI command names remain
+registered but unavailable where `app_get_capabilities` reports them so;
+those calls return typed `unsupported` errors. The desktop does not advertise
+live solving or AI availability.
 
 ## Rust-authoritative flow
 
@@ -85,10 +101,19 @@ functions instead of importing `invoke` directly.
 `src/api/generated.ts` is generated from the Rust-owned command and DTO
 contract and is checked in. Do not edit it by hand:
 
-1. Change the authoritative Rust DTO or command definition.
+1. Change the authoritative Rust DTO/command and the corresponding template
+   or catalog in `xtask/src/generate.rs`; change pack-owned query contracts at
+   their schema authority.
 2. Run `just generate`.
 3. Review the generated diff.
 4. Run `just generate-check` to reject drift.
+
+The generated client parses IPC responses, errors, and events from `unknown`,
+checks the declared schema, identities, revision correlation, discriminants,
+and collection bounds, and preserves lossless integer representations.
+Malformed responses do not trigger automatic command replay. Native command
+dispatch and the build manifest consume the same generated command catalog;
+the permission and local-window configuration are checked against that boundary.
 
 See
 [generated code discipline](../../docs/contributors/generated-code-and-contracts.md)

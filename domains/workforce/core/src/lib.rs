@@ -12,6 +12,7 @@ pub mod model;
 mod pack;
 pub mod people_csv;
 pub mod portable;
+pub mod setup;
 pub mod temporal;
 pub mod validation;
 

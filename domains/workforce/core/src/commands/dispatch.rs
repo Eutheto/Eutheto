@@ -9,7 +9,7 @@ use super::{
     },
 };
 use crate::validation::common::{Result, invalid};
-use eutheto_types::{CancellationToken, DomainCommandEnvelope, ScenarioDocument};
+use eutheto_types::{DomainCommandEnvelope, OperationControl, ScenarioDocument};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -17,15 +17,15 @@ pub(super) fn apply_one(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
     changes: &mut Changes,
-    cancellation: Option<&CancellationToken>,
+    control: Option<&OperationControl>,
 ) -> Result<Effect> {
-    super::check_cancellation(cancellation)?;
+    super::check_control(control)?;
     let domain = &mut document.domain;
     match envelope.command_type.as_str() {
         ADD_OCCURRENCE_IDENTITIES
         | REMOVE_OCCURRENCE_IDENTITIES
         | DETACH_SHIFT
-        | REATTACH_SHIFT => super::occurrences::apply(document, envelope, changes, cancellation),
+        | REATTACH_SHIFT => super::occurrences::apply(document, envelope, changes, control),
         ADD_ENTITY | UPDATE_ENTITY => {
             let payload: EntityPayload = decode(&envelope.payload)?;
             effect::mutate(

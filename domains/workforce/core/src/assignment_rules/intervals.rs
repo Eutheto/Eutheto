@@ -17,12 +17,12 @@ use jiff::{
 
 /// Original temporal normalization only. Callers independently decide rule/record applicability
 /// and unavailable/available-only satisfaction; this value contains no candidate decision.
-pub(super) struct AvailabilityIntervals {
+pub(crate) struct AvailabilityIntervals {
     pub query: Option<InstantInterval>,
     pub intervals: Vec<InstantInterval>,
 }
 
-pub(super) fn date_range(
+pub(crate) fn date_range(
     range: DateRange,
     settings: &ScenarioSettings,
     owner: EntityId,
@@ -39,7 +39,7 @@ pub(super) fn date_range(
     })
 }
 
-pub(super) fn availability_intervals(
+pub(crate) fn availability_intervals(
     availability: &Availability,
     shift: InstantInterval,
     settings: &ScenarioSettings,

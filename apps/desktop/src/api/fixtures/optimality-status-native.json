@@ -1,0 +1,131 @@
+{
+  "scenarioRevisions": [2],
+  "schemaVersion": 1,
+  "scenarioId": "01a08c71-76e1-7562-a147-3c2606002022",
+  "currentRevision": 2,
+  "explanation": {
+    "evidence": {
+      "evidence": {
+        "status": {
+          "runInput": {
+            "solverVersion": "1.0.0",
+            "backendVersion": "1.0.0",
+            "checksum": "c0a0b81f7a58af313d7f355773053f1ee89c3135e91a6a516662dc0800ffdf10",
+            "runId": "018f47f2-e880-7000-8100-000000000002",
+            "snapshotCreatedAt": "2026-09-10T17:50:41.418144082Z",
+            "packSchemaVersion": 1,
+            "snapshotDocumentHash": "eee5faf0f4a717e49e0274e2665dc3f2c53c7215420278c62120f0987f82814f",
+            "scenarioRevision": 2,
+            "protocolMajor": 1,
+            "schemaVersion": 1,
+            "snapshotId": "01a08c71-770b-7511-8c57-0027edf8064a",
+            "requestHash": "e8ad57b26edd5d0828771be1246972e71462b2999c4f152a3cef1ff3ea53127f",
+            "planningIrSchemaVersion": 2,
+            "scenarioId": "01a08c71-76e1-7562-a147-3c2606002022",
+            "adapterVersion": "1.0.0",
+            "requestId": "018f47f2-e880-7000-8200-000000000002",
+            "protocolMinor": 0,
+            "packId": "official.test",
+            "applicationVersion": "0.1.0",
+            "backendId": "synthetic.test",
+            "workerVersion": "1.0.0",
+            "modelHash": "1b8f77205c9e137190d06b2e009cb554b35d041e26f2d721453fa60d3ab22346",
+            "temporaryConditionHash": null,
+            "compilerVersion": "0.1.0",
+            "objectivePolicyHash": "4b88d0c4bcb7a54608157a3fdf001bd33c99d23f374d8e03c70512cb454ff7f1",
+            "solveOptions": {
+              "solutionLimit": 1,
+              "mode": "balanced",
+              "randomSeed": 7,
+              "stopAfterFirstFeasible": true,
+              "reproducibility": "deterministic",
+              "resourceLimits": {
+                "maxEntities": 1000,
+                "maxConstraints": 10000,
+                "maxVariables": 10000,
+                "maxRules": 1000
+              },
+              "memoryLimitBytes": null,
+              "preserveExisting": "none",
+              "workerThreads": {
+                "kind": "exact",
+                "count": 1
+              },
+              "backend": {
+                "backendId": "synthetic.test",
+                "kind": "specific"
+              },
+              "explanationMode": "standard",
+              "timeLimitMilliseconds": 5000,
+              "collectIntermediateSolutions": false
+            },
+            "scenarioTimezone": "UTC"
+          },
+          "result": {
+            "solutionId": "018f47f2-e880-7000-8300-000000000002",
+            "resultChecksum": "1e1c013902b45a067edf0226f0c6c76645db8efc27a4e258e6c8b783707ef1c3"
+          },
+          "runManifest": {
+            "finishedAt": "2026-09-10T17:50:42.418144082Z",
+            "runId": "018f47f2-e880-7000-8100-000000000002",
+            "runInputChecksum": "c0a0b81f7a58af313d7f355773053f1ee89c3135e91a6a516662dc0800ffdf10",
+            "outcome": {
+              "status": "optimal",
+              "verificationChecksum": "b15d4e12a81e22d112f448c94e4292d02c26215cd020d3493aa6c88d202d9d6c",
+              "type": "accepted",
+              "solutionId": "018f47f2-e880-7000-8300-000000000002",
+              "acceptedResultChecksum": "1e1c013902b45a067edf0226f0c6c76645db8efc27a4e258e6c8b783707ef1c3"
+            },
+            "firstIncumbentMilliseconds": 100,
+            "elapsedMilliseconds": 1000,
+            "verificationWarnings": [],
+            "phaseTimings": {
+              "optionalExplanationMilliseconds": null,
+              "projectionMilliseconds": null,
+              "compileMilliseconds": null,
+              "requiredRuleVerificationMilliseconds": null,
+              "structuralValidationMilliseconds": null,
+              "backendMilliseconds": null,
+              "scoreRecomputationMilliseconds": null,
+              "evidencePersistenceMilliseconds": null
+            },
+            "firstVerifiedFeasibleMilliseconds": 500,
+            "schemaVersion": 1,
+            "checksum": "dea551492bc1cf6e91fef4f44b4a4e52e7be615253134b73c07bd29ee2ee7cfe",
+            "startedAt": "2026-09-10T17:50:41.418144082Z"
+          }
+        },
+        "kind": "optimalityStatus"
+      },
+      "schemaVersion": 1,
+      "checksum": "6fd271945fcfc0ec030460e5c57394f80e51a137348b4b16a67b356ac024855f",
+      "certainty": "backendProof"
+    },
+    "schemaVersion": 1,
+    "checksum": "ee1838343a7be01da49ddef86d23ee2393300958049c724bc9f31cc79fe5de15",
+    "rendered": {
+      "evidenceChecksum": "6fd271945fcfc0ec030460e5c57394f80e51a137348b4b16a67b356ac024855f",
+      "schemaVersion": 1,
+      "kind": "optimalityStatus",
+      "messages": [
+        {
+          "assignments": [],
+          "evidence": [],
+          "parameters": {
+            "official.test.explanation.evidence_checksum": {
+              "type": "text",
+              "value": "6fd271945fcfc0ec030460e5c57394f80e51a137348b4b16a67b356ac024855f"
+            },
+            "official.test.explanation.kind": {
+              "type": "text",
+              "value": "optimalityStatus"
+            }
+          },
+          "rules": [],
+          "messageKey": "official.test.explanation.optimality_status",
+          "entities": []
+        }
+      ]
+    }
+  }
+}

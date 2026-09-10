@@ -210,6 +210,10 @@ define_id!(
     RequestId,
     "Stable identity used to correlate an API request."
 );
+define_id!(
+    OperationId,
+    "Native-minted identity of one window-owned application operation."
+);
 /// Error returned for an invalid namespaced identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NamespacedIdError;

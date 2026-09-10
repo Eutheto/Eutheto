@@ -170,3 +170,108 @@ fn document_and_command_boundaries_reject_undeclared_json_representations()
     );
     Ok(())
 }
+
+#[test]
+fn setup_query_examples_roundtrip_through_the_closed_query_decoder() -> Result<(), Box<dyn Error>> {
+    use eutheto_domain_api::{DomainSetupQueryV1, SetupQueryDescriptor};
+    use eutheto_workforce::setup::contracts::WorkforceSetupQueryV1;
+
+    let mut contract: Value = serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON)?;
+    let descriptors: Vec<SetupQueryDescriptor> =
+        serde_json::from_value(contract["setupQueries"].take())?;
+    for descriptor in descriptors {
+        descriptor.validate()?;
+        for parameters in &descriptor.valid_examples {
+            let query = DomainSetupQueryV1 {
+                schema_version: 1,
+                view_id: descriptor.id.clone(),
+                parameters: parameters.clone(),
+                continuation: None,
+            };
+            let decoded = WorkforceSetupQueryV1::decode(&query)
+                .map_err(|error| format!("{}: {error}", descriptor.id))?;
+            assert_eq!(decoded.view_id(), descriptor.id);
+            let encoded = serde_json::to_value(decoded)?;
+            descriptor.validate_parameters(&encoded["parameters"], ContractJsonLimits::DEFAULT)?;
+            let mut newer = query;
+            newer.schema_version = 2;
+            assert!(WorkforceSetupQueryV1::decode(&newer).is_err());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn command_change_output_distinguishes_field_references_from_local_paths()
+-> Result<(), Box<dyn Error>> {
+    use eutheto_domain_api::{DomainPack, SetupQueryDescriptor};
+    use eutheto_types::{Change, ChangeKind};
+    use eutheto_workforce::setup::contracts::{
+        CommandChangeV1, SETUP_OUTPUT_LIMITS, SetupPageV1, WorkforceSetupResultV1,
+        WorkforceSetupViewDataV1,
+    };
+    use serde_json::json;
+
+    let descriptor: SetupQueryDescriptor = eutheto_workforce::WorkforcePack
+        .catalog()?
+        .setup_queries
+        .into_iter()
+        .find(|query| query.id == "eutheto.setup.command_changes")
+        .ok_or("missing command-change query")?;
+    for path in [
+        "/settings".to_owned(),
+        format!("/domain/entities/{}", support::id(1)),
+    ] {
+        let result = WorkforceSetupResultV1 {
+            schema_version: 1,
+            result: WorkforceSetupViewDataV1::CommandChanges(SetupPageV1 {
+                total_items: 1,
+                items: vec![CommandChangeV1 {
+                    ordinal: 0,
+                    change: Change {
+                        kind: ChangeKind::Updated,
+                        path,
+                        before: Some(json!({"name": "Before"})),
+                        after: Some(json!({"name": "After"})),
+                    },
+                }],
+                continuation: None,
+            }),
+        };
+        let mut value = serde_json::to_value(result)?;
+        validate_contract_value(&descriptor.result_schema, &value, SETUP_OUTPUT_LIMITS)?;
+        value["result"]["data"]["items"][0]["change"]["after"] = json!("/home/private/scenario");
+        assert!(
+            validate_contract_value(&descriptor.result_schema, &value, SETUP_OUTPUT_LIMITS)
+                .is_err()
+        );
+        value["result"]["data"]["items"][0]["change"]["after"] = Value::Null;
+        value["result"]["data"]["items"][0]["change"]["path"] = json!("/home/private/scenario");
+        assert!(
+            validate_contract_value(&descriptor.result_schema, &value, SETUP_OUTPUT_LIMITS)
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn setup_query_contract_accepts_literal_search_not_portable_content() -> Result<(), Box<dyn Error>>
+{
+    use eutheto_domain_api::DomainPack;
+    use serde_json::json;
+
+    let mut descriptor = eutheto_workforce::WorkforcePack
+        .catalog()?
+        .setup_queries
+        .into_iter()
+        .find(|query| query.id == "eutheto.setup.entity_page")
+        .ok_or("missing entity-page query")?;
+    descriptor.valid_examples.push(json!({
+        "entityKind": "person",
+        "search": "/",
+        "limit": 50
+    }));
+    descriptor.validate()?;
+    Ok(())
+}

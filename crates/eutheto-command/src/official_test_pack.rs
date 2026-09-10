@@ -52,6 +52,7 @@ struct GeneratedContract {
     schema_version: u32,
     pack: GeneratedPack,
     commands: Vec<CommandDescriptor>,
+    setup_queries: Vec<eutheto_domain_api::SetupQueryDescriptor>,
     internal_schema: Value,
     portable_schema: Value,
     share_result_schema: Value,
@@ -224,6 +225,28 @@ impl DomainPack for crate::OfficialTestPack {
         let report = validation_report(document);
         control.check()?;
         Ok(report)
+    }
+
+    fn reconcile_settings(
+        &self,
+        original: &ScenarioDocument,
+        _settings: &eutheto_types::ScenarioSettings,
+        restoration: Option<&Value>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainSettingsMutation, DomainPackError> {
+        control.check()?;
+        parse_entities(original)?;
+        if restoration.is_some() {
+            return Err(DomainPackError::InvalidPayload {
+                path: "/restoration".to_owned(),
+                message: "the synthetic pack has no settings-dependent records".to_owned(),
+            });
+        }
+        control.check()?;
+        Ok(eutheto_domain_api::DomainSettingsMutation {
+            domain: original.domain.clone(),
+            inverse_payload: None,
+        })
     }
 
     fn apply_batch(
@@ -598,10 +621,21 @@ impl DomainPack for crate::OfficialTestPack {
 
     fn build_view(
         &self,
-        document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        view_id: &str,
-    ) -> Result<eutheto_domain_api::DomainView, DomainPackError> {
+        input: eutheto_domain_api::DomainViewInput<'_>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainViewOutput, DomainPackError> {
+        control.check()?;
+        let eutheto_domain_api::DomainViewInput::AcceptedSolution {
+            document,
+            solution,
+            view_id,
+        } = input
+        else {
+            return Err(DomainPackError::InvalidPayload {
+                path: "/source".to_owned(),
+                message: "official.test exposes only accepted-solution views".to_owned(),
+            });
+        };
         require_pack(document)?;
         if !generated_catalog()?
             .ui
@@ -614,12 +648,15 @@ impl DomainPack for crate::OfficialTestPack {
                 message: format!("unknown view {view_id}"),
             });
         }
-        Ok(eutheto_domain_api::DomainView {
-            view_id: view_id.to_owned(),
-            data: json!({
-                "entityCount": document.domain.entities.len(),
-                "assignmentCount": solution.map_or(0, |value| value.assignments.len()),
-            }),
+        Ok(eutheto_domain_api::DomainViewOutput {
+            view: eutheto_domain_api::DomainView {
+                view_id: view_id.to_owned(),
+                data: json!({
+                    "entityCount": document.domain.entities.len(),
+                    "assignmentCount": solution.assignments.len(),
+                }),
+            },
+            reconciliation: None,
         })
     }
 
@@ -904,6 +941,7 @@ fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
         portable_schema,
         share_result_schema,
         ai_tools,
+        setup_queries,
         ui_manifest,
         ..
     } = generated;
@@ -915,6 +953,7 @@ fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
         portable_schema,
         share_result_schema,
         commands,
+        setup_queries,
         ai_tools,
         ui: ui_manifest,
     })
@@ -926,12 +965,21 @@ fn validate_generated_contract(generated: &GeneratedContract) -> Result<(), Doma
         .iter()
         .map(|item| item.id.as_str())
         .collect();
-    if generated.schema_version == 3
+    if generated.schema_version == 4
         && generated.pack.id == OFFICIAL_TEST_PACK_ID
         && generated.pack.pack_version == OFFICIAL_TEST_PACK_VERSION
         && generated.pack.latest_schema_version == 1
         && generated.pack.portable_schema_version == 2
         && generated.pack.share_result_schema_version == 1
+        && generated
+            .setup_queries
+            .iter()
+            .map(|query| query.id.as_str())
+            .eq(
+                crate::generated_official_test_pack_contract::OFFICIAL_TEST_SETUP_QUERY_IDS
+                    .iter()
+                    .copied(),
+            )
         && generated_ids.as_slice() == OFFICIAL_TEST_COMMAND_IDS
     {
         Ok(())

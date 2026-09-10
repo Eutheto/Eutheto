@@ -93,42 +93,48 @@ pub(super) fn time_window(value: &TimeWindow) -> Result {
 
 impl Context<'_> {
     pub(super) fn resolved_time(&self, value: &ResolvedLocalTime) -> Result {
-        let actual = value.instant.as_timestamp().to_zoned(self.zone.clone());
-        require(
-            actual.offset().seconds() == value.offset_seconds,
-            "resolvedTime.offsetSeconds",
-            "offset does not match the scenario-zone instant",
-        )?;
-        if actual.datetime() == value.local.as_datetime() {
-            return Ok(());
-        }
-        require(
-            self.settings.gap_policy == GapPolicy::MoveForward
-                && matches!(
-                    self.zone
-                        .to_ambiguous_zoned(value.local.as_datetime())
-                        .offset(),
-                    AmbiguousOffset::Gap { .. }
-                ),
-            "resolvedTime.local",
-            "local intent does not match the scenario-zone instant",
-        )?;
-        let resolved = resolve_local_time(
-            value.local,
-            &self.settings.time_zone,
-            self.settings.gap_policy,
-            self.settings.overlap_policy,
-        )
-        .map_err(|_| {
-            invalid(
-                "resolvedTime.local",
-                "local intent cannot be resolved under the scenario policy",
-            )
-        })?;
-        require(
-            resolved == *value,
-            "resolvedTime",
-            "resolved gap differs from the explicit scenario resolver",
-        )
+        validate_resolved_time(value, self.settings, &self.zone)
     }
+}
+
+pub(crate) fn validate_resolved_time(
+    value: &ResolvedLocalTime,
+    settings: &eutheto_types::ScenarioSettings,
+    zone: &jiff::tz::TimeZone,
+) -> Result {
+    let actual = value.instant.as_timestamp().to_zoned(zone.clone());
+    require(
+        actual.offset().seconds() == value.offset_seconds,
+        "resolvedTime.offsetSeconds",
+        "offset does not match the scenario-zone instant",
+    )?;
+    if actual.datetime() == value.local.as_datetime() {
+        return Ok(());
+    }
+    require(
+        settings.gap_policy == GapPolicy::MoveForward
+            && matches!(
+                zone.to_ambiguous_zoned(value.local.as_datetime()).offset(),
+                AmbiguousOffset::Gap { .. }
+            ),
+        "resolvedTime.local",
+        "local intent does not match the scenario-zone instant",
+    )?;
+    let resolved = resolve_local_time(
+        value.local,
+        &settings.time_zone,
+        settings.gap_policy,
+        settings.overlap_policy,
+    )
+    .map_err(|_| {
+        invalid(
+            "resolvedTime.local",
+            "local intent cannot be resolved under the scenario policy",
+        )
+    })?;
+    require(
+        resolved == *value,
+        "resolvedTime",
+        "resolved gap differs from the explicit scenario resolver",
+    )
 }

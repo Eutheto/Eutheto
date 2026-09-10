@@ -111,6 +111,6 @@
     ]
   },
   "packId": "official.test",
-  "schemaVersion": 3,
-  "sourceBlake3": "9f1bd7a78b52ab3d00440425be27209e3142c0866fab786e3f734e306449f41e"
+  "schemaVersion": 4,
+  "sourceBlake3": "27e46c40838d1eb77548ca0f9bd136a8ea17ac5864f9b5ffea04f3c2806a11e3"
 }

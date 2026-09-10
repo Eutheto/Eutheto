@@ -2,6 +2,8 @@
 mod portable_decode;
 #[path = "../../../tests/support/portable_encode.rs"]
 mod portable_encode;
+#[path = "support/setup_control.rs"]
+mod setup_control;
 
 use eutheto_command::official_registry;
 use eutheto_core::{
@@ -832,6 +834,147 @@ async fn solution_application_fixture(
         stale,
         current,
     })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_view_releases_capture_lock_and_keeps_exact_result_document()
+-> Result<(), Box<dyn Error>> {
+    use setup_control::{ControlledPack, PauseAt, PreparationGate, ReleaseOnDrop};
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let gate = Arc::new(PreparationGate::default());
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    gate.pause_at.store(PauseAt::View as u8, Ordering::SeqCst);
+    let registry = eutheto_domain_api::DomainPackRegistry::builder()
+        .register(ControlledPack {
+            pack: eutheto_command::OfficialTestPack,
+            gate: Arc::clone(&gate),
+        })
+        .build()?;
+    let app = EuthetoApp::from_initialized_store_with_pack_registry(
+        Arc::clone(&fixture.store),
+        fixture.app.initialization().clone(),
+        dependencies(&directory)?,
+        registry,
+    )
+    .boxed()?;
+    let expected = AcceptedResultRefV1::from_result(&fixture.current.portable.accepted_result)?;
+    let revision = Revision::new(
+        fixture
+            .current
+            .portable
+            .accepted_result
+            .solution
+            .scenario_revision,
+    );
+    let scenario_id = fixture.scenario_id;
+    gate.armed.store(true, Ordering::SeqCst);
+    let reading = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.query(AppQuery::SolutionGetView(SolutionViewRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                scenario_id,
+                solution_id: expected.solution_id,
+                view_id: "official.test.result.summary".to_owned(),
+            }))
+            .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified()).await?;
+    let committed = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        app.execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: add_entity_envelope(scenario_id, revision, "third")?,
+            truncate_redo: false,
+        }),
+    )
+    .await?
+    .boxed()?;
+    let AppCommandResult::ScenarioCommand(committed) = committed else {
+        return Err("expected committed edit while accepted view was paused".into());
+    };
+    assert_eq!(committed.new_revision.value(), revision.value() + 1);
+    gate.release();
+    let AppQueryResult::SolutionView(view) = reading.await?.boxed()? else {
+        return Err("expected accepted solution view".into());
+    };
+    assert_eq!(view.result, expected);
+    assert_eq!(view.scenario_revision, revision);
+    assert_eq!(view.current_revision, revision);
+    assert_eq!(view.view.data["entityCount"], 2);
+    assert_eq!(
+        view.view.data["assignmentCount"].as_u64(),
+        Some(u64::try_from(
+            fixture
+                .current
+                .portable
+                .accepted_result
+                .solution
+                .assignments
+                .len()
+        )?),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_view_reports_cancellation_without_cancelling_sibling_reads()
+-> Result<(), Box<dyn Error>> {
+    use setup_control::{ControlledPack, PauseAt, PreparationGate, ReleaseOnDrop};
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let gate = Arc::new(PreparationGate::default());
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    gate.pause_at.store(PauseAt::View as u8, Ordering::SeqCst);
+    let registry = eutheto_domain_api::DomainPackRegistry::builder()
+        .register(ControlledPack {
+            pack: eutheto_command::OfficialTestPack,
+            gate: Arc::clone(&gate),
+        })
+        .build()?;
+    let app = EuthetoApp::from_initialized_store_with_pack_registry(
+        Arc::clone(&fixture.store),
+        fixture.app.initialization().clone(),
+        dependencies(&directory)?,
+        registry,
+    )
+    .boxed()?;
+    let request = SolutionViewRequestV1 {
+        schema_version: SOLUTION_API_SCHEMA_VERSION,
+        scenario_id: fixture.scenario_id,
+        solution_id: fixture
+            .current
+            .portable
+            .accepted_result
+            .solution
+            .solution_id,
+        view_id: "official.test.result.summary".to_owned(),
+    };
+    let cancellation = app.setup_cancellation();
+    gate.armed.store(true, Ordering::SeqCst);
+    let reading = tokio::spawn({
+        let app = app.clone();
+        let request = request.clone();
+        let cancellation = cancellation.clone();
+        async move {
+            app.solution_view_with_cancellation(request, cancellation)
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified()).await?;
+    cancellation.cancel();
+    gate.release();
+    assert!(
+        matches!(reading.await?, Err(AppError::Protocol(error)) if error.code == "operation.cancelled")
+    );
+    let sibling = app
+        .solution_view_with_cancellation(request, app.setup_cancellation())
+        .await
+        .boxed()?;
+    assert_eq!(sibling.view.data["entityCount"], 2);
+    Ok(())
 }
 
 #[tokio::test]

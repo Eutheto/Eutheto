@@ -34,7 +34,7 @@ fn contains<T: PartialEq>(
     Ok(values.contains(value))
 }
 
-pub(super) fn person_scope(
+pub(crate) fn person_scope(
     scope: &Scope,
     person: &Person,
     budget: &mut OperationBudget<'_>,
@@ -67,7 +67,7 @@ pub(super) fn person_scope(
     Ok(selected && team)
 }
 
-pub(super) fn shift_scope(
+pub(crate) fn shift_scope(
     scope: &Scope,
     shift: &ResolvedShift,
     metadata: &ShiftMetadata<'_>,

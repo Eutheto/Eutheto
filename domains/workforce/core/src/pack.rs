@@ -17,7 +17,7 @@ use eutheto_domain_api::{
     AiToolDescriptor, CommandDescriptor, CompileContext, CounterfactualCompileContext,
     DomainBatchCommand, DomainCapability, DomainCatalog, DomainMutation, DomainPack,
     DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
-    DomainValidationReport, DomainView, LicenseMetadata, LocalizedText, PortableImportContext,
+    DomainValidationReport, LicenseMetadata, LocalizedText, PortableImportContext,
     SchemaVersionDescriptor, ShareResultOptions,
 };
 use eutheto_domain_ir::{
@@ -164,6 +164,16 @@ impl DomainPack for WorkforcePack {
         commands::apply_batch_cancellable(document, batch, cancellation)
     }
 
+    fn reconcile_settings(
+        &self,
+        original: &ScenarioDocument,
+        settings: &eutheto_types::ScenarioSettings,
+        restoration: Option<&Value>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainSettingsMutation, DomainPackError> {
+        commands::reconcile_settings(original, settings, restoration, control)
+    }
+
     fn compile(
         &self,
         document: &ScenarioDocument,
@@ -269,14 +279,10 @@ impl DomainPack for WorkforcePack {
 
     fn build_view(
         &self,
-        _document: &ScenarioDocument,
-        _solution: Option<&NormalizedSolution>,
-        _view_id: &str,
-    ) -> Result<DomainView, DomainPackError> {
-        Err(DomainPackError::InvalidPayload {
-            path: "/viewId".to_owned(),
-            message: "unknown Workforce view".to_owned(),
-        })
+        input: eutheto_domain_api::DomainViewInput<'_>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainViewOutput, DomainPackError> {
+        crate::setup::build_view(input, control)
     }
 
     fn render_evidence(
@@ -305,6 +311,7 @@ struct GeneratedContract {
     schema_version: u32,
     pack: GeneratedPack,
     commands: Vec<CommandDescriptor>,
+    setup_queries: Vec<eutheto_domain_api::SetupQueryDescriptor>,
     internal_schema: Value,
     portable_schema: Value,
     share_result_schema: Value,
@@ -333,7 +340,7 @@ struct GeneratedAiTool {
 fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
     let generated: GeneratedContract =
         serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON).map_err(|_| generated_error())?;
-    if generated.schema_version != 3
+    if generated.schema_version != 4
         || generated.pack.id != WORKFORCE_PACK_ID
         || generated.pack.pack_version != WORKFORCE_PACK_VERSION
         || generated.pack.latest_schema_version != 1
@@ -344,6 +351,15 @@ fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
             .iter()
             .map(|command| command.id.as_str())
             .eq(WORKFORCE_COMMAND_IDS.iter().copied())
+        || !generated
+            .setup_queries
+            .iter()
+            .map(|query| query.id.as_str())
+            .eq(
+                crate::generated_workforce_pack_contract::WORKFORCE_SETUP_QUERY_IDS
+                    .iter()
+                    .copied(),
+            )
     {
         return Err(generated_error());
     }
@@ -372,6 +388,7 @@ fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
         portable_schema: generated.portable_schema,
         share_result_schema: generated.share_result_schema,
         commands: generated.commands,
+        setup_queries: generated.setup_queries,
         ai_tools,
         ui: generated.ui_manifest,
     })

@@ -23,11 +23,10 @@ use eutheto_import::{
 use eutheto_types::{
     ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
     CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
-    DomainPackRef, EntityId, EventTopic, FieldErrorDto, FoundationStatus, PackId,
-    ProjectMetadataDto, ProjectSummaryDto, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
-    SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings, ScenarioSummaryDto,
-    ScenarioViewDto, SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator,
-    ValidationIssue, ValidationReport, ValidationSeverity,
+    DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, PackId, ProjectMetadataDto,
+    ProjectSummaryDto, RequestId, ResourceRef, Revision, Rfc3339Timestamp, SafeDiagnosticValue,
+    ScenarioCommand, ScenarioId, ScenarioSettings, SupplementalIdentity, SupportPreviewDto,
+    SystemClock, SystemIdGenerator, ValidationIssue, ValidationReport,
 };
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -38,7 +37,17 @@ use tauri_plugin_dialog::DialogExt;
 #[cfg(feature = "bundled-ortools")]
 mod bundled_solver;
 
+#[macro_use]
 mod generated_command_catalog;
+mod operations;
+use operations::{OperationClaim, OperationContextV1, OperationPhaseV1, OperationRegistry};
+#[macro_use]
+mod setup_boundary;
+use setup_boundary::{
+    operation_cancel, operation_prepare, operation_release, scenario_get_entity,
+    scenario_get_rule_catalog, scenario_get_setup_status, scenario_get_summary, scenario_get_view,
+    scenario_search_entities, scenario_validate, workforce_apply_reviewed_generation,
+};
 
 use generated_command_catalog::REGISTERED_COMMANDS;
 const MAX_PREPARED_PORTABLE_OUTPUTS: usize = 3;
@@ -146,104 +155,6 @@ fn new_prepared_preview_id() -> Result<RequestId, ApiError> {
 const API_SCHEMA_VERSION: u32 = 1;
 const PORTABLE_EXTENSION: &str = ".eutheto";
 
-macro_rules! with_tauri_commands {
-    ($macro:ident) => {
-        $macro!(
-            app_get_info,
-            app_get_capabilities,
-            app_get_paths_summary,
-            app_open_data_folder,
-            app_create_support_bundle_preview,
-            app_create_support_bundle,
-            app_check_for_update,
-            app_install_update,
-            app_get_license_inventory,
-            pack_list,
-            pack_describe,
-            solver_list,
-            solver_describe,
-            solver_get_support_matrix,
-            solver_get_deferred_gates,
-            project_list,
-            project_get_metadata,
-            project_create,
-            project_duplicate,
-            project_archive,
-            project_unarchive,
-            project_delete,
-            project_import_preview,
-            project_import_apply,
-            project_export_preview,
-            project_export_create,
-            project_backup_preview,
-            project_backup_create,
-            project_restore_preview,
-            project_restore_apply,
-            project_operation_cancel,
-            project_unopened_bundle_inspect,
-            project_unopened_bundle_reexport,
-            scenario_get_summary,
-            scenario_get_setup_status,
-            scenario_get_view,
-            scenario_get_entity,
-            scenario_search_entities,
-            scenario_get_rule_catalog,
-            scenario_get_command_catalog,
-            scenario_apply_command,
-            scenario_apply_batch,
-            scenario_validate,
-            scenario_undo,
-            scenario_redo,
-            scenario_get_history,
-            scenario_migrate_preview,
-            solve_get_backend_options,
-            solve_estimate_model,
-            solve_start,
-            solve_cancel,
-            solve_get_job,
-            solve_list_runs,
-            solve_get_diagnostics_summary,
-            solution_list,
-            solution_get_summary,
-            solution_get_view,
-            solution_select,
-            solution_verify,
-            solution_compare,
-            solution_explain,
-            solution_start_counterfactual,
-            solution_cancel_counterfactual,
-            solution_lock_assignment,
-            solution_unlock_assignment,
-            solution_create_repair_request,
-            solution_export_preview,
-            solution_export,
-            solution_share_preview,
-            solution_share_create,
-            solution_export_cancel,
-            ai_get_provider_catalog,
-            ai_get_configuration,
-            ai_store_credential,
-            ai_delete_credential,
-            ai_test_provider,
-            ai_list_models,
-            ai_list_conversations,
-            ai_create_conversation,
-            ai_get_conversation,
-            ai_send_turn,
-            ai_cancel_turn,
-            ai_get_proposal,
-            ai_apply_proposal,
-            ai_reject_proposal,
-            ai_delete_conversation,
-            settings_get,
-            settings_update,
-            settings_reset_section,
-            settings_export_nonsecret,
-            settings_import_nonsecret,
-        )
-    };
-}
-
 macro_rules! make_tauri_handler {
     ($($command:ident),* $(,)?) => {
         tauri::generate_handler![$($command),*]
@@ -256,6 +167,26 @@ struct DesktopState {
     cache_dir: PathBuf,
     backup_dir: PathBuf,
     prepared_outputs: Arc<tokio::sync::Mutex<PreparedPortableCache>>,
+    operations: Arc<OperationRegistry>,
+}
+
+impl DesktopState {
+    fn new(app: EuthetoApp, cache_dir: PathBuf, backup_dir: PathBuf) -> Self {
+        let operations = Arc::new(OperationRegistry::new(
+            app.clone(),
+            Arc::new(SystemClock),
+            Arc::new(eutheto_types::SystemMonotonicClock::new()),
+            Arc::new(SystemIdGenerator),
+            ["main".to_owned()],
+        ));
+        Self {
+            app,
+            cache_dir,
+            backup_dir,
+            prepared_outputs: Arc::default(),
+            operations,
+        }
+    }
 }
 
 type ApiError = Box<ApiErrorDto>;
@@ -472,17 +403,6 @@ struct HistoryMutationRequest {
     request_id: RequestId,
     scenario_id: ScenarioId,
     expected_revision: Revision,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EntityRequest {
-    #[serde(rename = "requestId")]
-    request: RequestId,
-    #[serde(rename = "scenarioId")]
-    scenario: ScenarioId,
-    #[serde(rename = "entityId")]
-    entity: EntityId,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -779,22 +699,6 @@ struct PortableArtifactDto {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ScenarioSetupStatusDto {
-    ready: bool,
-    blocking_issues: Vec<ValidationIssue>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ScenarioEntityDto {
-    scenario_id: ScenarioId,
-    revision: Revision,
-    entity_id: EntityId,
-    value: Option<Value>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ScenarioCommandCatalogDto {
     command_types: &'static [&'static str],
 }
@@ -982,15 +886,6 @@ fn metadata_value<T: Serialize + ?Sized>(value: &T) -> Result<Value, ApiError> {
         )
         .into()
     })
-}
-
-fn validation_warnings(report: &ValidationReport) -> Vec<ValidationIssue> {
-    report
-        .issues
-        .iter()
-        .filter(|issue| issue.severity == ValidationSeverity::Warning)
-        .cloned()
-        .collect()
 }
 
 fn revision_diagnostic_value(revision: u64) -> SafeDiagnosticValue {
@@ -1602,31 +1497,6 @@ async fn project_list_impl(
     }
 }
 
-async fn scenario_view_impl(
-    state: &DesktopState,
-    request: ScenarioRequest,
-) -> ApiResult<ScenarioViewDto> {
-    match state
-        .app
-        .query(AppQuery::ScenarioView(request.scenario_id))
-        .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::Scenario(view) => Ok(response(
-            request.request_id,
-            Some(view.revision),
-            validation_warnings(&view.validation),
-            *view,
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected scenario result.",
-            None,
-        )
-        .into()),
-    }
-}
-
 async fn core_unavailable(
     state: &DesktopState,
     capability: DeferredCapability,
@@ -1691,10 +1561,16 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "project_operation_cancel",
         "project_unopened_bundle_inspect",
         "project_unopened_bundle_reexport",
+        "operation_prepare",
+        "operation_cancel",
+        "operation_release",
+        "workforce_apply_reviewed_generation",
         "scenario_get_summary",
         "scenario_get_setup_status",
         "scenario_get_view",
         "scenario_get_entity",
+        "scenario_search_entities",
+        "scenario_get_rule_catalog",
         "scenario_get_command_catalog",
         "scenario_apply_command",
         "scenario_apply_batch",
@@ -2728,93 +2604,6 @@ async fn project_unopened_bundle_reexport(
 }
 
 #[tauri::command]
-async fn scenario_get_summary(
-    state: State<'_, DesktopState>,
-    request: ScenarioRequest,
-) -> ApiResult<ScenarioSummaryDto> {
-    let view = scenario_view_impl(&state, request).await?;
-    let document = &view.result.document;
-    let summary = ScenarioSummaryDto {
-        scenario_id: document.scenario_id,
-        revision: view.result.revision,
-        title: document.metadata.title.clone(),
-        validation: view.result.validation.clone(),
-    };
-    Ok(response(
-        view.request_id,
-        view.current_revision,
-        view.warnings,
-        summary,
-    ))
-}
-
-#[tauri::command]
-async fn scenario_get_setup_status(
-    state: State<'_, DesktopState>,
-    request: ScenarioRequest,
-) -> ApiResult<ScenarioSetupStatusDto> {
-    let view = scenario_view_impl(&state, request).await?;
-    let blocking_issues = view
-        .result
-        .validation
-        .issues
-        .iter()
-        .filter(|issue| issue.severity == ValidationSeverity::Error)
-        .cloned()
-        .collect::<Vec<_>>();
-    Ok(response(
-        view.request_id,
-        view.current_revision,
-        view.warnings,
-        ScenarioSetupStatusDto {
-            ready: blocking_issues.is_empty(),
-            blocking_issues,
-        },
-    ))
-}
-
-#[tauri::command]
-async fn scenario_get_view(
-    state: State<'_, DesktopState>,
-    request: ScenarioRequest,
-) -> ApiResult<ScenarioViewDto> {
-    scenario_view_impl(&state, request).await
-}
-
-#[tauri::command]
-async fn scenario_get_entity(
-    state: State<'_, DesktopState>,
-    request: EntityRequest,
-) -> ApiResult<ScenarioEntityDto> {
-    let view = scenario_view_impl(
-        &state,
-        ScenarioRequest {
-            request_id: request.request,
-            scenario_id: request.scenario,
-        },
-    )
-    .await?;
-    let value = view
-        .result
-        .document
-        .domain
-        .entities
-        .get(&request.entity)
-        .cloned();
-    Ok(response(
-        request.request,
-        view.current_revision,
-        view.warnings,
-        ScenarioEntityDto {
-            scenario_id: request.scenario,
-            revision: view.result.revision,
-            entity_id: request.entity,
-            value,
-        },
-    ))
-}
-
-#[tauri::command]
 fn scenario_get_command_catalog(request: RequestOnly) -> ApiResponseDto<ScenarioCommandCatalogDto> {
     response(
         request.request_id,
@@ -2831,6 +2620,7 @@ fn scenario_get_command_catalog(request: RequestOnly) -> ApiResponseDto<Scenario
                 "setPreference",
                 "lockAssignment",
                 "unlockAssignment",
+                "setScenarioSettings",
                 "applyDomainCommand",
                 "applyBatch",
             ],
@@ -2904,20 +2694,6 @@ async fn scenario_apply_batch(
         }),
     };
     execute_scenario(&state, request_id, envelope, request.truncate_redo).await
-}
-
-#[tauri::command]
-async fn scenario_validate(
-    state: State<'_, DesktopState>,
-    request: ScenarioRequest,
-) -> ApiResult<ValidationReport> {
-    let view = scenario_view_impl(&state, request).await?;
-    Ok(response(
-        view.request_id,
-        view.current_revision,
-        view.warnings,
-        view.result.validation,
-    ))
 }
 
 async fn move_history(
@@ -3156,30 +2932,55 @@ async fn solution_get_summary(
 }
 
 #[tauri::command]
-async fn solution_get_view(
+async fn solution_get_view<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
 ) -> SolutionApiResult {
     let request: CorrelatedRequest<SolutionViewRequestV1> = decode_solution_request(request)?;
     let request_id = request.request_id;
-    match state
-        .app
-        .query(AppQuery::SolutionGetView(request.operation))
-        .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::SolutionView(result) => {
-            let result = *result;
-            let current_revision = result.current_revision;
-            solution_response(request_id, current_revision, result)
-        }
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected solution-view result.",
+    let context = OperationContextV1::Scenario {
+        scenario_id: request.operation.scenario_id,
+        expected_revision: None,
+    };
+    let operation_id = state
+        .operations
+        .reserve_accepted(window.label(), context.clone())?
+        .operation_id;
+    let app = state.app.clone();
+    state
+        .operations
+        .run(
+            window.label(),
+            OperationClaim {
+                operation_id,
+                request_id,
+                purpose: None,
+                context,
+            },
             None,
+            OperationPhaseV1::BuildingView,
+            ((), None),
+            move |(), mut execution| async move {
+                let result = app
+                    .solution_view_with_cancellation(request.operation, execution.cancellation())
+                    .await
+                    .map_err(|error| Box::new(map_app_error(error)))?;
+                execution.preparing_response();
+                tauri::async_runtime::spawn_blocking(move || {
+                    solution_response(request_id, result.current_revision, result)
+                })
+                .await
+                .map_err(|_| {
+                    Box::new(boundary_error(
+                        "operation.execution_failed",
+                        "The native operation could not finish safely.",
+                        None,
+                    ))
+                })?
+            },
         )
-        .into()),
-    }
+        .await
 }
 
 #[tauri::command]
@@ -3374,8 +3175,6 @@ unsupported_commands!(
     app_check_for_update => ("capability.update_unavailable", "Application updates"),
     app_install_update => ("capability.update_unavailable", "Application updates"),
     app_get_license_inventory => ("capability.license_inventory_unavailable", "License inventory"),
-    scenario_search_entities => ("capability.entity_search_unavailable", "Entity search"),
-    scenario_get_rule_catalog => ("capability.rule_catalog_unavailable", "Domain rule catalogs"),
     scenario_migrate_preview => ("capability.scenario_migration_unavailable", "Scenario migration previews"),
     settings_export_nonsecret => ("capability.settings_portable_unavailable", "Portable settings export"),
     settings_import_nonsecret => ("capability.settings_portable_unavailable", "Portable settings import"),
@@ -3482,7 +3281,7 @@ fn spawn_event_forwarder(
 /// application service cannot be opened, or the Tauri runtime cannot start.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
-    tauri::Builder::default()
+    let desktop = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|handle| {
             let app_data_dir = handle.path().app_data_dir()?;
@@ -3520,16 +3319,26 @@ pub fn run() -> tauri::Result<()> {
             for &(topic, event_name) in FORWARDED_EVENTS {
                 spawn_event_forwarder(handle.handle().clone(), app.clone(), topic, event_name);
             }
-            handle.manage(DesktopState {
-                app,
-                cache_dir,
-                backup_dir,
-                prepared_outputs: Arc::default(),
-            });
+            handle.manage(DesktopState::new(app, cache_dir, backup_dir));
             Ok(())
         })
         .invoke_handler(with_tauri_commands!(make_tauri_handler))
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?;
+    desktop.run(|handle, event| match event {
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Destroyed,
+            ..
+        } => {
+            handle
+                .state::<DesktopState>()
+                .operations
+                .cancel_window(&label);
+        }
+        tauri::RunEvent::Exit => handle.state::<DesktopState>().operations.shutdown(),
+        _ => {}
+    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3543,7 +3352,7 @@ mod tests {
     use eutheto_core::{
         AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
         BackendSupportColumn, BackupAssetSelection, CapabilityMatrix, DeferredCapability,
-        EuthetoApp, SolverSupportMatrixMetadata, SupportCell, SupportFeature,
+        EuthetoApp, ScenarioSummaryV2, SolverSupportMatrixMetadata, SupportCell, SupportFeature,
         SupportFeatureCategory, SupportFeatureGate, SupportFeatureId,
     };
     use eutheto_types::{
@@ -3555,22 +3364,24 @@ mod tests {
     };
     use serde::de::DeserializeOwned;
     use serde_json::{Value, json};
+    use tauri::Manager;
 
     use super::{
         BackupCreateRequest, BackupSummaryDto, CorrelatedRequest, DesktopState,
         ExportCreateRequest, FORWARDED_EVENTS, NativeFileError, PortableCancelRequest,
         PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
-        PreparedPortableOutput, ProjectListRequest, ProjectScopeDto, REGISTERED_COMMANDS,
-        RequestOnly, SolutionExplainRequestV1, SolutionStartCounterfactualRequestV1,
-        app_get_capabilities, backup_summary, cancel_portable_preview_impl, core_unavailable,
+        PreparedPortableOutput, ProjectListRequest, ProjectScopeDto, RequestOnly,
+        SolutionExplainRequestV1, SolutionStartCounterfactualRequestV1, app_get_capabilities,
+        backup_summary, cancel_portable_preview_impl, core_unavailable,
         decode_counterfactual_start_request, exact_reexport_unopened_bundle_to_path,
         inspect_unopened_bundle_bytes, map_app_error, map_native_file_error, native_file_task,
-        normalize_counterfactual_int64, pack_describe, pack_list, preview_portable_bytes,
-        project_archive, project_create, project_delete, project_import_apply, project_list,
-        project_list_impl, project_restore_apply, project_unarchive, read_bounded_portable,
-        revision_diagnostic_value, scenario_apply_command, scenario_get_view, scenario_redo,
-        scenario_undo, selected_basename, solution_explain, solution_list, solution_response,
-        solver_describe, solver_get_deferred_gates, solver_get_support_matrix, solver_list,
+        normalize_counterfactual_int64, operation_prepare, pack_describe, pack_list,
+        preview_portable_bytes, project_archive, project_create, project_delete,
+        project_import_apply, project_list, project_list_impl, project_restore_apply,
+        project_unarchive, read_bounded_portable, revision_diagnostic_value,
+        scenario_apply_command, scenario_get_summary, scenario_redo, scenario_undo,
+        selected_basename, solution_explain, solution_list, solution_response, solver_describe,
+        solver_get_deferred_gates, solver_get_support_matrix, solver_list,
         solver_support_matrix_dto, suggested_portable_filename,
     };
 
@@ -3580,6 +3391,14 @@ mod tests {
         webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
         command: &str,
         request: &Value,
+    ) -> Result<IpcResult, Box<dyn Error>> {
+        invoke_ipc_args(webview, command, json!({ "request": request }))
+    }
+
+    pub(super) fn invoke_ipc_args(
+        webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        command: &str,
+        arguments: Value,
     ) -> Result<IpcResult, Box<dyn Error>> {
         let origin = if cfg!(any(windows, target_os = "android")) {
             "http://tauri.localhost"
@@ -3593,7 +3412,7 @@ mod tests {
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
                 url: origin.parse()?,
-                body: json!({ "request": request }).into(),
+                body: arguments.into(),
                 headers: tauri::http::HeaderMap::default(),
 
                 invoke_key: tauri::test::INVOKE_KEY.to_owned(),
@@ -3601,7 +3420,7 @@ mod tests {
         ))
     }
 
-    fn invoke_ok<T: DeserializeOwned>(
+    pub(super) fn invoke_ok<T: DeserializeOwned>(
         webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
         command: &str,
         request: &Value,
@@ -3610,6 +3429,51 @@ mod tests {
             Ok(body) => Ok(body.deserialize()?),
             Err(error) => Err(format!("{command} IPC failed: {error}").into()),
         }
+    }
+
+    // Native reads expose bounded summaries. Exact persistence assertions inspect Rust state,
+    // not a reconstructed raw-document IPC response or a replacement desktop authority.
+    async fn native_summary_and_core_snapshot(
+        webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        request_id: RequestId,
+        scenario_id: eutheto_types::ScenarioId,
+    ) -> Result<(ApiResponseDto<ScenarioSummaryV2>, ScenarioViewDto), Box<dyn Error>> {
+        let prepared: ApiResponseDto<Value> = invoke_ok(
+            webview,
+            "operation_prepare",
+            &json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "purpose": {"kind": "scenarioSummary"},
+                "context": {"kind": "scenario", "scenarioId": scenario_id, "expectedRevision": null}
+            }),
+        )?;
+        let summary: ApiResponseDto<ScenarioSummaryV2> = match invoke_ipc_args(
+            webview,
+            "scenario_get_summary",
+            json!({
+                "onProgress": "__CHANNEL__:42",
+                "request": {
+                    "requestId": request_id, "schemaVersion": 2, "scenarioId": scenario_id,
+                    "expectedRevision": null, "operationId": prepared.result["operationId"]
+                }
+            }),
+        )? {
+            Ok(body) => body.deserialize()?,
+            Err(error) => return Err(format!("summary IPC failed: {error}").into()),
+        };
+        let snapshot = match webview
+            .state::<DesktopState>()
+            .app
+            .query(AppQuery::ScenarioView(scenario_id))
+            .await
+            .map_err(|error| format!("core persistence snapshot failed: {error:?}"))?
+        {
+            AppQueryResult::Scenario(snapshot) => *snapshot,
+            _ => return Err("unexpected core persistence snapshot".into()),
+        };
+        assert_eq!(summary.current_revision, Some(snapshot.revision));
+        Ok((summary, snapshot))
     }
 
     fn portable_options() -> Value {
@@ -4079,35 +3943,6 @@ mod tests {
     }
 
     #[test]
-    fn registered_catalog_matches_handler_and_permission_commands() {
-        macro_rules! command_names {
-            ($($command:ident),* $(,)?) => {
-                &[$(stringify!($command)),*]
-            };
-        }
-
-        assert_eq!(REGISTERED_COMMANDS.len(), 91);
-        let mut unique_commands = REGISTERED_COMMANDS.to_vec();
-        unique_commands.sort_unstable();
-        unique_commands.dedup();
-        assert_eq!(unique_commands.len(), REGISTERED_COMMANDS.len());
-
-        let handler_commands: &[&str] = with_tauri_commands!(command_names);
-        assert_eq!(handler_commands, REGISTERED_COMMANDS);
-
-        let permission = include_str!("../permissions/foundation-status.toml");
-        let permission_commands: Vec<_> = permission
-            .lines()
-            .filter_map(|line| {
-                line.trim()
-                    .strip_prefix('"')
-                    .and_then(|line| line.strip_suffix("\","))
-            })
-            .collect();
-        assert_eq!(permission_commands, REGISTERED_COMMANDS);
-    }
-
-    #[test]
     fn phase_04_solution_capabilities_and_event_topics_are_exact() -> Result<(), Box<dyn Error>> {
         let capabilities = app_get_capabilities(RequestOnly {
             request_id: RequestId::new(&SystemIdGenerator)?,
@@ -4210,12 +4045,11 @@ mod tests {
             AppCommandResult::Project(project) => project.scenario_id,
             result => return Err(format!("unexpected solution project result: {result:?}").into()),
         };
-        let state = DesktopState {
+        let state = DesktopState::new(
             app,
-            cache_dir: directory.path().join("solution-cache"),
-            backup_dir: directory.path().join("solution-backups"),
-            prepared_outputs: Arc::default(),
-        };
+            directory.path().join("solution-cache"),
+            directory.path().join("solution-backups"),
+        );
         let desktop = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![solution_explain, solution_list])
             .manage(state)
@@ -4440,12 +4274,11 @@ mod tests {
         })
         .await
         .map_err(|error| format!("metadata app setup failed: {error:?}"))?;
-        let state = DesktopState {
+        let state = DesktopState::new(
             app,
-            cache_dir: directory.path().join("metadata-cache"),
-            backup_dir: directory.path().join("metadata-backups"),
-            prepared_outputs: Arc::default(),
-        };
+            directory.path().join("metadata-cache"),
+            directory.path().join("metadata-backups"),
+        );
         let desktop = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
                 pack_list,
@@ -4579,12 +4412,11 @@ mod tests {
         })
         .await
         .map_err(|error| format!("unopened app setup failed: {error:?}"))?;
-        let state = DesktopState {
+        let state = DesktopState::new(
             app,
-            cache_dir: directory.path().join("unopened-cache"),
-            backup_dir: directory.path().join("unopened-backups"),
-            prepared_outputs: Arc::default(),
-        };
+            directory.path().join("unopened-cache"),
+            directory.path().join("unopened-backups"),
+        );
         let original = match state
             .app
             .query(AppQuery::ExportBackup {
@@ -4733,12 +4565,11 @@ mod tests {
         })
         .await
         .map_err(|error| format!("app setup failed: {error:?}"))?;
-        let state = DesktopState {
+        let state = DesktopState::new(
             app,
-            cache_dir: directory.path().join("cache"),
-            backup_dir: directory.path().join("backups"),
-            prepared_outputs: Arc::default(),
-        };
+            directory.path().join("cache"),
+            directory.path().join("backups"),
+        );
         let request_id = RequestId::new(&SystemIdGenerator)?;
         let result = project_list_impl(
             &state,
@@ -4829,18 +4660,18 @@ mod tests {
         let target_app = EuthetoApp::open(target_dependencies.clone())
             .await
             .map_err(|error| format!("target app setup failed: {error:?}"))?;
-        let target_state = DesktopState {
-            app: target_app,
-            cache_dir: directory.path().join("target-cache"),
-            backup_dir: directory.path().join("target-backups"),
-            prepared_outputs: Arc::default(),
-        };
+        let target_state = DesktopState::new(
+            target_app,
+            directory.path().join("target-cache"),
+            directory.path().join("target-backups"),
+        );
         let target_desktop = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
                 project_create,
                 project_import_apply,
                 project_list,
-                scenario_get_view,
+                operation_prepare,
+                scenario_get_summary,
             ])
             .manage(target_state.clone())
             .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
@@ -5024,13 +4855,16 @@ mod tests {
             .await
             .map_err(|error| format!("target reopen failed: {error:?}"))?;
         let reopened_desktop = tauri::test::mock_builder()
-            .invoke_handler(tauri::generate_handler![project_list, scenario_get_view])
-            .manage(DesktopState {
-                app: reopened_app,
-                cache_dir: directory.path().join("reopened-cache"),
-                backup_dir: directory.path().join("target-backups"),
-                prepared_outputs: Arc::default(),
-            })
+            .invoke_handler(tauri::generate_handler![
+                project_list,
+                operation_prepare,
+                scenario_get_summary
+            ])
+            .manage(DesktopState::new(
+                reopened_app,
+                directory.path().join("reopened-cache"),
+                directory.path().join("target-backups"),
+            ))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
         let reopened_webview = tauri::WebviewWindowBuilder::new(
             &reopened_desktop,
@@ -5061,18 +4895,15 @@ mod tests {
                 .any(|project| project.scenario_id == unrelated_scenario_id)
         );
 
-        let imported: ApiResponseDto<ScenarioViewDto> = invoke_ok(
+        let (imported, imported_snapshot) = native_summary_and_core_snapshot(
             &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scenarioId": source_scenario_id
-            }),
-        )?;
-        assert_eq!(imported.result.document.metadata.title, title);
+            RequestId::new(&ids)?,
+            source_scenario_id,
+        )
+        .await?;
+        assert_eq!(imported.result.title, title);
         assert_eq!(
-            imported
-                .result
+            imported_snapshot
                 .document
                 .domain
                 .entities
@@ -5080,17 +4911,15 @@ mod tests {
             Some(&source_entity)
         );
 
-        let same_title: ApiResponseDto<ScenarioViewDto> = invoke_ok(
+        let (same_title, _) = native_summary_and_core_snapshot(
             &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scenarioId": unrelated_scenario_id
-            }),
-        )?;
-        assert_eq!(same_title.result.document.metadata.title, title);
+            RequestId::new(&ids)?,
+            unrelated_scenario_id,
+        )
+        .await?;
+        assert_eq!(same_title.result.title, title);
         assert_eq!(same_title.result.revision, Revision::INITIAL);
-        assert!(same_title.result.document.domain.entities.is_empty());
+        assert_eq!(same_title.result.structure.entities, 0);
         Ok(())
     }
 
@@ -5116,15 +4945,15 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 project_create,
                 project_list,
-                scenario_get_view,
+                operation_prepare,
+                scenario_get_summary,
                 scenario_apply_command
             ])
-            .manage(DesktopState {
-                app: first_app,
-                cache_dir: directory.path().join("cache"),
-                backup_dir: directory.path().join("backups"),
-                prepared_outputs: Arc::default(),
-            })
+            .manage(DesktopState::new(
+                first_app,
+                directory.path().join("cache"),
+                directory.path().join("backups"),
+            ))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
         let first_webview =
             tauri::WebviewWindowBuilder::new(&first_desktop, "main", tauri::WebviewUrl::default())
@@ -5168,7 +4997,8 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 project_create,
                 project_list,
-                scenario_get_view,
+                operation_prepare,
+                scenario_get_summary,
                 scenario_apply_command,
                 scenario_undo,
                 scenario_redo,
@@ -5178,12 +5008,11 @@ mod tests {
                 project_unarchive,
                 project_delete,
             ])
-            .manage(DesktopState {
-                app: reopened_app,
-                cache_dir: directory.path().join("cache"),
-                backup_dir: directory.path().join("backups"),
-                prepared_outputs: Arc::default(),
-            })
+            .manage(DesktopState::new(
+                reopened_app,
+                directory.path().join("cache"),
+                directory.path().join("backups"),
+            ))
             .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
         let reopened_webview = tauri::WebviewWindowBuilder::new(
             &reopened_desktop,
@@ -5207,21 +5036,13 @@ mod tests {
         assert_eq!(listed.result[0].revision, Revision::INITIAL);
 
         let open_request_id = RequestId::new(&ids)?;
-        let opened: ApiResponseDto<ScenarioViewDto> = invoke_ok(
-            &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": open_request_id,
-                "scenarioId": scenario_id
-            }),
-        )?;
+        let (opened, _) =
+            native_summary_and_core_snapshot(&reopened_webview, open_request_id, scenario_id)
+                .await?;
         assert_eq!(opened.request_id, open_request_id);
         assert_eq!(opened.current_revision, Some(Revision::INITIAL));
-        assert_eq!(
-            opened.result.document.metadata.title,
-            "Persisted clinic roster"
-        );
-        assert!(opened.result.document.domain.entities.is_empty());
+        assert_eq!(opened.result.title, "Persisted clinic roster");
+        assert_eq!(opened.result.structure.entities, 0);
 
         for (command, request) in [
             (
@@ -5294,25 +5115,15 @@ mod tests {
         assert_eq!(committed.current_revision, Some(Revision::new(1)));
         assert_eq!(committed.result.new_revision, Revision::new(1));
 
-        let committed_view: ApiResponseDto<ScenarioViewDto> = invoke_ok(
-            &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scenarioId": scenario_id
-            }),
-        )?;
+        let (committed_view, committed_snapshot) =
+            native_summary_and_core_snapshot(&reopened_webview, RequestId::new(&ids)?, scenario_id)
+                .await?;
         assert_eq!(committed_view.result.revision, Revision::new(1));
         assert_eq!(
-            committed_view
-                .result
-                .document
-                .domain
-                .entities
-                .get(&entity_id),
+            committed_snapshot.document.domain.entities.get(&entity_id),
             Some(&json!({"id": entity_id.to_string(), "name": "Ada"}))
         );
-        let authoritative_document = committed_view.result.document;
+        let authoritative_document = committed_snapshot.document;
 
         let undo_request_id = RequestId::new(&ids)?;
         let undone: ApiResponseDto<CommandResult> = invoke_ok(
@@ -5327,17 +5138,12 @@ mod tests {
         assert_eq!(undone.request_id, undo_request_id);
         assert_eq!(undone.current_revision, Some(Revision::new(2)));
         assert_eq!(undone.result.new_revision, Revision::new(2));
-        let undone_view: ApiResponseDto<ScenarioViewDto> = invoke_ok(
-            &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scenarioId": scenario_id
-            }),
-        )?;
+        let (undone_view, undone_snapshot) =
+            native_summary_and_core_snapshot(&reopened_webview, RequestId::new(&ids)?, scenario_id)
+                .await?;
+        assert_eq!(undone_view.result.structure.entities, 0);
         assert!(
-            !undone_view
-                .result
+            !undone_snapshot
                 .document
                 .domain
                 .entities
@@ -5357,19 +5163,15 @@ mod tests {
         assert_eq!(redone.request_id, redo_request_id);
         assert_eq!(redone.current_revision, Some(Revision::new(3)));
         assert_eq!(redone.result.new_revision, Revision::new(3));
-        let redone_view: ApiResponseDto<ScenarioViewDto> = invoke_ok(
-            &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scenarioId": scenario_id
-            }),
-        )?;
+        let (redone_view, redone_snapshot) =
+            native_summary_and_core_snapshot(&reopened_webview, RequestId::new(&ids)?, scenario_id)
+                .await?;
+        assert_eq!(redone_view.result.revision, Revision::new(3));
         assert_eq!(
-            redone_view.result.document.domain.entities,
+            redone_snapshot.document.domain.entities,
             authoritative_document.domain.entities
         );
-        let authoritative_document = redone_view.result.document;
+        let authoritative_document = redone_snapshot.document;
 
         let stale_entity_id = EntityId::new(&ids)?;
         let stale_response = invoke_ipc(
@@ -5415,20 +5217,14 @@ mod tests {
             Some(&SafeDiagnosticValue::Integer(3))
         );
 
-        let after_stale: ApiResponseDto<ScenarioViewDto> = invoke_ok(
-            &reopened_webview,
-            "scenario_get_view",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scenarioId": scenario_id
-            }),
-        )?;
+        let (after_stale, after_stale_snapshot) =
+            native_summary_and_core_snapshot(&reopened_webview, RequestId::new(&ids)?, scenario_id)
+                .await?;
         assert_eq!(after_stale.current_revision, Some(Revision::new(3)));
         assert_eq!(after_stale.result.revision, Revision::new(3));
-        assert_eq!(after_stale.result.document, authoritative_document);
+        assert_eq!(after_stale_snapshot.document, authoritative_document);
         assert!(
-            !after_stale
-                .result
+            !after_stale_snapshot
                 .document
                 .domain
                 .entities

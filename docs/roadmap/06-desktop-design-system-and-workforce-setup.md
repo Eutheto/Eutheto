@@ -359,6 +359,8 @@ Detection, parsing, identity resolution, proposed-state validation, preview bind
 
 Choose horizon and IANA timezone, explicit DST review policy, preset such as `Clinic + on-call`, assignment types, recurring templates, location, local start/end including next-day end, exact/min/max coverage, and qualification slots. Show generated instances and regeneration diff; detached manual instances are not overwritten silently. Ambiguous/nonexistent local times link to exact template/instance fields and show wall/elapsed duration when different.
 
+Settings changes preserve the exact instants and elapsed durations of all stored manual and detached instances, including those outside the current horizon; local values and offsets are re-expressed only when required by the new timezone/DST policy. Recurring templates retain local-time intent. Rust owns preparation, preview, atomic command application, and exact inverse capture, so undo restores original endpoint representations rather than reconstructing lost gap-local intent from an instant. The setup UI must review these effects explicitly; changing a timezone is not permission to move existing stored work.
+
 ### Eligibility and availability
 
 `EligibilityMatrix` supports large-data virtualization, sticky/semantic row/column headers, bulk actions with preview, searchable people/types/qualifications, keyboard cell actions, and detail inspector. It does not duplicate the scenario in Pinia.

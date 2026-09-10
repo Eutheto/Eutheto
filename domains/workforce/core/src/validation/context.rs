@@ -1,5 +1,6 @@
 use super::MAX_REFERENCE_ITEMS;
 use super::common::{Result, invalid, require};
+use crate::assignment_rules::budget::OperationBudget;
 use crate::ids::{
     AssignmentTypeId, AvailabilityId, CoverageRequirementId, LocationId, QualificationId, ShiftId,
     ShiftTemplateId, TeamId, WorkCalendarId, WorkloadBucketId,
@@ -9,9 +10,9 @@ use crate::model::{
     Qualification, ShiftOrigin, ShiftTemplate, Team, WorkCalendar, WorkforceDomainV1,
     WorkforceEntity, WorkforceScorePolicy, WorkloadBucket,
 };
-use eutheto_types::{EntityId, PersonId, ScenarioSettings};
+use eutheto_types::{EntityId, OperationControl, PersonId, ScenarioSettings};
 use jiff::tz::TimeZone;
-use std::collections::BTreeSet;
+use std::{cell::RefCell, collections::BTreeSet};
 
 pub const MAX_TEMPLATE_OCCURRENCES: usize = 4096;
 pub const MAX_DOCUMENT_OCCURRENCES: usize = 32_768;
@@ -22,6 +23,7 @@ pub(super) struct Context<'a> {
     pub zone: TimeZone,
     pub score_policy: Option<&'a WorkforceScorePolicy>,
     occurrences: BTreeSet<ShiftId>,
+    budget: RefCell<OperationBudget<'a>>,
 }
 
 macro_rules! entity_lookup {
@@ -42,7 +44,9 @@ impl<'a> Context<'a> {
     pub(super) fn new(
         domain: &'a WorkforceDomainV1,
         settings: &'a ScenarioSettings,
+        control: Option<&'a OperationControl>,
     ) -> Result<Self> {
+        control.map_or(Ok(()), OperationControl::check)?;
         require(
             domain.entities.len() <= MAX_REFERENCE_ITEMS
                 && domain.rules.len() <= MAX_REFERENCE_ITEMS
@@ -56,6 +60,7 @@ impl<'a> Context<'a> {
         let mut score_policy = None;
         let mut has_base = false;
         for (id, entity) in &domain.entities {
+            control.map_or(Ok(()), OperationControl::check)?;
             require(
                 *id == entity.id(),
                 "entities.id",
@@ -81,6 +86,7 @@ impl<'a> Context<'a> {
                         "too many template occurrence definitions",
                     )?;
                     for (shift_id, occurrence) in &template.occurrence_identities {
+                        control.map_or(Ok(()), OperationControl::check)?;
                         require(
                             *shift_id == occurrence.id,
                             "occurrenceIdentities.id",
@@ -127,7 +133,13 @@ impl<'a> Context<'a> {
             zone,
             score_policy,
             occurrences,
+            budget: RefCell::new(OperationBudget::evaluation(control)),
         })
+    }
+
+    pub(super) fn checkpoint(&self) -> Result {
+        self.budget.borrow_mut().step()?;
+        Ok(())
     }
 
     pub(super) fn person(&self, id: PersonId) -> Result<&Person> {

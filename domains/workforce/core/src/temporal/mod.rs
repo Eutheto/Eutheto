@@ -8,7 +8,9 @@ pub(crate) use calendar::potentially_intersects;
 pub use calendar::{reporting_window, resolve_calendar};
 pub use generation::resolve_shifts;
 pub(crate) use generation::{ResolutionStep, resolve_validated_shifts, weekday};
+pub(crate) use generation::{resolve_validated_shift, resolve_validated_shifts_in_range};
 pub use review::preview_generation;
+pub(crate) use review::preview_generation_checked;
 
 mod types;
 pub use types::*;

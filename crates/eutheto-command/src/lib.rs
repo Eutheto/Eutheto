@@ -5,6 +5,7 @@
 //! metadata. The input is never modified, including on batch failure.
 mod generated_official_test_pack_contract;
 mod official_test_pack;
+mod reconciled;
 
 use eutheto_domain_api::{
     ContractJsonLimits, DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainMutation,
@@ -24,6 +25,10 @@ pub use generated_official_test_pack_contract::{
     OFFICIAL_TEST_COMMAND_IDS, OFFICIAL_TEST_PACK_CONTRACT_JSON, OFFICIAL_TEST_PACK_ID,
     OFFICIAL_TEST_PACK_VERSION,
 };
+pub use reconciled::{
+    PreparedReconciledCommand, ReconciledCommandError, apply_reconciled_command_with_registry,
+    preflight_setup_command,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,6 +40,13 @@ pub const MAX_BATCH_DEPTH: usize = 8;
 pub const MAX_BATCH_COMMANDS: usize = 1_000;
 /// Maximum compact JSON bytes in the complete generic inverse, including nested batches.
 pub const MAX_COMMAND_INVERSE_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum compact validation feedback in one committed command result.
+pub const MAX_COMMAND_VALIDATION_DELTA_BYTES: usize = 16 * 1024 * 1024;
+/// Complete result ceiling, preserving both existing 64-MiB change and inverse allowances.
+pub const MAX_COMMAND_RESULT_BYTES: usize = MAX_DOMAIN_MUTATION_CHANGE_BYTES
+    + MAX_COMMAND_INVERSE_BYTES
+    + MAX_COMMAND_VALIDATION_DELTA_BYTES
+    + 64 * 1024;
 
 pub const CODE_BATCH_DEPTH_EXCEEDED: &str = "command.batch_depth_exceeded";
 pub const CODE_BATCH_TOO_LARGE: &str = "command.batch_too_large";
@@ -149,7 +161,41 @@ struct ApplyContext<'a> {
     inverse_bytes: usize,
 }
 
-impl ApplyContext<'_> {
+impl<'a> ApplyContext<'a> {
+    fn new(
+        document: &ScenarioDocument,
+        registry: &'a DomainPackRegistry,
+        cancellation: &'a CancellationToken,
+        command: Option<&ScenarioCommand>,
+    ) -> Result<Self, CommandError> {
+        let unsupported = || CommandError::Unsupported {
+            pack_id: document.domain_pack.id.to_string(),
+            command_type: command.map_or_else(|| "apply_batch".to_owned(), command_type),
+        };
+        let pack = registry
+            .require(&document.domain_pack.id)
+            .map_err(|_| unsupported())?;
+        if !registry.descriptors().any(|descriptor| {
+            descriptor.id == document.domain_pack.id
+                && descriptor
+                    .scenario_versions
+                    .supports(document.domain_pack.schema_version)
+        }) {
+            return Err(unsupported());
+        }
+        validate_document_shape(document)?;
+        Ok(Self {
+            pack,
+            registry,
+            cancellation,
+            leaf_count: 0,
+            change_count: 0,
+            change_bytes: 2,
+            result_bytes: 2,
+            inverse_bytes: 0,
+        })
+    }
+
     fn check_cancelled(&self) -> Result<(), CommandError> {
         if self.cancellation.is_cancelled() {
             Err(CommandError::Cancelled)
@@ -174,6 +220,24 @@ impl ApplyContext<'_> {
         let remaining = MAX_COMMAND_INVERSE_BYTES.saturating_sub(self.inverse_bytes);
         self.inverse_bytes +=
             bounded_json_size(value, remaining).map_err(|error| domain_pack_error(&error))?;
+        Ok(())
+    }
+
+    fn charge_batch_frame(
+        &mut self,
+        label: Option<&str>,
+        command_count: usize,
+    ) -> Result<(), CommandError> {
+        self.charge_inverse(&ScenarioCommand::ApplyBatch(CommandBatch {
+            label: label.map(str::to_owned),
+            commands: Vec::new(),
+        }))?;
+        self.inverse_bytes = self
+            .inverse_bytes
+            .saturating_add(command_count.saturating_sub(1));
+        if self.inverse_bytes > MAX_COMMAND_INVERSE_BYTES {
+            return Err(domain_pack_error(&DomainPackError::MutationOutputLimit));
+        }
         Ok(())
     }
 
@@ -261,7 +325,7 @@ pub fn apply_command_with_registry(
     if cancellation.is_cancelled() {
         return Err(CommandError::Cancelled);
     }
-    validate_safe_serialized(&envelope.command, "/command")?;
+    preflight_command(&envelope.command, "/command", cancellation)?;
     if envelope.scenario_id != document.scenario_id {
         return Err(CommandError::ScenarioMismatch {
             command_scenario_id: envelope.scenario_id.to_string(),
@@ -275,49 +339,29 @@ pub fn apply_command_with_registry(
         });
     }
 
-    let pack =
-        registry
-            .require(&document.domain_pack.id)
-            .map_err(|_| CommandError::Unsupported {
-                pack_id: document.domain_pack.id.to_string(),
-                command_type: command_type(&envelope.command),
-            })?;
-    let supports_schema = registry.descriptors().any(|descriptor| {
-        descriptor.id == document.domain_pack.id
-            && descriptor
-                .scenario_versions
-                .supports(document.domain_pack.schema_version)
-    });
-    if !supports_schema {
-        return Err(CommandError::Unsupported {
-            pack_id: document.domain_pack.id.to_string(),
-            command_type: command_type(&envelope.command),
-        });
-    }
-
-    validate_document_shape(document)?;
-    let before_issues = pack.validate_fast(document).issues;
+    let mut context = ApplyContext::new(document, registry, cancellation, Some(&envelope.command))?;
+    let before_issues = context.pack.validate_fast(document).issues;
     let mut working = document.clone();
-    let mut context = ApplyContext {
-        pack,
-        registry,
-        cancellation,
-        leaf_count: 0,
-        change_count: 0,
-        change_bytes: 2,
-        result_bytes: 2,
-        inverse_bytes: 0,
-    };
     let effect = apply_nested(&mut working, &envelope.command, &mut context, 0)?;
+    finalize_application(working, current_revision, effect, &before_issues, &context)
+}
+
+fn finalize_application(
+    working: ScenarioDocument,
+    current_revision: Revision,
+    effect: PackCommandEffect,
+    before_issues: &[ValidationIssue],
+    context: &ApplyContext<'_>,
+) -> Result<AppliedCommand, CommandError> {
     context.check_cancelled()?;
     bounded_json_size(&effect.inverse, MAX_COMMAND_INVERSE_BYTES)
         .map_err(|error| domain_pack_error(&error))?;
     context.check_cancelled()?;
-    validate_safe_serialized(&effect.inverse, "/inverse")?;
+    preflight_command(&effect.inverse, "/inverse", context.cancellation)?;
     context.check_cancelled()?;
     validate_document_shape(&working)?;
-    let after_issues = pack.validate_fast(&working).issues;
-    let validation_delta = validation_delta(&before_issues, &after_issues);
+    let after_issues = context.pack.validate_fast(&working).issues;
+    let validation_delta = validation_delta(before_issues, &after_issues, context.cancellation)?;
     context.check_cancelled()?;
     let new_revision =
         current_revision
@@ -325,17 +369,20 @@ pub fn apply_command_with_registry(
             .map_err(|_| CommandError::RevisionOverflow {
                 revision: current_revision.value(),
             })?;
-
+    let result = CommandResult {
+        new_revision,
+        change_set: ChangeSet {
+            changes: effect.changes,
+        },
+        validation_delta,
+        inverse: Some(effect.inverse),
+    };
+    bounded_json_size(&result, MAX_COMMAND_RESULT_BYTES)
+        .map_err(|_| CommandError::ResourceLimitExceeded)?;
+    context.check_cancelled()?;
     Ok(AppliedCommand {
         document: working,
-        result: CommandResult {
-            new_revision,
-            change_set: ChangeSet {
-                changes: effect.changes,
-            },
-            validation_delta,
-            inverse: Some(effect.inverse),
-        },
+        result,
         summary: effect.summary,
         command_type: effect.command_type,
     })
@@ -353,6 +400,9 @@ fn apply_nested(
     }
     context.charge_leaves(1)?;
     match command {
+        ScenarioCommand::SetScenarioSettings(value) => {
+            set_scenario_settings(document, value, context)
+        }
         ScenarioCommand::ApplyDomainCommand(envelope) => {
             let mut run = apply_domain_run(document, std::iter::once(envelope), context)?;
             let inverse = run
@@ -387,32 +437,9 @@ fn apply_batch(
     context: &mut ApplyContext<'_>,
     depth: usize,
 ) -> Result<PackCommandEffect, CommandError> {
-    if batch.commands.is_empty() {
-        return Err(validation_error(
-            CODE_EMPTY_BATCH,
-            "/command/commands",
-            "a batch must contain at least one command",
-        ));
-    }
-    if depth >= MAX_BATCH_DEPTH {
-        return Err(validation_error(
-            CODE_BATCH_DEPTH_EXCEEDED,
-            "/command/commands",
-            format!("batch nesting may not exceed {MAX_BATCH_DEPTH}"),
-        ));
-    }
-
+    validate_batch_shape(batch, depth)?;
     // Charge each existing batch frame once, not its growing inverse prefix.
-    context.charge_inverse(&ScenarioCommand::ApplyBatch(CommandBatch {
-        label: batch.label.clone(),
-        commands: Vec::new(),
-    }))?;
-    context.inverse_bytes = context
-        .inverse_bytes
-        .saturating_add(batch.commands.len().saturating_sub(1));
-    if context.inverse_bytes > MAX_COMMAND_INVERSE_BYTES {
-        return Err(domain_pack_error(&DomainPackError::MutationOutputLimit));
-    }
+    context.charge_batch_frame(batch.label.as_deref(), batch.commands.len())?;
     let mut changes = Vec::new();
     let mut inverses = Vec::with_capacity(batch.commands.len());
     let mut children = batch.commands.as_slice();
@@ -442,21 +469,250 @@ fn apply_batch(
             children = &children[1..];
         }
     }
+    Ok(batch_effect(
+        batch.label.clone(),
+        batch.commands.len(),
+        changes,
+        inverses,
+    ))
+}
+
+fn batch_effect(
+    label: Option<String>,
+    count: usize,
+    changes: Vec<Change>,
+    mut inverses: Vec<ScenarioCommand>,
+) -> PackCommandEffect {
     inverses.reverse();
-    let count = batch.commands.len();
-    let summary = match &batch.label {
+    let summary = match &label {
         Some(label) => format!("{label} ({count} commands)"),
         None => format!("Apply batch ({count} commands)"),
     };
-    Ok(PackCommandEffect {
+    PackCommandEffect {
         changes,
         inverse: ScenarioCommand::ApplyBatch(CommandBatch {
-            label: batch.label.clone(),
+            label,
             commands: inverses,
         }),
         summary,
         command_type: "apply_batch".to_owned(),
+    }
+}
+
+fn validate_batch_shape(batch: &CommandBatch, depth: usize) -> Result<(), CommandError> {
+    if batch.commands.is_empty() {
+        return Err(validation_error(
+            CODE_EMPTY_BATCH,
+            "/command/commands",
+            "a batch must contain at least one command",
+        ));
+    }
+    if depth >= MAX_BATCH_DEPTH {
+        return Err(validation_error(
+            CODE_BATCH_DEPTH_EXCEEDED,
+            "/command/commands",
+            format!("batch nesting may not exceed {MAX_BATCH_DEPTH}"),
+        ));
+    }
+    Ok(())
+}
+
+fn preflight_command(
+    command: &ScenarioCommand,
+    path: &str,
+    cancellation: &CancellationToken,
+) -> Result<(), CommandError> {
+    let mut remaining_leaves = MAX_BATCH_COMMANDS;
+    preflight_settings_leaves(command, 0, &mut remaining_leaves, cancellation)?;
+    validate_safe_serialized(command, path)
+}
+
+fn preflight_settings_leaves(
+    command: &ScenarioCommand,
+    depth: usize,
+    remaining_leaves: &mut usize,
+    cancellation: &CancellationToken,
+) -> Result<(), CommandError> {
+    if cancellation.is_cancelled() {
+        return Err(CommandError::Cancelled);
+    }
+    match command {
+        ScenarioCommand::ApplyBatch(batch) => {
+            validate_batch_shape(batch, depth)?;
+            for child in &batch.commands {
+                preflight_settings_leaves(child, depth + 1, remaining_leaves, cancellation)?;
+            }
+        }
+        leaf => {
+            *remaining_leaves = remaining_leaves.checked_sub(1).ok_or_else(|| {
+                validation_error(
+                    CODE_BATCH_TOO_LARGE,
+                    "/command/commands",
+                    format!("batch may contain at most {MAX_BATCH_COMMANDS} commands"),
+                )
+            })?;
+            let value = match leaf {
+                ScenarioCommand::AddEntity(value) => Some(&value.value),
+                ScenarioCommand::UpdateEntity(value) => Some(&value.value),
+                ScenarioCommand::AddRule(value) => Some(&value.value),
+                ScenarioCommand::UpdateRule(value) => Some(&value.value),
+                ScenarioCommand::SetPreference(value) => value.value.as_ref(),
+                ScenarioCommand::LockAssignment(value) => Some(&value.value),
+                ScenarioCommand::ApplyDomainCommand(value) => Some(&value.payload),
+                _ => None,
+            };
+            if let Some(value) = value {
+                // Bound borrowed payload depth before a serializer can recurse or clone it.
+                validate_nonsecret_portable_json(value, &COMMAND_JSON_LIMITS).map_err(|error| {
+                    validation_error(CODE_PROHIBITED_DATA, "/command", error.to_string())
+                })?;
+            }
+            if let ScenarioCommand::SetScenarioSettings(settings) = leaf {
+                validate_settings_leaf(settings)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_settings_leaf(
+    settings: &eutheto_types::SetScenarioSettings,
+) -> Result<(), CommandError> {
+    // Measure the complete leaf, including its public adjacent-tag framing.
+    #[derive(Serialize)]
+    struct SettingsLeaf<'a> {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        payload: &'a eutheto_types::SetScenarioSettings,
+    }
+    if let Some(restoration) = &settings.restoration {
+        validate_nonsecret_portable_json(restoration, &COMMAND_JSON_LIMITS).map_err(|error| {
+            validation_error(CODE_PROHIBITED_DATA, "/restoration", error.to_string())
+        })?;
+    }
+    let limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES)
+        .map_err(|_| CommandError::ResourceLimitExceeded)?;
+    bounded_json_size(
+        &SettingsLeaf {
+            kind: "setScenarioSettings",
+            payload: settings,
+        },
+        limit,
+    )
+    .map_err(|_| CommandError::ResourceLimitExceeded)?;
+    Ok(())
+}
+
+fn set_scenario_settings(
+    document: &mut ScenarioDocument,
+    command: &eutheto_types::SetScenarioSettings,
+    context: &mut ApplyContext<'_>,
+) -> Result<PackCommandEffect, CommandError> {
+    let control = eutheto_types::OperationControl::Cancellation(context.cancellation.clone());
+    let mutation = context
+        .pack
+        .reconcile_settings(
+            document,
+            &command.settings,
+            command.restoration.as_ref(),
+            &control,
+        )
+        .map_err(|error| domain_pack_error(&error))?;
+    context.check_cancelled()?;
+    if mutation.domain.rules != document.domain.rules
+        || mutation.domain.preferences != document.domain.preferences
+        || mutation.domain.locked_assignments != document.domain.locked_assignments
+        || mutation
+            .domain
+            .entities
+            .keys()
+            .ne(document.domain.entities.keys())
+    {
+        return Err(mutation_error(
+            "settings reconciliation changed unrelated maps or identities",
+        ));
+    }
+    for record in mutation.domain.entities.values() {
+        context.check_cancelled()?;
+        validate_nonsecret_portable_json(record, &COMMAND_JSON_LIMITS).map_err(|error| {
+            validation_error(CODE_PROHIBITED_DATA, "/domain/entities", error.to_string())
+        })?;
+    }
+    let limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES)
+        .map_err(|_| CommandError::ResourceLimitExceeded)?;
+    bounded_json_size(&mutation.domain, limit).map_err(|error| domain_pack_error(&error))?;
+    let inverse_payload = eutheto_types::SetScenarioSettings {
+        settings: document.settings.clone(),
+        restoration: mutation.inverse_payload,
+    };
+    validate_settings_leaf(&inverse_payload)?;
+    let inverse = ScenarioCommand::SetScenarioSettings(Box::new(inverse_payload));
+    context.charge_inverse(&inverse)?;
+    let mut changes = Vec::new();
+    if document.settings != command.settings {
+        push_settings_change(
+            &mut changes,
+            Change {
+                kind: ChangeKind::Updated,
+                path: "/settings".to_owned(),
+                before: Some(
+                    serde_json::to_value(&document.settings)
+                        .map_err(|_| mutation_error("settings cannot be serialized"))?,
+                ),
+                after: Some(
+                    serde_json::to_value(&command.settings)
+                        .map_err(|_| mutation_error("settings cannot be serialized"))?,
+                ),
+            },
+            context,
+        )?;
+    }
+    for (id, after) in &mutation.domain.entities {
+        context.check_cancelled()?;
+        let before = document
+            .domain
+            .entities
+            .get(id)
+            .ok_or_else(|| mutation_error("settings reconciliation changed an identity"))?;
+        if before != after {
+            push_settings_change(
+                &mut changes,
+                Change {
+                    kind: ChangeKind::Updated,
+                    path: entity_path(id),
+                    before: Some(before.clone()),
+                    after: Some(after.clone()),
+                },
+                context,
+            )?;
+        }
+    }
+    document.settings = command.settings.clone();
+    document.domain = mutation.domain;
+    bounded_json_size(document, limit).map_err(|error| domain_pack_error(&error))?;
+    validate_document_shape(document)?;
+    context.check_cancelled()?;
+    Ok(PackCommandEffect {
+        changes,
+        inverse,
+        summary: "Update scenario settings".to_owned(),
+        command_type: "set_scenario_settings".to_owned(),
     })
+}
+
+fn push_settings_change(
+    changes: &mut Vec<Change>,
+    change: Change,
+    context: &mut ApplyContext<'_>,
+) -> Result<(), CommandError> {
+    let bytes = bounded_json_size(
+        std::slice::from_ref(&change),
+        MAX_DOMAIN_MUTATION_CHANGE_BYTES,
+    )
+    .map_err(|error| domain_pack_error(&error))?;
+    context.charge_output(1, bytes, 2)?;
+    changes.push(change);
+    Ok(())
 }
 
 fn apply_official_test_leaf(
@@ -473,13 +729,13 @@ fn apply_official_test_leaf(
         ScenarioCommand::SetPreference(value) => set_preference(document, value),
         ScenarioCommand::LockAssignment(value) => lock_assignment(document, value),
         ScenarioCommand::UnlockAssignment(value) => unlock_assignment(document, value),
-        ScenarioCommand::ApplyDomainCommand(_) | ScenarioCommand::ApplyBatch(_) => {
-            Err(validation_error(
-                CODE_INVALID_RECORD_SHAPE,
-                "/command",
-                "the command engine, not the legacy leaf applicator, must dispatch this command",
-            ))
-        }
+        ScenarioCommand::SetScenarioSettings(_)
+        | ScenarioCommand::ApplyDomainCommand(_)
+        | ScenarioCommand::ApplyBatch(_) => Err(validation_error(
+            CODE_INVALID_RECORD_SHAPE,
+            "/command",
+            "the command engine, not the legacy leaf applicator, must dispatch this command",
+        )),
     }
 }
 
@@ -1209,29 +1465,70 @@ fn validate_record<I: std::fmt::Display>(
     Ok(())
 }
 
-fn validation_delta(before: &[ValidationIssue], after: &[ValidationIssue]) -> ValidationDelta {
-    let before_by_key: BTreeMap<String, &ValidationIssue> = before
+fn validation_delta(
+    before: &[ValidationIssue],
+    after: &[ValidationIssue],
+    cancellation: &CancellationToken,
+) -> Result<ValidationDelta, CommandError> {
+    #[derive(Serialize)]
+    struct BorrowedDelta<'a> {
+        added: &'a [&'a ValidationIssue],
+        resolved: &'a [&'a str],
+    }
+    let check = || {
+        if cancellation.is_cancelled() {
+            Err(CommandError::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let before_by_key = before
         .iter()
-        .map(|issue| (validation_issue_key(issue), issue))
-        .collect();
-    let after_by_key: BTreeMap<String, &ValidationIssue> = after
+        .map(|issue| {
+            check()?;
+            Ok(validation_issue_key(issue))
+        })
+        .collect::<Result<BTreeSet<_>, CommandError>>()?;
+    let after_by_key = after
         .iter()
-        .map(|issue| (validation_issue_key(issue), issue))
-        .collect();
+        .map(|issue| {
+            check()?;
+            Ok((validation_issue_key(issue), issue))
+        })
+        .collect::<Result<BTreeMap<_, _>, CommandError>>()?;
     let added = after_by_key
         .iter()
-        .filter(|(key, _)| !before_by_key.contains_key(*key))
-        .map(|(_, issue)| (*issue).clone())
-        .collect();
-    let resolved = before
-        .iter()
-        .map(|issue| issue.code.as_str())
-        .filter(|code| !after.iter().any(|issue| issue.code == *code))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    ValidationDelta { added, resolved }
+        .filter(|(key, _)| !before_by_key.contains(*key))
+        .map(|(_, issue)| {
+            check()?;
+            Ok(*issue)
+        })
+        .collect::<Result<Vec<_>, CommandError>>()?;
+    let mut after_codes = BTreeSet::new();
+    for issue in after {
+        check()?;
+        after_codes.insert(issue.code.as_str());
+    }
+    let mut resolved = BTreeSet::new();
+    for issue in before {
+        check()?;
+        if !after_codes.contains(issue.code.as_str()) {
+            resolved.insert(issue.code.as_str());
+        }
+    }
+    let resolved: Vec<_> = resolved.into_iter().collect();
+    bounded_json_size(
+        &BorrowedDelta {
+            added: &added,
+            resolved: &resolved,
+        },
+        MAX_COMMAND_VALIDATION_DELTA_BYTES,
+    )
+    .map_err(|_| CommandError::ResourceLimitExceeded)?;
+    check()?;
+    let added = added.into_iter().cloned().collect();
+    let resolved = resolved.into_iter().map(str::to_owned).collect();
+    Ok(ValidationDelta { added, resolved })
 }
 
 fn validation_issue_key(issue: &ValidationIssue) -> String {
@@ -1282,6 +1579,7 @@ pub fn command_type(command: &ScenarioCommand) -> String {
         ScenarioCommand::SetPreference(_) => "set_preference".to_owned(),
         ScenarioCommand::LockAssignment(_) => "lock_assignment".to_owned(),
         ScenarioCommand::UnlockAssignment(_) => "unlock_assignment".to_owned(),
+        ScenarioCommand::SetScenarioSettings(_) => "set_scenario_settings".to_owned(),
         ScenarioCommand::ApplyDomainCommand(value) => format!("domain.{}", value.command_type),
         ScenarioCommand::ApplyBatch(_) => "apply_batch".to_owned(),
     }
@@ -1311,6 +1609,7 @@ pub fn human_summary(command: &ScenarioCommand) -> String {
         ScenarioCommand::UnlockAssignment(value) => {
             format!("Unlock assignment {}", value.assignment_id)
         }
+        ScenarioCommand::SetScenarioSettings(_) => "Update scenario settings".to_owned(),
         ScenarioCommand::ApplyDomainCommand(value) => {
             format!("Apply {} domain command", value.command_type)
         }
@@ -1321,5 +1620,32 @@ pub fn human_summary(command: &ScenarioCommand) -> String {
                 None => format!("Apply batch ({count} commands)"),
             }
         }
+    }
+}
+#[cfg(test)]
+mod validation_delta_tests {
+    use super::*;
+
+    #[test]
+    fn complete_feedback_budget_accepts_near_limit_and_rejects_amplification()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let issues: Vec<_> = (0..17)
+            .map(|index| ValidationIssue {
+                code: format!("fixture.{index}"),
+                severity: eutheto_types::ValidationSeverity::Info,
+                message: "x".repeat(1024 * 1024),
+                field_path: None,
+                resource: None,
+            })
+            .collect();
+        let cancellation = CancellationToken::new();
+        let accepted = validation_delta(&[], &issues[..15], &cancellation)?;
+        let bytes = serde_json::to_vec(&accepted)?.len();
+        assert!(bytes > 15 * 1024 * 1024 && bytes <= MAX_COMMAND_VALIDATION_DELTA_BYTES);
+        assert!(matches!(
+            validation_delta(&[], &issues, &cancellation),
+            Err(CommandError::ResourceLimitExceeded)
+        ));
+        Ok(())
     }
 }

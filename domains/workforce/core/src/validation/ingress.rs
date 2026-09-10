@@ -6,9 +6,9 @@ use super::{
 use crate::model::{LockState, WorkforceDomainV1, WorkforceEntity, planning_dates};
 use eutheto_domain_api::{ContractJsonLimits, DomainPackError, ValidatedContractSchema};
 use eutheto_types::{
-    PortableJsonLimits, SCENARIO_FORMAT_VERSION, ScenarioDocument, is_portable_namespace,
-    validate_document_owned_uuid_uniqueness, validate_nonsecret_portable_json,
-    validate_nonsecret_portable_json_bytes,
+    OperationControl, PortableJsonLimits, SCENARIO_FORMAT_VERSION, ScenarioDocument,
+    is_portable_namespace, validate_document_owned_uuid_uniqueness,
+    validate_nonsecret_portable_json, validate_nonsecret_portable_json_bytes,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -35,7 +35,7 @@ pub fn decode_document(bytes: &[u8]) -> Result<ScenarioDocument> {
     validate_bytes(bytes)?;
     let document: ScenarioDocument = serde_json::from_slice(bytes)
         .map_err(|_| invalid("document", "invalid or unsupported scenario envelope"))?;
-    validate_contents(&document, &WorkforceSchemas::load()?)?;
+    validate_contents(&document, &WorkforceSchemas::load()?, None)?;
     Ok(document)
 }
 
@@ -46,13 +46,23 @@ pub fn decode_document(bytes: &[u8]) -> Result<ScenarioDocument> {
 /// Rejects oversized or unsafe state, unsupported versions, malformed records, duplicate
 /// owned identities, unsafe scopes and unresolved or wrong-kind references.
 pub fn validate_document(document: &ScenarioDocument) -> Result<WorkforceDomainV1> {
-    validate_document_with_schemas(document, &WorkforceSchemas::load()?)
+    validate_document_with_schemas(document, &WorkforceSchemas::load()?, None)
+}
+
+pub(crate) fn validate_document_controlled(
+    document: &ScenarioDocument,
+    control: Option<&OperationControl>,
+) -> Result<WorkforceDomainV1> {
+    control.map_or(Ok(()), OperationControl::check)?;
+    validate_document_with_schemas(document, &WorkforceSchemas::load()?, control)
 }
 
 pub(crate) fn validate_document_with_schemas(
     document: &ScenarioDocument,
     schemas: &WorkforceSchemas,
+    control: Option<&OperationControl>,
 ) -> Result<WorkforceDomainV1> {
+    control.map_or(Ok(()), OperationControl::check)?;
     // Bound recursive Value depth before invoking a serializer on caller-built host state.
     for value in document
         .domain
@@ -63,13 +73,16 @@ pub(crate) fn validate_document_with_schemas(
         .chain(document.domain.locked_assignments.values())
         .chain(document.extensions.values())
     {
+        control.map_or(Ok(()), OperationControl::check)?;
         validate_value_bounds(value, "document")?;
     }
     let mut output = BoundedJsonWriter(Vec::new());
     serde_json::to_writer(&mut output, document)
         .map_err(|_| invalid("document", "serialized document exceeds its bound"))?;
+    control.map_or(Ok(()), OperationControl::check)?;
     validate_bytes(&output.0)?;
-    validate_contents(document, schemas)
+    control.map_or(Ok(()), OperationControl::check)?;
+    validate_contents(document, schemas, control)
 }
 
 pub(crate) fn validate_value_bounds(value: &Value, path: &str) -> Result {
@@ -90,7 +103,9 @@ fn validate_bytes(bytes: &[u8]) -> Result {
 fn validate_contents(
     document: &ScenarioDocument,
     schemas: &WorkforceSchemas,
+    control: Option<&OperationControl>,
 ) -> Result<WorkforceDomainV1> {
+    control.map_or(Ok(()), OperationControl::check)?;
     require(
         document.domain_pack.id.as_str() == "official.workforce",
         "domainPack.id",
@@ -125,21 +140,29 @@ fn validate_contents(
         )
     })?;
     let domain = WorkforceDomainV1 {
-        entities: decode_map(&document.domain.entities, "entities", &schemas.entities)?,
-        rules: decode_map(&document.domain.rules, "rules", &schemas.rules)?,
+        entities: decode_map(
+            &document.domain.entities,
+            "entities",
+            &schemas.entities,
+            control,
+        )?,
+        rules: decode_map(&document.domain.rules, "rules", &schemas.rules, control)?,
         preferences: decode_map(
             &document.domain.preferences,
             "preferences",
             &schemas.preferences,
+            control,
         )?,
         locked_assignments: decode_map(
             &document.domain.locked_assignments,
             "lockedAssignments",
             &schemas.locks,
+            control,
         )?,
     };
-    let context = Context::new(&domain, &document.settings)?;
+    let context = Context::new(&domain, &document.settings, control)?;
     validate_records(&context)?;
+    context.checkpoint()?;
     Ok(domain)
 }
 
@@ -147,6 +170,7 @@ fn validate_records(context: &Context<'_>) -> Result {
     let domain = context.domain;
     let mut external_ids = BTreeSet::new();
     for (id, entity) in &domain.entities {
+        context.checkpoint()?;
         record(context.entity(entity), "entities", id)?;
         if let WorkforceEntity::Person(person) = entity
             && let Some(external_id) = &person.external_id
@@ -167,6 +191,7 @@ fn validate_records(context: &Context<'_>) -> Result {
         record(context.score_references(policy), "entities", policy.id)?;
     }
     for (id, rule) in &domain.rules {
+        context.checkpoint()?;
         record(
             require(
                 *id == rule.header().0,
@@ -179,6 +204,7 @@ fn validate_records(context: &Context<'_>) -> Result {
         record(context.rule(rule), "rules", id)?;
     }
     for (id, preference) in &domain.preferences {
+        context.checkpoint()?;
         record(
             require(
                 *id == preference.header().0,
@@ -192,6 +218,7 @@ fn validate_records(context: &Context<'_>) -> Result {
     }
     let mut locked_pairs = BTreeSet::new();
     for (id, lock) in &domain.locked_assignments {
+        context.checkpoint()?;
         record(
             require(
                 *id == lock.id,
@@ -227,10 +254,12 @@ fn decode_map<K: Copy + Ord + Display, T: DeserializeOwned>(
     values: &BTreeMap<K, Value>,
     map: &str,
     schema: &ValidatedContractSchema,
+    control: Option<&OperationControl>,
 ) -> Result<BTreeMap<K, T>> {
     values
         .iter()
         .map(|(id, value)| {
+            control.map_or(Ok(()), OperationControl::check)?;
             record(
                 schema
                     .validate(value, ContractJsonLimits::DEFAULT)

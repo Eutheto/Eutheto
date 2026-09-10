@@ -268,6 +268,16 @@ impl DomainPack for IntervalFixturePack {
         OfficialTestPack.validate_full(document, control)
     }
 
+    fn reconcile_settings(
+        &self,
+        document: &ScenarioDocument,
+        settings: &eutheto_types::ScenarioSettings,
+        restoration: Option<&serde_json::Value>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainSettingsMutation, DomainPackError> {
+        OfficialTestPack.reconcile_settings(document, settings, restoration, control)
+    }
+
     fn apply_batch(
         &self,
         document: &ScenarioDocument,
@@ -400,11 +410,10 @@ impl DomainPack for IntervalFixturePack {
 
     fn build_view(
         &self,
-        document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        view_id: &str,
-    ) -> Result<eutheto_domain_api::DomainView, DomainPackError> {
-        OfficialTestPack.build_view(document, solution, view_id)
+        input: eutheto_domain_api::DomainViewInput<'_>,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DomainViewOutput, DomainPackError> {
+        OfficialTestPack.build_view(input, control)
     }
 
     fn render_evidence(

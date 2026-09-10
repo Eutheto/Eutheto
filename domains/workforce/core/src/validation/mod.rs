@@ -19,5 +19,8 @@ pub use score::{
 
 pub use context::{MAX_DOCUMENT_OCCURRENCES, MAX_TEMPLATE_OCCURRENCES};
 pub use ingress::{decode_document, validate_document};
-pub(crate) use ingress::{validate_document_with_schemas, validate_value_bounds};
+pub(crate) use ingress::{
+    validate_document_controlled, validate_document_with_schemas, validate_value_bounds,
+};
 pub(crate) use schemas::WorkforceSchemas;
+pub(crate) use time::validate_resolved_time;

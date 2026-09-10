@@ -10,15 +10,18 @@ use std::collections::BTreeSet;
 impl Context<'_> {
     pub(super) fn score_references(&self, score: &WorkforceScorePolicy) -> Result {
         for policy in score.workload_policies.values() {
+            self.checkpoint()?;
             self.workload_membership(policy.bucket_id, policy.calendar_id, policy.membership)?;
             self.people(&policy.peer_group.people, true)?;
             if let Some(ids) = &policy.peer_group.team_ids {
                 for id in ids {
+                    self.checkpoint()?;
                     self.team(*id)?;
                 }
             }
             if let WorkloadTargetMode::Explicit { targets } = &policy.target_mode {
                 for target in targets {
+                    self.checkpoint()?;
                     self.person(target.person_id)?;
                 }
             }
@@ -62,6 +65,7 @@ impl Context<'_> {
         };
         let mut peers = 0;
         for entity in self.domain.entities.values() {
+            self.checkpoint()?;
             let WorkforceEntity::Person(person) = entity else {
                 continue;
             };
@@ -69,24 +73,24 @@ impl Context<'_> {
                 PersonSelection::All {} => true,
                 PersonSelection::Selected { .. } => selected.contains(&person.id),
                 PersonSelection::Filter { .. } => {
-                    person
-                        .tags
-                        .iter()
-                        .filter(|tag| all_tags.contains(tag.as_str()))
-                        .count()
-                        == all_tags.len()
-                        && (any_tags.is_empty()
-                            || person
-                                .tags
-                                .iter()
-                                .any(|tag| any_tags.contains(tag.as_str())))
+                    self.matches_tags(&person.tags, &all_tags, &any_tags)?
                 }
             };
-            if !matches_people
-                || (policy.peer_group.team_ids.is_some()
-                    && !person.team_ids.iter().any(|id| teams.contains(id)))
-            {
+            if !matches_people {
                 continue;
+            }
+            if policy.peer_group.team_ids.is_some() {
+                let mut selected_team = false;
+                for id in &person.team_ids {
+                    self.checkpoint()?;
+                    if teams.contains(id) {
+                        selected_team = true;
+                        break;
+                    }
+                }
+                if !selected_team {
+                    continue;
+                }
             }
             peers += 1;
             match &policy.target_mode {
@@ -115,5 +119,24 @@ impl Context<'_> {
             )?;
         }
         Ok(())
+    }
+
+    fn matches_tags(
+        &self,
+        tags: &[String],
+        all_tags: &BTreeSet<&str>,
+        any_tags: &BTreeSet<&str>,
+    ) -> Result<bool> {
+        if all_tags.is_empty() && any_tags.is_empty() {
+            return Ok(true);
+        }
+        let mut matched_all = 0;
+        let mut matched_any = any_tags.is_empty();
+        for tag in tags {
+            self.checkpoint()?;
+            matched_all += usize::from(all_tags.contains(tag.as_str()));
+            matched_any = matched_any || any_tags.contains(tag.as_str());
+        }
+        Ok(matched_all == all_tags.len() && matched_any)
     }
 }

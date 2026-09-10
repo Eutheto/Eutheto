@@ -5,8 +5,8 @@ use super::{
 use crate::{
     ids::{ShiftId, ShiftTemplateId},
     model::{
-        PlanningDates, ReportingAttribution, ShiftInstance, ShiftOrigin, ShiftTemplate, Weekday,
-        WorkforceDomainV1, WorkforceEntity, planning_dates,
+        DateRange, PlanningDates, ReportingAttribution, ShiftInstance, ShiftOrigin, ShiftTemplate,
+        Weekday, WorkforceDomainV1, WorkforceEntity, planning_dates,
     },
     validation::{MAX_DOCUMENT_OCCURRENCES, MAX_TEMPLATE_OCCURRENCES, validate_document},
 };
@@ -199,18 +199,21 @@ pub(crate) fn weekday(date: Date) -> Weekday {
 pub(super) fn collect_prior_specs<'a>(
     domain: &'a WorkforceDomainV1,
     settings: &ScenarioSettings,
-    cancellation: &CancellationToken,
+    checkpoint: &mut impl FnMut() -> Result<(), TemporalError>,
 ) -> Result<Vec<ShiftSpec<'a>>, TemporalError> {
     let dates = planning_dates(settings)?;
     let mut specs = Vec::new();
     for entity in domain.entities.values() {
-        check_cancelled(cancellation)?;
+        checkpoint()?;
         match entity {
             WorkforceEntity::ShiftTemplate(template) => {
-                let excluded: BTreeSet<_> =
-                    template.recurrence.excluded_dates.iter().copied().collect();
+                let mut excluded = BTreeSet::new();
+                for date in &template.recurrence.excluded_dates {
+                    checkpoint()?;
+                    excluded.insert(*date);
+                }
                 for occurrence in template.occurrence_identities.values() {
-                    check_cancelled(cancellation)?;
+                    checkpoint()?;
                     let date = occurrence.local_start_date;
                     if dates.first_date <= date
                         && date <= dates.last_date
@@ -255,7 +258,27 @@ pub(super) fn collect_specs<'a, E: From<TemporalError>>(
     owners: &Owners,
     checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
 ) -> Result<Vec<ShiftSpec<'a>>, E> {
+    collect_specs_in_range(domain, settings, owners, None, checkpoint)
+}
+
+fn collect_specs_in_range<'a, E: From<TemporalError>>(
+    domain: &'a WorkforceDomainV1,
+    settings: &ScenarioSettings,
+    owners: &Owners,
+    range: Option<DateRange>,
+    checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
+) -> Result<Vec<ShiftSpec<'a>>, E> {
     let dates = planning_dates(settings).map_err(TemporalError::from)?;
+    let first_date = range.map_or(dates.first_date, |range| {
+        dates.first_date.max(range.start_date)
+    });
+    let last_date = range.map_or(Ok(dates.last_date), |range| {
+        range
+            .end_date_exclusive
+            .checked_sub(Span::new().days(1))
+            .map(|last| dates.last_date.min(last))
+            .map_err(|_| issue(TemporalIssueKind::InvalidQuery, None, None))
+    })?;
     let mut specs = Vec::new();
     let mut generated = 0;
     for entity in domain.entities.values() {
@@ -263,7 +286,7 @@ pub(super) fn collect_specs<'a, E: From<TemporalError>>(
         match entity {
             WorkforceEntity::ShiftTemplate(template) => {
                 let recurrence = &template.recurrence;
-                let mut date = dates.first_date.max(recurrence.effective_range.start_date);
+                let mut date = first_date.max(recurrence.effective_range.start_date);
                 let mut weekdays = BTreeSet::new();
                 for weekday in &recurrence.weekdays {
                     checkpoint(ResolutionStep::RetainRecurrenceKey)?;
@@ -275,9 +298,7 @@ pub(super) fn collect_specs<'a, E: From<TemporalError>>(
                     excluded.insert(*date);
                 }
                 let mut count = 0;
-                while date <= dates.last_date
-                    && date < recurrence.effective_range.end_date_exclusive
-                {
+                while date <= last_date && date < recurrence.effective_range.end_date_exclusive {
                     checkpoint(ResolutionStep::Inspect)?;
                     let owner = owners.get(&(template.id, date));
                     if weekdays.contains(&weekday(date))
@@ -306,7 +327,7 @@ pub(super) fn collect_specs<'a, E: From<TemporalError>>(
                         count += 1;
                         generated += 1;
                     }
-                    if date == dates.last_date {
+                    if date == last_date {
                         break;
                     }
                     date = date.checked_add(Span::new().days(1)).map_err(|_| {
@@ -323,7 +344,12 @@ pub(super) fn collect_specs<'a, E: From<TemporalError>>(
                     starts_at: shift.starts_at,
                     ends_at: shift.ends_at,
                 };
-                if contains_start(settings, interval) {
+                let local_date = shift.starts_at.local.as_datetime().date();
+                if contains_start(settings, interval)
+                    && range.is_none_or(|range| {
+                        range.start_date <= local_date && local_date < range.end_date_exclusive
+                    })
+                {
                     checkpoint(ResolutionStep::RetainSpec)?;
                     push_spec(&mut specs, ShiftSpec::Stored(shift))?;
                 }
@@ -364,10 +390,24 @@ pub(crate) fn resolve_validated_shifts<E: From<TemporalError>>(
     settings: &ScenarioSettings,
     checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
 ) -> Result<Vec<ResolvedShift>, E> {
+    resolve_validated_shifts_in_range(domain, settings, None, checkpoint)
+}
+
+/// Intersects recurrence enumeration with original local start dates before resolving.
+/// Endpoint horizon checks still use the entire planning horizon, not this display range.
+pub(crate) fn resolve_validated_shifts_in_range<E: From<TemporalError>>(
+    domain: &WorkforceDomainV1,
+    settings: &ScenarioSettings,
+    range: Option<DateRange>,
+    checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
+) -> Result<Vec<ResolvedShift>, E> {
     checkpoint(ResolutionStep::Inspect)?;
     let dates = planning_dates(settings).map_err(TemporalError::from)?;
+    if range.is_some_and(|range| range.start_date >= range.end_date_exclusive) {
+        return Err(issue(TemporalIssueKind::InvalidQuery, None, None).into());
+    }
     let owners = owners(domain, checkpoint)?;
-    let specs = collect_specs(domain, settings, &owners, checkpoint)?;
+    let specs = collect_specs_in_range(domain, settings, &owners, range, checkpoint)?;
     let mut resolved = Vec::new();
     for spec in specs {
         checkpoint(ResolutionStep::Inspect)?;
@@ -379,4 +419,159 @@ pub(crate) fn resolve_validated_shifts<E: From<TemporalError>>(
     resolved.sort_unstable_by_key(|shift| (shift.interval.starts_at.instant, shift.id));
     checkpoint(ResolutionStep::Inspect)?;
     Ok(resolved)
+}
+
+/// Resolves only the requested retained identity; dormant definitions are not work.
+pub(crate) fn resolve_validated_shift<E: From<TemporalError>>(
+    domain: &WorkforceDomainV1,
+    settings: &ScenarioSettings,
+    id: ShiftId,
+    checkpoint: &mut impl FnMut(ResolutionStep) -> Result<(), E>,
+) -> Result<Option<ResolvedShift>, E> {
+    let dates = planning_dates(settings).map_err(TemporalError::from)?;
+    let mut local_date = None;
+    for entity in domain.entities.values() {
+        checkpoint(ResolutionStep::Inspect)?;
+        match entity {
+            WorkforceEntity::ShiftInstance(shift) if shift.id == id => {
+                let spec = ShiftSpec::Stored(shift);
+                let resolved = spec.resolve(settings, dates)?;
+                return Ok(contains_start(settings, resolved.interval).then_some(resolved));
+            }
+            WorkforceEntity::ShiftTemplate(template) => {
+                if let Some(occurrence) = template.occurrence_identities.get(&id) {
+                    local_date = Some(occurrence.local_start_date);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(start_date) = local_date else {
+        return Ok(None);
+    };
+    let end_date_exclusive = start_date.checked_add(Span::new().days(1)).map_err(|_| {
+        issue(
+            TemporalIssueKind::DateOverflow,
+            Some(id.as_entity_id()),
+            Some(start_date),
+        )
+    })?;
+    let owners = owners(domain, checkpoint)?;
+    let specs = collect_specs_in_range(
+        domain,
+        settings,
+        &owners,
+        Some(DateRange {
+            start_date,
+            end_date_exclusive,
+        }),
+        checkpoint,
+    )?;
+    for spec in specs {
+        checkpoint(ResolutionStep::Inspect)?;
+        if spec.id() == Some(id) {
+            return spec.resolve(settings, dates).map(Some).map_err(Into::into);
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    use crate::model::{Coverage, OccurrenceIdentity, Recurrence, ShiftTiming};
+    use eutheto_types::{GapPolicy, Horizon, OverlapPolicy, UnitSystem};
+    use jiff::civil::Time;
+
+    #[test]
+    fn range_resolves_original_gap_date_without_generating_unrelated_dates()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let date = Date::new(2011, 12, 30)?;
+        let id: ShiftId = "018f7b40-a000-7000-8000-000000000008".parse()?;
+        let template = ShiftTemplate {
+            id: "018f7b40-a000-7000-8000-000000000006".parse()?,
+            name: "Skipped civil day".to_owned(),
+            assignment_type_id: "018f7b40-a000-7000-8000-000000000007".parse()?,
+            location_id: None,
+            recurrence: Recurrence {
+                weekdays: vec![Weekday::Thursday, Weekday::Friday, Weekday::Saturday],
+                effective_range: DateRange {
+                    start_date: Date::new(2011, 12, 29)?,
+                    end_date_exclusive: Date::new(2012, 1, 2)?,
+                },
+                excluded_dates: Vec::new(),
+            },
+            timing: ShiftTiming::ElapsedDuration {
+                start_time: Time::new(9, 0, 0, 0)?,
+                duration_minutes: 60,
+            },
+            coverage: Coverage::Exact {
+                count: 1,
+                qualification_minimums: Vec::new(),
+            },
+            tags: Vec::new(),
+            reporting_attribution: ReportingAttribution::StartLocalDate,
+            occurrence_identities: BTreeMap::from([(
+                id,
+                OccurrenceIdentity {
+                    id,
+                    local_start_date: date,
+                },
+            )]),
+        };
+        let mut domain = WorkforceDomainV1::default();
+        domain.entities.insert(
+            template.id.as_entity_id(),
+            WorkforceEntity::ShiftTemplate(template),
+        );
+        let settings = ScenarioSettings {
+            time_zone: "Pacific/Apia".parse()?,
+            locale: "en-US".parse()?,
+            units: UnitSystem::Metric,
+            horizon: Horizon {
+                start: "2011-12-29T00:00:00-10:00".parse()?,
+                end: "2012-01-02T00:00:00+14:00".parse()?,
+            },
+            gap_policy: GapPolicy::MoveForward,
+            overlap_policy: OverlapPolicy::Earlier,
+        };
+        let range = DateRange {
+            start_date: date,
+            end_date_exclusive: Date::new(2011, 12, 31)?,
+        };
+        let shifts =
+            resolve_validated_shifts_in_range(&domain, &settings, Some(range), &mut |_| {
+                Ok::<_, TemporalError>(())
+            })?;
+        assert_eq!(
+            shifts.iter().map(|shift| shift.id).collect::<Vec<_>>(),
+            vec![id]
+        );
+        assert_eq!(
+            shifts[0].interval.starts_at.local.as_datetime().date(),
+            date
+        );
+        assert_eq!(
+            shifts[0]
+                .interval
+                .starts_at
+                .instant
+                .as_timestamp()
+                .to_zoned(jiff::tz::TimeZone::get("Pacific/Apia")?)
+                .date(),
+            Date::new(2011, 12, 31)?,
+        );
+        assert!(matches!(
+            resolve_validated_shifts(&domain, &settings, &mut |_| Ok::<_, TemporalError>(())),
+            Err(TemporalError::Issue(super::super::TemporalIssue {
+                kind: TemporalIssueKind::UnreconciledIdentity,
+                ..
+            })),
+        ));
+        assert_eq!(
+            resolve_validated_shift(&domain, &settings, id, &mut |_| Ok::<_, TemporalError>(()))?,
+            Some(shifts[0]),
+        );
+        Ok(())
+    }
 }

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "pack": {
     "id": "official.workforce",
     "packVersion": "0.1.0",
@@ -8,6 +8,2807 @@
     "shareResultSchemaVersion": 1
   },
   "$defs": {
+    "SetupPageLimit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "SetupEntityKind": {
+      "oneOf": [
+        {
+          "const": "person"
+        },
+        {
+          "const": "qualification"
+        },
+        {
+          "const": "team"
+        },
+        {
+          "const": "location"
+        },
+        {
+          "const": "workloadBucket"
+        },
+        {
+          "const": "calendar"
+        },
+        {
+          "const": "assignmentType"
+        },
+        {
+          "const": "shiftTemplate"
+        },
+        {
+          "const": "shiftInstance"
+        },
+        {
+          "const": "availability"
+        },
+        {
+          "const": "coverageRequirement"
+        },
+        {
+          "const": "baseSchedule"
+        },
+        {
+          "const": "scorePolicy"
+        }
+      ]
+    },
+    "SetupRuleClass": {
+      "oneOf": [
+        {
+          "const": "required"
+        },
+        {
+          "const": "preference"
+        }
+      ]
+    },
+    "SetupRuleReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "ruleId"
+      ],
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/SetupRuleClass"
+        },
+        "ruleId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupScopeAxis": {
+      "oneOf": [
+        {
+          "const": "people"
+        },
+        {
+          "const": "shifts"
+        }
+      ]
+    },
+    "SetupScopePart": {
+      "oneOf": [
+        {
+          "const": "main"
+        },
+        {
+          "const": "minimumRestBefore"
+        },
+        {
+          "const": "minimumRestAfter"
+        }
+      ]
+    },
+    "SetupEmptyParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "SetupPageParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupEntityPageParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityKind",
+        "search"
+      ],
+      "properties": {
+        "entityKind": {
+          "$ref": "#/$defs/SetupEntityKind"
+        },
+        "search": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 256
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupEntityDetailParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityId",
+        "entityKind"
+      ],
+      "properties": {
+        "entityKind": {
+          "$ref": "#/$defs/SetupEntityKind"
+        },
+        "entityId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupRulePageParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/SetupRuleClass"
+        },
+        "kindId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupRuleDetailParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/SetupRuleReference"
+        }
+      }
+    },
+    "SetupRuleScopeParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "axis",
+        "part",
+        "rule"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/SetupRuleReference"
+        },
+        "part": {
+          "$ref": "#/$defs/SetupScopePart"
+        },
+        "axis": {
+          "$ref": "#/$defs/SetupScopeAxis"
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupWorkWindowParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dates"
+      ],
+      "properties": {
+        "dates": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupWorkDetailParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shiftId"
+      ],
+      "properties": {
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupGenerationReviewParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changesOnly"
+      ],
+      "properties": {
+        "dates": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DateRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changesOnly": {
+          "type": "boolean"
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupPeopleAxis": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Uuid"
+      },
+      "minItems": 0,
+      "maxItems": 128
+    },
+    "SetupAssignmentTypeAxis": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Uuid"
+      },
+      "minItems": 0,
+      "maxItems": 64
+    },
+    "SetupEligibilityMatrixParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeIds",
+        "personIds"
+      ],
+      "properties": {
+        "personIds": {
+          "$ref": "#/$defs/SetupPeopleAxis"
+        },
+        "assignmentTypeIds": {
+          "$ref": "#/$defs/SetupAssignmentTypeAxis"
+        }
+      }
+    },
+    "SetupAvailabilityWindowParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dates",
+        "personId"
+      ],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "dates": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupAssignmentInspectionParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "personId",
+        "shiftId"
+      ],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "limit": {
+          "$ref": "#/$defs/SetupPageLimit"
+        }
+      }
+    },
+    "SetupGapPolicy": {
+      "oneOf": [
+        {
+          "const": "reject"
+        },
+        {
+          "const": "moveForward"
+        },
+        {
+          "const": "packDefined"
+        }
+      ]
+    },
+    "SetupOverlapPolicy": {
+      "oneOf": [
+        {
+          "const": "earlier"
+        },
+        {
+          "const": "later"
+        },
+        {
+          "const": "reject"
+        }
+      ]
+    },
+    "SetupUnitSystem": {
+      "oneOf": [
+        {
+          "const": "metric"
+        },
+        {
+          "const": "us-customary"
+        }
+      ]
+    },
+    "SetupLocaleTag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "SetupSettingsPreparationParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dates",
+        "gapPolicy",
+        "locale",
+        "overlapPolicy",
+        "timeZone",
+        "units"
+      ],
+      "properties": {
+        "timeZone": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "locale": {
+          "$ref": "#/$defs/SetupLocaleTag"
+        },
+        "units": {
+          "$ref": "#/$defs/SetupUnitSystem"
+        },
+        "gapPolicy": {
+          "$ref": "#/$defs/SetupGapPolicy"
+        },
+        "overlapPolicy": {
+          "$ref": "#/$defs/SetupOverlapPolicy"
+        },
+        "dates": {
+          "$ref": "#/$defs/DateRange"
+        }
+      }
+    },
+    "SetupInstantInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "end",
+        "start"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "end": {
+          "$ref": "#/$defs/TemporalText"
+        }
+      }
+    },
+    "SetupScenarioSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gapPolicy",
+        "horizon",
+        "locale",
+        "overlapPolicy",
+        "timeZone",
+        "units"
+      ],
+      "properties": {
+        "timeZone": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "locale": {
+          "$ref": "#/$defs/SetupLocaleTag"
+        },
+        "units": {
+          "$ref": "#/$defs/SetupUnitSystem"
+        },
+        "gapPolicy": {
+          "$ref": "#/$defs/SetupGapPolicy"
+        },
+        "overlapPolicy": {
+          "$ref": "#/$defs/SetupOverlapPolicy"
+        },
+        "horizon": {
+          "$ref": "#/$defs/SetupInstantInterval"
+        }
+      }
+    },
+    "SetupFingerprint": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UInt8"
+      },
+      "minItems": 32,
+      "maxItems": 32
+    },
+    "SetupEntityPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityId",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "entity"
+        },
+        "entityId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupEntityContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "position": {
+          "$ref": "#/$defs/SetupEntityPosition"
+        }
+      }
+    },
+    "SetupRulePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ruleId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "rule"
+        },
+        "ruleId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupRuleContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "position": {
+          "$ref": "#/$defs/SetupRulePosition"
+        }
+      }
+    },
+    "SetupPersonPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "personId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "person"
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupPersonContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "position": {
+          "$ref": "#/$defs/SetupPersonPosition"
+        }
+      }
+    },
+    "SetupShiftPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "shiftId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "shift"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupShiftContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "position": {
+          "$ref": "#/$defs/SetupShiftPosition"
+        }
+      }
+    },
+    "SetupTimedShiftPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "shiftId",
+        "startsAt"
+      ],
+      "properties": {
+        "kind": {
+          "const": "timedShift"
+        },
+        "startsAt": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "SetupTimedShiftContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "position": {
+          "$ref": "#/$defs/SetupTimedShiftPosition"
+        }
+      }
+    },
+    "SetupOrdinalPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "nextOrdinal"
+      ],
+      "properties": {
+        "kind": {
+          "const": "ordinal"
+        },
+        "nextOrdinal": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "SetupOrdinalContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "position": {
+          "$ref": "#/$defs/SetupOrdinalPosition"
+        }
+      }
+    },
+    "SetupEntityKindCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SetupEntityKind"
+        },
+        "count": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "SetupFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activePreferences",
+        "activeRequiredRules",
+        "configuredTypeMemberships",
+        "entities",
+        "lockedAssignments",
+        "preferences",
+        "requiredRules",
+        "settings"
+      ],
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/SetupScenarioSettings"
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupEntityKindCount"
+          },
+          "minItems": 13,
+          "maxItems": 13
+        },
+        "requiredRules": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "activeRequiredRules": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "preferences": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "activePreferences": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "lockedAssignments": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "configuredTypeMemberships": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "SetupEntitySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityId",
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "entityId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/SetupEntityKind"
+        },
+        "name": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupEntityPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupEntitySummary"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupEntityContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupLocalizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defaultText",
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "defaultText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        }
+      }
+    },
+    "SetupKindDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "id",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "title": {
+          "$ref": "#/$defs/SetupLocalizedText"
+        },
+        "description": {
+          "$ref": "#/$defs/SetupLocalizedText"
+        }
+      }
+    },
+    "SetupRuleCatalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptor",
+        "support"
+      ],
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/SetupKindDescriptor"
+        },
+        "support": {
+          "oneOf": [
+            {
+              "const": "implemented"
+            },
+            {
+              "const": "notImplemented"
+            }
+          ]
+        }
+      }
+    },
+    "SetupRuleCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferences",
+        "required"
+      ],
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupRuleCatalogEntry"
+          },
+          "minItems": 0,
+          "maxItems": 12
+        },
+        "preferences": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupRuleCatalogEntry"
+          },
+          "minItems": 0,
+          "maxItems": 11
+        }
+      }
+    },
+    "SetupRuleSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "kindId",
+        "priority",
+        "rule",
+        "weight"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/SetupRuleReference"
+        },
+        "kindId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "priority": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PreferencePriority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "weight": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Weight"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupRulePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupRuleSummary"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupRuleContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupRuleRecord": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "class",
+            "record"
+          ],
+          "properties": {
+            "class": {
+              "const": "required"
+            },
+            "record": {
+              "$ref": "#/$defs/Rule"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "class",
+            "record"
+          ],
+          "properties": {
+            "class": {
+              "const": "preference"
+            },
+            "record": {
+              "$ref": "#/$defs/Preference"
+            }
+          }
+        }
+      ]
+    },
+    "SetupPersonSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "personId"
+      ],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        }
+      }
+    },
+    "SetupResolvedInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endsAt",
+        "startsAt"
+      ],
+      "properties": {
+        "startsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        }
+      }
+    },
+    "SetupDisplayDuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nanoseconds",
+        "seconds"
+      ],
+      "properties": {
+        "seconds": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "nanoseconds": {
+          "type": "integer",
+          "minimum": -999999999,
+          "maximum": 999999999
+        }
+      }
+    },
+    "SetupShiftOrigin": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "occurrenceDate",
+            "templateId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "generated"
+            },
+            "templateId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "occurrenceDate": {
+              "$ref": "#/$defs/TemporalText"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "occurrenceDate",
+            "templateId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "detached"
+            },
+            "templateId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "occurrenceDate": {
+              "$ref": "#/$defs/TemporalText"
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/ManualOrigin"
+        }
+      ]
+    },
+    "SetupCoverageSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum",
+        "minimum",
+        "preferred",
+        "qualificationMinimumCount"
+      ],
+      "properties": {
+        "minimum": {
+          "$ref": "#/$defs/UInt16"
+        },
+        "preferred": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UInt16"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maximum": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UInt16"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "qualificationMinimumCount": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "SetupWorkShift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeId",
+        "assignmentTypeName",
+        "coverage",
+        "elapsed",
+        "interval",
+        "locationId",
+        "locationName",
+        "origin",
+        "reportingDate",
+        "scheduled",
+        "shiftId",
+        "templateName"
+      ],
+      "properties": {
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "origin": {
+          "$ref": "#/$defs/SetupShiftOrigin"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeName": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "templateName": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locationId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locationName": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/SetupCoverageSummary"
+        },
+        "interval": {
+          "$ref": "#/$defs/SetupResolvedInterval"
+        },
+        "reportingDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "elapsed": {
+          "$ref": "#/$defs/SetupDisplayDuration"
+        },
+        "scheduled": {
+          "$ref": "#/$defs/SetupDisplayDuration"
+        }
+      }
+    },
+    "SetupWorkPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupWorkShift"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupTimedShiftContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupWorkShiftSource": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "record"
+          ],
+          "properties": {
+            "kind": {
+              "const": "template"
+            },
+            "record": {
+              "$ref": "#/$defs/SetupShiftTemplateRecord"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "record"
+          ],
+          "properties": {
+            "kind": {
+              "const": "instance"
+            },
+            "record": {
+              "$ref": "#/$defs/SetupShiftInstanceRecord"
+            }
+          }
+        }
+      ]
+    },
+    "SetupWorkShiftDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shift",
+        "source"
+      ],
+      "properties": {
+        "shift": {
+          "$ref": "#/$defs/SetupWorkShift"
+        },
+        "source": {
+          "$ref": "#/$defs/SetupWorkShiftSource"
+        }
+      }
+    },
+    "SetupPersonScopePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupPersonSummary"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupPersonContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupShiftScopePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupWorkShift"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupShiftContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupScopePopulation": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "page"
+          ],
+          "properties": {
+            "axis": {
+              "const": "people"
+            },
+            "page": {
+              "$ref": "#/$defs/SetupPersonScopePage"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "page"
+          ],
+          "properties": {
+            "axis": {
+              "const": "shifts"
+            },
+            "page": {
+              "$ref": "#/$defs/SetupShiftScopePage"
+            }
+          }
+        }
+      ]
+    },
+    "SetupScopeInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cartesianPairCount",
+        "part",
+        "peopleCount",
+        "population",
+        "rule",
+        "shiftCount"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/SetupRuleReference"
+        },
+        "part": {
+          "$ref": "#/$defs/SetupScopePart"
+        },
+        "peopleCount": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "shiftCount": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "cartesianPairCount": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "population": {
+          "$ref": "#/$defs/SetupScopePopulation"
+        }
+      }
+    },
+    "SetupTimeResolutionFailureKind": {
+      "oneOf": [
+        {
+          "const": "gap"
+        },
+        {
+          "const": "overlap"
+        },
+        {
+          "const": "packResolutionRequired"
+        },
+        {
+          "const": "invalidTimeZone"
+        }
+      ]
+    },
+    "SetupTemporalIssueCode": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "resolution"
+          ],
+          "properties": {
+            "kind": {
+              "const": "resolution"
+            },
+            "resolution": {
+              "$ref": "#/$defs/SetupTimeResolutionFailureKind"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "dateOverflow"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "invalidInterval"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "outsideHorizon"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unreconciledIdentity"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "identityCollision"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "identityTransition"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "occurrenceLimit"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "outputLimit"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "calendarLimit"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "calendarOverlap"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "calendarOrder"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ambiguousReportingDate"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unknownCalendar"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "invalidQuery"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "differentScenario"
+            }
+          }
+        }
+      ]
+    },
+    "SetupPriorUnresolvedShift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue",
+        "origin"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/SetupShiftOrigin"
+        },
+        "issue": {
+          "$ref": "#/$defs/SetupTemporalIssueCode"
+        }
+      }
+    },
+    "SetupPriorWorkShift": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "resolved"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupWorkShift"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unresolved"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupPriorUnresolvedShift"
+            }
+          }
+        }
+      ]
+    },
+    "SetupGenerationRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "after",
+        "before",
+        "change",
+        "shiftId"
+      ],
+      "properties": {
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "before": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupPriorWorkShift"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupWorkShift"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "change": {
+          "oneOf": [
+            {
+              "oneOf": [
+                {
+                  "const": "added"
+                },
+                {
+                  "const": "changed"
+                },
+                {
+                  "const": "removed"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupGenerationPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupGenerationRow"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupShiftContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupGenerationReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "page",
+        "prospectiveHash",
+        "reconciliationRequired",
+        "totalAdded",
+        "totalChanged",
+        "totalRemoved"
+      ],
+      "properties": {
+        "prospectiveHash": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "reconciliationRequired": {
+          "type": "boolean"
+        },
+        "totalAdded": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "totalChanged": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "totalRemoved": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "page": {
+          "$ref": "#/$defs/SetupGenerationPage"
+        }
+      }
+    },
+    "SetupEligibilityMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeIds",
+        "configuredMemberships",
+        "personIds"
+      ],
+      "properties": {
+        "personIds": {
+          "$ref": "#/$defs/SetupPeopleAxis"
+        },
+        "assignmentTypeIds": {
+          "$ref": "#/$defs/SetupAssignmentTypeAxis"
+        },
+        "configuredMemberships": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "minItems": 0,
+            "maxItems": 64
+          },
+          "minItems": 0,
+          "maxItems": 128
+        }
+      }
+    },
+    "SetupAvailabilityKind": {
+      "oneOf": [
+        {
+          "const": "unavailable"
+        },
+        {
+          "const": "availableOnly"
+        },
+        {
+          "const": "approvedTimeOff"
+        },
+        {
+          "const": "requestedTimeOff"
+        }
+      ]
+    },
+    "SetupAvailabilityOccurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "availabilityId",
+        "availabilityKind",
+        "interval",
+        "ordinal"
+      ],
+      "properties": {
+        "ordinal": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "availabilityId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "availabilityKind": {
+          "$ref": "#/$defs/SetupAvailabilityKind"
+        },
+        "interval": {
+          "$ref": "#/$defs/SetupInstantInterval"
+        }
+      }
+    },
+    "SetupAvailabilityPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupAvailabilityOccurrence"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupOrdinalContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupRejectionCause": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed",
+            "kind",
+            "outside"
+          ],
+          "properties": {
+            "kind": {
+              "const": "outsideActiveRange"
+            },
+            "allowed": {
+              "$ref": "#/$defs/SetupInstantInterval"
+            },
+            "outside": {
+              "$ref": "#/$defs/SetupInstantInterval"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "assignmentTypeId",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "assignmentTypeNotAllowed"
+            },
+            "assignmentTypeId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "assignmentTypeId",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "qualificationExpression"
+            },
+            "assignmentTypeId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availabilityId",
+            "kind",
+            "overlap"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unavailable"
+            },
+            "availabilityId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "overlap": {
+              "$ref": "#/$defs/SetupInstantInterval"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availabilityId",
+            "kind",
+            "uncovered"
+          ],
+          "properties": {
+            "kind": {
+              "const": "outsideAvailableOnly"
+            },
+            "availabilityId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "uncovered": {
+              "$ref": "#/$defs/SetupInstantInterval"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availabilityId",
+            "kind",
+            "overlap"
+          ],
+          "properties": {
+            "kind": {
+              "const": "approvedTimeOff"
+            },
+            "availabilityId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "overlap": {
+              "$ref": "#/$defs/SetupInstantInterval"
+            }
+          }
+        }
+      ]
+    },
+    "SetupPairRejection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bindingId",
+        "cause",
+        "ordinal"
+      ],
+      "properties": {
+        "ordinal": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "bindingId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "cause": {
+          "$ref": "#/$defs/SetupRejectionCause"
+        }
+      }
+    },
+    "SetupPairRejectionPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupPairRejection"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupOrdinalContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupAssignmentInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateInImplementedAssignmentGraph",
+        "personId",
+        "rejections",
+        "remainingRequiredRuleCount",
+        "shiftId"
+      ],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "candidateInImplementedAssignmentGraph": {
+          "type": "boolean"
+        },
+        "remainingRequiredRuleCount": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "rejections": {
+          "$ref": "#/$defs/SetupPairRejectionPage"
+        }
+      }
+    },
+    "SetupChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "after",
+        "before",
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "oneOf": [
+            {
+              "const": "added"
+            },
+            {
+              "const": "updated"
+            },
+            {
+              "const": "removed"
+            },
+            {
+              "const": "locked"
+            },
+            {
+              "const": "unlocked"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "format": "scenario-change-path",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "before": {},
+        "after": {}
+      }
+    },
+    "SetupCommandChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "change",
+        "ordinal"
+      ],
+      "properties": {
+        "ordinal": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "change": {
+          "$ref": "#/$defs/SetupChange"
+        }
+      }
+    },
+    "SetupCommandChangePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continuation",
+        "items",
+        "totalItems"
+      ],
+      "properties": {
+        "totalItems": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SetupCommandChange"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "continuation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetupOrdinalContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SetupCommandChangesResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "commandChanges"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupCommandChangePage"
+            }
+          }
+        }
+      }
+    },
+    "SetupEntityDetailResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "entityDetail"
+            },
+            "data": {
+              "$ref": "#/$defs/Entity"
+            }
+          }
+        }
+      }
+    },
+    "SetupEntityPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "entityPage"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupEntityPage"
+            }
+          }
+        }
+      }
+    },
+    "SetupRuleCatalogResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ruleCatalog"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupRuleCatalog"
+            }
+          }
+        }
+      }
+    },
+    "SetupAssignmentInspectionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "assignmentInspection"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupAssignmentInspection"
+            }
+          }
+        }
+      }
+    },
+    "SetupAvailabilityWindowResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "availabilityWindow"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupAvailabilityPage"
+            }
+          }
+        }
+      }
+    },
+    "SetupEligibilityMatrixResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "eligibilityMatrix"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupEligibilityMatrix"
+            }
+          }
+        }
+      }
+    },
+    "SetupGenerationReviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "generationReview"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupGenerationReview"
+            }
+          }
+        }
+      }
+    },
+    "SetupOverviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "overview"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupFacts"
+            }
+          }
+        }
+      }
+    },
+    "SetupRuleDetailResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ruleDetail"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupRuleRecord"
+            }
+          }
+        }
+      }
+    },
+    "SetupRulePageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "rulePage"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupRulePage"
+            }
+          }
+        }
+      }
+    },
+    "SetupRuleScopeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ruleScope"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupScopeInspection"
+            }
+          }
+        }
+      }
+    },
+    "SetupSettingsPreparationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "settingsPreparation"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupScenarioSettings"
+            }
+          }
+        }
+      }
+    },
+    "SetupWorkDetailResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "workDetail"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupWorkShiftDetail"
+            }
+          }
+        }
+      }
+    },
+    "SetupWorkWindowResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "schemaVersion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "workWindow"
+            },
+            "data": {
+              "$ref": "#/$defs/SetupWorkPage"
+            }
+          }
+        }
+      }
+    },
+    "SetupShiftTemplateRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeId",
+        "coverage",
+        "id",
+        "name",
+        "occurrenceIdentities",
+        "recurrence",
+        "reportingAttribution",
+        "tags",
+        "timing"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "recurrence": {
+          "$ref": "#/$defs/Recurrence"
+        },
+        "timing": {
+          "$ref": "#/$defs/ShiftTiming"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "reportingAttribution": {
+          "$ref": "#/$defs/ReportingAttribution"
+        },
+        "occurrenceIdentities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/OccurrenceIdentity"
+          }
+        }
+      }
+    },
+    "SetupShiftInstanceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentTypeId",
+        "coverage",
+        "endsAt",
+        "id",
+        "origin",
+        "reportingAttribution",
+        "startsAt",
+        "tags"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DisplayText"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "reportingAttribution": {
+          "$ref": "#/$defs/ReportingAttribution"
+        },
+        "origin": {
+          "$ref": "#/$defs/ShiftOrigin"
+        }
+      }
+    },
     "Uuid": {
       "type": "string",
       "format": "uuid"
@@ -3351,6 +6152,815 @@
       }
     }
   },
+  "setupQueries": [
+    {
+      "id": "eutheto.setup.command_changes",
+      "sources": ["commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "eutheto.setup.command_changes.title",
+        "defaultText": "Command changes"
+      },
+      "description": {
+        "key": "eutheto.setup.command_changes.description",
+        "defaultText": "Read complete ordered command-preview changes with original zero-based ordinals and exact totals; stored sources are rejected. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupPageParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupCommandChangesResult"
+      },
+      "validExamples": [
+        {},
+        {
+          "limit": 1
+        },
+        {
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {
+          "limit": 0
+        },
+        {
+          "limit": 201
+        },
+        {
+          "limit": null
+        },
+        {
+          "unexpected": true
+        }
+      ]
+    },
+    {
+      "id": "eutheto.setup.entity_detail",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "eutheto.setup.entity_detail.title",
+        "defaultText": "Entity detail"
+      },
+      "description": {
+        "key": "eutheto.setup.entity_detail.description",
+        "defaultText": "Read one complete typed stored Workforce entity by its matching kind and stable identity, without host-owned extension maps."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupEntityDetailParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupEntityDetailResult"
+      },
+      "validExamples": [
+        {
+          "entityKind": "person",
+          "entityId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "entityKind": "person",
+          "entityId": "invalid"
+        },
+        {
+          "entityKind": "unknown",
+          "entityId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ]
+    },
+    {
+      "id": "eutheto.setup.entity_page",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "eutheto.setup.entity_page.title",
+        "defaultText": "Entity page"
+      },
+      "description": {
+        "key": "eutheto.setup.entity_page.description",
+        "defaultText": "Read stable-ID-ordered entity summaries. Search is a literal Unicode-lowercase substring of at most 256 UTF-8 bytes; empty matches all and unnamed kinds require empty search. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupEntityPageParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupEntityPageResult"
+      },
+      "validExamples": [
+        {
+          "entityKind": "person",
+          "search": ""
+        },
+        {
+          "entityKind": "person",
+          "search": "ana",
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {
+          "entityKind": "person"
+        },
+        {
+          "entityKind": "person",
+          "search": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "entityKind": "person",
+          "search": "",
+          "limit": 0
+        },
+        {
+          "entityKind": "person",
+          "search": "",
+          "limit": 201
+        }
+      ]
+    },
+    {
+      "id": "eutheto.setup.rule_catalog",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "eutheto.setup.rule_catalog.title",
+        "defaultText": "Rule catalog"
+      },
+      "description": {
+        "key": "eutheto.setup.rule_catalog.description",
+        "defaultText": "Read Required and Preference catalog descriptors with implementation support from the existing compilation authority, not backend availability or feasibility."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupEmptyParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupRuleCatalogResult"
+      },
+      "validExamples": [
+        {}
+      ],
+      "invalidExamples": [
+        null,
+        {
+          "limit": 50
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.assignment_inspection",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.assignment_inspection.title",
+        "defaultText": "Assignment inspection"
+      },
+      "description": {
+        "key": "official.workforce.setup.assignment_inspection.description",
+        "defaultText": "Inspect one person and resolved shift using the implemented assignment graph, with remaining Required-rule count and ordinal-paged typed rejection causes. This is not whole-model feasibility. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupAssignmentInspectionParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupAssignmentInspectionResult"
+      },
+      "validExamples": [
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "shiftId": "018f7b40-a000-7000-8000-000000000006"
+        },
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "shiftId": "018f7b40-a000-7000-8000-000000000006",
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014"
+        },
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "shiftId": "018f7b40-a000-7000-8000-000000000006",
+          "limit": 0
+        },
+        {
+          "personId": "invalid",
+          "shiftId": "018f7b40-a000-7000-8000-000000000006"
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.availability_window",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.availability_window.title",
+        "defaultText": "Availability window"
+      },
+      "description": {
+        "key": "official.workforce.setup.availability_window.description",
+        "defaultText": "Read configured availability occurrences for one person, clipped and deduplicated by existing temporal authority and ordered by availability identity, start and end. The nonempty half-open date window is at most 366 local calendar days. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupAvailabilityWindowParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupAvailabilityWindowResult"
+      },
+      "validExamples": [
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          }
+        },
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014"
+        },
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "dates": null
+        },
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "limit": 201
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.eligibility_matrix",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.eligibility_matrix.title",
+        "defaultText": "Configured eligibility matrix"
+      },
+      "description": {
+        "key": "official.workforce.setup.eligibility_matrix.description",
+        "defaultText": "Read configured type membership, not solver feasibility, for unique existing typed-ID axes in request order: at most 128 people, 64 assignment types and 8,192 cells. Every requested cell is returned."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupEligibilityMatrixParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupEligibilityMatrixResult"
+      },
+      "validExamples": [
+        {
+          "personIds": [
+            "018f7b40-a000-7000-8000-000000000014"
+          ],
+          "assignmentTypeIds": [
+            "018f7b40-a000-7000-8000-000000000004"
+          ]
+        },
+        {
+          "personIds": [],
+          "assignmentTypeIds": []
+        }
+      ],
+      "invalidExamples": [
+        {
+          "personIds": [
+            "018f7b40-a000-7000-8000-000000000014"
+          ]
+        },
+        {
+          "personIds": [
+            "invalid"
+          ],
+          "assignmentTypeIds": [
+            "018f7b40-a000-7000-8000-000000000004"
+          ]
+        },
+        {
+          "personIds": [],
+          "assignmentTypeIds": [
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004",
+            "018f7b40-a000-7000-8000-000000000004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.generation_review",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.generation_review.title",
+        "defaultText": "Generation review"
+      },
+      "description": {
+        "key": "official.workforce.setup.generation_review.description",
+        "defaultText": "Read the existing whole-document generation reconciliation as ShiftId-ordered before/after/change rows and exact totals. Optional presentation dates include either before or after local start date and span at most 366 days; changesOnly uses authoritative change kinds. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupGenerationReviewParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupGenerationReviewResult"
+      },
+      "validExamples": [
+        {
+          "changesOnly": false
+        },
+        {
+          "dates": null,
+          "changesOnly": true,
+          "limit": 1
+        },
+        {
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "changesOnly": true,
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "changesOnly": "true"
+        },
+        {
+          "changesOnly": false,
+          "limit": 201
+        },
+        {
+          "changesOnly": false,
+          "dates": {}
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.overview",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.overview.title",
+        "defaultText": "Setup overview"
+      },
+      "description": {
+        "key": "official.workforce.setup.overview.description",
+        "defaultText": "Read captured scenario settings and exact stored structural counts, including all 13 entity kinds and stored active flags. No completeness, applicability or feasibility judgment is inferred."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupEmptyParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupOverviewResult"
+      },
+      "validExamples": [
+        {}
+      ],
+      "invalidExamples": [
+        null,
+        {
+          "ready": true
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.rule_detail",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.rule_detail.title",
+        "defaultText": "Rule detail"
+      },
+      "description": {
+        "key": "official.workforce.setup.rule_detail.description",
+        "defaultText": "Read one complete typed Required rule or Preference record, with the requested class and stable rule identity."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupRuleDetailParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupRuleDetailResult"
+      },
+      "validExamples": [
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          }
+        },
+        {
+          "rule": {
+            "class": "preference",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          }
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "rule": {
+            "class": "unknown",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          }
+        },
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "invalid"
+          }
+        },
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020",
+            "unexpected": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.rule_page",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.rule_page.title",
+        "defaultText": "Rule page"
+      },
+      "description": {
+        "key": "official.workforce.setup.rule_page.description",
+        "defaultText": "Read stable-ID-ordered rule summaries in one class. Omitted or null kindId selects all; a supplied kindId must be an existing catalog kind in that class. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupRulePageParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupRulePageResult"
+      },
+      "validExamples": [
+        {
+          "class": "required"
+        },
+        {
+          "class": "preference",
+          "kindId": null,
+          "limit": 200
+        },
+        {
+          "class": "required",
+          "kindId": "official.workforce.rule.eligibility",
+          "limit": 1
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "class": "unknown"
+        },
+        {
+          "class": "required",
+          "kindId": ""
+        },
+        {
+          "class": "required",
+          "kindId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "class": "required",
+          "limit": 201
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.rule_scope",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.rule_scope.title",
+        "defaultText": "Rule scope"
+      },
+      "description": {
+        "key": "official.workforce.setup.rule_scope.description",
+        "defaultText": "Inspect the existing scope helpers over the full captured horizon with exact people, shift and Cartesian population counts and a stable-ID page for the selected axis. Minimum-rest before/after parts require the matching rule kind. These are selected populations, not constraint or feasibility counts. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupRuleScopeParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupRuleScopeResult"
+      },
+      "validExamples": [
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          },
+          "part": "main",
+          "axis": "people"
+        },
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          },
+          "part": "main",
+          "axis": "shifts",
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          },
+          "part": "main"
+        },
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          },
+          "part": "unknown",
+          "axis": "people"
+        },
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          },
+          "part": "main",
+          "axis": "unknown"
+        },
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          },
+          "part": "main",
+          "axis": "people",
+          "limit": 0
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.settings_preparation",
+      "sources": ["stored"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.settings_preparation.title",
+        "defaultText": "Prepare scenario settings"
+      },
+      "description": {
+        "key": "official.workforce.setup.settings_preparation.description",
+        "defaultText": "Read-only stored-source preparation of explicit scenario settings by resolving local midnight horizon boundaries with existing Workforce planning-date authority. The desired whole horizon is not subject to the 366-day presentation-window cap. No mutation or continuation is accepted."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupSettingsPreparationParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupSettingsPreparationResult"
+      },
+      "validExamples": [
+        {
+          "timeZone": "Etc/UTC",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "locale": "en-US",
+          "units": "metric",
+          "gapPolicy": "reject",
+          "overlapPolicy": "earlier"
+        },
+        {
+          "timeZone": "Etc/UTC",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "locale": "en-US",
+          "units": "us-customary",
+          "gapPolicy": "moveForward",
+          "overlapPolicy": "later"
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "timeZone": "Etc/UTC",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "locale": "en-US",
+          "units": "imperial",
+          "gapPolicy": "reject",
+          "overlapPolicy": "earlier"
+        },
+        {
+          "timeZone": "Etc/UTC",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "locale": "en-US",
+          "units": "metric",
+          "gapPolicy": "unknown",
+          "overlapPolicy": "earlier"
+        },
+        {
+          "timeZone": "Etc/UTC",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "locale": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "units": "metric",
+          "gapPolicy": "reject",
+          "overlapPolicy": "earlier"
+        },
+        {
+          "timeZone": "Etc/UTC",
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "locale": "en-US",
+          "units": "metric",
+          "gapPolicy": "reject",
+          "overlapPolicy": "earlier",
+          "limit": 50
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.work_detail",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.work_detail.title",
+        "defaultText": "Work shift detail"
+      },
+      "description": {
+        "key": "official.workforce.setup.work_detail.description",
+        "defaultText": "Read one fully resolved shift and its complete typed template or stored instance source. Generated occurrences are never represented as directly editable stored entity records."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupWorkDetailParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupWorkDetailResult"
+      },
+      "validExamples": [
+        {
+          "shiftId": "018f7b40-a000-7000-8000-000000000006"
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "shiftId": "invalid"
+        },
+        {
+          "shiftId": "018f7b40-a000-7000-8000-000000000006",
+          "limit": 50
+        }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.work_window",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.work_window.title",
+        "defaultText": "Work window"
+      },
+      "description": {
+        "key": "official.workforce.setup.work_window.description",
+        "defaultText": "Read resolved shifts whose original local start dates fall in a nonempty half-open window of at most 366 calendar days, ordered by start instant and ShiftId. Omitted limit defaults to 50; explicit limits are 1–200. Display durations preserve exact seconds and nanoseconds."
+      },
+      "parameterSchema": {
+        "$ref": "#/$defs/SetupWorkWindowParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/SetupWorkWindowResult"
+      },
+      "validExamples": [
+        {
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          }
+        },
+        {
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "limit": 200
+        }
+      ],
+      "invalidExamples": [
+        {},
+        {
+          "dates": null
+        },
+        {
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08"
+          },
+          "limit": 201
+        },
+        {
+          "dates": {
+            "startDate": "2026-09-01",
+            "endDateExclusive": "2026-09-08",
+            "unexpected": true
+          }
+        }
+      ]
+    }
+  ],
   "commands": [
     {
       "id": "official.workforce.add_entity",
