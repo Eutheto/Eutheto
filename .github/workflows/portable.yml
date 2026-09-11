@@ -273,11 +273,11 @@ jobs:
           nix develop --no-update-lock-file --command cargo test --locked --all-targets --package eutheto-core --package eutheto-cli
           nix develop --no-update-lock-file --command cargo run --locked --package eutheto-cli -- status
 
-      - name: Test the real core and CLI on native Windows
+      - name: Test core CLI export and native desktop on Windows
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo test --locked --all-targets --package eutheto-core --package eutheto-cli
+          cargo test --locked --all-targets --package eutheto-core --package eutheto-cli --package eutheto-export --package eutheto-desktop
           cargo run --locked --package eutheto-cli -- status
 
       - name: Test and build the desktop shell in the default Nix shell
