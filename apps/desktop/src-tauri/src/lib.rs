@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -39,6 +38,7 @@ mod bundled_solver;
 
 #[macro_use]
 mod generated_command_catalog;
+mod native_file;
 mod operations;
 use operations::{OperationClaim, OperationContextV1, OperationPhaseV1, OperationRegistry};
 #[macro_use]
@@ -47,6 +47,13 @@ use setup_boundary::{
     operation_cancel, operation_prepare, operation_release, scenario_get_entity,
     scenario_get_rule_catalog, scenario_get_setup_status, scenario_get_summary, scenario_get_view,
     scenario_search_entities, scenario_validate, workforce_apply_reviewed_generation,
+};
+#[macro_use]
+mod people_csv;
+use people_csv::{
+    CsvCustody, people_csv_apply, people_csv_detect, people_csv_preview,
+    people_csv_preview_discard, people_csv_rejected_rows, people_csv_rejected_rows_save,
+    people_csv_source_close, people_csv_source_open,
 };
 
 use generated_command_catalog::REGISTERED_COMMANDS;
@@ -168,6 +175,7 @@ struct DesktopState {
     backup_dir: PathBuf,
     prepared_outputs: Arc<tokio::sync::Mutex<PreparedPortableCache>>,
     operations: Arc<OperationRegistry>,
+    csv: Arc<CsvCustody>,
 }
 
 impl DesktopState {
@@ -179,12 +187,14 @@ impl DesktopState {
             Arc::new(SystemIdGenerator),
             ["main".to_owned()],
         ));
+        let csv = Arc::new(CsvCustody::new(app.clone(), Arc::new(SystemIdGenerator)));
         Self {
             app,
             cache_dir,
             backup_dir,
             prepared_outputs: Arc::default(),
             operations,
+            csv,
         }
     }
 }
@@ -1181,72 +1191,9 @@ fn require_portable_path(path: PathBuf) -> Result<PathBuf, NativeFileError> {
 }
 
 fn read_bounded_portable(path: &Path) -> Result<Vec<u8>, NativeFileError> {
-    #[cfg(not(windows))]
-    let selected_metadata =
-        std::fs::symlink_metadata(path).map_err(|_| NativeFileError::Unreadable)?;
-    #[cfg(not(windows))]
-    if selected_metadata.file_type().is_symlink() || !selected_metadata.is_file() {
-        return Err(NativeFileError::InvalidFileType);
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // Open the final selected directory entry itself rather than traversing a reparse point.
-        // This is the Win32 FILE_FLAG_OPEN_REPARSE_POINT value.
-        options.custom_flags(0x0020_0000);
-    }
-    let file = options
-        .open(path)
-        .map_err(|_| NativeFileError::Unreadable)?;
-    let opened_metadata = file.metadata().map_err(|_| NativeFileError::Unreadable)?;
-    if !opened_metadata.is_file() {
-        return Err(NativeFileError::InvalidFileType);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if selected_metadata.dev() != opened_metadata.dev()
-            || selected_metadata.ino() != opened_metadata.ino()
-        {
-            return Err(NativeFileError::Unreadable);
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        // FILE_ATTRIBUTE_REPARSE_POINT covers symlinks and other name-surrogate final entries.
-        // The native dialog returns only a path, so this single resolution is authoritative:
-        // inspect and read the same handle without reopening the selected path.
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        if opened_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(NativeFileError::Unreadable);
-        }
-    }
-    if opened_metadata.len() > PORTABLE_LIMITS.max_archive_bytes {
-        return Err(NativeFileError::TooLarge);
-    }
-    let max_capacity = usize::try_from(PORTABLE_LIMITS.max_archive_bytes)
+    let maximum = usize::try_from(PORTABLE_LIMITS.max_archive_bytes)
         .map_err(|_| NativeFileError::TooLarge)?;
-    let capacity = usize::try_from(opened_metadata.len())
-        .map_err(|_| NativeFileError::TooLarge)?
-        .min(max_capacity);
-    let mut bytes = Vec::with_capacity(capacity);
-    file.take(PORTABLE_LIMITS.max_archive_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|_| NativeFileError::Unreadable)?;
-    if u64::try_from(bytes.len()).map_or(true, |byte_length| {
-        byte_length > PORTABLE_LIMITS.max_archive_bytes
-    }) {
-        return Err(NativeFileError::TooLarge);
-    }
-    Ok(bytes)
+    native_file::read_bounded_file(path, maximum, &CancellationToken::new())
 }
 
 fn selected_basename(path: &Path) -> Result<String, NativeFileError> {
@@ -1565,6 +1512,14 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "operation_cancel",
         "operation_release",
         "workforce_apply_reviewed_generation",
+        "people_csv_source_open",
+        "people_csv_source_close",
+        "people_csv_detect",
+        "people_csv_preview",
+        "people_csv_apply",
+        "people_csv_preview_discard",
+        "people_csv_rejected_rows",
+        "people_csv_rejected_rows_save",
         "scenario_get_summary",
         "scenario_get_setup_status",
         "scenario_get_view",
@@ -3330,12 +3285,15 @@ pub fn run() -> tauri::Result<()> {
             event: tauri::WindowEvent::Destroyed,
             ..
         } => {
-            handle
-                .state::<DesktopState>()
-                .operations
-                .cancel_window(&label);
+            let state = handle.state::<DesktopState>();
+            state.operations.cancel_window(&label);
+            state.csv.close_window(&label);
         }
-        tauri::RunEvent::Exit => handle.state::<DesktopState>().operations.shutdown(),
+        tauri::RunEvent::Exit => {
+            let state = handle.state::<DesktopState>();
+            state.operations.shutdown();
+            state.csv.shutdown();
+        }
         _ => {}
     });
     Ok(())

@@ -745,6 +745,34 @@ async fn request_cancellation_is_isolated_and_dropped_guard_signals_only_its_chi
     Ok(())
 }
 
+#[tokio::test]
+async fn native_parent_cancels_csv_without_child_completion_cancelling_siblings() -> TestResult {
+    let directory = directory()?;
+    let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
+    let parent = CancellationToken::new();
+    let sibling = eutheto_core::PeopleCsvOperation::child_of(&parent);
+    app.detect_people_csv(
+        Cursor::new(SOURCE),
+        eutheto_core::PeopleCsvOperation::child_of(&parent),
+    )
+    .await
+    .boxed()?;
+    assert!(!parent.is_cancelled());
+    app.detect_people_csv(Cursor::new(SOURCE), sibling)
+        .await
+        .boxed()?;
+    let cancelled = eutheto_core::PeopleCsvOperation::child_of(&parent);
+    parent.cancel();
+    assert_code(
+        app.detect_people_csv(Cursor::new(SOURCE), cancelled).await,
+        "operation.cancelled",
+    );
+    app.detect_people_csv(Cursor::new(SOURCE), app.people_csv_operation())
+        .await
+        .boxed()?;
+    Ok(())
+}
+
 struct CountedOverflow {
     read: Arc<std::sync::atomic::AtomicUsize>,
 }

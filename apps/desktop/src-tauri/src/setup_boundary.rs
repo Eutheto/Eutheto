@@ -96,7 +96,7 @@ struct ScenarioRuleCatalogRequestV2 {
     expected_revision: Revision,
 }
 
-fn decode<T: DeserializeOwned>(request: Option<Value>) -> Result<T, ApiError> {
+pub(super) fn decode<T: DeserializeOwned>(request: Option<Value>) -> Result<T, ApiError> {
     request
         .and_then(|value| serde_json::from_value(value).ok())
         .ok_or_else(|| {
@@ -118,7 +118,7 @@ fn version_two(version: u32) -> Result<(), ApiError> {
         )))
     }
 }
-fn claim(
+pub(super) fn claim(
     operation_id: OperationId,
     request_id: RequestId,
     purpose: OperationPurposeV1,
@@ -135,7 +135,7 @@ fn claim(
         },
     }
 }
-fn progress(channel: tauri::ipc::Channel<tauri::ipc::Response>) -> ProgressSink {
+pub(super) fn progress(channel: tauri::ipc::Channel<tauri::ipc::Response>) -> ProgressSink {
     Arc::new(move |event| {
         if let Ok(message) = encode(event, PROGRESS_WIRE_BYTES, None) {
             let _ = channel.send(message);
@@ -283,7 +283,7 @@ async fn summary<R: tauri::Runtime>(
                     finish(
                         &mut execution,
                         request.request_id,
-                        revision,
+                        Some(revision),
                         result,
                         SUMMARY_BYTES + FRAME_BYTES,
                         cancellation,
@@ -293,7 +293,7 @@ async fn summary<R: tauri::Runtime>(
                     finish(
                         &mut execution,
                         request.request_id,
-                        revision,
+                        Some(revision),
                         result,
                         SUMMARY_BYTES + FRAME_BYTES,
                         cancellation,
@@ -367,7 +367,7 @@ async fn view<R: tauri::Runtime>(
                 finish(
                     &mut execution,
                     request.request_id,
-                    revision,
+                    Some(revision),
                     result,
                     VIEW_BYTES + FRAME_BYTES,
                     cancellation,
@@ -478,7 +478,7 @@ pub(super) async fn scenario_validate<R: tauri::Runtime>(
                 finish(
                     &mut execution,
                     request.request_id,
-                    revision,
+                    Some(revision),
                     result,
                     VALIDATION_BYTES + FRAME_BYTES,
                     cancellation,
@@ -525,7 +525,7 @@ pub(super) async fn workforce_apply_reviewed_generation<R: tauri::Runtime>(
                 finish(
                     &mut execution,
                     request_id,
-                    revision,
+                    Some(revision),
                     result,
                     MAX_COMMAND_RESULT_BYTES,
                     None,
@@ -536,17 +536,17 @@ pub(super) async fn workforce_apply_reviewed_generation<R: tauri::Runtime>(
         .await
 }
 
-async fn finish<T: Serialize + Send + 'static>(
+pub(super) async fn finish<T: Serialize + Send + 'static>(
     execution: &mut OperationExecution,
     request_id: RequestId,
-    revision: Revision,
+    revision: Option<Revision>,
     result: T,
     compact_limit: usize,
     cancellation: Option<CancellationToken>,
 ) -> SolutionApiResult {
     execution.preparing_response();
     tauri::async_runtime::spawn_blocking(move || {
-        let envelope = response(request_id, Some(revision), Vec::new(), result);
+        let envelope = response(request_id, revision, Vec::new(), result);
         // Every quoted unsafe integer occupies at least16 bytes before its two added quotes.
         let wire_limit = compact_limit + compact_limit / 8 + FRAME_BYTES;
         encode(&envelope, wire_limit, cancellation)

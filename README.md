@@ -2,7 +2,7 @@
 
 `eutheto` is a local-first, open-source constraint-optimization platform for building plans that people can understand, verify, edit, and trust.
 
-The planned platform will validate those requirements, translate them into a solver-neutral planning model, route the model to a compatible backend, independently verify every candidate against the original domain meaning, and present the result in human language.
+The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
 > **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope; its editors are not yet implemented. Remaining Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
 
@@ -62,9 +62,9 @@ Optional AI ──────┘            │
                                       domain verification/scoring
 ```
 
-The intended dependency direction is presentation → thin Tauri adapter → application services → domain packs → planning core → backend adapters and infrastructure. Domain packs will never construct solver-specific objects, and solver adapters will never depend on official domains.
+The dependency direction is presentation → thin Tauri adapter → application services → domain packs → planning core → backend adapters and infrastructure. Domain packs do not construct solver-specific objects, and solver adapters do not depend on official domains.
 
-Under this architecture, a candidate will be visible as accepted only after projection, structural validation, independent evaluation of every required domain rule, and authoritative score recomputation.
+The core accepts candidates only after projection, structural validation, independent evaluation of every required domain rule, and authoritative score recomputation.
 
 ## Roadmap
 
@@ -120,6 +120,14 @@ approved OR-Tools worker. The CLI can fully validate scenarios, retain verified
 results, explain recorded assignments, and export accepted JSON or assignment CSV.
 This remains a bounded development planner: the complete Workforce desktop flow,
 Seating, repair/comparison product flows, AI, and signed releases remain roadmap work.
+
+Phase 06 has added light/dark design-system foundations and a generated, bounded
+desktop setup API with native operation ownership, progress, and cancellation.
+Native people-CSV commands support picker-owned immutable snapshots, reviewed
+atomic imports, and separate rejected-row report saves. These are prerequisites
+for the Workforce editors, not a complete desktop planning or CSV-import screen.
+Use the headless Workforce workflow below for the currently available end-to-end
+optimization path.
 
 ## Quick start
 

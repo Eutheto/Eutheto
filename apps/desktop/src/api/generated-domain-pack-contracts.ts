@@ -5210,6 +5210,147 @@ function isWorkforceWorkloadWeight(value: unknown): value is WorkforceWorkloadWe
     Object.keys(value).every((key0) => key0 === "denominator" || key0 === "numerator")
   );
 }
+const WorkforceCsvUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export function isWorkforceCsvPerson(value: unknown): value is WorkforcePerson {
+  return (
+    isWorkforceWireObject(value) &&
+    Object.hasOwn(value, "kind") &&
+    value["kind"] === "person" &&
+    Object.hasOwn(value, "activeRange") &&
+    Number(
+      isWorkforceWireObject(value["activeRange"]) &&
+        Object.hasOwn(value["activeRange"], "kind") &&
+        value["activeRange"]["kind"] === "always" &&
+        Object.keys(value["activeRange"]).every((key2) => key2 === "kind"),
+    ) +
+      Number(
+        isWorkforceWireObject(value["activeRange"]) &&
+          Object.hasOwn(value["activeRange"], "kind") &&
+          value["activeRange"]["kind"] === "dateRange" &&
+          Object.hasOwn(value["activeRange"], "endDateExclusive") &&
+          isWorkforceWireString(value["activeRange"]["endDateExclusive"], 1, 16384) &&
+          Object.hasOwn(value["activeRange"], "startDate") &&
+          isWorkforceWireString(value["activeRange"]["startDate"], 1, 16384) &&
+          Object.keys(value["activeRange"]).every(
+            (key2) => key2 === "endDateExclusive" || key2 === "kind" || key2 === "startDate",
+          ),
+      ) ===
+      1 &&
+    isWorkforceWireObject(value["activeRange"]) &&
+    (!Object.hasOwn(value, "display") ||
+      (isWorkforceWireObject(value["display"]) &&
+        (!Object.hasOwn(value["display"], "avatarInitials") ||
+          isWorkforceWireString(value["display"]["avatarInitials"], 1, 16)) &&
+        (!Object.hasOwn(value["display"], "color") ||
+          (isWorkforceWireString(value["display"]["color"], 7, 7) &&
+            value["display"]["color"].startsWith("#"))) &&
+        Object.keys(value["display"]).every(
+          (key1) => key1 === "avatarInitials" || key1 === "color",
+        ))) &&
+    Object.hasOwn(value, "eligibleAssignmentTypeIds") &&
+    Array.isArray(value["eligibleAssignmentTypeIds"]) &&
+    value["eligibleAssignmentTypeIds"].length >= 0 &&
+    value["eligibleAssignmentTypeIds"].length <= 10000 &&
+    value["eligibleAssignmentTypeIds"].every(
+      (item1: unknown) => isWorkforceWireString(item1, 0, 1048576) && WorkforceCsvUuid.test(item1),
+    ) &&
+    (!Object.hasOwn(value, "externalId") || isWorkforceWireString(value["externalId"], 1, 256)) &&
+    (!Object.hasOwn(value, "homeLocationId") ||
+      (isWorkforceWireString(value["homeLocationId"], 0, 1048576) &&
+        WorkforceCsvUuid.test(value["homeLocationId"]))) &&
+    Object.hasOwn(value, "id") &&
+    isWorkforceWireString(value["id"], 0, 1048576) &&
+    WorkforceCsvUuid.test(value["id"]) &&
+    Object.hasOwn(value, "name") &&
+    isWorkforceWireString(value["name"], 1, 256) &&
+    Object.hasOwn(value, "qualificationGrants") &&
+    Array.isArray(value["qualificationGrants"]) &&
+    value["qualificationGrants"].length >= 0 &&
+    value["qualificationGrants"].length <= 10000 &&
+    value["qualificationGrants"].every(
+      (item1: unknown) =>
+        isWorkforceWireObject(item1) &&
+        (!Object.hasOwn(item1, "effectiveFrom") ||
+          isWorkforceWireString(item1["effectiveFrom"], 1, 16384)) &&
+        (!Object.hasOwn(item1, "expiresAt") ||
+          isWorkforceWireString(item1["expiresAt"], 1, 16384)) &&
+        Object.hasOwn(item1, "qualificationId") &&
+        isWorkforceWireString(item1["qualificationId"], 0, 1048576) &&
+        WorkforceCsvUuid.test(item1["qualificationId"]) &&
+        Object.keys(item1).every(
+          (key2) => key2 === "effectiveFrom" || key2 === "expiresAt" || key2 === "qualificationId",
+        ),
+    ) &&
+    Object.hasOwn(value, "tags") &&
+    Array.isArray(value["tags"]) &&
+    value["tags"].length >= 0 &&
+    value["tags"].length <= 10000 &&
+    value["tags"].every((item1: unknown) => isWorkforceWireString(item1, 1, 256)) &&
+    Object.hasOwn(value, "teamIds") &&
+    Array.isArray(value["teamIds"]) &&
+    value["teamIds"].length >= 0 &&
+    value["teamIds"].length <= 10000 &&
+    value["teamIds"].every(
+      (item1: unknown) => isWorkforceWireString(item1, 0, 1048576) && WorkforceCsvUuid.test(item1),
+    ) &&
+    (!Object.hasOwn(value, "workloadTarget") ||
+      (isWorkforceWireObject(value["workloadTarget"]) &&
+        Object.hasOwn(value["workloadTarget"], "bucketId") &&
+        isWorkforceWireString(value["workloadTarget"]["bucketId"], 0, 1048576) &&
+        WorkforceCsvUuid.test(value["workloadTarget"]["bucketId"]) &&
+        Object.hasOwn(value["workloadTarget"], "calendarId") &&
+        isWorkforceWireString(value["workloadTarget"]["calendarId"], 0, 1048576) &&
+        WorkforceCsvUuid.test(value["workloadTarget"]["calendarId"]) &&
+        Object.hasOwn(value["workloadTarget"], "membership") &&
+        Number(value["workloadTarget"]["membership"] === "reportingDate") +
+          Number(value["workloadTarget"]["membership"] === "startInstant") +
+          Number(value["workloadTarget"]["membership"] === "intersection") ===
+          1 &&
+        Object.hasOwn(value["workloadTarget"], "target") &&
+        typeof value["workloadTarget"]["target"] === "number" &&
+        Number.isSafeInteger(value["workloadTarget"]["target"]) &&
+        value["workloadTarget"]["target"] >= 0 &&
+        value["workloadTarget"]["target"] <= 4294967295 &&
+        Object.keys(value["workloadTarget"]).every(
+          (key1) =>
+            key1 === "bucketId" ||
+            key1 === "calendarId" ||
+            key1 === "membership" ||
+            key1 === "target",
+        ))) &&
+    Object.hasOwn(value, "workloadWeight") &&
+    isWorkforceWireObject(value["workloadWeight"]) &&
+    Object.hasOwn(value["workloadWeight"], "denominator") &&
+    typeof value["workloadWeight"]["denominator"] === "number" &&
+    Number.isSafeInteger(value["workloadWeight"]["denominator"]) &&
+    value["workloadWeight"]["denominator"] >= 1 &&
+    value["workloadWeight"]["denominator"] <= 1000000 &&
+    Object.hasOwn(value["workloadWeight"], "numerator") &&
+    typeof value["workloadWeight"]["numerator"] === "number" &&
+    Number.isSafeInteger(value["workloadWeight"]["numerator"]) &&
+    value["workloadWeight"]["numerator"] >= 1 &&
+    value["workloadWeight"]["numerator"] <= 1000000 &&
+    Object.keys(value["workloadWeight"]).every(
+      (key1) => key1 === "denominator" || key1 === "numerator",
+    ) &&
+    Object.keys(value).every(
+      (key0) =>
+        key0 === "activeRange" ||
+        key0 === "display" ||
+        key0 === "eligibleAssignmentTypeIds" ||
+        key0 === "externalId" ||
+        key0 === "homeLocationId" ||
+        key0 === "id" ||
+        key0 === "kind" ||
+        key0 === "name" ||
+        key0 === "qualificationGrants" ||
+        key0 === "tags" ||
+        key0 === "teamIds" ||
+        key0 === "workloadTarget" ||
+        key0 === "workloadWeight",
+    )
+  );
+}
 const WorkforceSetupResultGuards: {
   readonly [K in keyof WorkforceSetupQueryResults]: (
     value: unknown,

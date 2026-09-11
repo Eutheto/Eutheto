@@ -46,6 +46,14 @@ const COMMAND_CATALOG: &[&str] = &[
     "operation_cancel",
     "operation_release",
     "workforce_apply_reviewed_generation",
+    "people_csv_source_open",
+    "people_csv_source_close",
+    "people_csv_detect",
+    "people_csv_preview",
+    "people_csv_apply",
+    "people_csv_preview_discard",
+    "people_csv_rejected_rows",
+    "people_csv_rejected_rows_save",
     "scenario_get_summary",
     "scenario_get_setup_status",
     "scenario_get_view",
@@ -112,6 +120,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type * as Pack from "./generated-domain-pack-contracts";
 import {
+  isWorkforceCsvPerson,
   isWorkforceSetupQueryResult,
   isWorkforceSetupViewId,
 } from "./generated-domain-pack-contracts";
@@ -855,7 +864,12 @@ export type OperationPurposeV1 =
   | { readonly kind: "setupView"; readonly viewId: SetupViewId }
   | { readonly kind: "commandPreview"; readonly viewId: SetupViewId }
   | { readonly kind: "fullValidation" }
-  | { readonly kind: "applyReviewedGeneration" };
+  | { readonly kind: "applyReviewedGeneration" }
+  | { readonly kind: "csvSourceOpen" }
+  | { readonly kind: "csvDetect" }
+  | { readonly kind: "csvPreview" }
+  | { readonly kind: "csvApply" }
+  | { readonly kind: "csvReportSave" };
 export interface OperationContextV1 {
   readonly kind: "scenario";
   readonly scenarioId: UuidV7;
@@ -879,7 +893,10 @@ export type OperationPhaseV1 =
   | "buildingView"
   | "applyingPreview"
   | "validating"
-  | "preparingResponse";
+  | "preparingResponse"
+  | "selectingFile"
+  | "detectingFormat"
+  | "publishingReport";
 export interface OperationProgressV1 {
   readonly eventVersion: 1;
   readonly timestamp: string;
@@ -890,6 +907,142 @@ export interface OperationProgressV1 {
   readonly sequence: number;
   readonly phase: OperationPhaseV1;
 }
+
+export type PeopleCsvDialect = "comma" | "semicolon" | "tab";
+export type PeopleCsvField =
+  | "name" | "externalId" | "activeRange" | "qualificationGrants"
+  | "eligibleAssignmentTypeIds" | "homeLocationId" | "workloadWeight"
+  | "workloadTarget" | "tags" | "teamIds";
+export interface PeopleCsvColumn {
+  readonly index: number;
+  readonly field: PeopleCsvField;
+  readonly blank: "preserve" | "clear";
+}
+/** Native creation policy, not a person already accepted by domain validation. */
+export interface PeopleCsvNewPersonDefaults {
+  readonly activeRange: Pack.WorkforceActiveRange;
+  readonly qualificationGrants: readonly Pack.WorkforceQualificationGrant[];
+  readonly eligibleAssignmentTypeIds: readonly UuidV7[];
+  readonly homeLocationId?: UuidV7;
+  readonly workloadWeight: { readonly numerator: number; readonly denominator: number };
+  readonly workloadTarget?: {
+    readonly bucketId: UuidV7;
+    readonly calendarId: UuidV7;
+    readonly membership: Pack.WorkforceWindowMembership;
+    readonly target: number;
+  };
+  readonly tags: readonly string[];
+  readonly teamIds: readonly UuidV7[];
+  readonly display?: { readonly color?: string; readonly avatarInitials?: string };
+}
+export interface PeopleCsvMapping {
+  readonly dialect: PeopleCsvDialect;
+  readonly hasHeader: boolean;
+  readonly expectedColumns: number;
+  readonly columns: readonly PeopleCsvColumn[];
+  readonly newPersonDefaults: PeopleCsvNewPersonDefaults;
+  readonly referenceMappings: Readonly<Record<string, UuidV7>>;
+}
+export interface PeopleCsvDecision {
+  readonly record: number;
+  readonly decision: { readonly kind: "add" | "update"; readonly personId: UuidV7 } | { readonly kind: "skip" };
+}
+export interface PeopleCsvSource {
+  readonly rawBytes: number;
+  readonly blake3: string;
+  readonly logicalRecords: number;
+}
+export type PeopleCsvErrorCode =
+  | "io" | "cancelled" | "unsupportedEncoding" | "invalidUtf8" | "binaryControl"
+  | "sourceByteLimit" | "cellLimit" | "recordByteLimit" | "columnLimit" | "logicalRecordLimit"
+  | "parserNoProgress" | "detectionLimit" | "invalidMapping" | "mappingLimit" | "headerMismatch"
+  | "dataRecordLimit" | "invalidDecision" | "decisionLimit" | "mutationLimit"
+  | "rejectedReportLimit" | "validationReportLimit" | "previewLimit" | "reviewLimit"
+  | "unsupportedVersion" | "invalidCurrentDocument" | "invalidReview" | "staleReview" | "invalidBatch";
+export interface PeopleCsvDetectionV1 {
+  readonly schemaVersion: 1;
+  readonly dialects: readonly (
+    | { readonly status: "candidate"; readonly dialect: PeopleCsvDialect; readonly source: PeopleCsvSource;
+        readonly consistentColumns: number | null;
+        readonly samples: readonly { readonly record: number; readonly cells: readonly { readonly text: string; readonly truncated: boolean }[] }[] }
+    | { readonly status: "rejected"; readonly dialect: PeopleCsvDialect; readonly error: { readonly code: PeopleCsvErrorCode; readonly record?: number } }
+  )[];
+}
+export type PeopleCsvDisposition = "reviewable" | "blocked" | "noChanges";
+export type PeopleCsvRejectionCode = "columnCount" | "invalidCell" | "invalidReference" | "missingName" | "invalidPerson";
+export interface PeopleCsvRejectedRow { readonly record: number; readonly code: PeopleCsvRejectionCode }
+export interface PeopleCsvReview {
+  readonly format: "eutheto/workforce-people-csv-review";
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly scenarioBlake3: string;
+  readonly source: PeopleCsvSource;
+  readonly parserVersion: "csv-core-0.1.13";
+  readonly limitsVersion: 1;
+  readonly mapping: PeopleCsvMapping;
+  readonly decisions: readonly PeopleCsvDecision[];
+  readonly changesBlake3: string;
+  readonly rejectedBlake3: string;
+  readonly validationBlake3: string;
+}
+export interface PeopleCsvPreview {
+  readonly schemaVersion: 1;
+  readonly disposition: PeopleCsvDisposition;
+  readonly source: PeopleCsvSource;
+  readonly columns: readonly PeopleCsvColumn[];
+  readonly rows: readonly { readonly record: number; readonly status: "added" | "updated" | "unchanged" | "skipped" | "rejected" | "unresolved" | "conflict";
+    readonly personId: UuidV7 | null; readonly rejection: PeopleCsvRejectionCode | null }[];
+  readonly rejectedRows: readonly PeopleCsvRejectedRow[];
+  readonly validationIssues: readonly ValidationIssue[];
+  readonly batch: {
+    readonly schemaVersion: 1;
+    readonly packId: "official.workforce";
+    readonly scenarioSchemaVersion: 1;
+    readonly label: string | null;
+    readonly commands: readonly {
+      readonly commandType: "official.workforce.add_entity" | "official.workforce.update_entity";
+      readonly payload: { readonly entity: Pack.WorkforcePerson };
+    }[];
+  } | null;
+  readonly review: PeopleCsvReview | null;
+  readonly approvalDigest: string | null;
+}
+export interface PeopleCsvSourceOpenedV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly byteCount: number;
+}
+export interface PeopleCsvPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly previewId: UuidV7;
+  readonly preview: PeopleCsvPreview;
+}
+export interface PeopleCsvRejectedRowsV1 {
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly disposition: PeopleCsvDisposition;
+  readonly consumed: boolean;
+  readonly rejectedRows: readonly PeopleCsvRejectedRow[];
+}
+export interface PeopleCsvApplyV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly outcome: { readonly kind: "applied"; readonly commandId: UuidV7; readonly revision: Revision }
+    | { readonly kind: "noChanges"; readonly revision: Revision };
+  readonly report: PeopleCsvRejectedRowsV1;
+}
+export interface PeopleCsvReportSavedV1 { readonly schemaVersion: 1; readonly previewId: UuidV7 }
+export type PeopleCsvSourceTarget =
+  | { readonly kind: "source"; readonly sourceId: UuidV7 }
+  | { readonly kind: "creator"; readonly operationId: UuidV7; readonly requestId: UuidV7 };
+export type PeopleCsvPreviewTarget =
+  | { readonly kind: "preview"; readonly previewId: UuidV7 }
+  | { readonly kind: "creator"; readonly operationId: UuidV7; readonly requestId: UuidV7 };
 
 export interface CommandResultDto {
   readonly newRevision: Revision;
@@ -1793,31 +1946,40 @@ function shape<T extends object>(fields: { readonly [K in keyof T]-?: Guard<T[K]
   };
 }
 
+function isCalendarDate(year: number, month: number, day: number): boolean {
+  // Jiff permits year zero, but its signed negative-zero spelling is invalid.
+  if (Object.is(year, -0) || year < -9999 || year > 9999 || month < 1 || month > 12) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const maximum = month === 2 ? (leap ? 29 : 28)
+    : month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+  return day >= 1 && day <= maximum;
+}
+
 // Check calendar fields explicitly: Date.parse normalizes invalid dates and loses nanoseconds.
 function isTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 40) return false;
   const match =
-    /^(-?[0-9]{4,6})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]{1,9})?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))$/.exec(
+    /^([0-9]{4}|[+-][0-9]{6})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]{1,9})?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))$/.exec(
       value,
     );
   if (match === null) return false;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  if (
-    year < -9999 ||
-    year > 9999 ||
-    month < 1 ||
-    month > 12 ||
-    Number(match[4]) > 23 ||
-    Number(match[5]) > 59 ||
-    Number(match[6]) > 59 ||
-    (match[7] !== undefined && (Number(match[8]) > 23 || Number(match[9]) > 59))
-  )
-    return false;
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const maximum = month === 2 ? (leap ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31;
-  return day >= 1 && day <= maximum;
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHours = Number(match[8] ?? "0");
+  const offsetMinutes = Number(match[9] ?? "0");
+  if (!isCalendarDate(year, month, day) || hour > 23 || minute > 59 || second > 59 ||
+      offsetHours > 23 || offsetMinutes > 59) return false;
+  if (year !== -9999 && year !== 9999) return true;
+  // Only extreme civil years can cross Jiff Timestamp::MIN/MAX after offset conversion.
+  // Validated fields avoid Date normalization; integer seconds preserve all nanoseconds:
+  // MIN has fraction zero and MAX has fraction 999999999.
+  const offset = (offsetHours * 3600 + offsetMinutes * 60) * (match[7] === "-" ? -1 : 1);
+  const instant = Date.UTC(year, month - 1, day, hour, minute, second) / 1000 - offset;
+  return instant >= -377705023201 && instant <= 253402207200;
 }
 
 // Count compact JSON bytes in-place, including escaping, without stringify/UTF-8 buffer copies.
@@ -1958,14 +2120,16 @@ function invalidResponse(): Error & ApiErrorDto {
   };
   return Object.assign(new Error(error.message), error);
 }
-type ResponseRevisionKey<T> = keyof T &
-  ("revision" | "currentRevision" | "newRevision" | "libraryRevision");
+type ResponseRevision<T> =
+  | (keyof T & ("revision" | "currentRevision" | "newRevision" | "libraryRevision"))
+  | ((result: T) => Revision | null)
+  | null;
 function parseResponse<T>(
   value: unknown,
   requestId: UuidV7,
   guard: Guard<T>,
   maximum: number,
-  revisionKey: ResponseRevisionKey<T> | undefined,
+  revisionKey: ResponseRevision<T> | undefined,
 ): ApiResponseDto<T> {
   const envelope = shape<ApiResponseDto<T>>({
     schemaVersion: literal(API_SCHEMA_VERSION),
@@ -1976,11 +2140,15 @@ function parseResponse<T>(
   });
   if (!boundedJson(value, maximum) || !envelope(value) || value.requestId !== requestId)
     throw invalidResponse();
-  if (
-    revisionKey !== undefined &&
-    (!isObject(value.result) || value.result[revisionKey] !== value.currentRevision)
-  )
-    throw invalidResponse();
+  if (revisionKey !== undefined) {
+    const resultRevision =
+      typeof revisionKey === "function"
+        ? revisionKey(value.result)
+        : revisionKey === null
+          ? null
+          : value.result[revisionKey];
+    if (resultRevision !== value.currentRevision) throw invalidResponse();
+  }
   // These declared top-level fields are invocation echoes, not nested job/domain identities.
   if (
     isObject(value.result) &&
@@ -3285,8 +3453,183 @@ const isOperationProgress = shape<OperationProgressV1>({
     "applyingPreview",
     "validating",
     "preparingResponse",
+    "selectingFile",
+    "detectingFormat",
+    "publishingReport",
   ),
 });
+
+const CSV_SOURCE_BYTES = 16 * 1_048_576;
+const CSV_PREVIEW_WIRE_BYTES = ((CSV_SOURCE_BYTES + 65_536) * 9) / 8 + 65_536;
+const CSV_SMALL_WIRE_BYTES = (131_072 * 9) / 8 + 65_536;
+const isCsvRecord = (value: unknown): value is number => isU32(value) && value >= 1 && value <= 10_001;
+const isCsvErrorRecord = (value: unknown): value is number => isU32(value) && value >= 1 && value <= 10_002;
+const isCsvColumnCount = (value: unknown): value is number => isU32(value) && value >= 1 && value <= 64;
+const isCsvByteCount = (value: unknown): value is number => isU32(value) && value <= CSV_SOURCE_BYTES;
+const isCsvDialect = choices<PeopleCsvDialect>("comma", "semicolon", "tab");
+const isCsvDisposition = choices<PeopleCsvDisposition>("reviewable", "blocked", "noChanges");
+const isCsvRejection = choices<PeopleCsvRejectionCode>("columnCount", "invalidCell", "invalidReference", "missingName", "invalidPerson");
+const isCsvSource = shape<PeopleCsvSource>({
+  rawBytes: isCsvByteCount, blake3: isDigest,
+  logicalRecords: (value: unknown): value is number => isU32(value) && value <= 10_001,
+});
+const isCsvColumn = shape<PeopleCsvColumn>({
+  index: (value: unknown): value is number => isU32(value) && value < 64,
+  field: choices<PeopleCsvField>("name", "externalId", "activeRange", "qualificationGrants",
+    "eligibleAssignmentTypeIds", "homeLocationId", "workloadWeight", "workloadTarget", "tags", "teamIds"),
+  blank: choices("preserve", "clear"),
+});
+function isCsvText(value: unknown, maximumBytes: number): value is string {
+  if (typeof value !== "string" || value.length > maximumBytes) return false;
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const point = value.codePointAt(index);
+    if (point === undefined || (point >= 0xd800 && point <= 0xdfff)) return false;
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes > maximumBytes) return false;
+    if (point > 0xffff) index += 1;
+  }
+  return true;
+}
+function isCsvDate(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 13) return false;
+  const match = /^([0-9]{4}|[+-][0-9]{6})-([0-9]{2})-([0-9]{2})$/.exec(value);
+  return match !== null && isCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]));
+}
+// Match NewPersonDefaults serde types and CSV policy limits, not full-person semantic validity.
+const isCsvDefaults = shape<PeopleCsvNewPersonDefaults>({
+  activeRange: union<Pack.WorkforceActiveRange>(
+    shape({ kind: literal("always") }),
+    shape({ kind: literal("dateRange"), startDate: isCsvDate, endDateExclusive: isCsvDate }),
+  ),
+  qualificationGrants: arrayOf(shape<Pack.WorkforceQualificationGrant>({
+    qualificationId: isUuid, effectiveFrom: optional(isTimestamp), expiresAt: optional(isTimestamp),
+  }), 10_000),
+  eligibleAssignmentTypeIds: arrayOf(isUuid, 10_000),
+  homeLocationId: optional(isUuid),
+  workloadWeight: shape({ numerator: isU32, denominator: isU32 }),
+  workloadTarget: optional(shape({
+    bucketId: isUuid, calendarId: isUuid,
+    membership: choices("reportingDate", "startInstant", "intersection"), target: isU32,
+  })),
+  tags: arrayOf((value: unknown): value is string => isCsvText(value, 256), 10_000),
+  teamIds: arrayOf(isUuid, 10_000),
+  display: optional(shape<NonNullable<PeopleCsvNewPersonDefaults["display"]>>({
+    color: optional((value: unknown): value is string => isCsvText(value, 7)),
+    avatarInitials: optional((value: unknown): value is string => isCsvText(value, 16)),
+  })),
+});
+const csvMappingShape = shape<PeopleCsvMapping>({
+  dialect: isCsvDialect, hasHeader: isBoolean, expectedColumns: isCsvColumnCount,
+  columns: arrayOf(isCsvColumn, 10), newPersonDefaults: isCsvDefaults,
+  referenceMappings: recordOf(isUuid, (value: unknown): value is string => isCsvText(value, 64), 10_000),
+});
+const isCsvMapping = (value: unknown): value is PeopleCsvMapping =>
+  boundedJson(value, 1_048_576) && csvMappingShape(value);
+const isCsvDecision = shape<PeopleCsvDecision>({
+  record: isCsvRecord,
+  decision: union<PeopleCsvDecision["decision"]>(
+    shape({ kind: choices("add", "update"), personId: isUuid }),
+    shape({ kind: literal("skip") }),
+  ),
+});
+const isCsvDecisions = (value: unknown): value is readonly PeopleCsvDecision[] =>
+  boundedJson(value, 1_048_576) && arrayOf(isCsvDecision, 10_000)(value);
+const isCsvErrorCode = choices<PeopleCsvErrorCode>(
+  "io", "cancelled", "unsupportedEncoding", "invalidUtf8", "binaryControl",
+  "sourceByteLimit", "cellLimit", "recordByteLimit", "columnLimit", "logicalRecordLimit",
+  "parserNoProgress", "detectionLimit", "invalidMapping", "mappingLimit", "headerMismatch",
+  "dataRecordLimit", "invalidDecision", "decisionLimit", "mutationLimit", "rejectedReportLimit",
+  "validationReportLimit", "previewLimit", "reviewLimit", "unsupportedVersion",
+  "invalidCurrentDocument", "invalidReview", "staleReview", "invalidBatch",
+);
+const csvDetectionShape = shape<PeopleCsvDetectionV1>({
+  schemaVersion: literal(1),
+  dialects: arrayOf(union<PeopleCsvDetectionV1["dialects"][number]>(
+    shape({
+      status: literal("candidate"), dialect: isCsvDialect, source: isCsvSource,
+      consistentColumns: nullable(isCsvColumnCount),
+      samples: arrayOf(shape({
+        record: isCsvRecord,
+        cells: arrayOf(shape({ text: (value: unknown): value is string => isCsvText(value, 64), truncated: isBoolean }), 64),
+      }), 2),
+    }),
+    shape({
+      status: literal("rejected"), dialect: isCsvDialect,
+      error: shape<{ readonly code: PeopleCsvErrorCode; readonly record?: number }>({
+        code: isCsvErrorCode, record: optional(isCsvErrorRecord),
+      }),
+    }),
+  ), 3),
+});
+const isCsvDetection = (value: unknown): value is PeopleCsvDetectionV1 =>
+  boundedJson(value, 65_536) && csvDetectionShape(value) &&
+  value.dialects.length === 3 && new Set(value.dialects.map((item) => item.dialect)).size === 3;
+const isCsvRejectedRow = shape<PeopleCsvRejectedRow>({ record: isCsvRecord, code: isCsvRejection });
+const isCsvRejectedRows = (value: unknown): value is readonly PeopleCsvRejectedRow[] =>
+  boundedJson(value, 65_536) && arrayOf(isCsvRejectedRow, 200)(value);
+const csvReviewShape = shape<PeopleCsvReview>({
+  format: literal("eutheto/workforce-people-csv-review"), schemaVersion: literal(1),
+  scenarioId: isUuid, revision: isRevision, scenarioBlake3: isDigest, source: isCsvSource,
+  parserVersion: literal("csv-core-0.1.13"), limitsVersion: literal(1), mapping: isCsvMapping,
+  decisions: isCsvDecisions, changesBlake3: isDigest, rejectedBlake3: isDigest, validationBlake3: isDigest,
+});
+const isCsvReview = (value: unknown): value is PeopleCsvReview =>
+  boundedJson(value, 2 * 1_048_576) && csvReviewShape(value);
+const csvPreviewShape = shape<PeopleCsvPreview>({
+  schemaVersion: literal(1), disposition: isCsvDisposition, source: isCsvSource,
+  columns: arrayOf(isCsvColumn, 10),
+  rows: arrayOf(shape({
+    record: isCsvRecord,
+    status: choices("added", "updated", "unchanged", "skipped", "rejected", "unresolved", "conflict"),
+    personId: nullable(isUuid), rejection: nullable(isCsvRejection),
+  }), 10_000),
+  rejectedRows: isCsvRejectedRows,
+  validationIssues: (value: unknown): value is readonly ValidationIssue[] =>
+    boundedJson(value, 65_536) && arrayOf(isValidationIssue, 201)(value),
+  batch: nullable(shape({
+    schemaVersion: literal(1), packId: literal("official.workforce"), scenarioSchemaVersion: literal(1),
+    label: nullable(isText),
+    commands: arrayOf(shape({
+      commandType: choices("official.workforce.add_entity", "official.workforce.update_entity"),
+      payload: shape({ entity: isWorkforceCsvPerson }),
+    }), 1_000),
+  })),
+  review: nullable(isCsvReview), approvalDigest: nullable(isDigest),
+});
+const isCsvPreview = (value: unknown): value is PeopleCsvPreview =>
+  boundedJson(value, CSV_SOURCE_BYTES) && csvPreviewShape(value) &&
+  (value.disposition === "blocked"
+    ? value.batch === null && value.review === null && value.approvalDigest === null
+    : value.review !== null && value.approvalDigest !== null &&
+      (value.disposition === "noChanges" ? value.batch === null : value.batch !== null));
+const isCsvOpened = shape<PeopleCsvSourceOpenedV1>({
+  schemaVersion: literal(1), sourceId: isUuid, byteCount: isCsvByteCount,
+});
+const csvPreviewResultShape = shape<PeopleCsvPreviewV1>({
+  schemaVersion: literal(1), sourceId: isUuid, scenarioId: isUuid, revision: isRevision,
+  previewId: isUuid, preview: isCsvPreview,
+});
+const isCsvPreviewResult = (value: unknown): value is PeopleCsvPreviewV1 =>
+  csvPreviewResultShape(value) && (value.preview.review === null ||
+    (value.preview.review.scenarioId === value.scenarioId && value.preview.review.revision === value.revision &&
+      value.preview.review.source.blake3 === value.preview.source.blake3 &&
+      value.preview.review.source.rawBytes === value.preview.source.rawBytes &&
+      value.preview.review.source.logicalRecords === value.preview.source.logicalRecords));
+const isCsvReport = shape<PeopleCsvRejectedRowsV1>({
+  schemaVersion: literal(1), previewId: isUuid, disposition: isCsvDisposition,
+  consumed: isBoolean, rejectedRows: isCsvRejectedRows,
+});
+const isCsvApply = shape<PeopleCsvApplyV1>({
+  schemaVersion: literal(1), sourceId: isUuid, scenarioId: isUuid,
+  outcome: union<PeopleCsvApplyV1["outcome"]>(
+    shape({ kind: literal("applied"), commandId: isUuid, revision: isRevision }),
+    shape({ kind: literal("noChanges"), revision: isRevision }),
+  ),
+  report: isCsvReport,
+});
+const isCsvSaved = shape<PeopleCsvReportSavedV1>({ schemaVersion: literal(1), previewId: isUuid });
+const isCsvClosed = shape<{ readonly schemaVersion: 1 }>({ schemaVersion: literal(1) });
 
 function newRequestId(): UuidV7 {
   const bytes = window.crypto.getRandomValues(new Uint8Array(16));
@@ -3342,7 +3685,7 @@ async function call<T>(
   options: {
     readonly maximumBytes?: number;
     readonly onProgress?: Channel;
-    readonly revisionKey?: ResponseRevisionKey<T>;
+    readonly revisionKey?: ResponseRevision<T>;
   } = {},
 ): Promise<ApiResponseDto<T>> {
   const revision = "expectedRevision" in request ? request.expectedRevision : undefined;
@@ -3394,6 +3737,7 @@ async function call<T>(
 
 export interface SetupOperation<T> {
   readonly requestId: UuidV7;
+  readonly operationId: Promise<UuidV7>;
   readonly result: Promise<ApiResponseDto<T>>;
   /** Cancellation acknowledgement is not a terminal outcome. Continue awaiting result. */
   cancel(): Promise<ApiResponseDto<OperationCancelledV1>>;
@@ -3409,7 +3753,12 @@ type SetupOperationCommand =
   | "scenario_search_entities"
   | "scenario_get_rule_catalog"
   | "scenario_validate"
-  | "workforce_apply_reviewed_generation";
+  | "workforce_apply_reviewed_generation"
+  | "people_csv_source_open"
+  | "people_csv_detect"
+  | "people_csv_preview"
+  | "people_csv_apply"
+  | "people_csv_rejected_rows_save";
 interface NativeCallbackRegistry {
   readonly unregisterCallback: (id: number) => void;
 }
@@ -3465,7 +3814,7 @@ export class SetupOperationScope {
     payload: object,
     guard: Guard<T>,
     maximumBytes: number,
-    revisionKey: ResponseRevisionKey<T>,
+    revisionKey: ResponseRevision<T>,
     onProgress?: (event: OperationProgressV1) => void,
   ): SetupOperation<T> {
     if (this.#disposed) throw inactiveOperation();
@@ -3602,7 +3951,201 @@ export class SetupOperationScope {
         if (!receivedSuccess) void releaseNative().catch(() => undefined);
       }
     })();
-    return { requestId, result, cancel, release, isCurrent };
+    return {
+      requestId,
+      get operationId() {
+        return prepared.then(({ result: reservation }) => reservation.operationId);
+      },
+      result,
+      cancel,
+      release,
+      isCurrent,
+    };
+  }
+}
+
+interface CsvOwnedResource {
+  readonly kind: "source" | "preview";
+  readonly operation: SetupOperation<unknown>;
+  id: UuidV7 | undefined;
+  closing: boolean;
+}
+
+/** Owns CSV grants/reports across revision scopes, but never authoritative scenario state. */
+export class PeopleCsvFlow {
+  readonly #scenarioId: UuidV7;
+  readonly #operations = new Set<SetupOperation<unknown>>();
+  readonly #resources = new Set<CsvOwnedResource>();
+  #disposed = false;
+
+  constructor(scenarioId: UuidV7) {
+    if (!isUuid(scenarioId)) throw new RangeError("A canonical scenario identity is required");
+    this.#scenarioId = scenarioId;
+  }
+
+  #scope(scope: SetupOperationScope): Revision {
+    if (this.#disposed) throw inactiveOperation();
+    if (scope.context.scenarioId !== this.#scenarioId)
+      throw new RangeError("The CSV flow belongs to another scenario");
+    return requireSetupRevision(scope);
+  }
+
+  #capacity(kind: CsvOwnedResource["kind"]): void {
+    let count = 0;
+    for (const resource of this.#resources) if (resource.kind === kind) count += 1;
+    if (count >= 3) throw new RangeError("Dismiss an existing CSV resource before opening another");
+  }
+
+  async #cleanup(resource: CsvOwnedResource): Promise<void> {
+    resource.closing = true;
+    // A failed acknowledgement must not skip creator-target cleanup.
+    await resource.operation.release().catch(() => undefined);
+    let operationId: UuidV7;
+    try {
+      operationId = await resource.operation.operationId;
+    } catch {
+      // Without the prepare result the generated client cannot have invoked acquisition.
+      this.#resources.delete(resource);
+      return;
+    }
+    await call(resource.kind === "source" ? "people_csv_source_close" : "people_csv_preview_discard", {
+      schemaVersion: 1, requestId: newRequestId(), scenarioId: this.#scenarioId,
+      target: { kind: "creator", operationId, requestId: resource.operation.requestId },
+    }, isCsvClosed, { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
+    this.#resources.delete(resource);
+  }
+
+  #track<T>(
+    operation: SetupOperation<T>,
+    resourceSpec?: { readonly kind: CsvOwnedResource["kind"]; readonly id: (value: T) => UuidV7 },
+    onSuccess?: (value: T) => void,
+  ): SetupOperation<T> {
+    const resource: CsvOwnedResource | undefined = resourceSpec === undefined ? undefined : {
+      kind: resourceSpec.kind, operation, id: undefined, closing: false,
+    };
+    if (resource !== undefined) this.#resources.add(resource);
+    const result = operation.result.then((response) => {
+      if (resource !== undefined && resourceSpec !== undefined) resource.id = resourceSpec.id(response.result);
+      onSuccess?.(response.result);
+      return response;
+    }).finally(async () => {
+      this.#operations.delete(tracked);
+      if (resource !== undefined &&
+        (resource.id === undefined || resource.closing || this.#disposed || !operation.isCurrent())) {
+        // Repeat after late settlement: a failed release may have preceded native reservation.
+        // Cleanup failure cannot replace a committed mutation or the real operation error.
+        await this.#cleanup(resource).catch(() => undefined);
+      }
+    });
+    const tracked: SetupOperation<T> = {
+      requestId: operation.requestId,
+      get operationId() { return operation.operationId; },
+      result,
+      cancel: () => operation.cancel(),
+      release: () => operation.release().finally(async () => {
+        if (resource !== undefined) await this.#cleanup(resource).catch(() => undefined);
+      }),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
+
+  open(scope: SetupOperationScope, onProgress?: (event: OperationProgressV1) => void): SetupOperation<PeopleCsvSourceOpenedV1> {
+    this.#scope(scope);
+    this.#capacity("source");
+    return this.#track(scope.run("people_csv_source_open", { kind: "csvSourceOpen" },
+      { schemaVersion: 1 }, isCsvOpened, CSV_SMALL_WIRE_BYTES, null, onProgress),
+      { kind: "source", id: (value) => value.sourceId });
+  }
+
+  detect(scope: SetupOperationScope, sourceId: UuidV7, onProgress?: (event: OperationProgressV1) => void): SetupOperation<PeopleCsvDetectionV1> {
+    this.#scope(scope);
+    return this.#track(scope.run("people_csv_detect", { kind: "csvDetect" },
+      { schemaVersion: 1, sourceId }, isCsvDetection, CSV_SMALL_WIRE_BYTES, null, onProgress));
+  }
+
+  preview(scope: SetupOperationScope, sourceId: UuidV7,
+    input: { readonly mapping: PeopleCsvMapping; readonly decisions: readonly PeopleCsvDecision[] },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PeopleCsvPreviewV1> {
+    const revision = this.#scope(scope);
+    this.#capacity("preview");
+    if (!isCsvMapping(input.mapping) || !isCsvDecisions(input.decisions))
+      throw new RangeError("CSV mapping or decisions exceed their typed limits");
+    const guard = (value: unknown): value is PeopleCsvPreviewV1 =>
+      isCsvPreviewResult(value) && value.scenarioId === this.#scenarioId &&
+      value.sourceId === sourceId && value.revision === revision;
+    return this.#track(scope.run("people_csv_preview", { kind: "csvPreview" },
+      { schemaVersion: 1, sourceId, mapping: input.mapping, decisions: input.decisions }, guard, CSV_PREVIEW_WIRE_BYTES, "revision", onProgress),
+      { kind: "preview", id: (value) => value.previewId });
+  }
+
+  apply(scope: SetupOperationScope, input: {
+    readonly sourceId: UuidV7; readonly previewId: UuidV7; readonly approvedDigest: string;
+    readonly commandId: UuidV7; readonly actor: ActorRef; readonly truncateRedo: boolean;
+  }, onProgress?: (event: OperationProgressV1) => void): SetupOperation<PeopleCsvApplyV1> {
+    const revision = this.#scope(scope);
+    const { sourceId, previewId, commandId } = input;
+    const guard = (value: unknown): value is PeopleCsvApplyV1 =>
+      isCsvApply(value) && value.sourceId === sourceId && value.scenarioId === this.#scenarioId &&
+      value.report.previewId === previewId && value.report.consumed &&
+      value.report.disposition === (value.outcome.kind === "applied" ? "reviewable" : "noChanges") &&
+      (value.outcome.kind === "applied"
+        ? value.outcome.commandId === commandId && value.outcome.revision === revision + 1
+        : value.outcome.revision === revision);
+    return this.#track(scope.run("people_csv_apply", { kind: "csvApply" },
+      { schemaVersion: 1, ...input }, guard, CSV_SMALL_WIRE_BYTES, (value) => value.outcome.revision, onProgress),
+      undefined, () => {
+        // Rust closes the snapshot after a successful/no-change apply, even if later publication fails.
+        for (const resource of this.#resources)
+          if (resource.kind === "source" && resource.id === sourceId) this.#resources.delete(resource);
+      });
+  }
+
+  async closeSource(sourceId: UuidV7): Promise<void> {
+    await call("people_csv_source_close", { schemaVersion: 1, requestId: newRequestId(),
+      scenarioId: this.#scenarioId, target: { kind: "source", sourceId } },
+      isCsvClosed, { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
+    for (const resource of this.#resources)
+      if (resource.kind === "source" && resource.id === sourceId) this.#resources.delete(resource);
+  }
+
+  async discardPreview(previewId: UuidV7): Promise<void> {
+    await call("people_csv_preview_discard", { schemaVersion: 1, requestId: newRequestId(),
+      scenarioId: this.#scenarioId, target: { kind: "preview", previewId } },
+      isCsvClosed, { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
+    for (const resource of this.#resources)
+      if (resource.kind === "preview" && resource.id === previewId) this.#resources.delete(resource);
+  }
+
+  rejectedRows(previewId: UuidV7): Promise<ApiResponseDto<PeopleCsvRejectedRowsV1>> {
+    if (this.#disposed) throw inactiveOperation();
+    return call("people_csv_rejected_rows", { schemaVersion: 1, requestId: newRequestId(),
+      scenarioId: this.#scenarioId, previewId },
+      (value: unknown): value is PeopleCsvRejectedRowsV1 => isCsvReport(value) && value.previewId === previewId,
+      { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
+  }
+
+  saveRejectedRows(scope: SetupOperationScope, previewId: UuidV7,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PeopleCsvReportSavedV1> {
+    this.#scope(scope);
+    return this.#track(scope.run("people_csv_rejected_rows_save", { kind: "csvReportSave" },
+      { schemaVersion: 1, previewId },
+      (value: unknown): value is PeopleCsvReportSavedV1 => isCsvSaved(value) && value.previewId === previewId,
+      CSV_SMALL_WIRE_BYTES, null, onProgress));
+  }
+
+  /** Signals first; completion can wait for an OS picker to return. No rollback is implied. */
+  async dispose(): Promise<void> {
+    this.#disposed = true;
+    const operations = [...this.#operations];
+    await Promise.allSettled(operations.map((operation) => operation.release()));
+    await Promise.allSettled([...this.#resources].map((resource) => this.#cleanup(resource)));
+    await Promise.allSettled(operations.map((operation) => operation.result));
+    // Surface any remaining custody-cleanup failure without replacing an operation's receipt.
+    await Promise.all([...this.#resources].map((resource) => this.#cleanup(resource)));
   }
 }
 
@@ -4280,18 +4823,25 @@ pub fn check(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn generated_files() -> Vec<(&'static str, String)> {
-    vec![
-        (GENERATED_DESKTOP_API_PATH, generated_desktop_api()),
+fn generated_files(repo_root: &Path) -> Result<Vec<(&'static str, String)>> {
+    Ok(vec![
+        (
+            GENERATED_DESKTOP_API_PATH,
+            crate::phase02_generate::format_typescript(
+                repo_root,
+                "src/api/generated.ts",
+                &generated_desktop_api(),
+            )?,
+        ),
         (
             GENERATED_RUST_COMMAND_CATALOG_PATH,
             generated_rust_command_catalog(),
         ),
-    ]
+    ])
 }
 
 fn all_generated_files(repo_root: &Path) -> Result<Vec<crate::protocol_generate::GeneratedOutput>> {
-    let mut files = generated_files()
+    let mut files = generated_files(repo_root)?
         .into_iter()
         .map(|(path, contents)| (path.to_owned(), contents.into_bytes()))
         .collect::<Vec<_>>();

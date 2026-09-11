@@ -1,0 +1,300 @@
+{
+  "sourceOpened": {
+    "schemaVersion": 1,
+    "byteCount": 29,
+    "sourceId": "01a08d98-40ae-7932-afbd-fb10e666c9ed"
+  },
+  "detection": {
+    "dialects": [
+      {
+        "status": "candidate",
+        "dialect": "comma",
+        "source": {
+          "logicalRecords": 3,
+          "rawBytes": 29,
+          "blake3": "a6384c67a1e1746ff842eff9f25dd559b7daec0d8e82cacee5de4e49d8823ba8"
+        },
+        "samples": [
+          {
+            "cells": [
+              {
+                "truncated": false,
+                "text": "external"
+              },
+              {
+                "truncated": false,
+                "text": "name"
+              }
+            ],
+            "record": 1
+          },
+          {
+            "cells": [
+              {
+                "truncated": false,
+                "text": "one"
+              },
+              {
+                "truncated": false,
+                "text": "River"
+              }
+            ],
+            "record": 2
+          }
+        ],
+        "consistentColumns": 2
+      },
+      {
+        "status": "candidate",
+        "dialect": "semicolon",
+        "source": {
+          "logicalRecords": 3,
+          "rawBytes": 29,
+          "blake3": "a6384c67a1e1746ff842eff9f25dd559b7daec0d8e82cacee5de4e49d8823ba8"
+        },
+        "samples": [
+          {
+            "cells": [
+              {
+                "truncated": false,
+                "text": "external,name"
+              }
+            ],
+            "record": 1
+          },
+          {
+            "cells": [
+              {
+                "truncated": false,
+                "text": "one,River"
+              }
+            ],
+            "record": 2
+          }
+        ],
+        "consistentColumns": 1
+      },
+      {
+        "status": "candidate",
+        "dialect": "tab",
+        "source": {
+          "logicalRecords": 3,
+          "rawBytes": 29,
+          "blake3": "a6384c67a1e1746ff842eff9f25dd559b7daec0d8e82cacee5de4e49d8823ba8"
+        },
+        "samples": [
+          {
+            "cells": [
+              {
+                "truncated": false,
+                "text": "external,name"
+              }
+            ],
+            "record": 1
+          },
+          {
+            "cells": [
+              {
+                "truncated": false,
+                "text": "one,River"
+              }
+            ],
+            "record": 2
+          }
+        ],
+        "consistentColumns": 1
+      }
+    ],
+    "schemaVersion": 1
+  },
+  "preview": {
+    "revision": 0,
+    "sourceId": "01a08d98-40ae-7932-afbd-fb10e666c9ed",
+    "preview": {
+      "batch": {
+        "schemaVersion": 1,
+        "label": "Import people from CSV",
+        "packId": "official.workforce",
+        "scenarioSchemaVersion": 1,
+        "commands": [
+          {
+            "payload": {
+              "entity": {
+                "activeRange": {
+                  "kind": "always"
+                },
+                "externalId": "one",
+                "kind": "person",
+                "workloadWeight": {
+                  "numerator": 1,
+                  "denominator": 1
+                },
+                "name": "River",
+                "qualificationGrants": [],
+                "eligibleAssignmentTypeIds": [],
+                "id": "0194aa00-0000-7000-8000-000000000201",
+                "teamIds": [],
+                "tags": []
+              }
+            },
+            "commandType": "official.workforce.add_entity"
+          }
+        ]
+      },
+      "approvalDigest": "31e9bc7c3d2a539853f32c2349003e1d5a5ff7a4bc12c03389c8e721d1ae3121",
+      "rows": [
+        {
+          "status": "added",
+          "personId": "0194aa00-0000-7000-8000-000000000201",
+          "rejection": null,
+          "record": 2
+        },
+        {
+          "status": "rejected",
+          "personId": null,
+          "rejection": "missingName",
+          "record": 3
+        }
+      ],
+      "validationIssues": [
+        {
+          "resource": null,
+          "code": "missingName",
+          "severity": "warning",
+          "fieldPath": "/peopleCsv/records/3",
+          "message": "The row was rejected and is excluded from the proposed import."
+        }
+      ],
+      "schemaVersion": 1,
+      "source": {
+        "logicalRecords": 3,
+        "rawBytes": 29,
+        "blake3": "a6384c67a1e1746ff842eff9f25dd559b7daec0d8e82cacee5de4e49d8823ba8"
+      },
+      "rejectedRows": [
+        {
+          "code": "missingName",
+          "record": 3
+        }
+      ],
+      "columns": [
+        {
+          "index": 0,
+          "field": "externalId",
+          "blank": "preserve"
+        },
+        {
+          "index": 1,
+          "field": "name",
+          "blank": "preserve"
+        }
+      ],
+      "disposition": "reviewable",
+      "review": {
+        "limitsVersion": 1,
+        "parserVersion": "csv-core-0.1.13",
+        "rejectedBlake3": "032c5d819504dc2a58f5852fd92eaecd0a5100f77140dc4bba2deb5cc280bc08",
+        "scenarioBlake3": "40787339a9c091c6427c36ade0dd4473a630a8cd35b39b6e4d8c298162c9156f",
+        "source": {
+          "logicalRecords": 3,
+          "rawBytes": 29,
+          "blake3": "a6384c67a1e1746ff842eff9f25dd559b7daec0d8e82cacee5de4e49d8823ba8"
+        },
+        "format": "eutheto/workforce-people-csv-review",
+        "revision": 0,
+        "mapping": {
+          "dialect": "comma",
+          "expectedColumns": 2,
+          "columns": [
+            {
+              "index": 0,
+              "field": "externalId",
+              "blank": "preserve"
+            },
+            {
+              "index": 1,
+              "field": "name",
+              "blank": "preserve"
+            }
+          ],
+          "newPersonDefaults": {
+            "activeRange": {
+              "kind": "always"
+            },
+            "qualificationGrants": [],
+            "eligibleAssignmentTypeIds": [],
+            "tags": [],
+            "workloadWeight": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "teamIds": []
+          },
+          "referenceMappings": {},
+          "hasHeader": true
+        },
+        "decisions": [
+          {
+            "decision": {
+              "personId": "0194aa00-0000-7000-8000-000000000201",
+              "kind": "add"
+            },
+            "record": 2
+          },
+          {
+            "decision": {
+              "personId": "0194aa00-0000-7000-8000-000000000202",
+              "kind": "add"
+            },
+            "record": 3
+          }
+        ],
+        "changesBlake3": "fa88d2336f162ce5941e2f7cdb2775348f399fa4b8606d2a12a3e5e36e07e2f2",
+        "validationBlake3": "91a6363df6fd16e193d27caf348d0b88ac084835cdbc11533d13de0ad03b920c",
+        "schemaVersion": 1,
+        "scenarioId": "01a08d98-4074-7860-abdf-8cfee257afb7"
+      }
+    },
+    "schemaVersion": 1,
+    "scenarioId": "01a08d98-4074-7860-abdf-8cfee257afb7",
+    "previewId": "01a08d99-8f14-73c2-905d-3739651ad6e7"
+  },
+  "applied": {
+    "schemaVersion": 1,
+    "outcome": {
+      "commandId": "0194aa00-0000-7000-8000-000000000203",
+      "revision": 1,
+      "kind": "applied"
+    },
+    "scenarioId": "01a08d98-4074-7860-abdf-8cfee257afb7",
+    "report": {
+      "schemaVersion": 1,
+      "rejectedRows": [
+        {
+          "code": "missingName",
+          "record": 3
+        }
+      ],
+      "disposition": "reviewable",
+      "consumed": true,
+      "previewId": "01a08d99-8f14-73c2-905d-3739651ad6e7"
+    },
+    "sourceId": "01a08d98-40ae-7932-afbd-fb10e666c9ed"
+  },
+  "rejectedRows": {
+    "schemaVersion": 1,
+    "rejectedRows": [
+      {
+        "code": "missingName",
+        "record": 3
+      }
+    ],
+    "disposition": "reviewable",
+    "consumed": true,
+    "previewId": "01a08d99-8f14-73c2-905d-3739651ad6e7"
+  },
+  "reportSaved": {
+    "schemaVersion": 1,
+    "previewId": "01a08d99-8f14-73c2-905d-3739651ad6e7"
+  }
+}
