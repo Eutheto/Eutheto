@@ -412,6 +412,7 @@ fn smoke_solve_flow(
         "validation used a different revision"
     );
     let output = root.join(format!("{label}-result.json"));
+    let diagnostics = root.join(format!("{label}-diagnostics.json"));
     let solved = run_cli(
         executable,
         data,
@@ -428,11 +429,19 @@ fn smoke_solve_flow(
             "1",
             "--max-time",
             "10s",
+            "--include-diagnostics",
+            path_text(&diagnostics)?,
             "--output",
             path_text(&output)?,
         ],
         0,
-    )?;
+    )
+    .map_err(|error| match read_smoke_json(&diagnostics) {
+        Ok(metadata) => anyhow::anyhow!("{error}; solve diagnostics: {metadata}"),
+        Err(diagnostic_error) => {
+            anyhow::anyhow!("{error}; solve diagnostics unavailable: {diagnostic_error}")
+        }
+    })?;
     let result = &solved["result"];
     ensure!(
         result["scenarioId"] == scenario_id
@@ -700,7 +709,8 @@ fn run_cli(
     );
     ensure!(
         status.code() == Some(expected_exit),
-        "CLI smoke command {args:?} returned {status}, expected {expected_exit}; stderr: {}",
+        "CLI smoke command {args:?} returned {status}, expected {expected_exit}; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
     let bytes = if expected_exit == 0 {
