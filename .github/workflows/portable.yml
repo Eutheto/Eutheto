@@ -277,7 +277,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo test --locked --all-targets --package eutheto-core --package eutheto-cli --package eutheto-export --package eutheto-desktop
+          cargo test --locked --all-targets --package eutheto-export
+          cargo test --locked --all-targets --package eutheto-desktop
+          cargo test --locked --all-targets --package eutheto-core --package eutheto-cli
           cargo run --locked --package eutheto-cli -- status
 
       - name: Test and build the desktop shell in the default Nix shell
