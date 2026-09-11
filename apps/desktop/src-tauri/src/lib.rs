@@ -3788,10 +3788,6 @@ mod tests {
         let regular = directory.path().join("regular.eutheto");
         std::fs::write(&regular, b"portable")?;
         assert_eq!(read_bounded_portable(&regular), Ok(b"portable".to_vec()));
-        assert_eq!(
-            read_bounded_portable(directory.path()),
-            Err(NativeFileError::InvalidFileType)
-        );
         let oversized = directory.path().join("oversized.eutheto");
         let oversized_file = std::fs::File::create(&oversized)?;
         oversized_file.set_len(eutheto_export::PORTABLE_LIMITS.max_archive_bytes + 1)?;

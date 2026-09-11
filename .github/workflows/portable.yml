@@ -279,6 +279,7 @@ jobs:
         run: |
           cargo test --locked --all-targets --package eutheto-export
           cargo test --locked --all-targets --package eutheto-desktop
+          cargo test --locked --package eutheto-desktop --lib native_file::tests::windows_final_file_reparse_point_is_rejected -- --ignored --exact
           cargo test --locked --all-targets --package eutheto-core --package eutheto-cli
           cargo run --locked --package eutheto-cli -- status
 
