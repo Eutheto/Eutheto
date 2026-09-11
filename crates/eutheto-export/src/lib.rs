@@ -2185,6 +2185,26 @@ impl PrivatePublicationDirectory {
 
     fn create(path: PathBuf) -> std::io::Result<Self> {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        // .NET CreateDirectory is recursive. Require an existing parent and deny
+        // its deletion while creating the private child, rather than creating an
+        // unrequested destination hierarchy as a side effect of staging.
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "staging parent is missing",
+            )
+        })?;
+        let parent_handle = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .share_mode(0x0000_0001 | 0x0000_0002)
+            .custom_flags(0x0200_0000)
+            .open(parent)?;
+        if !parent_handle.metadata()?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "staging parent is not a directory",
+            ));
+        }
         match std::fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),

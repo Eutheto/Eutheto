@@ -116,3 +116,20 @@ fn live_staging_directory_cannot_be_replaced_and_publish_releases_it() -> TestRe
     assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
     Ok(())
 }
+
+#[test]
+fn report_staging_does_not_create_a_missing_destination_parent() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let parent = directory.path().join("missing");
+    let control = OperationControl::Cancellation(CancellationToken::new());
+    assert!(matches!(
+        prepare_json_atomic_controlled(
+            &parent.join("report.json"),
+            &serde_json::json!({"rows": []}),
+            &control,
+        ),
+        Err(ExportError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(!parent.exists());
+    Ok(())
+}
