@@ -69,6 +69,11 @@ pkgs.mkShell {
     export PNPM_HOME="$PWD/.cache/pnpm/home"
     export XDG_CACHE_HOME="$PWD/.cache"
 
+    ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+      # Unbundled GTK dialogs need runtime discovery of GLib's build-time schema paths.
+      export XDG_DATA_DIRS="$GSETTINGS_SCHEMAS_PATH:''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    ''}
+
     source ${./dev-shell-welcome.sh}
   '';
 }
