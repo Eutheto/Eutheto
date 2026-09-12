@@ -2880,10 +2880,11 @@ mod tests {
                 Err(NativeFileError::InvalidFileType)
             );
         }
-        assert_eq!(
+        // Windows can refuse directory opening before same-handle type inspection.
+        assert!(matches!(
             read_bounded_portable(directory.path(), &cancellation),
-            Err(NativeFileError::InvalidFileType)
-        );
+            Err(NativeFileError::InvalidFileType | NativeFileError::Unreadable)
+        ));
         cancellation.cancel();
         assert_eq!(
             read_bounded_portable(&regular, &cancellation),
