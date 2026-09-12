@@ -141,6 +141,10 @@ These decisions remain approved until superseded by a numbered ADR with context,
 | ADR-017 | Time has an explicit scenario IANA zone and DST policy; solver quantities use checked integer units. |
 | ADR-018 | The public external representation is eutheto's versioned scenario document/bundle, never an OR-Tools or MiniZinc model. |
 
+## Temporary operating decision record
+
+[Proposed ADR-019](../adr/019-phase06-integration-and-verification.md) records the explicit user-authorized Phase06 integration trial. It is not part of the approved ADR set and does not close governance appointment gates. The [contributor workflow](../contributors/git-workflow.md#temporary-phase06-integration) defines its exact branch scope, verification cadence, and expiry.
+
 ## System architecture and dependency direction
 
 ```text
@@ -278,6 +282,8 @@ The Branch-H collaboration pilot likewise enters from completed Phase12 plus its
 After contracts exist, prefer complete thin paths—one person, one shift, coverage → compile → solve → verify → display → edit → undo—over horizontal mock layers. Add each official rule with schema/migration analysis, command DTO/validation, plain-language editor, fast/full validation, planning compilation, backend capability/translation tests, independent verification, provenance/explanation, appropriate AI schema, CLI/document example, edge/infeasible fixtures, user limitations, and model/benchmark review. Solver formulation alone is never “done.”
 
 Use trunk-based development, short-lived branches, protected `main`, and tags from tested commits. Add schema/protocol compatibility fixtures with the change, not at release time. Cargo features are sparse and explicit (`backend-pumpkin`, reviewed future adapters, diagnostics, platform integrations); required public packs are normal-build features. Frontend experiments use a typed application feature registry, never ad-hoc local-storage flags.
+
+The remainder of Phase06 has one user-authorized, time-bounded [integration-branch exception](../contributors/git-workflow.md#temporary-phase06-integration). Package dependencies may consume exact verified phase commits; `main` stays the permanent trunk and all final-main/manual gates remain required.
 
 ## Shared definitions
 

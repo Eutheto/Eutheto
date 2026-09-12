@@ -97,6 +97,8 @@ Each lane first checks its native architecture and Nix system, runs `nix flake c
 
 Ordinary pull requests run the path-relevant Tier-1 matrix and defer the two `macos-15-intel` source/package lanes. A pull request runs those Intel lanes immediately when it changes native desktop packaging, Nix or Cargo platform configuration, the worker build, the Rust toolchain, or either target-selection workflow. The Intel lanes always run for merge-group candidates, pushes to `main`, version-tag candidates, manual dispatches, and the staggered weekly schedules. Stable Portable and OR-Tools gate jobs turn skipped irrelevant matrices into explicit successful checks and require every selected matrix job otherwise; the protected `main` merge queue requires those gates before integration.
 
+For PRs targeting exactly `phase/06-desktop`, the user-authorized [temporary integration trial](git-workflow.md#temporary-phase06-integration) instead runs source/security/dependency checks on every package, defers native/package matrices only for the documented source-only path allowance, and requires full exact-phase checkpoints at the four named package boundaries. All other PR and non-PR policies above remain unchanged. An explicitly deferred policy gate is not native or packaged-artifact evidence.
+
 This is configured CI coverage, not a claim that a workflow run has completed. A queued, unavailable, or failed hosted-runner lane remains an explicit evidence gap for that architecture. Successful flake evaluation and shell entry prove the pinned environment on that runner, while the unbundled Tauri build remains source-build evidence rather than installer, signed-package, notarization, or clean-machine launch evidence.
 
 ## Caches and fallback behavior
