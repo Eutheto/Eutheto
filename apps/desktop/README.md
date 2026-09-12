@@ -54,6 +54,30 @@ ownership on settlement or disposal. Cancellation acknowledgement is not a
 terminal result. Full readiness distinguishes not-run, running, completed,
 failed, cancelled, and stale input; an empty fast report is not full readiness.
 
+The settings/About boundary is API-only; `/settings` and `/about/licenses` are
+not yet implemented screens. Existing get/update/reset commands keep their local
+validation. `SettingsImportFlow` and `LibraryOperationScope` provide native
+picker preview, one-use approval, atomic apply, and explicit review disposal.
+The standalone V1 `eutheto/application-settings` document contains only
+`appearance`, `locale`, and `units` as complete `{value, updatedAt}` entries.
+Missing keys mean reviewed removal within that scope; an empty map clears it.
+Device/credential settings and unrelated library data are never imported.
+An unportable local value makes the entire export fail rather than omit a key.
+
+Preview/apply/export use library-scoped progress and cancellation. Preview
+cleanup covers lost responses and late native settlement; three native slots
+include creating, ready, active, and closing reviews. A committed apply wins
+over late cancellation. `exportNonsecretSettings` captures after native
+destination selection and uses private atomic no-clobber publication: even
+picker replacement confirmation does not authorize overwriting an existing file.
+Source/compact settings payloads are limited to64KiB and wire envelopes to136KiB.
+
+`getLicenseInventory` reads embedded schema-V2 locked-workspace metadata offline,
+bounded to2MiB compact/2,368KiB wire and4,096packages. `NOASSERTION` remains
+unknown; this is not exact linked-installer attribution or completed Phase-11
+license notices. `getAppPathsSummary` exposes only the three configured-location
+booleans, never platform paths.
+
 Accepted-solution listing, detail, views, selection, verification, comparison,
 explanations, and counterfactual requests are implemented at the existing V1
 native boundary. Their retained accepted document/solution pairing remains

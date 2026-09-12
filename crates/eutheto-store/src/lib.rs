@@ -296,6 +296,7 @@ pub enum Failpoint {
     AfterCounterfactualJobInsert,
     AfterCounterfactualTransition,
     AfterCounterfactualCancelWrite,
+    AfterSettingsWrite,
 }
 
 /// The command commit boundary at which a debug-only hook pauses once.
@@ -1023,6 +1024,20 @@ pub struct HistoryCommand {
 pub struct AppSetting<T> {
     pub value: T,
     pub updated_at: Rfc3339Timestamp,
+}
+
+/// A consistent snapshot of the caller's trusted application-setting scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppSettingsSnapshot {
+    pub library_revision: Revision,
+    pub settings: BTreeMap<String, AppSetting<Value>>,
+}
+
+/// The outcome of an atomic application-settings replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettingsCommit {
+    pub library_revision: Revision,
+    pub changed: bool,
 }
 
 type ActorOperation = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
@@ -2411,6 +2426,107 @@ impl SqliteScenarioStore {
                 entries.push(parse_history_row(row, cursor)?);
             }
             Ok(entries)
+        })
+        .await
+    }
+
+    /// Captures only the trusted setting keys and library revision in one read transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or transaction fails, or a requested stored
+    /// setting or the library revision cannot be decoded.
+    pub async fn settings_snapshot(
+        &self,
+        keys: &'static [&'static str],
+    ) -> Result<AppSettingsSnapshot, StoreError> {
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let library_revision = library_revision(&transaction)?;
+            let settings = load_scoped_settings(&transaction, keys)?;
+            transaction.commit()?;
+            Ok(AppSettingsSnapshot {
+                library_revision,
+                settings,
+            })
+        })
+        .await
+    }
+
+    /// Replaces the trusted setting scope after checking its reviewed revision and entries.
+    ///
+    /// Missing keys remove settings only within `keys`. Complete entries, including
+    /// timestamps, determine whether the replacement changes the library. The caller
+    /// remains responsible for validating setting keys and values semantically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for cancellation before commit, a stale library revision or
+    /// before-state, out-of-scope entries, invalid stored data, revision overflow,
+    /// actor or transaction failure, or an injected debug failure. Every failure
+    /// rolls back all writes; committed success wins over later cancellation.
+    pub async fn replace_settings(
+        &self,
+        keys: &'static [&'static str],
+        before: AppSettingsSnapshot,
+        after: BTreeMap<String, AppSetting<Value>>,
+        cancellation: CancellationToken,
+    ) -> Result<SettingsCommit, StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = self.command_commit_test_hook.clone();
+        self.call(move |connection| {
+            Self::check_command_cancelled(&cancellation)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let actual_revision = library_revision(&transaction)?;
+            if before.library_revision != actual_revision {
+                return Err(StoreError::LibraryConflict {
+                    expected: before.library_revision,
+                    actual: actual_revision,
+                });
+            }
+            if before.settings.keys().chain(after.keys()).any(|key| !keys.contains(&key.as_str())) {
+                return Err(StoreError::InvalidStagedApply(
+                    "application settings replacement contains an out-of-scope key".to_owned(),
+                ));
+            }
+            if load_scoped_settings(&transaction, keys)? != before.settings {
+                return Err(StoreError::InvalidStagedApply(
+                    "application settings before-state no longer matches".to_owned(),
+                ));
+            }
+            let changed = before.settings != after;
+            let library_revision = if changed {
+                for key in before.settings.keys().filter(|key| !after.contains_key(*key)) {
+                    transaction.execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
+                }
+                for (key, setting) in &after {
+                    if before.settings.get(key) != Some(setting) {
+                        transaction.execute(
+                            "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+                            params![key, serde_json::to_string(&setting.value)?, setting.updated_at.to_string()],
+                        )?;
+                    }
+                }
+                #[cfg(debug_assertions)]
+                consume_failpoint(&failpoint, Failpoint::AfterSettingsWrite)?;
+                increment_library_revision(&transaction)?
+            } else {
+                actual_revision
+            };
+            Self::commit_command(
+                transaction,
+                &cancellation,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook.as_ref(),
+            )?;
+            Ok(SettingsCommit {
+                library_revision,
+                changed,
+            })
         })
         .await
     }
@@ -8387,6 +8503,32 @@ fn persist_portable_library_metadata(
     )?;
     Ok(())
 }
+fn load_scoped_settings(
+    connection: &Connection,
+    keys: &[&str],
+) -> Result<BTreeMap<String, AppSetting<Value>>, StoreError> {
+    let mut statement =
+        connection.prepare("SELECT value_json, updated_at FROM app_settings WHERE key = ?1")?;
+    let mut settings = BTreeMap::new();
+    for key in keys {
+        let row = statement
+            .query_row([key], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()?;
+        if let Some((json, updated_at)) = row {
+            settings.insert(
+                (*key).to_owned(),
+                AppSetting {
+                    value: serde_json::from_str(&json)?,
+                    updated_at: parse_timestamp(&updated_at, "app setting updated_at")?,
+                },
+            );
+        }
+    }
+    Ok(settings)
+}
+
 fn load_all_settings(
     connection: &Connection,
 ) -> Result<BTreeMap<String, AppSetting<Value>>, StoreError> {

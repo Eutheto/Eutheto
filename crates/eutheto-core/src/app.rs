@@ -68,6 +68,11 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
+#[path = "application_settings.rs"]
+mod application_settings;
+use application_settings::PendingSettingsPreview;
+pub use application_settings::*;
+
 #[path = "people_csv.rs"]
 mod people_csv;
 pub use people_csv::*;
@@ -858,6 +863,7 @@ enum PendingPortablePreview {
     Import(Box<PendingImportPreview>),
     Unopened(UnopenedBundle),
     PeopleCsv(PendingPeopleCsvPreview),
+    Settings(PendingSettingsPreview),
 }
 
 impl PendingPortablePreview {
@@ -868,6 +874,7 @@ impl PendingPortablePreview {
                 pending_tree_memory_charge(1, size_of::<(RequestId, Self)>()).unwrap_or(usize::MAX),
             ),
             Self::PeopleCsv(preview) => preview.retained_bytes(),
+            Self::Settings(preview) => preview.retained_bytes(),
         }
     }
 }
@@ -3011,7 +3018,7 @@ impl EuthetoApp {
         let mut previews = self.previews.lock().await;
         if matches!(
             previews.get(&preview_id),
-            Some(PendingPortablePreview::PeopleCsv(_))
+            Some(PendingPortablePreview::PeopleCsv(_) | PendingPortablePreview::Settings(_))
         ) {
             return Err(protocol_error(
                 "portable.preview_capability_mismatch",

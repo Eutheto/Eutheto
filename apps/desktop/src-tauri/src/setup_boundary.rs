@@ -545,6 +545,17 @@ pub(super) async fn finish<T: Serialize + Send + 'static>(
     cancellation: Option<CancellationToken>,
 ) -> SolutionApiResult {
     execution.preparing_response();
+    encode_response(request_id, revision, result, compact_limit, cancellation).await
+}
+
+/// Encodes an already bounded result without inventing an operation reservation.
+pub(super) async fn encode_response<T: Serialize + Send + 'static>(
+    request_id: RequestId,
+    revision: Option<Revision>,
+    result: T,
+    compact_limit: usize,
+    cancellation: Option<CancellationToken>,
+) -> SolutionApiResult {
     tauri::async_runtime::spawn_blocking(move || {
         let envelope = response(request_id, revision, Vec::new(), result);
         // Every quoted unsafe integer occupies at least16 bytes before its two added quotes.

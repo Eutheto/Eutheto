@@ -20,12 +20,13 @@ use eutheto_import::{
     PackMigrationVersionSpace, RestoreAuthorization, SafetyBackupEvidence,
 };
 use eutheto_types::{
-    ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
-    CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
-    DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, PackId, ProjectMetadataDto,
-    ProjectSummaryDto, RequestId, ResourceRef, Revision, Rfc3339Timestamp, SafeDiagnosticValue,
-    ScenarioCommand, ScenarioId, ScenarioSettings, SupplementalIdentity, SupportPreviewDto,
-    SystemClock, SystemIdGenerator, ValidationIssue, ValidationReport,
+    ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError,
+    ApplicationSettingEntryV1, BackendId, CancellationToken, CommandBatch, CommandEnvelope,
+    CommandId, CommandResult, CommandSource, DomainPackRef, EventTopic, FieldErrorDto,
+    FoundationStatus, PackId, ProjectMetadataDto, ProjectSummaryDto, RequestId, ResourceRef,
+    Revision, Rfc3339Timestamp, SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings,
+    SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator, ValidationIssue,
+    ValidationReport,
 };
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -55,6 +56,10 @@ use people_csv::{
     people_csv_preview_discard, people_csv_rejected_rows, people_csv_rejected_rows_save,
     people_csv_source_close, people_csv_source_open,
 };
+#[macro_use]
+mod settings;
+use settings::{SettingsCustody, settings_export_nonsecret, settings_import_nonsecret};
+mod license_inventory;
 
 use generated_command_catalog::REGISTERED_COMMANDS;
 const MAX_PREPARED_PORTABLE_OUTPUTS: usize = 3;
@@ -176,6 +181,7 @@ struct DesktopState {
     prepared_outputs: Arc<tokio::sync::Mutex<PreparedPortableCache>>,
     operations: Arc<OperationRegistry>,
     csv: Arc<CsvCustody>,
+    settings: Arc<SettingsCustody>,
 }
 
 impl DesktopState {
@@ -188,6 +194,7 @@ impl DesktopState {
             ["main".to_owned()],
         ));
         let csv = Arc::new(CsvCustody::new(app.clone(), Arc::new(SystemIdGenerator)));
+        let settings = Arc::new(SettingsCustody::new(app.clone()));
         Self {
             app,
             cache_dir,
@@ -195,6 +202,7 @@ impl DesktopState {
             prepared_outputs: Arc::default(),
             operations,
             csv,
+            settings,
         }
     }
 }
@@ -739,15 +747,8 @@ struct HistoryDto {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SettingEntryDto {
-    value: Value,
-    updated_at: Rfc3339Timestamp,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct SettingValueDto {
-    setting: Option<SettingEntryDto>,
+    setting: Option<ApplicationSettingEntryV1>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -1483,6 +1484,7 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "app_get_info",
         "app_get_capabilities",
         "app_get_paths_summary",
+        "app_get_license_inventory",
         "app_create_support_bundle_preview",
         "pack_list",
         "pack_describe",
@@ -1545,6 +1547,8 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "settings_get",
         "settings_update",
         "settings_reset_section",
+        "settings_export_nonsecret",
+        "settings_import_nonsecret",
     ];
     let unavailable_commands = REGISTERED_COMMANDS
         .iter()
@@ -1568,6 +1572,27 @@ fn app_get_paths_summary(
     request: RequestOnly,
 ) -> ApiResponseDto<AppPathsSummaryDto> {
     response(request.request_id, None, Vec::new(), state.into())
+}
+
+#[tauri::command]
+async fn app_get_license_inventory(request: RequestOnly) -> SolutionApiResult {
+    let inventory = tauri::async_runtime::spawn_blocking(license_inventory::read_inventory)
+        .await
+        .map_err(|_| {
+            boundary_error(
+                "license_inventory.invalid",
+                "The build-owned license inventory could not be read safely.",
+                None,
+            )
+        })??;
+    setup_boundary::encode_response(
+        request.request_id,
+        None,
+        inventory,
+        license_inventory::MAX_LICENSE_INVENTORY_COMPACT_BYTES,
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2762,7 +2787,7 @@ async fn settings_get(
             None,
             Vec::new(),
             SettingValueDto {
-                setting: setting.map(|setting| SettingEntryDto {
+                setting: setting.map(|setting| ApplicationSettingEntryV1 {
                     value: setting.value,
                     updated_at: setting.updated_at,
                 }),
@@ -3129,10 +3154,7 @@ unsupported_commands!(
     app_create_support_bundle => ("capability.support_bundle_unavailable", "Support bundles"),
     app_check_for_update => ("capability.update_unavailable", "Application updates"),
     app_install_update => ("capability.update_unavailable", "Application updates"),
-    app_get_license_inventory => ("capability.license_inventory_unavailable", "License inventory"),
     scenario_migrate_preview => ("capability.scenario_migration_unavailable", "Scenario migration previews"),
-    settings_export_nonsecret => ("capability.settings_portable_unavailable", "Portable settings export"),
-    settings_import_nonsecret => ("capability.settings_portable_unavailable", "Portable settings import"),
 );
 
 core_deferred_commands!(
@@ -3288,11 +3310,13 @@ pub fn run() -> tauri::Result<()> {
             let state = handle.state::<DesktopState>();
             state.operations.cancel_window(&label);
             state.csv.close_window(&label);
+            state.settings.close_window(&label);
         }
         tauri::RunEvent::Exit => {
             let state = handle.state::<DesktopState>();
             state.operations.shutdown();
             state.csv.shutdown();
+            state.settings.shutdown();
         }
         _ => {}
     });
