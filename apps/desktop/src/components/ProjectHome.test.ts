@@ -177,6 +177,32 @@ describe("ProjectHome", () => {
     },
   );
 
+  it("keeps the root mutation lock until real settlement after cancellation acknowledgement", async () => {
+    const home = createHome(fakeApi([project]));
+    await home.load();
+    const nativeResult = deferred<ApiResponseDto<unknown>>();
+    const cancellation = deferred<undefined>();
+    const running = home.runOperation({
+      action: "restore",
+      label: "Restoring the reviewed backup",
+      execute: () => nativeResult.promise,
+      success: () => "Restore committed.",
+      cancel: () => cancellation.promise,
+    });
+
+    const cancelling = home.cancelOperation();
+    cancellation.resolve(undefined);
+    await cancelling;
+    expect(home.state.operation?.cancellationRequested).toBe(true);
+    expect(home.state.operation?.settled).toBe(false);
+    expect(await home.deleteProject(project)).toBe(false);
+
+    nativeResult.resolve(response({}));
+    await running;
+    expect(home.state.announcement).toBe("Restore committed.");
+    expect(await home.deleteProject(project)).toBe(true);
+  });
+
   it("refuses overlapping user operations without losing an owned preview", async () => {
     const api = fakeApi([project]);
     const home = createHome(api);
@@ -905,7 +931,7 @@ describe("ProjectHome", () => {
     expect(api.listProjects).toHaveBeenCalledOnce();
   });
 
-  it("announces revision conflicts and reloads the authoritative project list", async () => {
+  it("reloads the authoritative project list after a rejected revision-conflicted mutation", async () => {
     const saved = [{ ...project }];
     const api = fakeApi(saved);
     api.listProjects.mockImplementation(() =>
@@ -924,11 +950,9 @@ describe("ProjectHome", () => {
       throw new Error("Expected the saved project to exist");
     }
     saved[0] = { ...savedProject, title: "Authoritative title", revision: 4 };
-    await home.duplicateProject(project, "Copy");
+    expect(await home.duplicateProject(project, "Copy")).toBe(false);
 
     expect(home.state.projects[0]?.title).toBe("Authoritative title");
-    expect(home.state.announcement).toContain("changed in another window");
-    expect(await render(home)).toContain('aria-live="polite"');
   });
 
   it("refreshes from native scenario events and disposes listeners and previews", async () => {

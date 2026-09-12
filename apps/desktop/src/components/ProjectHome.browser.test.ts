@@ -1,12 +1,18 @@
+/* eslint-disable vue/one-component-per-file -- Browser-only routing fixtures need distinct components in one isolated harness. Production SFCs retain the rule. */
 import { cleanup, render, screen, within } from "@testing-library/vue";
 import { PiniaColada } from "@pinia/colada";
 import axe from "axe-core";
 import { createPinia } from "pinia";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
-import { defineComponent, h, onMounted, onUnmounted } from "vue";
+import { defineComponent, h, onMounted, onUnmounted, ref } from "vue";
+import { createMemoryHistory, createRouter, RouterLink, RouterView, useRoute } from "vue-router";
 
-import { createProjectHomeController, type ProjectHomeApi } from "../project-home";
+import {
+  createProjectHomeController,
+  type ProjectHomeApi,
+  type ProjectHomeController,
+} from "../project-home";
 import type { ApiResponseDto } from "../api/generated";
 import * as generatedApi from "../api/generated";
 import App from "../App.vue";
@@ -19,6 +25,8 @@ import {
   response,
 } from "../testing/project-home";
 import ProjectHome from "./ProjectHome.vue";
+import RouteLeaveGuard from "./RouteLeaveGuard.vue";
+import { messages } from "../messages";
 import "../styles.css";
 
 vi.mock("../api/generated", { spy: true });
@@ -380,5 +388,89 @@ describe("ProjectHome confirmations in the browser", () => {
     await expect.element(archivedRow).toBeEnabled();
     await userEvent.click(archivedRow);
     await expect.element(screen.getByRole("heading", { name: "Archived roster" })).toBeVisible();
+  });
+});
+
+describe("Route draft guard in the browser", () => {
+  it("preserves drafts and focus on Stay, and discards only after confirmed route update or leave", async () => {
+    const draft = ref("");
+    let home: ProjectHomeController | undefined;
+    const editor = defineComponent({
+      setup() {
+        const route = useRoute();
+        const controller = home;
+        if (!controller) throw new Error("Expected the root controller before its route");
+        return () =>
+          h("section", [
+            h("h2", `Editor ${String(route.params.id)}`),
+            h("label", { for: "guard-draft" }, "Draft title"),
+            h("input", {
+              id: "guard-draft",
+              value: draft.value,
+              onInput(event: Event) {
+                if (event.target instanceof HTMLInputElement) draft.value = event.target.value;
+              },
+            }),
+            h(RouterLink, { to: "/edit/two" }, () => "Next editor"),
+            h(RouterLink, { to: "/other" }, () => "Other view"),
+            h(RouteLeaveGuard, {
+              home: controller,
+              dirty: draft.value !== "",
+              pending: false,
+              discard: () => {
+                draft.value = "";
+              },
+            }),
+          ]);
+      },
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/edit/:id", component: editor },
+        { path: "/other", component: defineComponent({ render: () => h("h2", "Other view") }) },
+      ],
+    });
+    await router.push("/edit/one");
+    render(
+      defineComponent({
+        setup() {
+          home = createProjectHomeController(fakeApi());
+          return () => h("main", [h("h1", "Workspace"), h(RouterView)]);
+        },
+      }),
+      { global: { plugins: [createPinia(), PiniaColada, router] } },
+    );
+
+    const input = await screen.findByRole("textbox", { name: "Draft title" });
+    await userEvent.fill(input, "Unsaved title");
+    const next = screen.getByRole("link", { name: "Next editor" });
+    await userEvent.click(next);
+    const dialog = await screen.findByRole("dialog", { name: messages.navigation.leaveTitle });
+    await expect
+      .element(within(dialog).getByRole("button", { name: messages.navigation.stay }))
+      .toHaveFocus();
+    expect((await axe.run(dialog)).violations).toEqual([]);
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => screen.queryByRole("dialog")).toBeNull();
+    await expect.element(next).toHaveFocus();
+    await expect.element(input).toHaveValue("Unsaved title");
+    expect(router.currentRoute.value.params.id).toBe("one");
+
+    await userEvent.keyboard("{Enter}");
+    await screen.findByRole("dialog");
+    await userEvent.tab();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(await screen.findByRole("heading", { name: "Editor two" })).toBeVisible();
+    await expect.element(input).toHaveValue("");
+
+    await userEvent.fill(input, "Another draft");
+    await userEvent.click(screen.getByRole("link", { name: "Other view" }));
+    const leaving = await screen.findByRole("dialog", { name: messages.navigation.leaveTitle });
+    await userEvent.click(
+      within(leaving).getByRole("button", { name: messages.navigation.discardAndLeave }),
+    );
+    await expect.element(await screen.findByRole("heading", { name: "Other view" })).toBeVisible();
+    expect(draft.value).toBe("");
   });
 });

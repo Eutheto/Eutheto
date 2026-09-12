@@ -1,6 +1,7 @@
 import { onScopeDispose, shallowReactive, watch } from "vue";
 import { useQuery, useQueryCache } from "@pinia/colada";
 import { useWorkspaceStore } from "./stores/workspace";
+import { messages } from "./messages";
 
 import {
   LibraryOperationScope,
@@ -21,6 +22,8 @@ import type {
   CollisionPlan,
   DomainPackRef,
   ImportOptions,
+  OperationPhaseV1,
+  OperationProgressV1,
   Revision,
   PortableFilePreviewDto,
   PortablePreviewDto,
@@ -96,11 +99,34 @@ function generatedProjectHomeApi(): ProjectHomeApi {
   };
 }
 
+export interface WorkspaceOperationState {
+  readonly label: string;
+  readonly cancel: (() => Promise<unknown>) | null;
+  phase: OperationPhaseV1 | null;
+  cancellationRequested: boolean;
+  settled: boolean;
+}
+
+export interface WorkspaceOperation<T> {
+  readonly action: string;
+  readonly label: string;
+  readonly execute: (report: (event: OperationProgressV1) => void) => Promise<ApiResponseDto<T>>;
+  readonly success: (result: T) => string;
+  readonly cancel?: () => Promise<unknown>;
+  readonly refreshLibrary?: boolean;
+}
+
+type ReviewOwner = Pick<PortableReviewFlow, "dispose">;
+
 export interface ProjectHomeState {
   phase: ProjectPhase;
   readonly projects: readonly ProjectSummary[];
   selectedId: string | null;
   busyAction: string | null;
+  operation: WorkspaceOperationState | null;
+  libraryEpoch: number;
+  reviewCleanupError: string | null;
+  retryingReviewCleanup: boolean;
   errorMessage: string | null;
   announcement: string;
   importPreview: PortablePreview | null;
@@ -117,6 +143,11 @@ export interface ProjectHomeController {
   load(): Promise<void>;
   startEventListeners(): Promise<void>;
   dispose(): Promise<void>;
+  runOperation<T>(operation: WorkspaceOperation<T>): Promise<ApiResponseDto<T>>;
+  cancelOperation(): Promise<void>;
+  registerReviewOwner(owner: ReviewOwner): void;
+  retireReviewOwner(owner: ReviewOwner): Promise<boolean>;
+  retryReviewCleanup(): Promise<void>;
   selectProject(scenarioId: string): void;
   createProject(input: CreateProjectInput): Promise<boolean>;
   duplicateProject(project: ProjectSummary, title: string): Promise<boolean>;
@@ -153,7 +184,7 @@ interface ApiFailure {
   readonly details?: unknown;
 }
 
-function safeMessage(error: unknown): string {
+export function safeMessage(error: unknown): string {
   const failure = error as ApiFailure | null;
   if (
     typeof failure === "object" &&
@@ -168,7 +199,7 @@ function safeMessage(error: unknown): string {
   return "The local project library could not complete that request.";
 }
 
-function isRevisionConflict(error: unknown): boolean {
+export function isRevisionConflict(error: unknown): boolean {
   const failure = error as ApiFailure;
   return (
     failure.category === "conflict" ||
@@ -176,7 +207,7 @@ function isRevisionConflict(error: unknown): boolean {
   );
 }
 
-function isOperationCancelled(error: unknown): boolean {
+export function isOperationCancelled(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -184,7 +215,7 @@ function isOperationCancelled(error: unknown): boolean {
   );
 }
 
-function isRetainedRestoreFailure(error: unknown): boolean {
+export function isRetainedRestoreFailure(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const failure = error as ApiFailure;
   if (
@@ -293,6 +324,10 @@ export function createProjectHomeController(
       workspace.selectedProjectId = value;
     },
     busyAction: null,
+    operation: null,
+    libraryEpoch: 0,
+    reviewCleanupError: null,
+    retryingReviewCleanup: false,
     errorMessage: null,
     announcement: "",
     importPreview: null,
@@ -304,6 +339,8 @@ export function createProjectHomeController(
     restoreMode: "add-backup",
   });
   const eventUnlisteners: Array<() => void> = [];
+  const reviewOwners = new Set<ReviewOwner>([api.portable]);
+  const failedReviewCleanup = new Set<ReviewOwner>();
   let listenersStarted = false;
   let disposed = false;
   let disposal: Promise<void> | undefined;
@@ -322,6 +359,7 @@ export function createProjectHomeController(
           state.selectedId = result.data[0]?.scenarioId ?? null;
         }
         state.phase = "ready";
+        state.libraryEpoch += 1;
         state.errorMessage = null;
       } else if (result.status === "error") {
         state.phase = "error";
@@ -396,11 +434,12 @@ export function createProjectHomeController(
   function dispose(): Promise<void> {
     if (disposal) return disposal;
     disposed = true;
-    disposal = api.portable.dispose();
+    disposal = Promise.all([...reviewOwners].map((owner) => owner.dispose())).then(() => undefined);
     // cancel() also detaches pending writes; scope untracking alone only aborts.
     const entry = queryCache.get(projectKey);
     if (entry) queryCache.cancel(entry);
     for (const unlisten of eventUnlisteners.splice(0)) releaseListener(unlisten);
+    state.operation = null;
     state.importPreview = null;
     state.importWarnings = [];
     state.backupPreview = null;
@@ -416,34 +455,115 @@ export function createProjectHomeController(
     });
   });
 
+  function registerReviewOwner(owner: ReviewOwner): void {
+    if (isDisposed()) throw new Error(messages.operations.closed);
+    reviewOwners.add(owner);
+  }
+
+  async function retireReviewOwner(owner: ReviewOwner): Promise<boolean> {
+    try {
+      await owner.dispose();
+      reviewOwners.delete(owner);
+      failedReviewCleanup.delete(owner);
+      if (!isDisposed() && failedReviewCleanup.size === 0) state.reviewCleanupError = null;
+      return true;
+    } catch {
+      // Keep the concrete owner reachable across route unmount so cleanup can be retried.
+      failedReviewCleanup.add(owner);
+      if (!isDisposed()) state.reviewCleanupError = messages.operations.cleanupFailed;
+      return false;
+    }
+  }
+
+  async function retryReviewCleanup(): Promise<void> {
+    if (isDisposed() || state.retryingReviewCleanup) return;
+    state.retryingReviewCleanup = true;
+    try {
+      await Promise.all([...failedReviewCleanup].map(retireReviewOwner));
+    } finally {
+      if (!isDisposed()) state.retryingReviewCleanup = false;
+    }
+  }
+
+  async function cancelOperation(): Promise<void> {
+    const active = state.operation;
+    if (!active?.cancel || active.settled || active.cancellationRequested) return;
+    active.cancellationRequested = true;
+    try {
+      await active.cancel();
+    } catch (error) {
+      const current = state.operation;
+      if (!isDisposed() && current === active && !current.settled) {
+        current.cancellationRequested = false;
+        state.errorMessage = safeMessage(error);
+      }
+    }
+  }
+
+  async function runOperation<T>(operation: WorkspaceOperation<T>): Promise<ApiResponseDto<T>> {
+    if (isDisposed()) throw new Error(messages.operations.closed);
+    if (state.busyAction) throw new Error(messages.operations.busy);
+    const active = shallowReactive<WorkspaceOperationState>({
+      label: operation.label,
+      cancel: operation.cancel ?? null,
+      phase: null,
+      cancellationRequested: false,
+      settled: false,
+    });
+    state.busyAction = operation.action;
+    state.operation = active;
+    state.errorMessage = null;
+    try {
+      const response = await operation.execute((event) => {
+        if (!isDisposed() && state.operation === active && !active.settled)
+          active.phase = event.phase;
+      });
+      active.settled = true;
+      if (!isDisposed()) {
+        state.announcement = operation.success(response.result);
+        if (operation.refreshLibrary !== false) await reload(false);
+      }
+      return response;
+    } catch (error) {
+      active.settled = true;
+      if (!isDisposed()) {
+        if (isRevisionConflict(error)) {
+          const reloaded = await reload(false);
+          if (!isDisposed())
+            state.announcement = reloaded
+              ? messages.operations.conflictReloaded
+              : messages.operations.conflictRefreshFailed;
+        } else if (isOperationCancelled(error)) {
+          state.announcement = messages.operations.cancelled;
+        } else {
+          state.errorMessage = safeMessage(error);
+        }
+      }
+      throw error;
+    } finally {
+      if (!isDisposed() && state.operation === active) {
+        state.operation = null;
+        state.busyAction = null;
+      }
+    }
+  }
+
   async function mutate(
     action: string,
     operation: () => Promise<ApiResponseDto<unknown>>,
     successAnnouncement: string,
   ): Promise<boolean> {
     if (isDisposed() || state.busyAction) return false;
-    state.busyAction = action;
-    state.errorMessage = null;
     try {
-      await operation();
-      if (isDisposed()) return true;
-      await reload(false);
-      if (!isDisposed()) state.announcement = successAnnouncement;
+      await runOperation({
+        action,
+        label: messages.operations.pending,
+        execute: operation,
+        success: () => successAnnouncement,
+      });
       return true;
-    } catch (error) {
-      if (isDisposed()) return false;
-      if (isRevisionConflict(error)) {
-        const reloaded = await reload(false);
-        if (!isDisposed())
-          state.announcement = reloaded
-            ? "The project changed in another window. The latest saved version has been reloaded."
-            : "The project changed in another window. Refresh the library before trying the change again.";
-      } else {
-        state.errorMessage = safeMessage(error);
-      }
+    } catch {
       return false;
-    } finally {
-      if (!isDisposed()) state.busyAction = null;
     }
   }
 
@@ -451,6 +571,11 @@ export function createProjectHomeController(
     state,
     startEventListeners,
     dispose,
+    runOperation,
+    cancelOperation,
+    registerReviewOwner,
+    retireReviewOwner,
+    retryReviewCleanup,
     load: async () => {
       await reload();
     },

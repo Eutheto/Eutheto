@@ -20,7 +20,9 @@ onMounted(async () => {
   await home.load();
 });
 onUnmounted(() => {
-  void home.dispose();
+  void home.dispose().catch(() => {
+    // Native window teardown remains responsible for resources after the root has gone.
+  });
 });
 </script>
 
@@ -45,6 +47,47 @@ onUnmounted(() => {
           : messages.app.noSelection
       }}
     </p>
+
+    <section v-if="home.state.operation" class="state-panel" aria-labelledby="operation-label">
+      <div>
+        <h2 id="operation-label">{{ home.state.operation.label }}</h2>
+        <p role="status" aria-live="polite" aria-atomic="true">
+          {{
+            home.state.operation.settled
+              ? messages.operations.refreshing
+              : home.state.operation.cancellationRequested
+                ? messages.operations.cancelling
+                : home.state.operation.phase
+                  ? messages.operations.phases[home.state.operation.phase]
+                  : messages.operations.pending
+          }}
+        </p>
+      </div>
+      <button
+        v-if="home.state.operation.cancel && !home.state.operation.settled"
+        type="button"
+        class="button-secondary"
+        :disabled="home.state.operation.cancellationRequested"
+        @click="home.cancelOperation"
+      >
+        {{ messages.operations.cancel }}
+      </button>
+    </section>
+    <section v-if="home.state.reviewCleanupError" class="inline-alert" role="alert">
+      <p>{{ home.state.reviewCleanupError }}</p>
+      <button
+        type="button"
+        class="button-secondary"
+        :disabled="home.state.retryingReviewCleanup"
+        @click="home.retryReviewCleanup"
+      >
+        {{
+          home.state.retryingReviewCleanup
+            ? messages.operations.retryingCleanup
+            : messages.operations.retryCleanup
+        }}
+      </button>
+    </section>
 
     <RouterView v-slot="{ Component }">
       <component :is="Component" :home="home" />
