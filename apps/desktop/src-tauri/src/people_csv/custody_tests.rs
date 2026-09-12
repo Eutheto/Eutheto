@@ -529,7 +529,10 @@ async fn wrong_kind_core_discard_retires_native_slot_without_removing_portable_a
     let source = source(&custody, scenario)?;
     let AppQueryResult::Bundle { bytes, .. } = custody
         .app
-        .query(AppQuery::ExportScenario(scenario))
+        .query(AppQuery::ExportScenario {
+            scenario_id: scenario,
+            cancellation: custody.app.setup_cancellation(),
+        })
         .await
         .map_err(boxed)?
     else {
@@ -538,6 +541,7 @@ async fn wrong_kind_core_discard_retires_native_slot_without_removing_portable_a
     let AppQueryResult::PortablePreview { preview_id, .. } = custody
         .app
         .query(AppQuery::PreviewImport {
+            cancellation: custody.app.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,

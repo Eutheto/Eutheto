@@ -29,39 +29,39 @@ Registry/API evidence was verified **2026-08-29**. Exact non-UI lockfile pins re
 
 UI001's adopted runtime/browser subset was reverified on **2026-09-09**; exact adoption evidence and the narrow declaration-only dependency repairs are recorded in [the assumptions ledger](assumptions.md). Later-phase or not-yet-consumed entries below remain adoption gates, not claims that those packages or features are installed.
 
-| Role | Version | Compatibility and major-version implication |
-|---|---:|---|
-| Node.js | 24.20.0 LTS | Production LTS; satisfies Vite 8, pnpm 11, ESLint 10, Vitest 4. Do not move to Node 26 Current before its LTS/support gate. |
-| pnpm | 11.24.0 | Current stable; replaces the blueprint's stale pnpm 10 assumption. Requires Node `>=22.13`. Update package-manager/CI/Nix pins as one cutover. |
-| TypeScript | 6.0.3 | Newest compatible stable, not latest 7.0.2: `typescript-eslint` 8.68.0 declares `<6.1.0`. A TS 7 or 6.1+ upgrade waits for lint-parser support. |
-| Vue | 3.5.42 | Composition API baseline. |
-| vue-router | 5.3.0 | Breaking major from Router 4-era examples; requires Vue `^3.5.34`, Vite `^7.3 || ^8`, Pinia `^3.0.4 || ^4.0.2`. Use/test Router 5 hash-history, guards, typed route behavior; do not copy Router 4 APIs unreviewed. |
-| Pinia | 4.0.3 | Breaking major, ESM-only, and requires `@vue/devtools-api` separately. It remains transient/view state only. |
-| `@pinia/colada` | 1.4.2 | Query/server-state coordination only; Rust remains authoritative and mutations still cross the typed command/revision boundary. |
-| `@vue/compiler-sfc` | 3.5.42 | Must exactly match the Vue 3.5.42 baseline for SFC compilation. |
-| `@vue/devtools-api` | 8.2.1 | Required separate Pinia peer; pin explicitly rather than relying on an undeclared transitive copy. |
-| Vite | 8.2.2 | Breaking major; engine `^20.19 || >=22.12`, satisfied by Node 24.20.0. |
-| `@vitejs/plugin-vue` | 6.0.8 | Compatible with Vue 3 and Vite 8. |
-| `@tauri-apps/api` | 2.11.1 | Keep coherent with the selected Tauri 2 Rust crates and generated API tests. |
-| `@tauri-apps/cli` | 2.11.4 | Workspace development/build CLI; patch does not need to match JS API numerically, but the lock/manifests must be conformance-tested together. |
-| `@tauri-apps/plugin-updater` | 2.10.1 | Release use is later; retain typed boundary and compatible Rust plugin/config. |
-| `@tauri-apps/plugin-shell` | 2.3.5 | Minimize use; strict scope permits only exact bundled sidecar where needed. |
-| Tailwind CSS / `@tailwindcss/vite` | 4.3.3 / 4.3.3 | Tailwind 4 is CSS-first and uses the Vite plugin. Audit v3 syntax; shadcn-vue uses `tw-animate-css`, and CSS variable utilities use `var(...)` semantics rather than stale v3 snippets. |
-| shadcn-vue | 2.8.2 | Component generator/source, not runtime design authority. It migrated from Radix Vue to Reka; generated code is owned/reviewed by `eutheto`. |
-| Reka UI | 2.10.4 | Current direct-registry version; use accessible headless behavior, not stale Radix Vue APIs. |
-| `@lucide/vue` | 1.39.0 | Preserve the installed Phase-04 foundation pin; icons require visible/accessible labels where meaning is not decorative. |
-| TanStack Vue Table | 9.2.4 | Breaking v9 API: use `useTable`, not v8 `useVueTable`, and configure features explicitly. |
-| TanStack Vue Virtual | 3.13.36 | Stable v3 `useVirtualizer` line for measured large views. |
-| Konva / vue-konva | 10.3.2 / 3.4.0 | Seating Phase 09; vue-konva supports Vue 3 and Konva `>7`. Treat Konva 10 as a breaking-major baseline. |
-| ECharts / vue-echarts | 6.1.0 / 8.1.0 | Use only selected analytical views; vue-echarts 8 expects ECharts 6 and Vue 3. Do not copy v5 wrapper setup. |
-| ESLint | 10.9.1 | Node 24 compatible; configure current flat/type-aware Vue rules. |
-| `typescript-eslint` | 8.68.0 | Governs the TypeScript 6.0.3 ceiling (`>=4.8.4 <6.1.0`). |
-| Vitest | 4.1.11 | Compatible with Vite 8 and Node 24. |
-| Vue Test Utils | 2.5.0 | Vue 3 component tests. |
-| Testing Library Vue | 8.1.0 | User-centric accessible queries. |
-| axe-core | 4.13.0 | Automated accessibility aid; manual keyboard/screen-reader scripts remain required. |
-| `@vitest/browser-playwright` / `playwright` | 4.1.11 / 1.62.1 | Real Chromium component interaction and axe checks; not native IPC, platform or installer evidence. |
-| Native W3C WebDriver runner | Repository-owned | Existing dependency-free Node 24 runner; `just e2e` exercises Linux native unbundled Tauri/WebKit persistence across application-process restarts. |
+| Role                                        |          Version | Compatibility and major-version implication                                                                                                                                             |
+| ------------------------------------------- | ---------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js                                     |      24.20.0 LTS | Production LTS; satisfies Vite 8, pnpm 11, ESLint 10, Vitest 4. Do not move to Node 26 Current before its LTS/support gate.                                                             |
+| pnpm                                        |          11.24.0 | Current stable; replaces the blueprint's stale pnpm 10 assumption. Requires Node `>=22.13`. Update package-manager/CI/Nix pins as one cutover.                                          |
+| TypeScript                                  |            6.0.3 | Newest compatible stable, not latest 7.0.2: `typescript-eslint` 8.68.0 declares `<6.1.0`. A TS 7 or 6.1+ upgrade waits for lint-parser support.                                         |
+| Vue                                         |           3.5.42 | Composition API baseline.                                                                                                                                                               |
+| vue-router                                  |            5.3.0 | Breaking major from Router 4-era examples; requires Vue `^3.5.34`, Vite `^7.3                                                                                                           |     | ^8`, Pinia `^3.0.4                   |     | ^4.0.2`. Use/test Router 5 hash-history, guards, typed route behavior; do not copy Router 4 APIs unreviewed. |
+| Pinia                                       |            4.0.3 | Breaking major, ESM-only, and requires `@vue/devtools-api` separately. It remains transient/view state only.                                                                            |
+| `@pinia/colada`                             |            1.4.2 | Query/server-state coordination only; Rust remains authoritative and mutations still cross the typed command/revision boundary.                                                         |
+| `@vue/compiler-sfc`                         |           3.5.42 | Must exactly match the Vue 3.5.42 baseline for SFC compilation.                                                                                                                         |
+| `@vue/devtools-api`                         |            8.2.1 | Required separate Pinia peer; pin explicitly rather than relying on an undeclared transitive copy.                                                                                      |
+| Vite                                        |            8.2.2 | Breaking major; engine `^20.19                                                                                                                                                          |     | >=22.12`, satisfied by Node 24.20.0. |
+| `@vitejs/plugin-vue`                        |            6.0.8 | Compatible with Vue 3 and Vite 8.                                                                                                                                                       |
+| `@tauri-apps/api`                           |           2.11.1 | Keep coherent with the selected Tauri 2 Rust crates and generated API tests.                                                                                                            |
+| `@tauri-apps/cli`                           |           2.11.4 | Workspace development/build CLI; patch does not need to match JS API numerically, but the lock/manifests must be conformance-tested together.                                           |
+| `@tauri-apps/plugin-updater`                |           2.10.1 | Release use is later; retain typed boundary and compatible Rust plugin/config.                                                                                                          |
+| `@tauri-apps/plugin-shell`                  |            2.3.5 | Minimize use; strict scope permits only exact bundled sidecar where needed.                                                                                                             |
+| Tailwind CSS / `@tailwindcss/vite`          |    4.3.3 / 4.3.3 | Tailwind 4 is CSS-first and uses the Vite plugin. Audit v3 syntax; shadcn-vue uses `tw-animate-css`, and CSS variable utilities use `var(...)` semantics rather than stale v3 snippets. |
+| shadcn-vue                                  |            2.8.2 | Component generator/source, not runtime design authority. It migrated from Radix Vue to Reka; generated code is owned/reviewed by `eutheto`.                                            |
+| Reka UI                                     |           2.10.4 | Current direct-registry version; use accessible headless behavior, not stale Radix Vue APIs.                                                                                            |
+| `@lucide/vue`                               |           1.39.0 | Preserve the installed Phase-04 foundation pin; icons require visible/accessible labels where meaning is not decorative.                                                                |
+| TanStack Vue Table                          |            9.2.4 | Breaking v9 API: use `useTable`, not v8 `useVueTable`, and configure features explicitly.                                                                                               |
+| TanStack Vue Virtual                        |          3.13.36 | Stable v3 `useVirtualizer` line for measured large views.                                                                                                                               |
+| Konva / vue-konva                           |   10.3.2 / 3.4.0 | Seating Phase 09; vue-konva supports Vue 3 and Konva `>7`. Treat Konva 10 as a breaking-major baseline.                                                                                 |
+| ECharts / vue-echarts                       |    6.1.0 / 8.1.0 | Use only selected analytical views; vue-echarts 8 expects ECharts 6 and Vue 3. Do not copy v5 wrapper setup.                                                                            |
+| ESLint                                      |           10.9.1 | Node 24 compatible; configure current flat/type-aware Vue rules.                                                                                                                        |
+| `typescript-eslint`                         |           8.68.0 | Governs the TypeScript 6.0.3 ceiling (`>=4.8.4 <6.1.0`).                                                                                                                                |
+| Vitest                                      |           4.1.11 | Compatible with Vite 8 and Node 24.                                                                                                                                                     |
+| Vue Test Utils                              |            2.5.0 | Vue 3 component tests.                                                                                                                                                                  |
+| Testing Library Vue                         |            8.1.0 | User-centric accessible queries.                                                                                                                                                        |
+| axe-core                                    |           4.13.0 | Automated accessibility aid; manual keyboard/screen-reader scripts remain required.                                                                                                     |
+| `@vitest/browser-playwright` / `playwright` |  4.1.11 / 1.62.1 | Real Chromium component interaction and axe checks; not native IPC, platform or installer evidence.                                                                                     |
+| Native W3C WebDriver runner                 | Repository-owned | Existing dependency-free Node 24 runner; `just e2e` exercises Linux native unbundled Tauri/WebKit persistence across application-process restarts.                                      |
 
 `@pinia/colada` **1.4.2**, `@vue/compiler-sfc` **3.5.42**, `@vue/devtools-api` **8.2.1**, and `@lucide/vue` **1.39.0** are mandatory direct dependencies at these exact versions, not undeclared transitive dependencies.
 
@@ -161,6 +161,7 @@ settings_export_nonsecret
 settings_import_nonsecret
 
 project_list
+project_open
 project_get_metadata
 project_create
 project_duplicate
@@ -201,7 +202,15 @@ solve_list_runs
 solve_get_diagnostics_summary
 ```
 
-The `/settings` route uses the five `settings_*` endpoints above, `/about/licenses` uses `app_get_license_inventory`, and UI that shows local data/cache/log/export locations uses the bounded, nonsecret `app_get_paths_summary` result rather than reconstructing platform paths in Vue. Support-bundle and updater APIs are intentionally completed in [Phase 11](11-public-mvp-packaging-and-documentation.md), not improvised in this phase.
+The `/settings` route uses the five `settings_*` endpoints above, and `/about/licenses` uses the bounded offline `app_get_license_inventory` result. `app_get_paths_summary` exposes configured/unconfigured categories, not device paths or proof that directories exist, are accessible, or are writable; Vue must not reconstruct paths from these flags. Support-bundle and updater APIs are intentionally completed in [Phase 11](11-public-mvp-packaging-and-documentation.md), not improvised in this phase.
+
+Project creation, listing, and opening use closed V1 requests. Workforce creation accepts first and last included civil dates; Rust resolves exact local midnights, checks the exclusive end date, and rejects shifted or skipped boundaries before committing. The versioned list/open projection adds `lastOpenedAt`; listing is read-only, and opening records its timestamp only if loading succeeds. The CLI retains its RFC3339 creation arguments and original project-list JSON shape.
+
+Local settings reads return complete nullable `appearance`, `locale`, and `units` entries at one library revision. Updates and resets require `expectedLibraryRevision` and return the exact committed snapshot and `changed` result. Stale writes fail without retry; an absent-key reset neither advances the revision nor emits a change notification. Local values remain readable under local validation even when stricter portable policy prohibits exporting them.
+
+Portable import, export, backup, restore, unopened-bundle inspection, and exact re-export use closed V1 requests through operation admission. Reviews bind to the owning window, creator request/operation, exact purpose, and captured library/scenario revisions as applicable. The generated `PortableReviewFlow` owns retained reviews and actual operation settlement; a cancellation acknowledgement is not a terminal result. Native custody retains quota charges during active consumption and cleanup, and creator/window teardown rejects late publication of a review. Compact portable payloads remain bounded at 64 MiB, with a separate fixed wire bound; these limits do not widen other IPC contracts.
+
+Restore retry authority comes from the actually retained core review after a safety-backup failure. The native boundary reports the typed `portablePreviewRetained` evidence only after successful handback; clients must not infer it from an error code. Committed restore receipts distinguish `notRequired`, `createdAndVerified` with the actual artifact basename, and `confirmedBypass`. Recovery selection accepts only `userSelected` or `safetyBackups` origin, never a renderer-provided path. Cancellation before the final commit check aborts mutation; cancellation after commit preserves the committed outcome. A verified safety backup published before a later cancellation or conflict remains available.
 
 Commands reject arbitrary SQL, shell strings, ungranted paths, and unallowlisted solver parameters. File operations use an explicit picker/grant result. Request/response uses commands; bounded progress/change streams use channels/events. Every event includes `eventVersion`, timestamp, request/job/scenario IDs, and revision where applicable. Phase 06 consumes `scenario://changed`, `scenario://validation-changed`, `solve://progress`, `solve://completed`, and `app://notification`.
 
@@ -445,16 +454,16 @@ Advanced controls show clear backend, compatibility, reproducibility, privacy, a
 
 Default keyboard model:
 
-| Action | Shortcut |
-|---|---|
-| Undo/redo | Platform `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` |
-| Save/export bundle | `Ctrl/Cmd+S` |
-| Global command/search | `Ctrl/Cmd+K` |
-| Optimize | configurable and collision-checked |
-| Find active-view entity | `Ctrl/Cmd+F` |
-| Toggle assistant | configurable |
-| Open explanation/selected detail | `Enter` or explicit action |
-| Lock/unlock selection | command palette and context menu |
+| Action                           | Shortcut                                  |
+| -------------------------------- | ----------------------------------------- |
+| Undo/redo                        | Platform `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` |
+| Save/export bundle               | `Ctrl/Cmd+S`                              |
+| Global command/search            | `Ctrl/Cmd+K`                              |
+| Optimize                         | configurable and collision-checked        |
+| Find active-view entity          | `Ctrl/Cmd+F`                              |
+| Toggle assistant                 | configurable                              |
+| Open explanation/selected detail | `Enter` or explicit action                |
+| Lock/unlock selection            | command palette and context menu          |
 
 Never bind destructive actions to one unmodified letter. Shortcut help is visible; future customization is allowed without changing command semantics.
 
@@ -550,7 +559,7 @@ For the remainder of this phase, follow the user-authorized [temporary integrati
 - representative 100-person matrices remain usable under measured render/input/scroll budgets with current Table 9/Virtual 3 APIs;
 - sub-threshold operations avoid progress flicker; longer operations show only real phases, remain cancellable, keep input/focus responsive, and coalesce screen-reader announcements;
 - raw backend incumbents never trigger verified-result copy, and optional later explanation work never blocks the already accepted result shell.
-- real Chromium component tests supplement but never replace native Tauri/WebKit coverage; `just e2e` currently exercises a Linux unbundled debug executable, not an installer. Extend the existing native W3C runner where supported and retain the later exact packaged-artifact/platform gates plus manual picker and screen-reader evidence.
+- Real Chromium component tests supplement but never replace native Tauri/WebKit coverage. `just e2e` exercises the Linux unbundled debug shell, native settings and portable file workflows, real safety-backup failure/bypass/recovery, deletion/history boundaries, offline inventory, route recovery and restart persistence; see [desktop behavior and verification limits](../../apps/desktop/README.md). This is not installer, native screen-reader, or cross-platform acceptance. Keep the later exact packaged-artifact/platform gates and manual picker/screen-reader evidence; unconsumed native editing shortcuts still need platform binding verification.
 
 ### Phase exit gate
 
@@ -562,18 +571,18 @@ A desktop flow is done only when normal, empty, loading, stale, error, and offli
 
 ## Risks and failure handling
 
-| Risk or failure | Required behavior |
-|---|---|
-| Router 5/Table 9/Pinia 4 examples use old APIs | Treat compile/type failures and behavior changes as migration defects; use only current APIs and remove compatibility layers. |
-| Pinia duplicates domain state | Delete the duplication; query Rust view models and reconcile command deltas. |
-| Tauri command accessible from unintended window | Register strict capability/command manifest and minimum window scope; do not rely on invoke handler alone. |
-| Tailwind 3/shadcn stale CSS silently misstyles focus/theme | Audit generated source for Tailwind 4 variables/animation package and test both themes/focus/contrast. |
-| Import identity ambiguity | Require explicit matching; never partially mutate or silently merge names. |
-| Scenario changes while form/validation/solve is open | Detect revision mismatch, preserve edit buffer, refetch/review; never overwrite. |
-| Large eligibility matrix stalls | Cursor/window query, stable keys, measured virtualization, bulk command rather than cell-by-cell IPC. |
-| Calendar/drag excludes keyboard/screen-reader users | Supply equivalent list/form actions and logical grid semantics. |
-| Error exposes sensitive/internal data | Show safe typed summary/diagnostic ID; sanitize copied report and logs. |
-| AI/network unavailable | Core and all setup remain fully usable offline; no blocking prompt/account. |
+| Risk or failure                                            | Required behavior                                                                                                             |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Router 5/Table 9/Pinia 4 examples use old APIs             | Treat compile/type failures and behavior changes as migration defects; use only current APIs and remove compatibility layers. |
+| Pinia duplicates domain state                              | Delete the duplication; query Rust view models and reconcile command deltas.                                                  |
+| Tauri command accessible from unintended window            | Register strict capability/command manifest and minimum window scope; do not rely on invoke handler alone.                    |
+| Tailwind 3/shadcn stale CSS silently misstyles focus/theme | Audit generated source for Tailwind 4 variables/animation package and test both themes/focus/contrast.                        |
+| Import identity ambiguity                                  | Require explicit matching; never partially mutate or silently merge names.                                                    |
+| Scenario changes while form/validation/solve is open       | Detect revision mismatch, preserve edit buffer, refetch/review; never overwrite.                                              |
+| Large eligibility matrix stalls                            | Cursor/window query, stable keys, measured virtualization, bulk command rather than cell-by-cell IPC.                         |
+| Calendar/drag excludes keyboard/screen-reader users        | Supply equivalent list/form actions and logical grid semantics.                                                               |
+| Error exposes sensitive/internal data                      | Show safe typed summary/diagnostic ID; sanitize copied report and logs.                                                       |
+| AI/network unavailable                                     | Core and all setup remain fully usable offline; no blocking prompt/account.                                                   |
 
 ## Deferred and non-goals
 

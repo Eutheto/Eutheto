@@ -91,9 +91,10 @@ async fn fixture() -> TestResult<Fixture> {
         &window,
         "project_create",
         &json!({
+            "schemaVersion": 1,
             "requestId": RequestId::new(&SystemIdGenerator)?, "title": "Native Workforce setup", "description": "",
             "domainPack": {"id":"official.workforce", "schemaVersion":1},
-            "settings": {"timeZone":"UTC", "locale":"en-US", "units":"metric", "horizon":{"start":"2026-09-01T00:00:00Z", "end":"2026-09-02T00:00:00Z"}, "gapPolicy":"reject", "overlapPolicy":"earlier"}
+            "settings": {"timeZone":"UTC", "locale":"en-US", "units":"metric", "firstDate":"2026-09-01", "lastDate":"2026-09-01", "gapPolicy":"reject", "overlapPolicy":"earlier"}
         }),
     )?;
     let scenario_id = project.result["scenarioId"]

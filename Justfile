@@ -327,7 +327,8 @@ e2e:
       "$(command -v env)"
       "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
       "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
-      "$(command -v xvfb-run)" -a --server-args="-screen 0 1280x720x24"
+      "EUTHETO_XDOTOOL=$(command -v xdotool)"
+      "$(command -v xvfb-run)" -a --server-args="-screen 0 1600x1200x24"
       "$(command -v eutheto-desktop-runtime)"
       "$(command -v pnpm)" --filter @eutheto/desktop run e2e
     )

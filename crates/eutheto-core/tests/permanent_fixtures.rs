@@ -454,7 +454,13 @@ async fn export_scenario(
     app: &EuthetoApp,
     scenario_id: eutheto_types::ScenarioId,
 ) -> TestResult<Vec<u8>> {
-    match app_result(app.query(AppQuery::ExportScenario(scenario_id)).await)? {
+    match app_result(
+        app.query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: app.setup_cancellation(),
+        })
+        .await,
+    )? {
         AppQueryResult::Bundle { bytes, .. } => Ok(bytes),
         other => Err(Box::<dyn Error>::from(std::io::Error::other(format!(
             "unexpected export result: {other:?}"
@@ -684,6 +690,7 @@ async fn import_fixture(
 ) -> TestResult {
     let preview_id = match app_result(
         app.query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: source_bundle,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -702,6 +709,7 @@ async fn import_fixture(
     };
     let applied = app_result(
         app.execute(AppCommand::ApplyImport {
+            cancellation: app.setup_cancellation(),
             request_id: RequestId::new(&SystemIdGenerator)?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -710,7 +718,7 @@ async fn import_fixture(
     )?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { ref scenarios }
+        AppCommandResult::PortableApplied { ref scenarios, .. }
             if matches!(
                 scenarios.as_slice(),
                 [applied_scenario]
@@ -964,6 +972,7 @@ async fn historical_pack_migration_failure_is_atomic() -> TestResult {
     assert_eq!(project_count(&app).await?, 0);
     assert!(matches!(
         app.query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: source,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -1007,6 +1016,7 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
     ))?;
     assert!(matches!(
         app.query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: newer_source.clone(),
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -1032,6 +1042,7 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
     ))?;
     assert!(matches!(
         app.query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: missing_source,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -1050,6 +1061,7 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
 
     let preview_id = match app_result(
         app.query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             bytes: newer_source.clone(),
         })
         .await,
@@ -1066,6 +1078,7 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
     assert!(matches!(
         app_result(
             app.execute(AppCommand::ExactReexportUnopenedBundle {
+                cancellation: app.setup_cancellation(),
                 preview_id,
                 destination: destination.clone(),
             })

@@ -6,10 +6,7 @@ use super::{
     paging::{PageBuilder, ProjectionBudget, Result, invalid},
 };
 use eutheto_domain_api::{DomainPackError, SetupViewContext};
-use eutheto_types::{
-    Change, Horizon, LocalWallTime, ScenarioId, ScenarioSettings, resolve_local_time,
-};
-use jiff::civil::Time;
+use eutheto_types::{Change, Horizon, ScenarioId, ScenarioSettings, resolve_local_midnight};
 
 pub(super) fn settings_preparation(
     parameters: SettingsPreparationParametersV1,
@@ -31,13 +28,12 @@ pub(super) fn settings_preparation(
     // These dates define the entire desired horizon, not a 366-day display window.
     let mut endpoint = |date: jiff::civil::Date, path| {
         budget.visit()?;
-        resolve_local_time(
-            LocalWallTime::from_datetime(date.to_datetime(Time::MIN)),
+        resolve_local_midnight(
+            date,
             &parameters.time_zone,
             parameters.gap_policy,
             parameters.overlap_policy,
         )
-        .map(|resolved| resolved.instant)
         .map_err(|error| {
             invalid(
                 path,

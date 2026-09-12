@@ -1,21 +1,28 @@
 import { vi, type Mock } from "vitest";
-import type { FixedExclusion, ValidationIssue } from "../api/generated";
+import type {
+  ApiResponseDto,
+  FixedExclusion,
+  PortableAppliedDto,
+  SetupOperation,
+  ValidationIssue,
+} from "../api/generated";
 import type { ProjectHomeApi, ProjectSummary } from "../project-home";
 
-export type ProjectHomeApiMocks = {
-  [Method in keyof ProjectHomeApi]: ProjectHomeApi[Method] extends (
-    ...args: infer Arguments
-  ) => infer Result
+type MethodMocks<Api> = {
+  [Method in keyof Api]: Api[Method] extends (...args: infer Arguments) => infer Result
     ? Mock<(...args: Arguments) => Result>
     : never;
 };
+export type ProjectHomeApiMocks = MethodMocks<ProjectHomeApi>;
 export const project: ProjectSummary = {
+  schemaVersion: 1,
   scenarioId: "01900000-0000-7000-8000-000000000001",
   title: "Clinic roster",
   domainPackId: "official.test",
   revision: 3,
   updatedAt: "2026-08-29T12:00:00Z",
   archived: false,
+  lastOpenedAt: null,
 };
 export const previewWarning: ValidationIssue = {
   code: "portable.preview.warning",
@@ -34,53 +41,88 @@ export const fixedExclusions = [
   "executable-content",
 ] as const satisfies readonly FixedExclusion[];
 
-export function response<T>(result: T, warnings: readonly ValidationIssue[] = []) {
+export function response<T>(
+  result: T,
+  warnings: readonly ValidationIssue[] = [],
+  currentRevision: number | null = null,
+) {
   return {
     schemaVersion: 1 as const,
     requestId: "01900000-0000-7000-8000-000000000099",
-    currentRevision: null,
+    currentRevision,
     warnings,
     result,
   };
 }
 
+/** A controllable operation receipt at the presentation seam, not simulated native custody. */
+export function portableOperation<T>(
+  receipt: ApiResponseDto<T> | Promise<ApiResponseDto<T>>,
+): SetupOperation<T> {
+  let current = true;
+  return {
+    requestId: "01900000-0000-7000-8000-000000000099",
+    operationId: Promise.resolve("01900000-0000-7000-8000-000000000098"),
+    result: Promise.resolve(receipt),
+    cancel: () =>
+      Promise.resolve(
+        response({ schemaVersion: 1 as const, acknowledgement: "cancellationRequested" as const }),
+      ),
+    release: () => {
+      current = false;
+      return Promise.resolve(
+        response({ schemaVersion: 1 as const, acknowledgement: "released" as const }),
+      );
+    },
+    isCurrent: () => current,
+  };
+}
+
+export function portableApplied(
+  safetyBackup: PortableAppliedDto["safetyBackup"] = { kind: "notRequired" },
+): ApiResponseDto<PortableAppliedDto> {
+  return response<PortableAppliedDto>(
+    { schemaVersion: 1, libraryRevision: 2, scenarioIds: [project.scenarioId], safetyBackup },
+    [],
+    2,
+  );
+}
+
 export function fakeApi(projects: ProjectSummary[] = []): ProjectHomeApiMocks {
+  // Real operation scopes capture SDK window identity even when the presentation flow is injected.
+  if (typeof window === "undefined") vi.stubGlobal("window", globalThis);
+  vi.stubGlobal("__TAURI_INTERNALS__", {
+    unregisterCallback: vi.fn(),
+    metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
+  });
   return {
     listProjects: vi.fn(() => Promise.resolve(response([...projects]))),
-    createProject: vi.fn(() => Promise.resolve(response({}))),
-    duplicateProject: vi.fn(() => Promise.resolve(response({}))),
-    setProjectArchived: vi.fn(() => Promise.resolve(response({}))),
-    deleteProject: vi.fn(() => Promise.resolve(response({}))),
-    previewImport: vi.fn(() => Promise.resolve(response(portablePreview("scenario-export")))),
-    applyImport: vi.fn(() => Promise.resolve(response({}))),
-    previewBackup: vi.fn((title) =>
+    openProject: vi.fn<ProjectHomeApi["openProject"]>((scenarioId) =>
       Promise.resolve(
         response({
-          title,
-          byteLength: 4096,
-          previewId: "01900000-0000-7000-8000-000000000070",
-          digest: "b".repeat(64),
-          currentRevision: null,
-          libraryRevision: 1,
-          backupSummary: {
-            includeResults: true,
-            assetSelection: "all" as const,
-            excludedAssetCount: 1,
-            excludedAssetIds: ["inherited-placeholder.png"],
-            exclusionScope: "inherited-placeholder",
-            thresholdVersion: null,
-            thresholdBytes: null,
-            fixedExclusions,
-          },
+          ...(projects.find((item) => item.scenarioId === scenarioId) ?? project),
+          scenarioId,
+          lastOpenedAt: "2026-08-29T13:00:00Z",
         }),
       ),
     ),
-    createBackup: vi.fn(() =>
-      Promise.resolve(response({ artifactName: "before-changes.eutheto" })),
+    createProject: vi.fn<ProjectHomeApi["createProject"]>((input) =>
+      Promise.resolve(
+        response({
+          scenarioId: project.scenarioId,
+          title: input.title,
+          description: input.description,
+          domainPack: input.domainPack,
+          revision: 0,
+          createdAt: "2026-08-29T13:00:00Z",
+          updatedAt: "2026-08-29T13:00:00Z",
+          archivedAt: null,
+        }),
+      ),
     ),
-    previewRestore: vi.fn(() => Promise.resolve(response(portablePreview("full-backup")))),
-    applyRestore: vi.fn(() => Promise.resolve(response({}))),
-    cancelPortablePreview: vi.fn(() => Promise.resolve(response({}))),
+    duplicateProject: vi.fn(() => Promise.resolve(response({}))),
+    setProjectArchived: vi.fn(() => Promise.resolve(response({}))),
+    deleteProject: vi.fn(() => Promise.resolve(response({}))),
     onAppNotification: vi.fn(() => Promise.resolve(vi.fn())),
     onLibraryRefreshRequired: vi.fn(() => Promise.resolve(vi.fn())),
     onScenarioChanged: vi.fn(() => Promise.resolve(vi.fn())),
@@ -90,6 +132,8 @@ export function fakeApi(projects: ProjectSummary[] = []): ProjectHomeApiMocks {
 
 export function portablePreview(bundleKind: "scenario-export" | "full-backup") {
   return {
+    schemaVersion: 1,
+    libraryRevision: 1,
     previewId: "01900000-0000-7000-8000-000000000010",
     bundleId: "01900000-0000-7000-8000-000000000011",
     bundleKind,

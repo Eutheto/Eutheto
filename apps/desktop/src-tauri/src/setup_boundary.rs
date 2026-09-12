@@ -14,7 +14,7 @@ use eutheto_core::{
 use eutheto_types::{CancellationToken, EntityId, OperationId, RequestId, Revision, ScenarioId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::{io::Write, sync::Arc};
+use std::{io::Write, str::FromStr, sync::Arc};
 use tauri::State;
 const FRAME_BYTES: usize = 64 * 1024;
 const SUMMARY_BYTES: usize = 2 * 1024 * 1024;
@@ -141,6 +141,27 @@ pub(super) fn progress(channel: tauri::ipc::Channel<tauri::ipc::Response>) -> Pr
             let _ = channel.send(message);
         }
     })
+}
+
+pub(super) fn channel<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    value: Option<Value>,
+) -> Result<ProgressSink, ApiError> {
+    let invalid = || {
+        boundary_error(
+            "operation.progress_channel_invalid",
+            "This operation requires a valid progress channel.",
+            Some("/onProgress"),
+        )
+    };
+    let Some(Value::String(value)) = value else {
+        return Err(invalid().into());
+    };
+    if value.len() > 64 {
+        return Err(invalid().into());
+    }
+    let id = tauri::ipc::JavaScriptChannelId::from_str(&value).map_err(|_| invalid())?;
+    Ok(progress(id.channel_on(webview)))
 }
 
 fn preflight_view(

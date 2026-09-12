@@ -387,6 +387,7 @@ export interface UnopenedBundleMetadataDto {
 }
 
 export interface UnopenedBundlePreviewDto {
+  readonly schemaVersion: 1;
   readonly previewId: UuidV7;
   readonly metadata: UnopenedBundleMetadataDto;
 }
@@ -410,13 +411,15 @@ export interface ScenarioSettings {
   readonly overlapPolicy: OverlapPolicy;
 }
 
-export interface ProjectSummaryDto {
+export interface ProjectListItemV1 {
+  readonly schemaVersion: 1;
   readonly scenarioId: UuidV7;
   readonly title: string;
   readonly domainPackId: PackId;
   readonly revision: Revision;
   readonly updatedAt: string;
   readonly archived: boolean;
+  readonly lastOpenedAt: string | null;
 }
 
 export interface ProjectMetadataDto {
@@ -428,6 +431,16 @@ export interface ProjectMetadataDto {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly archivedAt: string | null;
+}
+
+export interface CalendarSettingsV1 {
+  readonly timeZone: string;
+  readonly locale: string;
+  readonly units: UnitSystem;
+  readonly firstDate: string;
+  readonly lastDate: string;
+  readonly gapPolicy: GapPolicy;
+  readonly overlapPolicy: OverlapPolicy;
 }
 
 export interface ImportOptions {
@@ -531,6 +544,8 @@ export interface RemovedScenarioDto {
 }
 
 export interface PortablePreviewDto {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
   readonly previewId: UuidV7;
   readonly bundleId: UuidV7;
   readonly bundleKind: "scenario-export" | "full-backup";
@@ -556,20 +571,32 @@ export interface PortablePreviewDto {
 }
 
 export interface PortableAppliedDto {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
+  readonly safetyBackup: SafetyBackupOutcomeDto;
   readonly scenarioIds: readonly UuidV7[];
 }
 
+export type SafetyBackupOutcomeDto =
+  | { readonly kind: "notRequired" }
+  | { readonly kind: "createdAndVerified"; readonly artifactName: string }
+  | { readonly kind: "confirmedBypass" };
+
 export interface PortableFilePreviewDto {
+  readonly schemaVersion: 1;
   readonly title: string;
   readonly byteLength: number;
   readonly backupSummary: BackupSummaryDto | null;
   readonly previewId: UuidV7;
   readonly digest: string;
   readonly currentRevision: Revision | null;
-  readonly libraryRevision: Revision | null;
+  readonly libraryRevision: Revision;
 }
 
 export interface PortableArtifactDto {
+  readonly schemaVersion: 1;
+  readonly currentRevision: Revision | null;
+  readonly libraryRevision: Revision | null;
   readonly artifactName: string;
 }
 
@@ -601,11 +628,6 @@ export interface HistoryEntryDto {
   readonly historySequence: number;
   readonly branchGeneration: number;
   readonly applied: boolean;
-}
-
-export interface SettingEntryDto {
-  readonly value: JsonValue;
-  readonly updatedAt: string;
 }
 
 export type ScenarioCommand =
@@ -757,7 +779,17 @@ export type OperationPurposeV1 =
   | { readonly kind: "csvReportSave" }
   | { readonly kind: "settingsImportPreview" }
   | { readonly kind: "settingsImportApply" }
-  | { readonly kind: "settingsExport" };
+  | { readonly kind: "settingsExport" }
+  | { readonly kind: "projectImportPreview" }
+  | { readonly kind: "projectImportApply" }
+  | { readonly kind: "projectExportPreview" }
+  | { readonly kind: "projectExportCreate" }
+  | { readonly kind: "projectBackupPreview" }
+  | { readonly kind: "projectBackupCreate" }
+  | { readonly kind: "projectRestorePreview" }
+  | { readonly kind: "projectRestoreApply" }
+  | { readonly kind: "projectUnopenedBundleInspect" }
+  | { readonly kind: "projectUnopenedBundleReexport" };
 export type ScenarioOperationContextV1 = {
   readonly kind: "scenario";
   readonly scenarioId: UuidV7;
@@ -816,6 +848,17 @@ export interface ApplicationSettingEntryV1<
 > {
   readonly value: ApplicationSettingValues[K];
   readonly updatedAt: string;
+}
+export type ApplicationSettingsValuesV1 = {
+  readonly [K in ApplicationSettingKey]: ApplicationSettingEntryV1<K> | null;
+};
+export interface ApplicationSettingsSnapshotV1 {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
+  readonly settings: ApplicationSettingsValuesV1;
+}
+export interface ApplicationSettingsWriteResultV1 extends ApplicationSettingsSnapshotV1 {
+  readonly changed: boolean;
 }
 export type NonsecretSettingsDocumentV1 = {
   readonly format: "eutheto/application-settings";
@@ -1947,6 +1990,7 @@ export const COMMAND_CATALOG = [
   "solver_get_support_matrix",
   "solver_get_deferred_gates",
   "project_list",
+  "project_open",
   "project_get_metadata",
   "project_create",
   "project_duplicate",
@@ -2332,13 +2376,15 @@ function parseResponse<T>(
 }
 
 const isDomainPackRef = shape<DomainPackRef>({ id: isPackId, schemaVersion: isU32 });
-const isProjectSummary = shape<ProjectSummaryDto>({
+const isProjectListItem = shape<ProjectListItemV1>({
+  schemaVersion: literal(1),
   scenarioId: isUuid,
   title: isText,
   domainPackId: isPackId,
   revision: isRevision,
   updatedAt: isTimestamp,
   archived: isBoolean,
+  lastOpenedAt: nullable(isTimestamp),
 });
 const isProjectMetadata = shape<ProjectMetadataDto>({
   scenarioId: isUuid,
@@ -2440,6 +2486,8 @@ const isRemovedScenario = shape<RemovedScenarioDto>({
   archived: isBoolean,
 });
 const isPortablePreview = shape<PortablePreviewDto>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
   previewId: isUuid,
   bundleId: isUuid,
   bundleKind: choices("scenario-export", "full-backup"),
@@ -2463,17 +2511,32 @@ const isPortablePreview = shape<PortablePreviewDto>({
   settingsRemoved: arrayOf(isText),
   appliedMigrations: arrayOf(isAppliedMigration),
 });
-const isPortableApplied = shape<PortableAppliedDto>({ scenarioIds: arrayOf(isUuid) });
+const isPortableApplied = shape<PortableAppliedDto>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  scenarioIds: arrayOf(isUuid),
+  safetyBackup: union<SafetyBackupOutcomeDto>(
+    shape({ kind: literal("notRequired") }),
+    shape({ kind: literal("createdAndVerified"), artifactName: isText }),
+    shape({ kind: literal("confirmedBypass") }),
+  ),
+});
 const isPortableFilePreview = shape<PortableFilePreviewDto>({
+  schemaVersion: literal(1),
   title: isText,
   byteLength: isRevision,
   backupSummary: nullable(isBackupSummary),
   previewId: isUuid,
   digest: isDigest,
   currentRevision: nullable(isRevision),
+  libraryRevision: isRevision,
+});
+const isPortableArtifact = shape<PortableArtifactDto>({
+  schemaVersion: literal(1),
+  artifactName: isText,
+  currentRevision: nullable(isRevision),
   libraryRevision: nullable(isRevision),
 });
-const isPortableArtifact = shape<PortableArtifactDto>({ artifactName: isText });
 const isFoundation = shape<FoundationStatus>({ schemaVersion: isU32, capability: isText });
 const isAppInfo = shape<AppInfoDto>({
   name: isText,
@@ -2731,6 +2794,7 @@ const isUnopenedMetadata = shape<UnopenedBundleMetadataDto>({
   ),
 });
 const isUnopenedPreview = shape<UnopenedBundlePreviewDto>({
+  schemaVersion: literal(1),
   previewId: isUuid,
   metadata: isUnopenedMetadata,
 });
@@ -2828,7 +2892,6 @@ const isHistoryEntry = shape<HistoryEntryDto>({
   branchGeneration: isRevision,
   applied: isBoolean,
 });
-const isSetting = shape<SettingEntryDto>({ value: isJson, updatedAt: isTimestamp });
 const isEventContext = shape<EventContextDto>({
   eventVersion: literal(1),
   timestamp: isTimestamp,
@@ -3669,6 +3732,30 @@ function applicationSettingEntry<K extends ApplicationSettingKey>(
     updatedAt: isTimestamp,
   });
 }
+const localSettingsShape = shape<ApplicationSettingsValuesV1>({
+  appearance: nullable(applicationSettingEntry("appearance")),
+  locale: nullable(applicationSettingEntry("locale")),
+  units: nullable(applicationSettingEntry("units")),
+});
+const settingsSnapshotShape = shape<ApplicationSettingsSnapshotV1>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  settings: localSettingsShape,
+});
+const isSettingsSnapshot = (value: unknown): value is ApplicationSettingsSnapshotV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) && settingsSnapshotShape(value);
+const settingsWriteShape = shape<ApplicationSettingsWriteResultV1>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  settings: localSettingsShape,
+  changed: isBoolean,
+});
+function settingsWriteGuard(expected: Revision): Guard<ApplicationSettingsWriteResultV1> {
+  return (value: unknown): value is ApplicationSettingsWriteResultV1 =>
+    boundedJson(value, SETTINGS_COMPACT_BYTES) &&
+    settingsWriteShape(value) &&
+    value.libraryRevision === expected + (value.changed ? 1 : 0);
+}
 const settingsChangeGuards = {
   appearance: shape<Extract<SettingsChangeV1, { readonly key: "appearance" }>>({
     key: literal("appearance"),
@@ -4127,6 +4214,7 @@ async function call<T>(
   guard: Guard<T>,
   options: {
     readonly maximumBytes?: number;
+    readonly requestMaximumBytes?: number;
     readonly onProgress?: Channel;
     readonly revisionKey?: ResponseRevision<T>;
   } = {},
@@ -4151,6 +4239,11 @@ async function call<T>(
         ? request.cancelRequestId
         : undefined;
   if (!isUuid(requestId)) throw new RangeError("A canonical UUIDv7 request identity is required");
+  if (
+    options.requestMaximumBytes !== undefined &&
+    !boundedJson(request, options.requestMaximumBytes)
+  )
+    throw new RangeError("The operation request exceeds its JSON limits");
   let value: unknown;
   try {
     value = await invoke<unknown>(
@@ -4202,6 +4295,28 @@ type SetupOperationCommand =
   | "people_csv_preview"
   | "people_csv_apply"
   | "people_csv_rejected_rows_save";
+const portableCommands = {
+  projectImportPreview: "project_import_preview",
+  projectImportApply: "project_import_apply",
+  projectExportPreview: "project_export_preview",
+  projectExportCreate: "project_export_create",
+  projectBackupPreview: "project_backup_preview",
+  projectBackupCreate: "project_backup_create",
+  projectRestorePreview: "project_restore_preview",
+  projectRestoreApply: "project_restore_apply",
+  projectUnopenedBundleInspect: "project_unopened_bundle_inspect",
+  projectUnopenedBundleReexport: "project_unopened_bundle_reexport",
+} as const;
+type PortablePurpose = keyof typeof portableCommands;
+type PortableCommand = (typeof portableCommands)[PortablePurpose];
+function isPortablePurpose(kind: OperationPurposeV1["kind"]): kind is PortablePurpose {
+  return Object.hasOwn(portableCommands, kind);
+}
+const PORTABLE_COMPACT_BYTES = 64 * 1_048_576;
+const PORTABLE_WIRE_BYTES = 128 * 1_048_576 + 128 * 1024;
+function portableGuard<T>(guard: Guard<T>): Guard<T> {
+  return (value: unknown): value is T => boundedJson(value, PORTABLE_COMPACT_BYTES) && guard(value);
+}
 interface NativeCallbackRegistry {
   readonly unregisterCallback: (id: number) => void;
 }
@@ -4252,7 +4367,11 @@ class OperationScope<C extends OperationContextV1> {
   }
 
   run<T>(
-    command: SetupOperationCommand | "settings_import_nonsecret" | "settings_export_nonsecret",
+    command:
+      | SetupOperationCommand
+      | PortableCommand
+      | "settings_import_nonsecret"
+      | "settings_export_nonsecret",
     purpose: OperationPurposeV1,
     payload: object,
     guard: Guard<T>,
@@ -4262,10 +4381,21 @@ class OperationScope<C extends OperationContextV1> {
     onAbandon?: () => void,
   ): SetupOperation<T> {
     if (this.#disposed) throw inactiveOperation();
-    const libraryPurpose =
+    const portablePurpose = isPortablePurpose(purpose.kind);
+    const settingsPurpose =
       purpose.kind === "settingsImportPreview" ||
       purpose.kind === "settingsImportApply" ||
       purpose.kind === "settingsExport";
+    const libraryPurpose =
+      settingsPurpose ||
+      (portablePurpose &&
+        purpose.kind !== "projectExportPreview" &&
+        purpose.kind !== "projectExportCreate");
+    const libraryRevisionRequired =
+      purpose.kind === "settingsImportApply" ||
+      purpose.kind === "projectImportApply" ||
+      purpose.kind === "projectRestoreApply" ||
+      purpose.kind === "projectBackupCreate";
     if (
       (this.#context.kind === "library") !== libraryPurpose ||
       (this.#context.kind === "scenario" &&
@@ -4274,17 +4404,41 @@ class OperationScope<C extends OperationContextV1> {
       throw new RangeError("The operation purpose belongs to another context kind");
     if (
       this.#context.kind === "library" &&
-      ((purpose.kind === "settingsImportApply") !==
-        (this.#context.expectedLibraryRevision !== null) ||
-        command !==
-          (purpose.kind === "settingsExport"
-            ? "settings_export_nonsecret"
-            : "settings_import_nonsecret"))
+      libraryRevisionRequired !== (this.#context.expectedLibraryRevision !== null)
     )
-      throw new RangeError(
-        "The settings operation requires its matching command and revision context",
-      );
-    if (!boundedJson(payload, libraryPurpose ? SETTINGS_COMPACT_BYTES : RESPONSE_MAX_BYTES))
+      throw new RangeError("The operation requires its exact library revision context");
+    if (
+      settingsPurpose &&
+      command !==
+        (purpose.kind === "settingsExport"
+          ? "settings_export_nonsecret"
+          : "settings_import_nonsecret")
+    )
+      throw new RangeError("The settings operation requires its matching command");
+    if (portablePurpose) {
+      if (
+        !isPortablePurpose(purpose.kind) ||
+        command !== portableCommands[purpose.kind] ||
+        (this.#context.kind === "scenario" && this.#context.expectedRevision === null)
+      )
+        throw new RangeError(
+          "The portable operation requires its matching command and exact context",
+        );
+    } else if (
+      Object.values(portableCommands).some((portableCommand) => portableCommand === command)
+    ) {
+      throw new RangeError("The portable command requires its matching purpose");
+    }
+    if (
+      !boundedJson(
+        payload,
+        portablePurpose
+          ? PORTABLE_COMPACT_BYTES
+          : settingsPurpose
+            ? SETTINGS_COMPACT_BYTES
+            : RESPONSE_MAX_BYTES,
+      )
+    )
       throw new RangeError("The operation request exceeds its JSON limits");
     // Capture before the prepare await: later edits to a Vue draft cannot rebind this request.
     const snapshot: unknown = JSON.parse(JSON.stringify(payload));
@@ -4398,34 +4552,54 @@ class OperationScope<C extends OperationContextV1> {
         };
         const response = await call(
           command,
-          context.kind === "scenario"
+          portablePurpose
             ? {
                 ...snapshot,
+                schemaVersion: 1,
                 requestId,
                 operationId,
-                scenarioId: context.scenarioId,
-                expectedRevision: context.expectedRevision,
+                ...(context.kind === "scenario"
+                  ? {
+                      scenarioId: context.scenarioId,
+                      expectedRevision: context.expectedRevision,
+                    }
+                  : libraryRevisionRequired
+                    ? { expectedLibraryRevision: context.expectedLibraryRevision }
+                    : {}),
               }
-            : purpose.kind === "settingsImportApply"
+            : context.kind === "scenario"
               ? {
-                  previewId: snapshot.previewId,
-                  approvalSha256: snapshot.approvalSha256,
-                  action: "apply",
-                  schemaVersion: 1,
+                  ...snapshot,
                   requestId,
                   operationId,
-                  expectedLibraryRevision: context.expectedLibraryRevision,
+                  scenarioId: context.scenarioId,
+                  expectedRevision: context.expectedRevision,
                 }
-              : purpose.kind === "settingsImportPreview"
+              : purpose.kind === "settingsImportApply"
                 ? {
-                    action: "preview",
+                    previewId: snapshot.previewId,
+                    approvalSha256: snapshot.approvalSha256,
+                    action: "apply",
                     schemaVersion: 1,
                     requestId,
                     operationId,
+                    expectedLibraryRevision: context.expectedLibraryRevision,
                   }
-                : { schemaVersion: 1, requestId, operationId },
+                : purpose.kind === "settingsImportPreview"
+                  ? {
+                      action: "preview",
+                      schemaVersion: 1,
+                      requestId,
+                      operationId,
+                    }
+                  : { schemaVersion: 1, requestId, operationId },
           guard,
-          { maximumBytes, onProgress: channel, revisionKey },
+          {
+            maximumBytes,
+            onProgress: channel,
+            revisionKey,
+            ...(portablePurpose ? { requestMaximumBytes: PORTABLE_COMPACT_BYTES } : {}),
+          },
         );
         receivedSuccess = true;
         return response;
@@ -5000,8 +5174,21 @@ export function getDeferredSolverGates(): Promise<
 
 export function listProjects(
   scope: ProjectScope = "active",
-): Promise<ApiResponseDto<readonly ProjectSummaryDto[]>> {
-  return call("project_list", { requestId: newRequestId(), scope }, arrayOf(isProjectSummary));
+): Promise<ApiResponseDto<readonly ProjectListItemV1[]>> {
+  return call(
+    "project_list",
+    { requestId: newRequestId(), schemaVersion: 1, scope },
+    arrayOf(isProjectListItem),
+  );
+}
+
+export function openProject(scenarioId: UuidV7): Promise<ApiResponseDto<ProjectListItemV1>> {
+  const guard = (value: unknown): value is ProjectListItemV1 =>
+    isProjectListItem(value) && value.scenarioId === scenarioId && value.lastOpenedAt !== null;
+  return call("project_open", { requestId: newRequestId(), schemaVersion: 1, scenarioId }, guard, {
+    maximumBytes: 136 * 1024,
+    revisionKey: "revision",
+  });
 }
 
 export function getProjectMetadata(
@@ -5019,11 +5206,17 @@ export function createProject(input: {
   readonly title: string;
   readonly description: string;
   readonly domainPack: DomainPackRef;
-  readonly settings: ScenarioSettings;
+  readonly settings: CalendarSettingsV1;
 }): Promise<ApiResponseDto<ProjectMetadataDto>> {
-  return call("project_create", { requestId: newRequestId(), ...input }, isProjectMetadata, {
-    revisionKey: "revision",
-  });
+  return call(
+    "project_create",
+    { requestId: newRequestId(), schemaVersion: 1, ...input },
+    isProjectMetadata,
+    {
+      maximumBytes: 136 * 1024,
+      revisionKey: "revision",
+    },
+  );
 }
 
 export function duplicateProject(input: {
@@ -5064,86 +5257,503 @@ export function deleteProject(
   );
 }
 
-export function previewImport(options: ImportOptions): Promise<ApiResponseDto<PortablePreviewDto>> {
-  return call("project_import_preview", { requestId: newRequestId(), options }, isPortablePreview);
+type PortableReviewKind = "import" | "restore" | "unopened" | "export" | "backup";
+interface PortableOwnedReview {
+  readonly kind: PortableReviewKind;
+  readonly operation: SetupOperation<unknown>;
+  readonly scenarioId: UuidV7 | null;
+  readonly scenarioRevision: Revision | null;
+  readonly replaceLibrary: boolean;
+  libraryRevision: Revision | null;
+  id: UuidV7 | undefined;
+  settled: boolean;
+  consuming: boolean;
+  consumer: SetupOperation<unknown> | undefined;
+  closing: boolean;
 }
+const isImportOptions = shape<ImportOptions>({
+  restoreMode: choices("import-scenario", "add-backup", "replace-library"),
+  includeResults: isBoolean,
+  includeAssets: isBoolean,
+});
+const isCollisionPlan = shape<CollisionPlan>({
+  scenarios: recordOf(choices("create-copy", "replace", "skip"), isUuid),
+  supplementalChoices: arrayOf(
+    shape<SupplementalCollisionChoice>({
+      section: choices("results", "shared-records", "preferences", "assets"),
+      key: isText,
+      action: choices("replace", "skip"),
+    }),
+  ),
+});
+const isRestoreOrigin = choices("userSelected", "safetyBackups");
+const isRestoreAuthorization = shape<RestoreAuthorizationDto>({
+  destructiveActionConfirmed: isBoolean,
+  safetyBackupBypassPhrase: nullable(isText),
+});
+const isPortableDiscarded = shape<{ readonly schemaVersion: 1 }>({ schemaVersion: literal(1) });
 
-export function applyImport(input: {
-  readonly previewId: UuidV7;
-  readonly collisionPlan: CollisionPlan;
-}): Promise<ApiResponseDto<PortableAppliedDto>> {
-  return call("project_import_apply", { requestId: newRequestId(), ...input }, isPortableApplied);
-}
+/** Owns finite native reviews and actual operation settlement, not authoritative library data. */
+export class PortableReviewFlow {
+  readonly #reviews = new Set<PortableOwnedReview>();
+  readonly #operations = new Set<SetupOperation<unknown>>();
+  #disposed = false;
+  #disposal: Promise<void> | undefined;
 
-export function previewExport(scenarioId: UuidV7): Promise<ApiResponseDto<PortableFilePreviewDto>> {
-  return call(
-    "project_export_preview",
-    { requestId: newRequestId(), scenarioId },
-    isPortableFilePreview,
-    { revisionKey: "currentRevision" },
-  );
-}
+  #active(): void {
+    if (this.#disposed) throw inactiveOperation();
+  }
 
-export function createExport(
-  scenarioId: UuidV7,
-  previewId: UuidV7,
-): Promise<ApiResponseDto<PortableArtifactDto>> {
-  return call(
-    "project_export_create",
-    { requestId: newRequestId(), scenarioId, previewId },
-    isPortableArtifact,
-  );
-}
+  #capacity(kind: PortableReviewKind): void {
+    this.#active();
+    const prepared = kind === "export" || kind === "backup";
+    let count = 0;
+    for (const review of this.#reviews)
+      if ((review.kind === "export" || review.kind === "backup") === prepared) count += 1;
+    if (count >= 3)
+      throw new RangeError("Dismiss a portable review in this group before opening another");
+  }
 
-export function previewBackup(title: string): Promise<ApiResponseDto<PortableFilePreviewDto>> {
-  return call(
-    "project_backup_preview",
-    { requestId: newRequestId(), title },
-    isPortableFilePreview,
-    { revisionKey: "libraryRevision" },
-  );
-}
+  async #cleanup(review: PortableOwnedReview): Promise<void> {
+    review.closing = true;
+    await review.consumer?.release().catch(() => undefined);
+    await review.operation.release().catch(() => undefined);
+    let operationId: UuidV7;
+    try {
+      operationId = await review.operation.operationId;
+    } catch {
+      if (review.settled && !review.consuming) this.#reviews.delete(review);
+      return;
+    }
+    await call(
+      "project_operation_cancel",
+      {
+        schemaVersion: 1,
+        requestId: newRequestId(),
+        target: { kind: "creator", operationId, requestId: review.operation.requestId },
+      },
+      isPortableDiscarded,
+      { maximumBytes: PORTABLE_WIRE_BYTES, revisionKey: null },
+    );
+    // An acknowledgement is not settlement; retain the creator to repeat cleanup after a late reply.
+    if (review.settled && !review.consuming) this.#reviews.delete(review);
+  }
 
-export function createBackup(
-  title: string,
-  previewId: UuidV7,
-): Promise<ApiResponseDto<PortableArtifactDto>> {
-  return call(
-    "project_backup_create",
-    { requestId: newRequestId(), title, previewId },
-    isPortableArtifact,
-  );
-}
+  #track<T>(
+    operation: SetupOperation<T>,
+    result: Promise<ApiResponseDto<T>>,
+    onRelease?: () => Promise<void>,
+  ): SetupOperation<T> {
+    const tracked: SetupOperation<T> = {
+      requestId: operation.requestId,
+      get operationId() {
+        return operation.operationId;
+      },
+      result: result.finally(() => this.#operations.delete(tracked)),
+      cancel: () => operation.cancel(),
+      release: () =>
+        operation.release().finally(async () => {
+          await onRelease?.().catch(() => undefined);
+        }),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
 
-export function previewRestore(
-  options: ImportOptions,
-): Promise<ApiResponseDto<PortablePreviewDto>> {
-  return call("project_restore_preview", { requestId: newRequestId(), options }, isPortablePreview);
-}
+  #preview<T extends { readonly previewId: UuidV7 }>(
+    scope: LibraryOperationScope | SetupOperationScope,
+    kind: PortableReviewKind,
+    purpose: PortablePurpose,
+    payload: object,
+    guard: Guard<T>,
+    revisionKey: ResponseRevision<T>,
+    libraryRevision: (value: T) => Revision | null,
+    onProgress?: (event: OperationProgressV1) => void,
+    replaceLibrary = false,
+  ): SetupOperation<T> {
+    this.#capacity(kind);
+    const operation = scope.run(
+      portableCommands[purpose],
+      { kind: purpose },
+      payload,
+      portableGuard(guard),
+      PORTABLE_WIRE_BYTES,
+      revisionKey,
+      onProgress,
+      () => {
+        void this.#cleanup(review).catch(() => undefined);
+      },
+    );
+    const review: PortableOwnedReview = {
+      kind,
+      operation,
+      id: undefined,
+      libraryRevision: null,
+      replaceLibrary,
+      scenarioId: scope.context.kind === "scenario" ? scope.context.scenarioId : null,
+      scenarioRevision: scope.context.kind === "scenario" ? scope.context.expectedRevision : null,
+      settled: false,
+      consuming: false,
+      consumer: undefined,
+      closing: false,
+    };
+    this.#reviews.add(review);
+    const result = operation.result
+      .then((response) => {
+        review.id = response.result.previewId;
+        review.libraryRevision = libraryRevision(response.result);
+        return response;
+      })
+      .finally(async () => {
+        review.settled = true;
+        if (review.id === undefined || review.closing || this.#disposed || !operation.isCurrent())
+          await this.#cleanup(review).catch(() => undefined);
+      });
+    return this.#track(operation, result, () => this.#cleanup(review));
+  }
 
-export function applyRestore(input: {
-  readonly previewId: UuidV7;
-  readonly collisionPlan: CollisionPlan;
-  readonly authorization: RestoreAuthorizationDto;
-}): Promise<ApiResponseDto<PortableAppliedDto>> {
-  return call("project_restore_apply", { requestId: newRequestId(), ...input }, isPortableApplied);
-}
+  #owned(
+    scope: LibraryOperationScope | SetupOperationScope,
+    previewId: UuidV7,
+    kind: PortableReviewKind,
+    expectedLibraryRevision?: Revision,
+  ): PortableOwnedReview {
+    this.#active();
+    const review = [...this.#reviews].find((item) => item.id === previewId);
+    if (
+      !isUuid(previewId) ||
+      review === undefined ||
+      review.kind !== kind ||
+      review.closing ||
+      review.consuming ||
+      !review.settled
+    )
+      throw new RangeError("An available review owned by this portable flow is required");
+    const context = scope.context;
+    if (
+      kind === "export"
+        ? context.kind !== "scenario" ||
+          context.scenarioId !== review.scenarioId ||
+          context.expectedRevision !== review.scenarioRevision ||
+          expectedLibraryRevision !== review.libraryRevision
+        : context.kind !== "library" ||
+          context.expectedLibraryRevision !== (kind === "unopened" ? null : review.libraryRevision)
+    )
+      throw new RangeError("The portable review belongs to another revision context");
+    return review;
+  }
 
-export function cancelPortablePreview(previewId: UuidV7): Promise<ApiResponseDto<EmptyDto>> {
-  return call("project_operation_cancel", { requestId: newRequestId(), previewId }, isEmpty);
-}
-export function inspectUnopenedBundle(): Promise<ApiResponseDto<UnopenedBundlePreviewDto>> {
-  return call("project_unopened_bundle_inspect", { requestId: newRequestId() }, isUnopenedPreview);
-}
+  #consume<T>(review: PortableOwnedReview, start: () => SetupOperation<T>): SetupOperation<T> {
+    review.consuming = true;
+    let operation: SetupOperation<T>;
+    try {
+      operation = start();
+    } catch (error) {
+      review.consuming = false;
+      void this.#cleanup(review).catch(() => undefined);
+      throw error;
+    }
+    review.consumer = operation;
+    let retained = false;
+    const result = operation.result
+      .catch((error: unknown) => {
+        const detail = isApiError(error) ? error.details?.portablePreviewRetained : undefined;
+        retained =
+          review.kind === "restore" &&
+          isApiError(error) &&
+          error.code === "restore.safety_backup_failed" &&
+          detail?.type === "boolean" &&
+          detail.value;
+        throw error;
+      })
+      .finally(async () => {
+        review.consuming = false;
+        review.consumer = undefined;
+        if (!retained || review.closing || this.#disposed || !operation.isCurrent())
+          await this.#cleanup(review).catch(() => undefined);
+      });
+    return this.#track(operation, result, () => this.#cleanup(review));
+  }
 
-export function reexportUnopenedBundle(
-  previewId: UuidV7,
-): Promise<ApiResponseDto<PortableArtifactDto>> {
-  return call(
-    "project_unopened_bundle_reexport",
-    { requestId: newRequestId(), previewId },
-    isPortableArtifact,
-  );
+  previewImport(
+    scope: LibraryOperationScope,
+    options: ImportOptions,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortablePreviewDto> {
+    if (!isImportOptions(options))
+      throw new RangeError("Valid portable import options are required");
+    return this.#preview(
+      scope,
+      "import",
+      "projectImportPreview",
+      { options },
+      isPortablePreview,
+      "libraryRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+    );
+  }
+
+  applyImport(
+    scope: LibraryOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly collisionPlan: CollisionPlan;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableAppliedDto> {
+    const review = this.#owned(scope, input.previewId, "import");
+    return this.#consume(review, () => {
+      if (!isCollisionPlan(input.collisionPlan))
+        throw new RangeError("A valid collision plan is required");
+      return scope.run(
+        "project_import_apply",
+        { kind: "projectImportApply" },
+        { previewId: input.previewId, collisionPlan: input.collisionPlan },
+        portableGuard(
+          (value: unknown): value is PortableAppliedDto =>
+            isPortableApplied(value) &&
+            review.libraryRevision !== null &&
+            (value.libraryRevision === review.libraryRevision ||
+              value.libraryRevision === review.libraryRevision + 1) &&
+            value.safetyBackup.kind === "notRequired",
+        ),
+        PORTABLE_WIRE_BYTES,
+        "libraryRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      );
+    });
+  }
+
+  previewExport(
+    scope: SetupOperationScope,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableFilePreviewDto> {
+    const revision = requireSetupRevision(scope);
+    return this.#preview(
+      scope,
+      "export",
+      "projectExportPreview",
+      {},
+      (value: unknown): value is PortableFilePreviewDto =>
+        isPortableFilePreview(value) &&
+        value.currentRevision === revision &&
+        value.backupSummary === null,
+      "currentRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+    );
+  }
+
+  createExport(
+    scope: SetupOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly expectedLibraryRevision: Revision;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableArtifactDto> {
+    const review = this.#owned(scope, input.previewId, "export", input.expectedLibraryRevision);
+    return this.#consume(review, () =>
+      scope.run(
+        "project_export_create",
+        { kind: "projectExportCreate" },
+        { previewId: input.previewId, expectedLibraryRevision: input.expectedLibraryRevision },
+        portableGuard(
+          (value: unknown): value is PortableArtifactDto =>
+            isPortableArtifact(value) &&
+            value.currentRevision === review.scenarioRevision &&
+            value.libraryRevision === review.libraryRevision,
+        ),
+        PORTABLE_WIRE_BYTES,
+        "currentRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      ),
+    );
+  }
+
+  previewBackup(
+    scope: LibraryOperationScope,
+    title: string,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableFilePreviewDto> {
+    if (!isText(title)) throw new RangeError("A portable backup title is required");
+    return this.#preview(
+      scope,
+      "backup",
+      "projectBackupPreview",
+      { title },
+      (value: unknown): value is PortableFilePreviewDto =>
+        isPortableFilePreview(value) &&
+        value.currentRevision === null &&
+        value.backupSummary !== null,
+      "libraryRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+    );
+  }
+
+  createBackup(
+    scope: LibraryOperationScope,
+    previewId: UuidV7,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableArtifactDto> {
+    const review = this.#owned(scope, previewId, "backup");
+    return this.#consume(review, () =>
+      scope.run(
+        "project_backup_create",
+        { kind: "projectBackupCreate" },
+        { previewId },
+        portableGuard(
+          (value: unknown): value is PortableArtifactDto =>
+            isPortableArtifact(value) &&
+            value.currentRevision === null &&
+            value.libraryRevision === review.libraryRevision,
+        ),
+        PORTABLE_WIRE_BYTES,
+        "libraryRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      ),
+    );
+  }
+
+  previewRestore(
+    scope: LibraryOperationScope,
+    options: ImportOptions,
+    origin: "userSelected" | "safetyBackups",
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortablePreviewDto> {
+    if (!isImportOptions(options) || !isRestoreOrigin(origin))
+      throw new RangeError("Valid restore options and native selection origin are required");
+    return this.#preview(
+      scope,
+      "restore",
+      "projectRestorePreview",
+      { options, origin },
+      isPortablePreview,
+      "libraryRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+      options.restoreMode === "replace-library",
+    );
+  }
+
+  applyRestore(
+    scope: LibraryOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly collisionPlan: CollisionPlan;
+      readonly authorization: RestoreAuthorizationDto;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableAppliedDto> {
+    const review = this.#owned(scope, input.previewId, "restore");
+    return this.#consume(review, () => {
+      if (!isCollisionPlan(input.collisionPlan) || !isRestoreAuthorization(input.authorization))
+        throw new RangeError("A valid collision plan and restore authorization are required");
+      return scope.run(
+        "project_restore_apply",
+        { kind: "projectRestoreApply" },
+        {
+          previewId: input.previewId,
+          collisionPlan: input.collisionPlan,
+          authorization: input.authorization,
+        },
+        portableGuard(
+          (value: unknown): value is PortableAppliedDto =>
+            isPortableApplied(value) &&
+            review.libraryRevision !== null &&
+            (value.libraryRevision === review.libraryRevision ||
+              value.libraryRevision === review.libraryRevision + 1) &&
+            (review.replaceLibrary
+              ? value.safetyBackup.kind !== "notRequired"
+              : value.safetyBackup.kind === "notRequired"),
+        ),
+        PORTABLE_WIRE_BYTES,
+        "libraryRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      );
+    });
+  }
+
+  inspectUnopenedBundle(
+    scope: LibraryOperationScope,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<UnopenedBundlePreviewDto> {
+    return this.#preview(
+      scope,
+      "unopened",
+      "projectUnopenedBundleInspect",
+      {},
+      isUnopenedPreview,
+      null,
+      () => null,
+      onProgress,
+    );
+  }
+
+  reexportUnopenedBundle(
+    scope: LibraryOperationScope,
+    previewId: UuidV7,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableArtifactDto> {
+    const review = this.#owned(scope, previewId, "unopened");
+    return this.#consume(review, () =>
+      scope.run(
+        "project_unopened_bundle_reexport",
+        { kind: "projectUnopenedBundleReexport" },
+        { previewId },
+        portableGuard(
+          (value: unknown): value is PortableArtifactDto =>
+            isPortableArtifact(value) &&
+            value.currentRevision === null &&
+            value.libraryRevision === null,
+        ),
+        PORTABLE_WIRE_BYTES,
+        null,
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      ),
+    );
+  }
+
+  async discardPreview(previewId: UuidV7): Promise<void> {
+    const review = [...this.#reviews].find((item) => item.id === previewId);
+    if (!isUuid(previewId) || review === undefined)
+      throw new RangeError("A portable review owned by this flow is required");
+    await this.#cleanup(review);
+  }
+
+  /** Signals first, then awaits real picker/transaction settlement; committed receipts stay intact. */
+  dispose(): Promise<void> {
+    this.#disposed = true;
+    this.#disposal ??= (async () => {
+      const operations = [...this.#operations];
+      await Promise.allSettled(operations.map((operation) => operation.release()));
+      await Promise.allSettled([...this.#reviews].map((review) => this.#cleanup(review)));
+      await Promise.allSettled(operations.map((operation) => operation.result));
+      await Promise.all([...this.#reviews].map((review) => this.#cleanup(review)));
+    })().catch((error: unknown) => {
+      this.#disposal = undefined;
+      throw error;
+    });
+    return this.#disposal;
+  }
 }
 
 function setupWireLimit(dataBytes: number): number {
@@ -5507,27 +6117,56 @@ export function cancelCounterfactual(input: {
   });
 }
 
-export function getSetting(
-  key: string,
-): Promise<ApiResponseDto<{ readonly setting: SettingEntryDto | null }>> {
+export function getApplicationSettings(): Promise<ApiResponseDto<ApplicationSettingsSnapshotV1>> {
+  return call("settings_get", { requestId: newRequestId(), schemaVersion: 1 }, isSettingsSnapshot, {
+    maximumBytes: SETTINGS_WIRE_BYTES,
+    revisionKey: "libraryRevision",
+  });
+}
+
+export function updateSetting<K extends ApplicationSettingKey>(
+  key: K,
+  value: ApplicationSettingValues[K],
+  expectedLibraryRevision: Revision,
+): Promise<ApiResponseDto<ApplicationSettingsWriteResultV1>> {
+  if (!isRevision(expectedLibraryRevision) || !applicationSettingGuards[key](value))
+    throw new RangeError("A valid setting and captured library revision are required");
   return call(
-    "settings_get",
-    { requestId: newRequestId(), key },
-    shape({ setting: nullable(isSetting) }),
+    "settings_update",
+    {
+      requestId: newRequestId(),
+      schemaVersion: 1,
+      key,
+      value,
+      expectedLibraryRevision,
+    },
+    settingsWriteGuard(expectedLibraryRevision),
+    {
+      maximumBytes: SETTINGS_WIRE_BYTES,
+      revisionKey: "libraryRevision",
+    },
   );
 }
 
-export function updateSetting(key: string, value: JsonValue): Promise<ApiResponseDto<EmptyDto>> {
-  return call("settings_update", { requestId: newRequestId(), key, value }, isEmpty);
-}
-
 export function resetSettingsSection(
-  key: string,
-): Promise<ApiResponseDto<{ readonly existed: boolean }>> {
+  key: ApplicationSettingKey,
+  expectedLibraryRevision: Revision,
+): Promise<ApiResponseDto<ApplicationSettingsWriteResultV1>> {
+  if (!isRevision(expectedLibraryRevision))
+    throw new RangeError("A captured library revision is required");
   return call(
     "settings_reset_section",
-    { requestId: newRequestId(), key },
-    shape({ existed: isBoolean }),
+    {
+      requestId: newRequestId(),
+      schemaVersion: 1,
+      key,
+      expectedLibraryRevision,
+    },
+    settingsWriteGuard(expectedLibraryRevision),
+    {
+      maximumBytes: SETTINGS_WIRE_BYTES,
+      revisionKey: "libraryRevision",
+    },
   );
 }
 

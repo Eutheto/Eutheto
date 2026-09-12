@@ -22,8 +22,8 @@ use eutheto_import::{
 use eutheto_types::{
     ActorRef, BackendId, BackendSelection, BundleId, CancellationToken, CommandId, CommandSource,
     CounterfactualJobId, IanaTimeZone, MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset,
-    PortableJsonLimits, ProjectMetadataDto, ProjectSummaryDto, RequestId, Revision,
-    Rfc3339Timestamp, SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
+    PortableJsonLimits, ProjectMetadataDto, RequestId, Revision, Rfc3339Timestamp,
+    SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
     ScenarioSnapshotId, ScenarioSnapshotV1, SemanticCapability, SolutionId, SolveOptions,
     SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
     collect_scenario_owned_uuids, collect_self_declared_uuids, extract_result_dependency,
@@ -586,19 +586,6 @@ pub struct ProjectSummary {
     pub archived_at: Option<Rfc3339Timestamp>,
 }
 
-impl From<&ProjectSummary> for ProjectSummaryDto {
-    fn from(summary: &ProjectSummary) -> Self {
-        Self {
-            scenario_id: summary.id,
-            title: summary.title.clone(),
-            domain_pack_id: summary.domain_pack_id.clone(),
-            revision: summary.revision,
-            updated_at: summary.updated_at,
-            archived: summary.archived_at.is_some(),
-        }
-    }
-}
-
 impl From<&ProjectSummary> for ProjectMetadataDto {
     fn from(summary: &ProjectSummary) -> Self {
         Self {
@@ -1034,10 +1021,11 @@ pub struct AppSettingsSnapshot {
 }
 
 /// The outcome of an atomic application-settings replacement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettingsCommit {
     pub library_revision: Revision,
     pub changed: bool,
+    pub settings: BTreeMap<String, AppSetting<Value>>,
 }
 
 type ActorOperation = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
@@ -1394,21 +1382,28 @@ impl SqliteScenarioStore {
     /// Returns an error when the staged input is invalid or stale, a referenced
     /// scenario is missing or already occupied, a document cannot be
     /// serialized, a numeric value is out of range, the storage transaction
-    /// fails, or the database actor is unavailable.
+    /// fails, cancellation wins before commit, or the database actor is unavailable.
+    /// Committed success wins over later cancellation, including no-effect applies.
     pub async fn apply_staged_library(
         &self,
         staged: StagedLibraryApply,
         applied_at: Rfc3339Timestamp,
+        cancellation: CancellationToken,
     ) -> Result<LibraryApplyOutcome, StoreError> {
         #[cfg(debug_assertions)]
         let failpoint = Arc::clone(&self.failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = self.command_commit_test_hook.clone();
         self.call(move |connection| {
             apply_staged_library_transaction(
                 connection,
                 staged,
                 applied_at,
+                &cancellation,
                 #[cfg(debug_assertions)]
                 &failpoint,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook.as_ref(),
             )
         })
         .await
@@ -1979,8 +1974,9 @@ impl SqliteScenarioStore {
                 return Err(StoreError::ScenarioNotFound(scenario_id));
             }
             increment_library_revision(&transaction)?;
+            let project = load_project(&transaction, scenario_id)?;
             transaction.commit()?;
-            load_project(connection, scenario_id)
+            Ok(project)
         })
         .await
     }
@@ -2526,6 +2522,7 @@ impl SqliteScenarioStore {
             Ok(SettingsCommit {
                 library_revision,
                 changed,
+                settings: after,
             })
         })
         .await
@@ -2559,52 +2556,6 @@ impl SqliteScenarioStore {
         .await
     }
 
-    /// Creates or replaces a typed application setting.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be serialized, the database actor
-    /// or transaction fails, or the library revision cannot be represented.
-    pub async fn set_setting<T: Serialize + Send + 'static>(
-        &self,
-        key: String,
-        value: T,
-        updated_at: Rfc3339Timestamp,
-    ) -> Result<(), StoreError> {
-        self.call(move |connection| {
-            let value_json = serde_json::to_string(&value)?;
-            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute(
-                "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-                params![key, value_json, updated_at.to_string()],
-            )?;
-            increment_library_revision(&transaction)?;
-            transaction.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// Deletes an application setting and reports whether it existed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database actor or transaction fails, or the
-    /// library revision cannot be represented.
-    pub async fn delete_setting(&self, key: String) -> Result<bool, StoreError> {
-        self.call(move |connection| {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let changed =
-                transaction.execute("DELETE FROM app_settings WHERE key = ?1", [key])? != 0;
-            if changed {
-                increment_library_revision(&transaction)?;
-            }
-            transaction.commit()?;
-            Ok(changed)
-        })
-        .await
-    }
     /// Returns bounded, non-sensitive database diagnostics.
     ///
     /// # Errors
@@ -7679,8 +7630,11 @@ fn apply_staged_library_transaction(
     connection: &mut Connection,
     staged: StagedLibraryApply,
     applied_at: Rfc3339Timestamp,
+    cancellation: &CancellationToken,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+    #[cfg(debug_assertions)] command_commit_test_hook: Option<&CommandCommitTestHook>,
 ) -> Result<LibraryApplyOutcome, StoreError> {
+    SqliteScenarioStore::check_command_cancelled(cancellation)?;
     let StagedApplyParts {
         import,
         remove_scenario_ids,
@@ -7695,38 +7649,31 @@ fn apply_staged_library_transaction(
         authorization.as_ref(),
     )?;
 
-    let StagedImport {
-        binding,
-        mode,
-        scenarios,
-        scenario_revisions,
-        results,
-        shared_records,
-        preferences,
-        manifest_extensions,
-        nonsemantic_extensions,
-        assets,
-        supplemental_replacements,
-        provenance,
-    } = import;
+    let mode = import.mode;
     ensure_supplemental_replacements(
         &transaction,
         mode,
-        &results,
-        &shared_records,
-        &preferences,
-        &assets,
-        &supplemental_replacements,
+        &import.results,
+        &import.shared_records,
+        &import.preferences,
+        &import.assets,
+        &import.supplemental_replacements,
     )?;
     let no_effect = mode != RestoreMode::ReplaceLibrary
         && remove_scenario_ids.is_empty()
-        && scenarios.is_empty()
-        && results.is_empty()
-        && shared_records.is_empty()
-        && preferences.is_empty()
-        && assets.is_empty()
+        && import.scenarios.is_empty()
+        && import.results.is_empty()
+        && import.shared_records.is_empty()
+        && import.preferences.is_empty()
+        && import.assets.is_empty()
         && settings.is_empty();
     if no_effect {
+        SqliteScenarioStore::commit_command(
+            transaction,
+            cancellation,
+            #[cfg(debug_assertions)]
+            command_commit_test_hook,
+        )?;
         return Ok(LibraryApplyOutcome {
             library_revision: actual_revision,
             created: 0,
@@ -7738,42 +7685,51 @@ fn apply_staged_library_transaction(
     let (outcome, retained_candidates) = replace_staged_scenarios(
         &transaction,
         mode,
-        scenarios,
-        scenario_revisions,
+        import.scenarios,
+        import.scenario_revisions,
         &remove_scenario_ids,
     )?;
-    store_opaque_staged_results(&transaction, results, &supplemental_replacements)?;
+    store_opaque_staged_results(
+        &transaction,
+        import.results,
+        &import.supplemental_replacements,
+    )?;
     upsert_portable_section(
         &transaction,
         SupplementalSectionKind::SharedRecords,
-        shared_records,
+        import.shared_records,
     )?;
     upsert_portable_section(
         &transaction,
         SupplementalSectionKind::Preferences,
-        preferences,
+        import.preferences,
     )?;
-    upsert_portable_assets(&transaction, assets)?;
+    upsert_portable_assets(&transaction, import.assets)?;
     synchronize_retained_scenario_revisions(&transaction, retained_candidates)?;
     upsert_settings(&transaction, settings)?;
     persist_portable_library_metadata(
         &transaction,
         mode,
-        manifest_extensions,
-        nonsemantic_extensions,
+        import.manifest_extensions,
+        import.nonsemantic_extensions,
     )?;
     validate_global_identity_ownership(&transaction)?;
     #[cfg(debug_assertions)]
     consume_failpoint(failpoint, Failpoint::AfterSupplementalWrite)?;
     insert_import_provenance(
         &transaction,
-        binding,
-        provenance,
+        import.binding,
+        import.provenance,
         &outcome.sources,
         applied_at,
     )?;
     let library_revision = increment_library_revision(&transaction)?;
-    transaction.commit()?;
+    SqliteScenarioStore::commit_command(
+        transaction,
+        cancellation,
+        #[cfg(debug_assertions)]
+        command_commit_test_hook,
+    )?;
     Ok(LibraryApplyOutcome {
         library_revision,
 

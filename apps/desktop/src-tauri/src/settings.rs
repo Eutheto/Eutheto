@@ -2,28 +2,159 @@
 mod custody;
 
 use crate::operations::{
-    OperationClaim, OperationContextV1, OperationPhaseV1, OperationPurposeV1, ProgressSink,
-    require_version,
+    OperationClaim, OperationContextV1, OperationPhaseV1, OperationPurposeV1, require_version,
 };
-use crate::setup_boundary::{decode, encode_response, finish, progress};
+use crate::setup_boundary::{channel, decode, encode_response, finish};
 use crate::{
     ApiError, DesktopState, NativeFileError, SolutionApiResult, boundary_error, map_app_error,
     native_file_task,
 };
 pub(crate) use custody::SettingsCustody;
 use custody::{Creator, PreviewTarget};
-use eutheto_core::bounded_json_size;
+use eutheto_core::{AppCommand, AppCommandResult, bounded_json_size};
 use eutheto_types::{
     MAX_APPLICATION_SETTINGS_BYTES, OperationControl, OperationId, RequestId, Revision,
     SettingsImportApplyDtoV1, SettingsImportApplyRequestV1, SettingsImportPreviewDtoV1,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 const FRAME_BYTES: usize = 64 * 1024;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ApplicationSettingKey {
+    Appearance,
+    Locale,
+    Units,
+}
+
+impl ApplicationSettingKey {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Appearance => "appearance",
+            Self::Locale => "locale",
+            Self::Units => "units",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SnapshotRequest {
+    schema_version: u32,
+    request_id: RequestId,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    expected_library_revision: Revision,
+    key: ApplicationSettingKey,
+    value: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResetRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    expected_library_revision: Revision,
+    key: ApplicationSettingKey,
+}
+
+#[tauri::command]
+pub(super) async fn settings_get(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SnapshotRequest = decode(bounded_request(request)?)?;
+    require_version(request.schema_version)?;
+    let snapshot = state
+        .app
+        .application_settings_snapshot()
+        .await
+        .map_err(map_app_error)?;
+    encode_response(
+        request.request_id,
+        Some(snapshot.library_revision),
+        snapshot,
+        FRAME_BYTES,
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn settings_update(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: UpdateRequest = decode(bounded_request(request)?)?;
+    require_version(request.schema_version)?;
+    write_setting(
+        &state,
+        request.request_id,
+        AppCommand::SetSetting {
+            request_id: request.request_id,
+            expected_library_revision: request.expected_library_revision,
+            key: request.key.as_str().to_owned(),
+            value: request.value,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn settings_reset_section(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: ResetRequest = decode(bounded_request(request)?)?;
+    require_version(request.schema_version)?;
+    write_setting(
+        &state,
+        request.request_id,
+        AppCommand::DeleteSetting {
+            request_id: request.request_id,
+            expected_library_revision: request.expected_library_revision,
+            key: request.key.as_str().to_owned(),
+        },
+    )
+    .await
+}
+
+async fn write_setting(
+    state: &DesktopState,
+    request_id: RequestId,
+    command: AppCommand,
+) -> SolutionApiResult {
+    let AppCommandResult::SettingsWritten(committed) =
+        state.app.execute(command).await.map_err(map_app_error)?
+    else {
+        return Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected setting write result.",
+            None,
+        )
+        .into());
+    };
+    // Local validation bounds these three entries. Never relabel a committed write
+    // as cancelled while serializing its exact transaction result.
+    encode_response(
+        request_id,
+        Some(committed.library_revision),
+        committed,
+        FRAME_BYTES,
+        None,
+    )
+    .await
+}
 
 #[derive(Deserialize)]
 #[serde(
@@ -94,27 +225,6 @@ fn bounded_request(request: Option<Value>) -> Result<Option<Value>, ApiError> {
         .into());
     }
     Ok(request)
-}
-
-fn channel<R: tauri::Runtime>(
-    webview: tauri::Webview<R>,
-    value: Option<Value>,
-) -> Result<ProgressSink, ApiError> {
-    let invalid = || {
-        boundary_error(
-            "operation.progress_channel_invalid",
-            "This operation requires a valid progress channel.",
-            Some("/onProgress"),
-        )
-    };
-    let Some(Value::String(value)) = value else {
-        return Err(invalid().into());
-    };
-    if value.len() > 64 {
-        return Err(invalid().into());
-    }
-    let id = tauri::ipc::JavaScriptChannelId::from_str(&value).map_err(|_| invalid())?;
-    Ok(progress(id.channel_on(webview)))
 }
 
 fn claim(

@@ -575,12 +575,57 @@ pub fn resolve_local_time(
     gap_policy: GapPolicy,
     overlap_policy: OverlapPolicy,
 ) -> Result<ResolvedLocalTime, TimeResolutionError> {
+    let zoned = resolve_local_zoned(local, zone, gap_policy, overlap_policy)?;
+    Ok(ResolvedLocalTime {
+        instant: Rfc3339Timestamp::from_timestamp(zoned.timestamp()),
+        local,
+        offset_seconds: zoned.offset().seconds(),
+    })
+}
+
+/// Resolves an exact local-calendar midnight in the selected time zone.
+///
+/// Unlike [`resolve_local_time`], this rejects gap resolution that moves the
+/// requested boundary to another wall time or date, even with [`GapPolicy::MoveForward`].
+///
+/// # Errors
+///
+/// Returns [`TimeResolutionError`] when a gap moves the requested midnight,
+/// policy rejects an ambiguity, pack resolution is required, or the time-zone
+/// operation fails.
+pub fn resolve_local_midnight(
+    date: jiff::civil::Date,
+    zone: &IanaTimeZone,
+    gap_policy: GapPolicy,
+    overlap_policy: OverlapPolicy,
+) -> Result<Rfc3339Timestamp, TimeResolutionError> {
+    let midnight = date.to_datetime(jiff::civil::Time::MIN);
+    let zoned = resolve_local_zoned(
+        LocalWallTime::from_datetime(midnight),
+        zone,
+        gap_policy,
+        overlap_policy,
+    )?;
+    if zoned.datetime() != midnight {
+        return Err(TimeResolutionError {
+            kind: TimeResolutionFailureKind::Gap,
+        });
+    }
+    Ok(Rfc3339Timestamp::from_timestamp(zoned.timestamp()))
+}
+
+fn resolve_local_zoned(
+    local: LocalWallTime,
+    zone: &IanaTimeZone,
+    gap_policy: GapPolicy,
+    overlap_policy: OverlapPolicy,
+) -> Result<jiff::Zoned, TimeResolutionError> {
     let time_zone = zone.time_zone().map_err(|_| TimeResolutionError {
         kind: TimeResolutionFailureKind::InvalidTimeZone,
     })?;
     let ambiguous = time_zone.to_ambiguous_zoned(local.as_datetime());
     let offset = ambiguous.offset();
-    let zoned = match offset {
+    match offset {
         AmbiguousOffset::Unambiguous { .. } => ambiguous.unambiguous(),
         AmbiguousOffset::Gap { .. } => match gap_policy {
             GapPolicy::Reject => {
@@ -607,12 +652,6 @@ pub fn resolve_local_time(
     }
     .map_err(|_| TimeResolutionError {
         kind: TimeResolutionFailureKind::InvalidTimeZone,
-    })?;
-
-    Ok(ResolvedLocalTime {
-        instant: Rfc3339Timestamp::from_timestamp(zoned.timestamp()),
-        local,
-        offset_seconds: zoned.offset().seconds(),
     })
 }
 
@@ -674,7 +713,8 @@ impl<'de> Deserialize<'de> for Horizon {
 mod tests {
     use super::{
         Clock, FixedClock, GapPolicy, IanaTimeZone, LocalWallTime, OverlapPolicy, REVISION_MAX_V1,
-        Revision, Rfc3339Timestamp, TimeResolutionFailureKind, resolve_local_time,
+        Revision, Rfc3339Timestamp, TimeResolutionFailureKind, resolve_local_midnight,
+        resolve_local_time,
     };
 
     #[test]
@@ -717,6 +757,43 @@ mod tests {
         let moved =
             resolve_local_time(local, &zone, GapPolicy::MoveForward, OverlapPolicy::Earlier)?;
         assert_eq!(moved.instant.to_string(), "2026-03-08T08:30:00Z");
+        Ok(())
+    }
+
+    #[test]
+    fn local_midnight_rejects_shifted_gap_boundaries() -> Result<(), Box<dyn std::error::Error>> {
+        for (zone, date) in [
+            ("America/Sao_Paulo", "2018-11-04"),
+            ("Pacific/Apia", "2011-12-30"),
+        ] {
+            assert_eq!(
+                resolve_local_midnight(
+                    date.parse()?,
+                    &IanaTimeZone::parse(zone)?,
+                    GapPolicy::MoveForward,
+                    OverlapPolicy::Reject,
+                )
+                .map_err(|error| error.kind),
+                Err(TimeResolutionFailureKind::Gap)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn local_midnight_honors_overlap_policy() -> Result<(), Box<dyn std::error::Error>> {
+        let zone = IanaTimeZone::parse("America/Havana")?;
+        let date = "2020-11-01".parse()?;
+        let earlier =
+            resolve_local_midnight(date, &zone, GapPolicy::Reject, OverlapPolicy::Earlier)?;
+        let later = resolve_local_midnight(date, &zone, GapPolicy::Reject, OverlapPolicy::Later)?;
+        assert_eq!(earlier.to_string(), "2020-11-01T04:00:00Z");
+        assert_eq!(later.to_string(), "2020-11-01T05:00:00Z");
+        assert_eq!(
+            resolve_local_midnight(date, &zone, GapPolicy::Reject, OverlapPolicy::Reject)
+                .map_err(|error| error.kind),
+            Err(TimeResolutionFailureKind::Overlap)
+        );
         Ok(())
     }
 

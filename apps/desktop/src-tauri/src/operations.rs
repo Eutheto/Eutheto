@@ -42,6 +42,16 @@ pub(super) enum OperationPurposeV1 {
     SettingsImportPreview,
     SettingsImportApply,
     SettingsExport,
+    ProjectImportPreview,
+    ProjectImportApply,
+    ProjectExportPreview,
+    ProjectExportCreate,
+    ProjectBackupPreview,
+    ProjectBackupCreate,
+    ProjectRestorePreview,
+    ProjectRestoreApply,
+    ProjectUnopenedBundleInspect,
+    ProjectUnopenedBundleReexport,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -238,6 +248,14 @@ impl OperationRegistry {
             OperationPurposeV1::SettingsImportPreview
                 | OperationPurposeV1::SettingsImportApply
                 | OperationPurposeV1::SettingsExport
+                | OperationPurposeV1::ProjectImportPreview
+                | OperationPurposeV1::ProjectImportApply
+                | OperationPurposeV1::ProjectBackupPreview
+                | OperationPurposeV1::ProjectBackupCreate
+                | OperationPurposeV1::ProjectRestorePreview
+                | OperationPurposeV1::ProjectRestoreApply
+                | OperationPurposeV1::ProjectUnopenedBundleInspect
+                | OperationPurposeV1::ProjectUnopenedBundleReexport
         );
         match request.context {
             OperationContextV1::Scenario {
@@ -259,12 +277,17 @@ impl OperationRegistry {
             OperationContextV1::Library {
                 expected_library_revision,
             } if library_purpose => {
-                if matches!(request.purpose, OperationPurposeV1::SettingsImportApply)
-                    != expected_library_revision.is_some()
-                {
+                let revision_required = matches!(
+                    request.purpose,
+                    OperationPurposeV1::SettingsImportApply
+                        | OperationPurposeV1::ProjectImportApply
+                        | OperationPurposeV1::ProjectBackupCreate
+                        | OperationPurposeV1::ProjectRestoreApply
+                );
+                if revision_required != expected_library_revision.is_some() {
                     return Err(boundary_error(
                         "operation.library_revision_mismatch",
-                        "Only a settings apply operation requires an exact library revision.",
+                        "The library revision context does not match this operation's purpose.",
                         Some("/context/expectedLibraryRevision"),
                     )
                     .into());
@@ -618,7 +641,7 @@ fn not_active() -> ApiErrorDto {
         Some("/operationId"),
     )
 }
-fn cancelled() -> ApiErrorDto {
+pub(super) fn cancelled() -> ApiErrorDto {
     boundary_error("operation.cancelled", "The operation was cancelled.", None)
 }
 fn resource_limit() -> ApiErrorDto {

@@ -112,6 +112,10 @@ export default withVueTs(
       ],
       "vue/max-attributes-per-line": "off",
       "vue/singleline-html-element-content-newline": "off",
+      // Prettier owns layout; Vue's alternatives disagree on multiline inline content.
+      "vue/html-indent": "off",
+      "vue/html-closing-bracket-newline": "off",
+      "vue/multiline-html-element-content-newline": "off",
     },
   },
   {
