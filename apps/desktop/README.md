@@ -26,8 +26,8 @@ prevent closing-animation or busy-state activation from authorizing a mutation.
 The current `ProjectHome` surface supports:
 
 - listing persisted active and archived projects;
-- creating an `official.test` project with explicit locale, time zone, horizon,
-  units, and daylight-saving gap/overlap policies;
+- creating an `official.workforce` project with explicit locale, time zone, first
+  and last included dates, units, and daylight-saving gap/overlap policies;
 - selecting, duplicating, archiving, unarchiving, and permanently deleting a
   project;
 - previewing and applying project imports, including an explicit action for
@@ -40,6 +40,13 @@ The Rust command boundary and generated client also implement project export
 preview and creation. The current `ProjectHome` component does not expose
 export controls, so export is API scope rather than a claim about the visible
 home screen.
+
+Project creation, listing, and opening use closed V1 native requests. Rust
+resolves the included calendar dates to exact local-midnight boundaries and
+rejects skipped midnights rather than shifting the requested horizon. The CLI
+retains its explicit RFC3339 creation arguments and six-field project-list JSON.
+The list/open projection includes `lastOpenedAt`; listing is read-only, while
+`project_open` records a successful opening atomically with loading the project.
 
 The native setup boundary exposes V2 summary/readiness, bounded Workforce
 views, entity detail/search, rule catalogs, command previews, and explicit full
@@ -55,9 +62,13 @@ terminal result. Full readiness distinguishes not-run, running, completed,
 failed, cancelled, and stale input; an empty fast report is not full readiness.
 
 The settings/About boundary is API-only; `/settings` and `/about/licenses` are
-not yet implemented screens. Existing get/update/reset commands keep their local
-validation. `SettingsImportFlow` and `LibraryOperationScope` provide native
-picker preview, one-use approval, atomic apply, and explicit review disposal.
+not yet implemented screens. Local get/update/reset commands expose complete
+`appearance`, `locale`, and `units` entries at one library revision. Writes
+require that expected revision and return their exact committed snapshot;
+conflicts are not retried, and an absent-key reset is silent and unchanged.
+Local validation remains distinct from stricter portable-export policy.
+`SettingsImportFlow` and `LibraryOperationScope` provide native picker preview,
+one-use approval, atomic apply, and explicit review disposal.
 The standalone V1 `eutheto/application-settings` document contains only
 `appearance`, `locale`, and `units` as complete `{value, updatedAt}` entries.
 Missing keys mean reviewed removal within that scope; an empty map clears it.
@@ -108,11 +119,33 @@ src-tauri/src/lib.rs
 EuthetoApp ── SQLite library
 ```
 
-The application-data database is the durable project authority. Portable
-imports and exports use the managed local exchange area, while backups use the
-managed backup area. Portable operations preview their artifact before
-mutation. A replace-library restore requests a safety backup before replacing
-the current library.
+The application-data database is the durable project authority. Portable source
+and destination paths are selected by native dialogs and never enter Vue state.
+Automatic pre-restore safety backups use the private application backup area.
+
+`PortableReviewFlow` owns versioned import, restore, backup, scenario export, and
+unopened-bundle operations. Library applies bind the reviewed library revision;
+scenario exports retain both scenario and library revisions. Native custody
+binds the invoking window, creator, review kind, and exact reviewed revisions.
+Core-backed and prepared-output reviews each have three native slots; prepared
+archive bytes remain charged during active publication. Compact portable
+metadata is limited to64MiB, with a128MiB+128KiB client wire allowance.
+
+Cancellation acknowledgement does not mean work has stopped. Owners await real
+settlement; a committed mutation or successful publication remains successful
+after late cancellation. A blocking native chooser may still need to be closed.
+Cleanup also covers lost responses and window teardown without requiring a
+current library revision.
+
+A restore reports its actual safety-backup result: not required,
+created and verified with the real artifact basename, or an explicitly confirmed
+bypass after a real bound failure. Only an actually retained native failure review
+can offer the stronger confirmation. Advisory refreshes preserve the displayed
+committed outcome. The API's `safetyBackups` picker origin uses the private backup
+area and the normal review/apply pipeline; the recovery entry point in the full
+shell is still presentation work, not a completed screen.
+A published safety backup may remain if a later restore step is cancelled or
+conflicts; cancellation does not imply that no file was created.
 
 ## Generated API-only Tauri imports
 

@@ -1,38 +1,36 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-    BackendSupportColumn, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
-    PreparedPortableBinding, ProjectScope, SolutionCancelCounterfactualRequestV1,
-    SolutionCompareRequestV1, SolutionExplainRequestV1, SolutionListRequestV1,
-    SolutionSelectRequestV1, SolutionStartCounterfactualRequestV1, SolutionSummaryRequestV1,
-    SolutionVerifyRequestV1, SolutionViewRequestV1, SolverSupportMatrixMetadata, SupportCell,
-    SupportFeature, SupportFeatureId,
+    BackendSupportColumn, BackupAssetSelection, DeferredCapability, EuthetoApp, ProjectScope,
+    SolutionCancelCounterfactualRequestV1, SolutionCompareRequestV1, SolutionExplainRequestV1,
+    SolutionListRequestV1, SolutionSelectRequestV1, SolutionStartCounterfactualRequestV1,
+    SolutionSummaryRequestV1, SolutionVerifyRequestV1, SolutionViewRequestV1,
+    SolverSupportMatrixMetadata, SupportCell, SupportFeature, SupportFeatureId, bounded_json_size,
 };
 use eutheto_export::{
     ApplicationMetadata, BackupSelectionScope, BundleKind, FixedExclusion, OmittedAssetReason,
     PORTABLE_LIMITS, PortableBackupAssetSelection,
 };
 use eutheto_import::{
-    CollisionPlan, ImportOptions, ImportPreview, MigrationRegistryKind, MigrationSubject,
-    PackMigrationVersionSpace, RestoreAuthorization, SafetyBackupEvidence,
+    ImportPreview, MigrationRegistryKind, MigrationSubject, PackMigrationVersionSpace,
+    RestoreAuthorization, SafetyBackupEvidence,
 };
 use eutheto_types::{
-    ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError,
-    ApplicationSettingEntryV1, BackendId, CancellationToken, CommandBatch, CommandEnvelope,
-    CommandId, CommandResult, CommandSource, DomainPackRef, EventTopic, FieldErrorDto,
-    FoundationStatus, PackId, ProjectMetadataDto, ProjectSummaryDto, RequestId, ResourceRef,
-    Revision, Rfc3339Timestamp, SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings,
-    SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator, ValidationIssue,
-    ValidationReport,
+    ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
+    CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
+    DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, GapPolicy, Horizon, IanaTimeZone,
+    OverlapPolicy, PackId, ProjectListItemV1, ProjectMetadataDto, RequestId, ResourceRef, Revision,
+    Rfc3339Timestamp, SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings,
+    SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem,
+    ValidationIssue, ValidationReport, resolve_local_midnight,
 };
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_dialog::DialogExt;
 
 #[cfg(feature = "bundled-ortools")]
 mod bundled_solver;
@@ -58,11 +56,21 @@ use people_csv::{
 };
 #[macro_use]
 mod settings;
-use settings::{SettingsCustody, settings_export_nonsecret, settings_import_nonsecret};
+use settings::{
+    SettingsCustody, settings_export_nonsecret, settings_get, settings_import_nonsecret,
+    settings_reset_section, settings_update,
+};
+#[macro_use]
+mod portable;
+use portable::{
+    PortableCustody, project_backup_create, project_backup_preview, project_export_create,
+    project_export_preview, project_import_apply, project_import_preview, project_operation_cancel,
+    project_restore_apply, project_restore_preview, project_unopened_bundle_inspect,
+    project_unopened_bundle_reexport,
+};
 mod license_inventory;
 
 use generated_command_catalog::REGISTERED_COMMANDS;
-const MAX_PREPARED_PORTABLE_OUTPUTS: usize = 3;
 
 #[derive(Clone)]
 enum PreparedPortableKind {
@@ -75,7 +83,6 @@ enum PreparedPortableKind {
     Backup {
         library_revision: Revision,
         title: String,
-        summary: BackupSummaryDto,
     },
 }
 
@@ -83,66 +90,6 @@ struct PreparedPortableOutput {
     bytes: Vec<u8>,
     sha256: String,
     kind: PreparedPortableKind,
-}
-
-#[derive(Default)]
-struct PreparedPortableCache {
-    entries: VecDeque<(RequestId, PreparedPortableOutput)>,
-    total_bytes: usize,
-}
-
-impl PreparedPortableCache {
-    fn insert(
-        &mut self,
-        preview_id: RequestId,
-        output: PreparedPortableOutput,
-    ) -> Result<(), ApiError> {
-        let max_total_bytes =
-            usize::try_from(PORTABLE_LIMITS.max_archive_bytes).map_err(|_| -> ApiError {
-                boundary_error(
-                    "portable.limit_unrepresentable",
-                    "The portable publication limit cannot be represented on this platform.",
-                    None,
-                )
-                .into()
-            })?;
-        let byte_length = output.bytes.len();
-        if byte_length > max_total_bytes {
-            return Err(boundary_error(
-                "portable.preview_too_large",
-                "The prepared portable output exceeds the publication limit.",
-                None,
-            )
-            .into());
-        }
-        while self.entries.len() >= MAX_PREPARED_PORTABLE_OUTPUTS
-            || self.total_bytes.saturating_add(byte_length) > max_total_bytes
-        {
-            let Some((_, evicted)) = self.entries.pop_front() else {
-                break;
-            };
-            self.total_bytes = self.total_bytes.saturating_sub(evicted.bytes.len());
-        }
-        self.total_bytes = self.total_bytes.saturating_add(byte_length);
-        self.entries.push_back((preview_id, output));
-        Ok(())
-    }
-
-    fn get(&self, preview_id: RequestId) -> Option<&PreparedPortableOutput> {
-        self.entries
-            .iter()
-            .find_map(|(candidate, output)| (*candidate == preview_id).then_some(output))
-    }
-
-    fn remove(&mut self, preview_id: RequestId) -> Option<PreparedPortableOutput> {
-        let index = self
-            .entries
-            .iter()
-            .position(|(candidate, _)| *candidate == preview_id)?;
-        let (_, output) = self.entries.remove(index)?;
-        self.total_bytes = self.total_bytes.saturating_sub(output.bytes.len());
-        Some(output)
-    }
 }
 
 fn prepared_output_error(code: &'static str) -> ApiErrorDto {
@@ -178,7 +125,7 @@ struct DesktopState {
     app: EuthetoApp,
     cache_dir: PathBuf,
     backup_dir: PathBuf,
-    prepared_outputs: Arc<tokio::sync::Mutex<PreparedPortableCache>>,
+    portable: Arc<PortableCustody>,
     operations: Arc<OperationRegistry>,
     csv: Arc<CsvCustody>,
     settings: Arc<SettingsCustody>,
@@ -195,11 +142,12 @@ impl DesktopState {
         ));
         let csv = Arc::new(CsvCustody::new(app.clone(), Arc::new(SystemIdGenerator)));
         let settings = Arc::new(SettingsCustody::new(app.clone()));
+        let portable = Arc::new(PortableCustody::new(app.clone()));
         Self {
             app,
             cache_dir,
             backup_dir,
-            prepared_outputs: Arc::default(),
+            portable,
             operations,
             csv,
             settings,
@@ -257,6 +205,7 @@ struct SolverDescribeRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProjectListRequest {
     request_id: RequestId,
+    schema_version: u32,
     scope: ProjectScopeDto,
 }
 
@@ -287,12 +236,125 @@ struct ScenarioRequest {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProjectOpenRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    scenario_id: ScenarioId,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateProjectRequest {
     request_id: RequestId,
+    schema_version: u32,
     title: String,
     description: String,
     domain_pack: DomainPackRef,
-    settings: ScenarioSettings,
+    settings: CalendarSettingsRequest,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CalendarSettingsRequest {
+    time_zone: String,
+    locale: String,
+    units: UnitSystem,
+    first_date: String,
+    last_date: String,
+    gap_policy: GapPolicy,
+    overlap_policy: OverlapPolicy,
+}
+
+impl CalendarSettingsRequest {
+    fn into_settings(self) -> Result<ScenarioSettings, ApiError> {
+        let time_zone: IanaTimeZone = self.time_zone.parse().map_err(|_| {
+            boundary_error(
+                "project.time_zone_invalid",
+                "Choose a valid IANA time zone.",
+                Some("/settings/timeZone"),
+            )
+        })?;
+        let locale = self.locale.parse().map_err(|_| {
+            boundary_error(
+                "project.locale_invalid",
+                "Enter a valid locale tag.",
+                Some("/settings/locale"),
+            )
+        })?;
+        let first = self.first_date.parse().map_err(|_| {
+            boundary_error(
+                "project.date_invalid",
+                "Enter a valid first date.",
+                Some("/settings/firstDate"),
+            )
+        })?;
+        let last = self.last_date.parse().map_err(|_| {
+            boundary_error(
+                "project.date_invalid",
+                "Enter a valid last date.",
+                Some("/settings/lastDate"),
+            )
+        })?;
+        let start = resolve_local_midnight(first, &time_zone, self.gap_policy, self.overlap_policy)
+            .map_err(|_| {
+                boundary_error(
+                    "project.midnight_invalid",
+                    "The first date has no exact midnight under the selected time-zone policies.",
+                    Some("/settings/firstDate"),
+                )
+            })?;
+        if first > last {
+            return Err(boundary_error(
+                "project.date_range_invalid",
+                "The last date must not precede the first date.",
+                Some("/settings/lastDate"),
+            )
+            .into());
+        }
+        let end_exclusive = last.tomorrow().map_err(|_| {
+            boundary_error(
+                "project.date_overflow",
+                "The last date cannot form a supported exclusive end.",
+                Some("/settings/lastDate"),
+            )
+        })?;
+        let end = resolve_local_midnight(end_exclusive, &time_zone, self.gap_policy, self.overlap_policy)
+            .map_err(|_| boundary_error(
+                "project.midnight_invalid",
+                "The date after the last date has no exact midnight under the selected time-zone policies.",
+                Some("/settings/lastDate"),
+            ))?;
+        let horizon = Horizon::new(start, end).map_err(|_| {
+            boundary_error(
+                "project.date_range_invalid",
+                "The dates must form a supported nonempty planning horizon.",
+                Some("/settings/lastDate"),
+            )
+        })?;
+        Ok(ScenarioSettings {
+            time_zone,
+            locale,
+            units: self.units,
+            horizon,
+            gap_policy: self.gap_policy,
+            overlap_policy: self.overlap_policy,
+        })
+    }
+}
+
+fn decode_project_request<T: DeserializeOwned>(request: Option<Value>) -> Result<T, ApiError> {
+    if request
+        .as_ref()
+        .is_some_and(|value| bounded_json_size(value, 64 * 1024).is_err())
+    {
+        return Err(boundary_error(
+            "project.request_too_large",
+            "The project request exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
+    setup_boundary::decode(request)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -310,61 +372,6 @@ struct ProjectMutationRequest {
     request_id: RequestId,
     scenario_id: ScenarioId,
     expected_revision: Revision,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PortablePreviewRequest {
-    request_id: RequestId,
-    options: ImportOptions,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PortableApplyRequest {
-    request_id: RequestId,
-    preview_id: RequestId,
-    collision_plan: CollisionPlan,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PortableCancelRequest {
-    request_id: RequestId,
-    preview_id: RequestId,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[allow(clippy::struct_field_names)]
-struct ExportCreateRequest {
-    request_id: RequestId,
-    scenario_id: ScenarioId,
-    preview_id: RequestId,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackupPreviewRequest {
-    request_id: RequestId,
-    title: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackupCreateRequest {
-    request_id: RequestId,
-    title: String,
-    preview_id: RequestId,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RestoreApplyRequest {
-    request_id: RequestId,
-    preview_id: RequestId,
-    collision_plan: CollisionPlan,
-    authorization: RestoreAuthorizationDto,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -421,21 +428,6 @@ struct HistoryMutationRequest {
     request_id: RequestId,
     scenario_id: ScenarioId,
     expected_revision: Revision,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SettingRequest {
-    request_id: RequestId,
-    key: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SettingUpdateRequest {
-    request_id: RequestId,
-    key: String,
-    value: Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -571,6 +563,7 @@ struct UnopenedBundleMetadataDto {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UnopenedBundlePreviewDto {
+    schema_version: u32,
     preview_id: RequestId,
     metadata: UnopenedBundleMetadataDto,
 }
@@ -654,6 +647,8 @@ struct AppliedMigrationDto {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PortablePreviewDto {
+    schema_version: u32,
+    library_revision: Revision,
     preview_id: RequestId,
     bundle_id: String,
     bundle_kind: &'static str,
@@ -681,7 +676,34 @@ struct PortablePreviewDto {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableAppliedDto {
+    schema_version: u32,
+    library_revision: Revision,
+    safety_backup: SafetyBackupOutcomeDto,
     scenario_ids: Vec<ScenarioId>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum SafetyBackupOutcomeDto {
+    NotRequired,
+    CreatedAndVerified { artifact_name: String },
+    ConfirmedBypass,
+}
+
+impl From<eutheto_core::SafetyBackupOutcome> for SafetyBackupOutcomeDto {
+    fn from(outcome: eutheto_core::SafetyBackupOutcome) -> Self {
+        match outcome {
+            eutheto_core::SafetyBackupOutcome::NotRequired => Self::NotRequired,
+            eutheto_core::SafetyBackupOutcome::CreatedAndVerified { artifact_name } => {
+                Self::CreatedAndVerified { artifact_name }
+            }
+            eutheto_core::SafetyBackupOutcome::ConfirmedBypass => Self::ConfirmedBypass,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -700,18 +722,22 @@ struct BackupSummaryDto {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableFilePreviewDto {
+    schema_version: u32,
     title: String,
     byte_length: usize,
     backup_summary: Option<BackupSummaryDto>,
     preview_id: RequestId,
     digest: String,
     current_revision: Option<Revision>,
-    library_revision: Option<Revision>,
+    library_revision: Revision,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableArtifactDto {
+    schema_version: u32,
+    current_revision: Option<Revision>,
+    library_revision: Option<Revision>,
     artifact_name: String,
 }
 
@@ -743,18 +769,6 @@ struct HistoryEntryDto {
 #[serde(rename_all = "camelCase")]
 struct HistoryDto {
     entries: Vec<HistoryEntryDto>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingValueDto {
-    setting: Option<ApplicationSettingEntryV1>,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingResetDto {
-    existed: bool,
 }
 
 fn response<T>(
@@ -1110,7 +1124,7 @@ fn map_native_file_error(error: NativeFileError) -> ApiErrorDto {
     let (code, message, category, retryable) = match error {
         NativeFileError::Cancelled => (
             "operation.cancelled",
-            "No file was selected.",
+            "The file operation was cancelled.",
             ApiErrorCategoryDto::Protocol,
             true,
         ),
@@ -1172,7 +1186,7 @@ where
         .map_err(|_| {
             boundary_error(
                 "portable.dialog_failed",
-                "The native file dialog could not be completed.",
+                "The native file operation could not be completed.",
                 None,
             )
         })?
@@ -1191,10 +1205,13 @@ fn require_portable_path(path: PathBuf) -> Result<PathBuf, NativeFileError> {
     }
 }
 
-fn read_bounded_portable(path: &Path) -> Result<Vec<u8>, NativeFileError> {
+fn read_bounded_portable(
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>, NativeFileError> {
     let maximum = usize::try_from(PORTABLE_LIMITS.max_archive_bytes)
         .map_err(|_| NativeFileError::TooLarge)?;
-    native_file::read_bounded_file(path, maximum, &CancellationToken::new())
+    native_file::read_bounded_file(path, maximum, cancellation)
 }
 
 fn selected_basename(path: &Path) -> Result<String, NativeFileError> {
@@ -1289,6 +1306,8 @@ fn source_backup_selection(selection: eutheto_export::BackupSelection) -> Source
 
 fn portable_preview(preview_id: RequestId, preview: ImportPreview) -> PortablePreviewDto {
     PortablePreviewDto {
+        schema_version: 1,
+        library_revision: preview.binding.local_library_revision,
         preview_id,
         bundle_id: preview.bundle_id.to_string(),
         bundle_kind: match preview.bundle_kind {
@@ -1426,7 +1445,8 @@ fn backup_summary(summary: eutheto_core::BackupSummary) -> BackupSummaryDto {
 async fn project_list_impl(
     state: &DesktopState,
     request: ProjectListRequest,
-) -> ApiResult<Vec<ProjectSummaryDto>> {
+) -> ApiResult<Vec<ProjectListItemV1>> {
+    operations::require_version(request.schema_version)?;
     match state
         .app
         .query(AppQuery::ListProjects(request.scope.into()))
@@ -1493,6 +1513,7 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "solver_get_support_matrix",
         "solver_get_deferred_gates",
         "project_list",
+        "project_open",
         "project_get_metadata",
         "project_create",
         "project_duplicate",
@@ -1782,9 +1803,29 @@ async fn solver_get_deferred_gates(
 #[tauri::command]
 async fn project_list(
     state: State<'_, DesktopState>,
-    request: ProjectListRequest,
-) -> ApiResult<Vec<ProjectSummaryDto>> {
-    project_list_impl(&state, request).await
+    request: Option<Value>,
+) -> ApiResult<Vec<ProjectListItemV1>> {
+    project_list_impl(&state, decode_project_request(request)?).await
+}
+
+#[tauri::command]
+async fn project_open(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> ApiResult<ProjectListItemV1> {
+    let request: ProjectOpenRequest = decode_project_request(request)?;
+    operations::require_version(request.schema_version)?;
+    let project = state
+        .app
+        .open_project_metadata(request.scenario_id)
+        .await
+        .map_err(map_app_error)?;
+    Ok(response(
+        request.request_id,
+        Some(project.revision),
+        Vec::new(),
+        project,
+    ))
 }
 
 #[tauri::command]
@@ -1816,8 +1857,10 @@ async fn project_get_metadata(
 #[tauri::command]
 async fn project_create(
     state: State<'_, DesktopState>,
-    request: CreateProjectRequest,
+    request: Option<Value>,
 ) -> ApiResult<ProjectMetadataDto> {
+    let request: CreateProjectRequest = decode_project_request(request)?;
+    operations::require_version(request.schema_version)?;
     let request_id = request.request_id;
     match state
         .app
@@ -1826,7 +1869,7 @@ async fn project_create(
             title: request.title,
             description: request.description,
             domain_pack: request.domain_pack,
-            settings: request.settings,
+            settings: request.settings.into_settings()?,
         })
         .await
         .map_err(map_app_error)?
@@ -1953,634 +1996,6 @@ async fn project_delete(
         )
         .into()),
     }
-}
-
-async fn preview_portable_bytes(
-    state: &DesktopState,
-    request: PortablePreviewRequest,
-    bytes: Vec<u8>,
-    restore: bool,
-) -> ApiResult<PortablePreviewDto> {
-    let query = if restore {
-        AppQuery::PreviewRestore {
-            bytes,
-            options: request.options,
-        }
-    } else {
-        AppQuery::PreviewImport {
-            bytes,
-            options: request.options,
-        }
-    };
-    match state.app.query(query).await.map_err(map_app_error)? {
-        AppQueryResult::PortablePreview {
-            preview_id,
-            preview,
-        } => Ok(response(
-            request.request_id,
-            None,
-            Vec::new(),
-            portable_preview(preview_id, *preview),
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected portable preview result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-async fn preview_portable(
-    state: &DesktopState,
-    app_handle: AppHandle,
-    request: PortablePreviewRequest,
-    restore: bool,
-) -> ApiResult<PortablePreviewDto> {
-    let dialog_title = if restore {
-        "Choose an Eutheto backup to restore"
-    } else {
-        "Choose an Eutheto file to import"
-    };
-    let bytes = native_file_task(move || {
-        let selected = app_handle
-            .dialog()
-            .file()
-            .set_title(dialog_title)
-            .add_filter("Eutheto portable file", &["eutheto"])
-            .blocking_pick_file()
-            .ok_or(NativeFileError::Cancelled)?;
-        let path = selected
-            .into_path()
-            .map_err(|_| NativeFileError::Conversion)
-            .and_then(require_portable_path)?;
-        read_bounded_portable(&path)
-    })
-    .await?;
-    preview_portable_bytes(state, request, bytes, restore).await
-}
-
-#[tauri::command]
-async fn project_import_preview(
-    state: State<'_, DesktopState>,
-    app_handle: AppHandle,
-    request: PortablePreviewRequest,
-) -> ApiResult<PortablePreviewDto> {
-    preview_portable(&state, app_handle, request, false).await
-}
-
-#[tauri::command]
-async fn project_import_apply(
-    state: State<'_, DesktopState>,
-    request: PortableApplyRequest,
-) -> ApiResult<PortableAppliedDto> {
-    let request_id = request.request_id;
-    match state
-        .app
-        .execute(AppCommand::ApplyImport {
-            request_id,
-            preview_id: request.preview_id,
-            collision_plan: request.collision_plan,
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::PortableApplied { scenarios } => Ok(response(
-            request_id,
-            None,
-            Vec::new(),
-            PortableAppliedDto {
-                scenario_ids: scenarios
-                    .into_iter()
-                    .map(|scenario| scenario.scenario_id)
-                    .collect(),
-            },
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected import result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn project_export_preview(
-    state: State<'_, DesktopState>,
-    request: ScenarioRequest,
-) -> ApiResult<PortableFilePreviewDto> {
-    let title = match state
-        .app
-        .query(AppQuery::ProjectMetadata(request.scenario_id))
-        .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::Project(project) => project.title,
-        _ => return Err(prepared_output_error("protocol.result_mismatch").into()),
-    };
-    let AppQueryResult::Bundle {
-        bytes,
-        scenario_revision,
-        library_revision,
-    } = state
-        .app
-        .query(AppQuery::ExportScenario(request.scenario_id))
-        .await
-        .map_err(map_app_error)?
-    else {
-        return Err(prepared_output_error("protocol.result_mismatch").into());
-    };
-    let preview_id = new_prepared_preview_id()?;
-    let digest = eutheto_export::sha256_hex(&bytes);
-    let byte_length = bytes.len();
-    state.prepared_outputs.lock().await.insert(
-        preview_id,
-        PreparedPortableOutput {
-            bytes,
-            sha256: digest.clone(),
-            kind: PreparedPortableKind::Scenario {
-                scenario_id: request.scenario_id,
-                revision: scenario_revision,
-                library_revision,
-                title,
-            },
-        },
-    )?;
-    Ok(response(
-        request.request_id,
-        Some(scenario_revision),
-        Vec::new(),
-        PortableFilePreviewDto {
-            title: "Scenario export".to_owned(),
-            byte_length,
-            backup_summary: None,
-            preview_id,
-            digest,
-            current_revision: Some(scenario_revision),
-            library_revision: Some(library_revision),
-        },
-    ))
-}
-
-#[tauri::command]
-async fn project_export_create(
-    state: State<'_, DesktopState>,
-    app_handle: AppHandle,
-    request: ExportCreateRequest,
-) -> ApiResult<PortableArtifactDto> {
-    let title = {
-        let cache = state.prepared_outputs.lock().await;
-        match cache.get(request.preview_id).map(|output| &output.kind) {
-            Some(PreparedPortableKind::Scenario {
-                scenario_id, title, ..
-            }) if scenario_id == &request.scenario_id => title.clone(),
-            Some(_) => {
-                return Err(prepared_output_error("portable.preview_kind_mismatch").into());
-            }
-            None => return Err(prepared_output_error("portable.preview_not_found").into()),
-        }
-    };
-    let suggested_name = suggested_portable_filename(&title, "Eutheto-Export");
-    let selected = native_file_task(move || {
-        let selected = app_handle
-            .dialog()
-            .file()
-            .set_title("Save Eutheto export")
-            .set_file_name(suggested_name)
-            .add_filter("Eutheto portable file", &["eutheto"])
-            .blocking_save_file()
-            .ok_or(NativeFileError::Cancelled)?;
-        let destination = selected
-            .into_path()
-            .map_err(|_| NativeFileError::Conversion)
-            .and_then(require_portable_path)?;
-        let artifact_name = selected_basename(&destination)?;
-        Ok((destination, artifact_name))
-    })
-    .await;
-    let (destination, artifact_name) = match selected {
-        Ok(selected) => selected,
-        Err(error) => {
-            state
-                .prepared_outputs
-                .lock()
-                .await
-                .remove(request.preview_id);
-            return Err(error);
-        }
-    };
-    let output = state
-        .prepared_outputs
-        .lock()
-        .await
-        .remove(request.preview_id)
-        .ok_or_else(|| ApiError::from(prepared_output_error("portable.preview_not_found")))?;
-    let PreparedPortableKind::Scenario {
-        scenario_id,
-        revision,
-        library_revision,
-        ..
-    } = output.kind
-    else {
-        return Err(prepared_output_error("portable.preview_kind_mismatch").into());
-    };
-    match state
-        .app
-        .execute(AppCommand::PublishPreparedPortable {
-            destination,
-            bytes: output.bytes,
-            expected_sha256: output.sha256,
-            binding: PreparedPortableBinding::Scenario {
-                scenario_id,
-                expected_revision: revision,
-                expected_library_revision: library_revision,
-            },
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::BundleWritten => Ok(response(
-            request.request_id,
-            Some(revision),
-            Vec::new(),
-            PortableArtifactDto { artifact_name },
-        )),
-        _ => Err(prepared_output_error("protocol.result_mismatch").into()),
-    }
-}
-
-#[tauri::command]
-async fn project_backup_preview(
-    state: State<'_, DesktopState>,
-    request: BackupPreviewRequest,
-) -> ApiResult<PortableFilePreviewDto> {
-    let title = request.title;
-    let AppQueryResult::BackupBundle {
-        bytes,
-        summary,
-        library_revision,
-    } = state
-        .app
-        .query(AppQuery::ExportBackup {
-            title: title.clone(),
-            selection: BackupSelection::default(),
-        })
-        .await
-        .map_err(map_app_error)?
-    else {
-        return Err(prepared_output_error("protocol.result_mismatch").into());
-    };
-    let preview_id = new_prepared_preview_id()?;
-    let digest = eutheto_export::sha256_hex(&bytes);
-    let byte_length = bytes.len();
-    let summary = backup_summary(summary);
-    state.prepared_outputs.lock().await.insert(
-        preview_id,
-        PreparedPortableOutput {
-            bytes,
-            sha256: digest.clone(),
-            kind: PreparedPortableKind::Backup {
-                library_revision,
-                title: title.clone(),
-                summary: summary.clone(),
-            },
-        },
-    )?;
-    Ok(response(
-        request.request_id,
-        Some(library_revision),
-        Vec::new(),
-        PortableFilePreviewDto {
-            title,
-            byte_length,
-            backup_summary: Some(summary),
-            preview_id,
-            digest,
-            current_revision: None,
-            library_revision: Some(library_revision),
-        },
-    ))
-}
-
-#[tauri::command]
-async fn project_backup_create(
-    state: State<'_, DesktopState>,
-    app_handle: AppHandle,
-    request: BackupCreateRequest,
-) -> ApiResult<PortableArtifactDto> {
-    {
-        let cache = state.prepared_outputs.lock().await;
-        match cache.get(request.preview_id).map(|output| &output.kind) {
-            Some(PreparedPortableKind::Backup { title, summary, .. })
-                if title == &request.title
-                    && summary.include_results
-                    && summary.asset_selection == "all" => {}
-            Some(_) => {
-                return Err(prepared_output_error("portable.preview_kind_mismatch").into());
-            }
-            None => return Err(prepared_output_error("portable.preview_not_found").into()),
-        }
-    }
-    let suggested_name = suggested_portable_filename(&request.title, "Eutheto-Backup");
-    let selected = native_file_task(move || {
-        let selected = app_handle
-            .dialog()
-            .file()
-            .set_title("Save Eutheto backup")
-            .set_file_name(suggested_name)
-            .add_filter("Eutheto portable file", &["eutheto"])
-            .blocking_save_file()
-            .ok_or(NativeFileError::Cancelled)?;
-        let destination = selected
-            .into_path()
-            .map_err(|_| NativeFileError::Conversion)
-            .and_then(require_portable_path)?;
-        let artifact_name = selected_basename(&destination)?;
-        Ok((destination, artifact_name))
-    })
-    .await;
-    let (destination, artifact_name) = match selected {
-        Ok(selected) => selected,
-        Err(error) => {
-            state
-                .prepared_outputs
-                .lock()
-                .await
-                .remove(request.preview_id);
-            return Err(error);
-        }
-    };
-    let output = state
-        .prepared_outputs
-        .lock()
-        .await
-        .remove(request.preview_id)
-        .ok_or_else(|| ApiError::from(prepared_output_error("portable.preview_not_found")))?;
-    let PreparedPortableKind::Backup {
-        library_revision, ..
-    } = output.kind
-    else {
-        return Err(prepared_output_error("portable.preview_kind_mismatch").into());
-    };
-    match state
-        .app
-        .execute(AppCommand::PublishPreparedPortable {
-            destination,
-            bytes: output.bytes,
-            expected_sha256: output.sha256,
-            binding: PreparedPortableBinding::Backup {
-                expected_library_revision: library_revision,
-            },
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::BundleWritten => Ok(response(
-            request.request_id,
-            Some(library_revision),
-            Vec::new(),
-            PortableArtifactDto { artifact_name },
-        )),
-        _ => Err(prepared_output_error("protocol.result_mismatch").into()),
-    }
-}
-
-#[tauri::command]
-async fn project_restore_preview(
-    state: State<'_, DesktopState>,
-    app_handle: AppHandle,
-    request: PortablePreviewRequest,
-) -> ApiResult<PortablePreviewDto> {
-    preview_portable(&state, app_handle, request, true).await
-}
-
-#[tauri::command]
-async fn project_restore_apply(
-    state: State<'_, DesktopState>,
-    request: RestoreApplyRequest,
-) -> ApiResult<PortableAppliedDto> {
-    let request_id = request.request_id;
-    match state
-        .app
-        .execute(AppCommand::ApplyRestore {
-            request_id,
-            preview_id: request.preview_id,
-            collision_plan: request.collision_plan,
-            authorization: request.authorization.into(),
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::PortableApplied { scenarios } => Ok(response(
-            request_id,
-            None,
-            Vec::new(),
-            PortableAppliedDto {
-                scenario_ids: scenarios
-                    .into_iter()
-                    .map(|scenario| scenario.scenario_id)
-                    .collect(),
-            },
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected restore result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-async fn cancel_portable_preview_impl(
-    state: &DesktopState,
-    request: PortableCancelRequest,
-) -> ApiResult<EmptyDto> {
-    if state
-        .prepared_outputs
-        .lock()
-        .await
-        .remove(request.preview_id)
-        .is_some()
-    {
-        return Ok(response(request.request_id, None, Vec::new(), EmptyDto {}));
-    }
-    match state
-        .app
-        .execute(AppCommand::CancelPortablePreview {
-            preview_id: request.preview_id,
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::PortablePreviewCancelled => {
-            Ok(response(request.request_id, None, Vec::new(), EmptyDto {}))
-        }
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected cancellation result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn project_operation_cancel(
-    state: State<'_, DesktopState>,
-    request: PortableCancelRequest,
-) -> ApiResult<EmptyDto> {
-    cancel_portable_preview_impl(&state, request).await
-}
-
-async fn inspect_unopened_bundle_bytes(
-    state: &DesktopState,
-    request_id: RequestId,
-    bytes: Vec<u8>,
-) -> ApiResult<UnopenedBundlePreviewDto> {
-    match state
-        .app
-        .query(AppQuery::InspectUnopenedBundle { bytes })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::UnopenedBundlePreview {
-            preview_id,
-            metadata,
-        } => Ok(response(
-            request_id,
-            None,
-            Vec::new(),
-            UnopenedBundlePreviewDto {
-                preview_id,
-                metadata: UnopenedBundleMetadataDto {
-                    file_sha256: metadata.file_sha256,
-                    format: metadata.format,
-                    format_version: metadata.format_version,
-                    portable_schema_version: metadata.portable_schema_version,
-                    bundle_kind: metadata.bundle_kind,
-                    title: metadata.title,
-                    required_capabilities: metadata
-                        .required_capabilities
-                        .into_iter()
-                        .map(|capability| PortableCapabilityDto {
-                            id: capability.id,
-                            version: capability.version,
-                        })
-                        .collect(),
-                    scenarios: metadata
-                        .scenarios
-                        .into_iter()
-                        .map(|scenario| UnopenedBundleScenarioDto {
-                            path: scenario.path,
-                            scenario_id: scenario.scenario_id,
-                            pack_id: scenario.pack_id,
-                            internal_pack_schema_version: scenario.internal_pack_schema_version,
-                            portable_pack_schema_version: scenario.portable_pack_schema_version,
-                        })
-                        .collect(),
-                },
-            },
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected unopened-bundle inspection result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn project_unopened_bundle_inspect(
-    state: State<'_, DesktopState>,
-    app_handle: AppHandle,
-    request: RequestOnly,
-) -> ApiResult<UnopenedBundlePreviewDto> {
-    let bytes = native_file_task(move || {
-        let selected = app_handle
-            .dialog()
-            .file()
-            .set_title("Choose an unopened Eutheto bundle to inspect")
-            .add_filter("Eutheto portable file", &["eutheto"])
-            .blocking_pick_file()
-            .ok_or(NativeFileError::Cancelled)?;
-        let path = selected
-            .into_path()
-            .map_err(|_| NativeFileError::Conversion)
-            .and_then(require_portable_path)?;
-        read_bounded_portable(&path)
-    })
-    .await?;
-    inspect_unopened_bundle_bytes(&state, request.request_id, bytes).await
-}
-
-async fn exact_reexport_unopened_bundle_to_path(
-    state: &DesktopState,
-    request: PortableCancelRequest,
-    destination: PathBuf,
-    artifact_name: String,
-) -> ApiResult<PortableArtifactDto> {
-    match state
-        .app
-        .execute(AppCommand::ExactReexportUnopenedBundle {
-            preview_id: request.preview_id,
-            destination,
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::UnopenedBundleReexported => Ok(response(
-            request.request_id,
-            None,
-            Vec::new(),
-            PortableArtifactDto { artifact_name },
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected unopened-bundle re-export result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn project_unopened_bundle_reexport(
-    state: State<'_, DesktopState>,
-    app_handle: AppHandle,
-    request: PortableCancelRequest,
-) -> ApiResult<PortableArtifactDto> {
-    let selected = native_file_task(move || {
-        let selected = app_handle
-            .dialog()
-            .file()
-            .set_title("Save exact unopened Eutheto bundle")
-            .set_file_name("Eutheto-Unopened.eutheto")
-            .add_filter("Eutheto portable file", &["eutheto"])
-            .blocking_save_file()
-            .ok_or(NativeFileError::Cancelled)?;
-        let destination = selected
-            .into_path()
-            .map_err(|_| NativeFileError::Conversion)
-            .and_then(require_portable_path)?;
-        let artifact_name = selected_basename(&destination)?;
-        Ok((destination, artifact_name))
-    })
-    .await;
-    let (destination, artifact_name) = match selected {
-        Ok(selected) => selected,
-        Err(error) => {
-            let _ = state
-                .app
-                .execute(AppCommand::CancelPortablePreview {
-                    preview_id: request.preview_id,
-                })
-                .await;
-            return Err(error);
-        }
-    };
-    exact_reexport_unopened_bundle_to_path(&state, request, destination, artifact_name).await
 }
 
 #[tauri::command]
@@ -2765,93 +2180,6 @@ async fn scenario_get_history(
         _ => Err(boundary_error(
             "protocol.result_mismatch",
             "The application returned an unexpected history result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn settings_get(
-    state: State<'_, DesktopState>,
-    request: SettingRequest,
-) -> ApiResult<SettingValueDto> {
-    match state
-        .app
-        .query(AppQuery::Setting(request.key))
-        .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::Setting(setting) => Ok(response(
-            request.request_id,
-            None,
-            Vec::new(),
-            SettingValueDto {
-                setting: setting.map(|setting| ApplicationSettingEntryV1 {
-                    value: setting.value,
-                    updated_at: setting.updated_at,
-                }),
-            },
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected setting result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn settings_update(
-    state: State<'_, DesktopState>,
-    request: SettingUpdateRequest,
-) -> ApiResult<EmptyDto> {
-    let request_id = request.request_id;
-    match state
-        .app
-        .execute(AppCommand::SetSetting {
-            request_id,
-            key: request.key,
-            value: request.value,
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::SettingUpdated => Ok(response(request_id, None, Vec::new(), EmptyDto {})),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected setting update result.",
-            None,
-        )
-        .into()),
-    }
-}
-
-#[tauri::command]
-async fn settings_reset_section(
-    state: State<'_, DesktopState>,
-    request: SettingRequest,
-) -> ApiResult<SettingResetDto> {
-    let request_id = request.request_id;
-    match state
-        .app
-        .execute(AppCommand::DeleteSetting {
-            request_id,
-            key: request.key,
-        })
-        .await
-        .map_err(map_app_error)?
-    {
-        AppCommandResult::SettingDeleted(existed) => Ok(response(
-            request_id,
-            None,
-            Vec::new(),
-            SettingResetDto { existed },
-        )),
-        _ => Err(boundary_error(
-            "protocol.result_mismatch",
-            "The application returned an unexpected setting reset result.",
             None,
         )
         .into()),
@@ -3311,12 +2639,14 @@ pub fn run() -> tauri::Result<()> {
             state.operations.cancel_window(&label);
             state.csv.close_window(&label);
             state.settings.close_window(&label);
+            state.portable.close_window(&label);
         }
         tauri::RunEvent::Exit => {
             let state = handle.state::<DesktopState>();
             state.operations.shutdown();
             state.csv.shutdown();
             state.settings.shutdown();
+            state.portable.shutdown();
         }
         _ => {}
     });
@@ -3325,41 +2655,31 @@ pub fn run() -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use eutheto_export::FixedExclusion;
-    use eutheto_import::{CollisionAction, SafetyBackupEvidence, SupplementalCollisionAction};
-    use std::collections::BTreeMap;
     use std::error::Error;
     use std::sync::Arc;
 
     use eutheto_core::{
         AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-        BackendSupportColumn, BackupAssetSelection, CapabilityMatrix, DeferredCapability,
-        EuthetoApp, ScenarioSummaryV2, SolverSupportMatrixMetadata, SupportCell, SupportFeature,
-        SupportFeatureCategory, SupportFeatureGate, SupportFeatureId,
+        BackendSupportColumn, CapabilityMatrix, EuthetoApp, ScenarioSummaryV2,
+        SolverSupportMatrixMetadata, SupportCell, SupportFeature, SupportFeatureCategory,
+        SupportFeatureGate, SupportFeatureId,
     };
     use eutheto_types::{
-        ActorRef, AddEntity, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
-        CancellationToken, CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef,
-        EntityId, EventTopic, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId,
-        Revision, SafeDiagnosticValue, ScenarioCommand, ScenarioSettings, ScenarioViewDto,
-        SystemClock, SystemIdGenerator,
+        ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId, CancellationToken,
+        CommandId, CommandResult, DomainPackRef, EntityId, EventTopic, ProjectListItemV1,
+        ProjectMetadataDto, REVISION_MAX_V1, RequestId, Revision, SafeDiagnosticValue,
+        ScenarioSettings, ScenarioViewDto, SystemClock, SystemIdGenerator,
     };
     use serde::de::DeserializeOwned;
     use serde_json::{Value, json};
     use tauri::Manager;
 
     use super::{
-        BackupCreateRequest, BackupSummaryDto, CorrelatedRequest, DesktopState,
-        ExportCreateRequest, FORWARDED_EVENTS, NativeFileError, PortableCancelRequest,
-        PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
-        PreparedPortableOutput, ProjectListRequest, ProjectScopeDto, RequestOnly,
+        CorrelatedRequest, DesktopState, FORWARDED_EVENTS, NativeFileError, RequestOnly,
         SolutionExplainRequestV1, SolutionStartCounterfactualRequestV1, app_get_capabilities,
-        backup_summary, cancel_portable_preview_impl, core_unavailable,
-        decode_counterfactual_start_request, exact_reexport_unopened_bundle_to_path,
-        inspect_unopened_bundle_bytes, map_app_error, map_native_file_error, native_file_task,
+        decode_counterfactual_start_request, map_app_error, map_native_file_error,
         normalize_counterfactual_int64, operation_prepare, pack_describe, pack_list,
-        preview_portable_bytes, project_archive, project_create, project_delete,
-        project_import_apply, project_list, project_list_impl, project_restore_apply,
+        project_archive, project_create, project_delete, project_list, project_open,
         project_unarchive, read_bounded_portable, revision_diagnostic_value,
         scenario_apply_command, scenario_get_summary, scenario_redo, scenario_undo,
         selected_basename, solution_explain, solution_list, solution_response, solver_describe,
@@ -3415,7 +2735,7 @@ mod tests {
 
     // Native reads expose bounded summaries. Exact persistence assertions inspect Rust state,
     // not a reconstructed raw-document IPC response or a replacement desktop authority.
-    async fn native_summary_and_core_snapshot(
+    pub(super) async fn native_summary_and_core_snapshot(
         webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
         request_id: RequestId,
         scenario_id: eutheto_types::ScenarioId,
@@ -3458,26 +2778,6 @@ mod tests {
         Ok((summary, snapshot))
     }
 
-    fn portable_options() -> Value {
-        json!({
-            "restoreMode": "import-scenario",
-            "includeResults": true,
-            "includeAssets": true
-        })
-    }
-
-    fn all_fixed_exclusions() -> Vec<&'static str> {
-        vec![
-            "local-undo-and-audit-history",
-            "sqlite-and-database-internals",
-            "credentials-tokens-and-keychain-references",
-            "device-local-paths-and-window-state",
-            "logs-caches-and-temporary-data",
-            "redistribution-prohibited-provider-data",
-            "executable-content",
-        ]
-    }
-
     #[test]
     fn conflict_error_includes_current_revision() -> Result<(), Box<dyn Error>> {
         let error = map_app_error(AppError::Conflict {
@@ -3509,50 +2809,6 @@ mod tests {
     }
 
     #[test]
-    fn prepared_output_cache_preserves_exact_bytes_and_evicts_oldest() -> Result<(), Box<dyn Error>>
-    {
-        let ids = SystemIdGenerator;
-        let mut cache = PreparedPortableCache::default();
-        let summary = BackupSummaryDto {
-            include_results: true,
-            asset_selection: "all",
-            excluded_asset_count: 1,
-            excluded_asset_ids: vec!["inherited-placeholder.png".to_owned()],
-            exclusion_scope: Some("inherited-placeholder".to_owned()),
-            threshold_version: None,
-            threshold_bytes: None,
-            fixed_exclusions: all_fixed_exclusions(),
-        };
-        let mut preview_ids = Vec::new();
-        for marker in 0_u8..4 {
-            let preview_id = RequestId::new(&ids)?;
-            preview_ids.push(preview_id);
-            let inserted = cache.insert(
-                preview_id,
-                PreparedPortableOutput {
-                    bytes: vec![marker, marker.saturating_add(1)],
-                    sha256: format!("{marker:064x}"),
-                    kind: PreparedPortableKind::Backup {
-                        library_revision: Revision::new(u64::from(marker)),
-                        title: "Prepared backup".to_owned(),
-                        summary: summary.clone(),
-                    },
-                },
-            );
-            assert!(inserted.is_ok());
-        }
-        assert!(cache.get(preview_ids[0]).is_none());
-        let output = cache
-            .remove(preview_ids[3])
-            .ok_or("newest prepared output was missing")?;
-        assert_eq!(output.bytes, vec![3, 4]);
-        assert_eq!(output.sha256.len(), 64);
-        assert!(output.sha256.ends_with('3'));
-        assert!(cache.get(preview_ids[3]).is_none());
-        Ok(())
-    }
-
-    #[test]
     fn revision_request_dto_preserves_cap_and_rejects_unsafe_values() -> Result<(), Box<dyn Error>>
     {
         let request_id = "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a";
@@ -3570,219 +2826,6 @@ mod tests {
             }))
             .is_err()
         );
-        Ok(())
-    }
-
-    #[test]
-    fn portable_preview_dtos_serialize_revision_and_exclusion_scope() -> Result<(), Box<dyn Error>>
-    {
-        let counts = serde_json::to_value(super::PortableCountsDto {
-            scenarios: 1,
-            scenario_revisions: 2,
-            results: 3,
-            shared_records: 4,
-            preferences: 5,
-            assets: 6,
-        })?;
-        assert_eq!(counts["scenarioRevisions"], 2);
-        let tombstoned = serde_json::to_value(super::PortableScenarioDto {
-            scenario_id: eutheto_types::ScenarioId::new(&SystemIdGenerator)?,
-            title: "Previously deleted roster".to_owned(),
-            collides: true,
-            source_revision: Revision::new(2),
-            same_identity_revision: Revision::new(6),
-            same_identity_revision_warning: Some(
-                "This ID was tombstoned; importing resumes at revision 6.".to_owned(),
-            ),
-        })?;
-        assert_eq!(tombstoned["sourceRevision"], 2);
-        assert_eq!(tombstoned["sameIdentityRevision"], 6);
-        assert!(
-            tombstoned["sameIdentityRevisionWarning"]
-                .as_str()
-                .is_some_and(|warning| warning.contains("tombstoned"))
-        );
-        let omission = serde_json::to_value((
-            super::SourceBackupSelectionDto {
-                include_results: false,
-                asset_selection: "v1-threshold",
-                threshold_version: Some(1),
-                threshold_bytes: Some(16_777_216),
-                excluded_asset_count: 1,
-                excluded_asset_ids: vec!["large-video.mp4".to_owned()],
-                fixed_exclusions: all_fixed_exclusions(),
-                scope: "library",
-            },
-            super::OmittedAssetDto {
-                asset_id: "large-video.mp4".to_owned(),
-                format: "eutheto/omitted-asset".to_owned(),
-                version: 1,
-                reason: "above-v1-threshold",
-                original_media_type: "video/mp4".to_owned(),
-                original_size: 20_000_000,
-                content_sha256: "a".repeat(64),
-            },
-        ))?;
-        assert_eq!(omission[0]["includeResults"], false);
-        assert_eq!(omission[0]["excludedAssetIds"][0], "large-video.mp4");
-        assert_eq!(omission[1]["reason"], "above-v1-threshold");
-        assert_eq!(
-            omission[0]["fixedExclusions"].as_array().map(Vec::len),
-            Some(7)
-        );
-        assert_eq!(omission[1]["originalMediaType"], "video/mp4");
-        let inherited_summary =
-            serde_json::to_value(backup_summary(eutheto_core::BackupSummary {
-                include_results: true,
-                asset_selection: BackupAssetSelection::IncludeAll,
-                excluded_asset_count: 1,
-                excluded_asset_ids: vec!["inherited-placeholder.png".to_owned()],
-                exclusion_scope: Some("inherited-placeholder".to_owned()),
-                fixed_exclusions: FixedExclusion::ALL.into_iter().collect(),
-            }))?;
-        assert_eq!(inherited_summary["assetSelection"], "all");
-        assert_eq!(
-            inherited_summary["excludedAssetIds"][0],
-            "inherited-placeholder.png"
-        );
-        assert!(inherited_summary["thresholdBytes"].is_null());
-        assert_eq!(
-            inherited_summary["fixedExclusions"]
-                .as_array()
-                .map(Vec::len),
-            Some(7)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn portable_request_dtos_bind_sections_collisions_and_restore_authorization()
-    -> Result<(), Box<dyn Error>> {
-        let request_id = "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a";
-        let options = portable_options();
-        let preview: PortablePreviewRequest = serde_json::from_value(json!({
-            "requestId": request_id,
-            "options": options.clone()
-        }))?;
-        assert!(preview.options.include_results);
-        assert!(preview.options.include_assets);
-
-        let apply: super::PortableApplyRequest = serde_json::from_value(json!({
-            "requestId": request_id,
-            "previewId": "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2b",
-            "collisionPlan": {
-                "scenarios": {
-                    "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a": "create-copy"
-                },
-                "supplementalChoices": [{
-                    "section": "preferences",
-                    "key": "view.json",
-                    "action": "skip"
-                }]
-            }
-        }))?;
-        assert!(matches!(
-            apply.collision_plan.supplemental.values().next(),
-            Some(SupplementalCollisionAction::Skip)
-        ));
-
-        let restore: super::RestoreApplyRequest = serde_json::from_value(json!({
-            "requestId": request_id,
-            "previewId": "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2b",
-            "collisionPlan": {"scenarios": {}, "supplementalChoices": []},
-            "authorization": {
-                "destructiveActionConfirmed": true,
-                "safetyBackupBypassPhrase": "REPLACE WITHOUT BACKUP"
-            }
-        }))?;
-        let authorization: eutheto_import::RestoreAuthorization = restore.authorization.into();
-        assert!(authorization.destructive_action_confirmed);
-        assert!(matches!(
-            authorization.safety_backup,
-            SafetyBackupEvidence::FailedWithStrongConfirmation { proof }
-                if proof == "REPLACE WITHOUT BACKUP"
-        ));
-        assert!(authorization.prospective_failure_receipt_token.is_none());
-        assert!(authorization.collision_plan_sha256.is_none());
-        assert!(
-            serde_json::from_value::<super::RestoreAuthorizationDto>(json!({
-                "destructiveActionConfirmed": true,
-                "safetyBackupBypassPhrase": null,
-                "prospectiveFailureReceiptToken": "01900000-0000-7000-8000-000000000099"
-            }))
-            .is_err()
-        );
-
-        assert!(
-            serde_json::from_value::<PortablePreviewRequest>(json!({
-                "requestId": request_id,
-                "sourceArtifact": "private/path.eutheto",
-                "options": options.clone()
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<PortablePreviewRequest>(json!({
-                "requestId": request_id,
-                "path": "/private/library.eutheto",
-                "options": options
-            }))
-            .is_err()
-        );
-
-        serde_json::from_value::<ExportCreateRequest>(json!({
-            "requestId": request_id,
-            "scenarioId": request_id,
-            "previewId": request_id,
-        }))?;
-        assert!(
-            serde_json::from_value::<ExportCreateRequest>(json!({
-                "requestId": request_id,
-                "scenarioId": request_id,
-                "previewId": request_id,
-                "fileName": "renderer-chosen.eutheto"
-            }))
-            .is_err()
-        );
-
-        serde_json::from_value::<BackupCreateRequest>(json!({
-            "requestId": request_id,
-            "title": "Before migration",
-            "previewId": request_id,
-        }))?;
-        assert!(
-            serde_json::from_value::<BackupCreateRequest>(json!({
-                "requestId": request_id,
-                "title": "Before migration",
-                "previewId": request_id,
-                "fileName": "renderer-chosen.eutheto"
-            }))
-            .is_err()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn native_dialog_seam_maps_cancellation_without_opening_a_dialog()
-    -> Result<(), Box<dyn Error>> {
-        let Err(error) = native_file_task::<(), _>(|| Err(NativeFileError::Cancelled)).await else {
-            return Err("cancelled dialog unexpectedly succeeded".into());
-        };
-        assert_eq!(error.code, "operation.cancelled");
-        assert_eq!(error.category, ApiErrorCategoryDto::Protocol);
-        assert!(error.retryable);
-        assert!(error.field_errors.is_empty());
-        assert!(error.details.is_none());
-        assert!(error.diagnostic_id.is_none());
-
-        let conversion = map_native_file_error(NativeFileError::Conversion);
-        assert_eq!(conversion.code, "portable.selection_invalid");
-        assert_eq!(conversion.category, ApiErrorCategoryDto::Protocol);
-        assert!(!conversion.retryable);
-
-        let unreadable = map_native_file_error(NativeFileError::Unreadable);
-        assert_eq!(unreadable.code, "portable.artifact_unreadable");
-        assert_eq!(unreadable.category, ApiErrorCategoryDto::Storage);
         Ok(())
     }
 
@@ -3809,14 +2852,18 @@ mod tests {
     #[test]
     fn native_portable_reads_reject_links_and_non_regular_files() -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
+        let cancellation = CancellationToken::new();
         let regular = directory.path().join("regular.eutheto");
         std::fs::write(&regular, b"portable")?;
-        assert_eq!(read_bounded_portable(&regular), Ok(b"portable".to_vec()));
+        assert_eq!(
+            read_bounded_portable(&regular, &cancellation),
+            Ok(b"portable".to_vec())
+        );
         let oversized = directory.path().join("oversized.eutheto");
         let oversized_file = std::fs::File::create(&oversized)?;
         oversized_file.set_len(eutheto_export::PORTABLE_LIMITS.max_archive_bytes + 1)?;
         assert_eq!(
-            read_bounded_portable(&oversized),
+            read_bounded_portable(&oversized, &cancellation),
             Err(NativeFileError::TooLarge)
         );
         let oversized_error = map_native_file_error(NativeFileError::TooLarge);
@@ -3829,10 +2876,19 @@ mod tests {
             symlink(&regular, &link)?;
 
             assert_eq!(
-                read_bounded_portable(&link),
+                read_bounded_portable(&link, &cancellation),
                 Err(NativeFileError::InvalidFileType)
             );
         }
+        assert_eq!(
+            read_bounded_portable(directory.path(), &cancellation),
+            Err(NativeFileError::InvalidFileType)
+        );
+        cancellation.cancel();
+        assert_eq!(
+            read_bounded_portable(&regular, &cancellation),
+            Err(NativeFileError::Cancelled)
+        );
         Ok(())
     }
     #[test]
@@ -4372,164 +3428,10 @@ mod tests {
         Ok(())
     }
 
-    // One sequential flow proves exact-byte publication and every single-use capability outcome.
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
-    async fn unopened_bundle_adapter_preserves_exact_bytes_and_consumes_capabilities()
+    async fn native_calendar_creation_and_open_preserve_authoritative_dates()
     -> Result<(), Box<dyn Error>> {
-        let directory = tempfile::tempdir()?;
-        let app = EuthetoApp::open(AppDependencies {
-            paths: AppPaths {
-                database: directory.path().join("unopened.sqlite3"),
-                safety_backups: directory.path().join("unopened-backups"),
-            },
-            clock: Arc::new(SystemClock),
-            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
-            ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationToken::default(),
-        })
-        .await
-        .map_err(|error| format!("unopened app setup failed: {error:?}"))?;
-        let state = DesktopState::new(
-            app,
-            directory.path().join("unopened-cache"),
-            directory.path().join("unopened-backups"),
-        );
-        let original = match state
-            .app
-            .query(AppQuery::ExportBackup {
-                title: "Exact unopened fixture".to_owned(),
-                selection: eutheto_core::BackupSelection::default(),
-            })
-            .await
-            .map_err(|error| format!("fixture export failed: {error:?}"))?
-        {
-            AppQueryResult::BackupBundle { bytes, .. } => bytes,
-            other => return Err(format!("unexpected fixture export result: {other:?}").into()),
-        };
-        let ids = SystemIdGenerator;
-
-        let inspected =
-            inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, original.clone())
-                .await
-                .map_err(|error| format!("unopened inspection failed: {error:?}"))?;
-        assert_eq!(
-            inspected.result.metadata.title.as_deref(),
-            Some("Exact unopened fixture")
-        );
-        assert_eq!(
-            inspected.result.metadata.file_sha256,
-            eutheto_export::sha256_hex(&original)
-        );
-        let exposed = serde_json::to_value(&inspected.result)?;
-        assert!(exposed.get("bytes").is_none());
-        assert!(exposed["metadata"].get("bytes").is_none());
-
-        let destination = directory.path().join("exact-copy.eutheto");
-        exact_reexport_unopened_bundle_to_path(
-            &state,
-            PortableCancelRequest {
-                request_id: RequestId::new(&ids)?,
-                preview_id: inspected.result.preview_id,
-            },
-            destination.clone(),
-            "exact-copy.eutheto".to_owned(),
-        )
-        .await
-        .map_err(|error| format!("exact re-export failed: {error:?}"))?;
-        assert_eq!(std::fs::read(&destination)?, original);
-
-        let consumed = exact_reexport_unopened_bundle_to_path(
-            &state,
-            PortableCancelRequest {
-                request_id: RequestId::new(&ids)?,
-                preview_id: inspected.result.preview_id,
-            },
-            directory.path().join("second-copy.eutheto"),
-            "second-copy.eutheto".to_owned(),
-        )
-        .await;
-        let Err(consumed) = consumed else {
-            return Err("single-use preview unexpectedly re-exported twice".into());
-        };
-        assert_eq!(consumed.code, "portable.preview_not_found");
-
-        let no_clobber =
-            inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, original.clone())
-                .await
-                .map_err(|error| format!("second inspection failed: {error:?}"))?;
-        let occupied = directory.path().join("occupied.eutheto");
-        std::fs::write(&occupied, b"sentinel")?;
-        let publication = exact_reexport_unopened_bundle_to_path(
-            &state,
-            PortableCancelRequest {
-                request_id: RequestId::new(&ids)?,
-                preview_id: no_clobber.result.preview_id,
-            },
-            occupied.clone(),
-            "occupied.eutheto".to_owned(),
-        )
-        .await;
-        let Err(publication) = publication else {
-            return Err("exact re-export unexpectedly replaced an existing file".into());
-        };
-        assert_eq!(publication.category, ApiErrorCategoryDto::Storage);
-        assert_eq!(std::fs::read(&occupied)?, b"sentinel");
-        let after_no_clobber = exact_reexport_unopened_bundle_to_path(
-            &state,
-            PortableCancelRequest {
-                request_id: RequestId::new(&ids)?,
-                preview_id: no_clobber.result.preview_id,
-            },
-            directory.path().join("after-no-clobber.eutheto"),
-            "after-no-clobber.eutheto".to_owned(),
-        )
-        .await;
-        let Err(after_no_clobber) = after_no_clobber else {
-            return Err("failed publication unexpectedly retained its preview".into());
-        };
-        assert_eq!(after_no_clobber.code, "portable.preview_not_found");
-
-        let cancelled = inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, original)
-            .await
-            .map_err(|error| format!("third inspection failed: {error:?}"))?;
-        cancel_portable_preview_impl(
-            &state,
-            PortableCancelRequest {
-                request_id: RequestId::new(&ids)?,
-                preview_id: cancelled.result.preview_id,
-            },
-        )
-        .await
-        .map_err(|error| format!("unopened cancellation failed: {error:?}"))?;
-        let after_cancel = exact_reexport_unopened_bundle_to_path(
-            &state,
-            PortableCancelRequest {
-                request_id: RequestId::new(&ids)?,
-                preview_id: cancelled.result.preview_id,
-            },
-            directory.path().join("cancelled.eutheto"),
-            "cancelled.eutheto".to_owned(),
-        )
-        .await;
-        let Err(after_cancel) = after_cancel else {
-            return Err("cancelled unopened preview unexpectedly re-exported".into());
-        };
-        assert_eq!(after_cancel.code, "portable.preview_not_found");
-
-        let malformed =
-            inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, b"not a zip".to_vec())
-                .await;
-        let Err(malformed) = malformed else {
-            return Err("malformed unopened bundle unexpectedly inspected".into());
-        };
-        assert_eq!(malformed.code, "portable.content_invalid");
-        assert_eq!(malformed.category, ApiErrorCategoryDto::Validation);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn project_list_delegates_and_round_trips_request_id() -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
         let app = EuthetoApp::open(AppDependencies {
             paths: AppPaths {
@@ -4548,356 +3450,112 @@ mod tests {
             directory.path().join("cache"),
             directory.path().join("backups"),
         );
-        let request_id = RequestId::new(&SystemIdGenerator)?;
-        let result = project_list_impl(
-            &state,
-            ProjectListRequest {
-                request_id,
-                scope: ProjectScopeDto::Active,
-            },
-        )
-        .await
-        .map_err(|error| format!("project list failed: {error:?}"))?;
-        assert_eq!(result.request_id, request_id);
-        assert!(result.result.is_empty());
-        let Err(deferred) = core_unavailable(&state, DeferredCapability::Solve).await else {
-            return Err("solve unexpectedly became available".into());
-        };
-        assert_eq!(deferred.category, ApiErrorCategoryDto::Unsupported);
-        assert_eq!(deferred.code, "capability.solve_unavailable");
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    #[tokio::test]
-    async fn native_portable_commands_replace_by_identity_and_persist() -> Result<(), Box<dyn Error>>
-    {
-        let directory = tempfile::tempdir()?;
-        let ids = SystemIdGenerator;
-        let settings: ScenarioSettings = serde_json::from_value(json!({
-            "timeZone": "UTC",
-            "locale": "en-US",
-            "units": "metric",
-            "horizon": {
-                "start": "2026-09-01T00:00:00Z",
-                "end": "2026-10-01T00:00:00Z"
-            },
-            "gapPolicy": "reject",
-            "overlapPolicy": "earlier"
-        }))?;
-        let title = "Portable identity collision";
-
-        let source = EuthetoApp::open(AppDependencies {
-            paths: AppPaths {
-                database: directory.path().join("source.sqlite3"),
-                safety_backups: directory.path().join("source-backups"),
-            },
-            clock: Arc::new(SystemClock),
-            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
-            ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationToken::default(),
-        })
-        .await
-        .map_err(|error| format!("source app setup failed: {error:?}"))?;
-        let source_scenario_id = match source
-            .execute(AppCommand::CreateProject {
-                request_id: RequestId::new(&ids)?,
-                title: title.to_owned(),
-                description: "Portable command boundary source".to_owned(),
-                domain_pack: DomainPackRef {
-                    id: "official.test".parse()?,
-                    schema_version: 1,
-                },
-                settings: settings.clone(),
-            })
-            .await
-            .map_err(|error| format!("source project setup failed: {error:?}"))?
-        {
-            AppCommandResult::Project(project) => project.scenario_id,
-            result => return Err(format!("unexpected source project result: {result:?}").into()),
-        };
-        let initial_bytes = match source
-            .query(AppQuery::ExportScenario(source_scenario_id))
-            .await
-            .map_err(|error| format!("initial source export failed: {error:?}"))?
-        {
-            AppQueryResult::Bundle { bytes, .. } => bytes,
-            result => return Err(format!("unexpected initial export result: {result:?}").into()),
-        };
-
-        let target_dependencies = AppDependencies {
-            paths: AppPaths {
-                database: directory.path().join("target.sqlite3"),
-                safety_backups: directory.path().join("target-backups"),
-            },
-            clock: Arc::new(SystemClock),
-            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
-            ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationToken::default(),
-        };
-        let target_app = EuthetoApp::open(target_dependencies.clone())
-            .await
-            .map_err(|error| format!("target app setup failed: {error:?}"))?;
-        let target_state = DesktopState::new(
-            target_app,
-            directory.path().join("target-cache"),
-            directory.path().join("target-backups"),
-        );
-        let target_desktop = tauri::test::mock_builder()
+        let desktop = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
                 project_create,
-                project_import_apply,
                 project_list,
-                operation_prepare,
-                scenario_get_summary,
+                project_open
             ])
-            .manage(target_state.clone())
+            .manage(state.clone())
             .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
-        let target_webview =
-            tauri::WebviewWindowBuilder::new(&target_desktop, "main", tauri::WebviewUrl::default())
+        let window =
+            tauri::WebviewWindowBuilder::new(&desktop, "main", tauri::WebviewUrl::default())
                 .build()?;
-
-        let unrelated: ApiResponseDto<ProjectMetadataDto> = invoke_ok(
-            &target_webview,
-            "project_create",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "title": title,
-                "description": "Same title, different identity",
-                "domainPack": {
-                    "id": "official.test",
-                    "schemaVersion": 1
-                },
-                "settings": settings
-            }),
-        )?;
-        let unrelated_scenario_id = unrelated.result.scenario_id;
-        assert_ne!(unrelated_scenario_id, source_scenario_id);
-
-        let selected_path = directory.path().join("selected.eutheto");
-        std::fs::write(&selected_path, initial_bytes)?;
-        let first_preview_request_id = RequestId::new(&ids)?;
-        let first_preview_request: PortablePreviewRequest = serde_json::from_value(json!({
-            "requestId": first_preview_request_id,
-            "options": {
-                "restoreMode": "import-scenario",
-                "includeResults": false,
-                "includeAssets": false
+        let request = json!({
+            "schemaVersion": 1, "requestId": RequestId::new(&SystemIdGenerator)?,
+            "title": "Spring clinic", "description": "",
+            "domainPack": {"id": "official.workforce", "schemaVersion": 1},
+            "settings": {
+                "timeZone": "America/New_York", "locale": "en-US", "units": "metric",
+                "firstDate": "2026-03-07", "lastDate": "2026-03-08",
+                "gapPolicy": "reject", "overlapPolicy": "earlier"
             }
-        }))?;
-        let first_preview_bytes = read_bounded_portable(&selected_path)
-            .map_err(|error| format!("initial portable read failed: {error:?}"))?;
-        let first_preview = preview_portable_bytes(
-            &target_state,
-            first_preview_request,
-            first_preview_bytes,
-            false,
-        )
-        .await
-        .map_err(|error| format!("initial portable preview failed: {error:?}"))?;
-        assert_eq!(first_preview.request_id, first_preview_request_id);
-        assert_eq!(first_preview.result.scenarios.len(), 1);
-        assert_eq!(
-            first_preview.result.scenarios[0].scenario_id,
-            source_scenario_id
-        );
-        assert!(!first_preview.result.scenarios[0].collides);
-        let first_preview_id = first_preview.result.preview_id;
-
-        let first_apply_request_id = RequestId::new(&ids)?;
-        let first_applied: ApiResponseDto<Value> = invoke_ok(
-            &target_webview,
-            "project_import_apply",
-            &json!({
-                "requestId": first_apply_request_id,
-                "previewId": first_preview_id,
-                "collisionPlan": eutheto_import::CollisionPlan::default()
-            }),
-        )?;
-        assert_eq!(first_applied.request_id, first_apply_request_id);
-        assert_eq!(
-            first_applied.result["scenarioIds"],
-            json!([source_scenario_id])
-        );
-
-        let source_entity_id = EntityId::new(&ids)?;
-        let source_entity = json!({
-            "id": source_entity_id.to_string(),
-            "name": "Authoritative portable entity"
         });
-        let source_mutation = source
-            .execute(AppCommand::ApplyScenario {
-                request_id: RequestId::new(&ids)?,
-                envelope: CommandEnvelope {
-                    command_id: CommandId::new(&ids)?,
-                    scenario_id: source_scenario_id,
-                    expected_revision: Revision::INITIAL,
-                    actor: ActorRef {
-                        actor_id: Some("desktop.portable.test".to_owned()),
-                        display_name: "Desktop Portable Test".to_owned(),
-                    },
-                    source: CommandSource::System,
-                    command: ScenarioCommand::AddEntity(AddEntity {
-                        entity_id: source_entity_id,
-                        value: source_entity.clone(),
-                    }),
-                },
-                truncate_redo: false,
-            })
+        let created: ApiResponseDto<ProjectMetadataDto> =
+            invoke_ok(&window, "project_create", &request)?;
+        let AppQueryResult::Scenario(view) = state
+            .app
+            .query(AppQuery::ScenarioView(created.result.scenario_id))
             .await
-            .map_err(|error| format!("source mutation failed: {error:?}"))?;
-        assert!(matches!(
-            &source_mutation,
-            AppCommandResult::ScenarioCommand(result)
-                if result.new_revision == Revision::new(1)
-        ));
-        let replacement_bytes = match source
-            .query(AppQuery::ExportScenario(source_scenario_id))
-            .await
-            .map_err(|error| format!("replacement source export failed: {error:?}"))?
-        {
-            AppQueryResult::Bundle { bytes, .. } => bytes,
-            result => {
-                return Err(format!("unexpected replacement export result: {result:?}").into());
-            }
+            .map_err(|error| format!("{error:?}"))?
+        else {
+            return Err("created scenario unavailable".into());
         };
-
-        std::fs::write(&selected_path, replacement_bytes)?;
-        let replace_preview_request_id = RequestId::new(&ids)?;
-        let replace_preview_request: PortablePreviewRequest = serde_json::from_value(json!({
-            "requestId": replace_preview_request_id,
-            "options": {
-                "restoreMode": "import-scenario",
-                "includeResults": false,
-                "includeAssets": false
-            }
-        }))?;
-        let replace_preview_bytes = read_bounded_portable(&selected_path)
-            .map_err(|error| format!("replacement portable read failed: {error:?}"))?;
-        let replace_preview = preview_portable_bytes(
-            &target_state,
-            replace_preview_request,
-            replace_preview_bytes,
-            false,
-        )
-        .await
-        .map_err(|error| format!("replace portable preview failed: {error:?}"))?;
-        assert_eq!(replace_preview.request_id, replace_preview_request_id);
-        assert_eq!(replace_preview.result.scenarios.len(), 1);
-        let collision = &replace_preview.result.scenarios[0];
-        assert_eq!(collision.scenario_id, source_scenario_id);
-        assert!(collision.collides);
-        assert_eq!(collision.source_revision, Revision::new(1));
-        assert_eq!(collision.same_identity_revision, Revision::new(1));
-        assert!(collision.same_identity_revision_warning.is_none());
-        let replace_preview_id = replace_preview.result.preview_id;
-        let replace_request_id = RequestId::new(&ids)?;
-        let replaced: ApiResponseDto<Value> = invoke_ok(
-            &target_webview,
-            "project_import_apply",
-            &json!({
-                "requestId": replace_request_id,
-                "previewId": replace_preview_id,
-                "collisionPlan": eutheto_import::CollisionPlan {
-                    scenarios: BTreeMap::from([(
-                        source_scenario_id,
-                        CollisionAction::Replace
-                    )]),
-                    supplemental: BTreeMap::new()
-                }
-            }),
-        )?;
-        assert_eq!(replaced.request_id, replace_request_id);
-        assert_eq!(replaced.result["scenarioIds"], json!([source_scenario_id]));
-
-        let consumed = invoke_ipc(
-            &target_webview,
-            "project_import_apply",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "previewId": replace_preview_id,
-                "collisionPlan": eutheto_import::CollisionPlan::default()
-            }),
-        )?;
-        let consumed_error: ApiErrorDto = match consumed {
-            Ok(_) => return Err("consumed portable preview unexpectedly applied twice".into()),
-            Err(error) => serde_json::from_value(error)?,
-        };
-        assert_eq!(consumed_error.code, "portable.preview_not_found");
-
-        drop(target_webview);
-        drop(target_desktop);
-        drop(target_state);
-
-        let reopened_app = EuthetoApp::open(target_dependencies)
-            .await
-            .map_err(|error| format!("target reopen failed: {error:?}"))?;
-        let reopened_desktop = tauri::test::mock_builder()
-            .invoke_handler(tauri::generate_handler![
-                project_list,
-                operation_prepare,
-                scenario_get_summary
-            ])
-            .manage(DesktopState::new(
-                reopened_app,
-                directory.path().join("reopened-cache"),
-                directory.path().join("target-backups"),
-            ))
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
-        let reopened_webview = tauri::WebviewWindowBuilder::new(
-            &reopened_desktop,
-            "main",
-            tauri::WebviewUrl::default(),
-        )
-        .build()?;
-
-        let listed: ApiResponseDto<Vec<ProjectSummaryDto>> = invoke_ok(
-            &reopened_webview,
-            "project_list",
-            &json!({
-                "requestId": RequestId::new(&ids)?,
-                "scope": "active"
-            }),
-        )?;
-        assert_eq!(listed.result.len(), 2);
-        assert!(
-            listed
-                .result
-                .iter()
-                .any(|project| project.scenario_id == source_scenario_id)
-        );
-        assert!(
-            listed
-                .result
-                .iter()
-                .any(|project| project.scenario_id == unrelated_scenario_id)
-        );
-
-        let (imported, imported_snapshot) = native_summary_and_core_snapshot(
-            &reopened_webview,
-            RequestId::new(&ids)?,
-            source_scenario_id,
-        )
-        .await?;
-        assert_eq!(imported.result.title, title);
         assert_eq!(
-            imported_snapshot
-                .document
-                .domain
-                .entities
-                .get(&source_entity_id),
-            Some(&source_entity)
+            view.document.settings.horizon.start.to_string(),
+            "2026-03-07T05:00:00Z"
         );
-
-        let (same_title, _) = native_summary_and_core_snapshot(
-            &reopened_webview,
-            RequestId::new(&ids)?,
-            unrelated_scenario_id,
-        )
-        .await?;
-        assert_eq!(same_title.result.title, title);
-        assert_eq!(same_title.result.revision, Revision::INITIAL);
-        assert_eq!(same_title.result.structure.entities, 0);
+        assert_eq!(
+            view.document.settings.horizon.end.to_string(),
+            "2026-03-09T04:00:00Z"
+        );
+        let list_request = json!({
+            "schemaVersion": 1, "requestId": RequestId::new(&SystemIdGenerator)?, "scope": "all"
+        });
+        let listed: ApiResponseDto<Vec<ProjectListItemV1>> =
+            invoke_ok(&window, "project_list", &list_request)?;
+        assert_eq!(listed.result.len(), 1);
+        assert_eq!(listed.result[0].scenario_id, created.result.scenario_id);
+        assert!(listed.result[0].last_opened_at.is_none());
+        let before_open = state
+            .app
+            .application_settings_snapshot()
+            .await
+            .map_err(|error| format!("{error:?}"))?
+            .library_revision;
+        let opened: ApiResponseDto<ProjectListItemV1> = invoke_ok(
+            &window,
+            "project_open",
+            &json!({
+                "schemaVersion": 1, "requestId": RequestId::new(&SystemIdGenerator)?,
+                "scenarioId": created.result.scenario_id
+            }),
+        )?;
+        assert!(opened.result.last_opened_at.is_some());
+        assert_eq!(opened.result.revision, created.result.revision);
+        let after_open = state
+            .app
+            .application_settings_snapshot()
+            .await
+            .map_err(|error| format!("{error:?}"))?
+            .library_revision;
+        assert_eq!(after_open, before_open.checked_next()?);
+        for (last_date, code) in [
+            ("2026-03-06", "project.date_range_invalid"),
+            ("9999-12-31", "project.date_overflow"),
+        ] {
+            let mut invalid = request.clone();
+            invalid["requestId"] = json!(RequestId::new(&SystemIdGenerator)?);
+            invalid["settings"]["lastDate"] = json!(last_date);
+            let rejected = invoke_ipc(&window, "project_create", &invalid)?
+                .err()
+                .ok_or("invalid calendar range created a project")?;
+            assert_eq!(rejected["code"], code);
+        }
+        let mut skipped = request;
+        skipped["requestId"] = json!(RequestId::new(&SystemIdGenerator)?);
+        skipped["settings"]["timeZone"] = json!("Pacific/Apia");
+        skipped["settings"]["firstDate"] = json!("2011-12-30");
+        skipped["settings"]["lastDate"] = json!("2011-12-31");
+        skipped["settings"]["gapPolicy"] = json!("moveForward");
+        let rejected = invoke_ipc(&window, "project_create", &skipped)?
+            .err()
+            .ok_or("skipped date created a shifted project")?;
+        assert_eq!(rejected["code"], "project.midnight_invalid");
+        let listed: ApiResponseDto<Vec<ProjectListItemV1>> =
+            invoke_ok(&window, "project_list", &list_request)?;
+        assert_eq!(listed.result.len(), 1);
+        assert_eq!(
+            listed.result[0].last_opened_at,
+            opened.result.last_opened_at
+        );
+        let after_rejection = state
+            .app
+            .application_settings_snapshot()
+            .await
+            .map_err(|error| format!("{error:?}"))?
+            .library_revision;
+        assert_eq!(after_rejection, after_open);
         Ok(())
     }
 
@@ -4943,6 +3601,7 @@ mod tests {
             "project_create",
             &json!({
                 "requestId": create_request_id,
+                "schemaVersion": 1,
                 "title": "Persisted clinic roster",
                 "description": "Desktop command boundary regression",
                 "domainPack": {
@@ -4953,10 +3612,8 @@ mod tests {
                     "timeZone": "UTC",
                     "locale": "en-US",
                     "units": "metric",
-                    "horizon": {
-                        "start": "2026-09-01T00:00:00Z",
-                        "end": "2026-10-01T00:00:00Z"
-                    },
+                    "firstDate": "2026-09-01",
+                    "lastDate": "2026-09-30",
                     "gapPolicy": "reject",
                     "overlapPolicy": "earlier"
                 }
@@ -4980,8 +3637,6 @@ mod tests {
                 scenario_apply_command,
                 scenario_undo,
                 scenario_redo,
-                project_import_apply,
-                project_restore_apply,
                 project_archive,
                 project_unarchive,
                 project_delete,
@@ -5000,11 +3655,12 @@ mod tests {
         .build()?;
 
         let list_request_id = RequestId::new(&ids)?;
-        let listed: ApiResponseDto<Vec<ProjectSummaryDto>> = invoke_ok(
+        let listed: ApiResponseDto<Vec<ProjectListItemV1>> = invoke_ok(
             &reopened_webview,
             "project_list",
             &json!({
                 "requestId": list_request_id,
+                "schemaVersion": 1,
                 "scope": "active"
             }),
         )?;
@@ -5021,46 +3677,6 @@ mod tests {
         assert_eq!(opened.current_revision, Some(Revision::INITIAL));
         assert_eq!(opened.result.title, "Persisted clinic roster");
         assert_eq!(opened.result.structure.entities, 0);
-
-        for (command, request) in [
-            (
-                "project_import_apply",
-                json!({
-                    "requestId": RequestId::new(&ids)?,
-                    "previewId": RequestId::new(&ids)?,
-                    "collisionPlan": {
-                        "scenarios": {},
-                        "supplementalChoices": [{
-                            "section": "preferences",
-                            "key": "view.json",
-                            "action": "skip"
-                        }]
-                    }
-                }),
-            ),
-            (
-                "project_restore_apply",
-                json!({
-                    "requestId": RequestId::new(&ids)?,
-                    "previewId": RequestId::new(&ids)?,
-                    "collisionPlan": {"scenarios": {}, "supplementalChoices": []},
-                    "authorization": {
-                        "destructiveActionConfirmed": true,
-                        "safetyBackupBypassPhrase": null
-                    }
-                }),
-            ),
-        ] {
-            let response = invoke_ipc(&reopened_webview, command, &request)?;
-            let error: ApiErrorDto = match response {
-                Ok(_) => {
-                    return Err(format!("{command} unexpectedly accepted a missing preview").into());
-                }
-                Err(error) => serde_json::from_value(error)?,
-            };
-            assert_eq!(error.category, ApiErrorCategoryDto::Protocol);
-            assert_eq!(error.code, "portable.preview_not_found");
-        }
 
         let entity_id = EntityId::new(&ids)?;
         let mutation_request_id = RequestId::new(&ids)?;

@@ -664,6 +664,92 @@ fn staged_import(
 }
 
 #[tokio::test]
+async fn malformed_open_rolls_back_last_opened_and_library_revision() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let id = scenario_id(94)?;
+    let expected = document(id)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: expected.clone(),
+        })
+        .await?;
+    let before_open = store.library_metadata_snapshot().await?;
+    let opened = store.open_project(id, timestamp(UPDATED)?).await?;
+    assert_eq!(opened.summary.last_opened_at, Some(timestamp(UPDATED)?));
+    assert_eq!(opened.document, expected);
+    let before_failure = store.library_metadata_snapshot().await?;
+    assert_eq!(
+        before_failure.revision,
+        before_open.revision.checked_next()?
+    );
+
+    let connection = Connection::open(&path)?;
+    connection.execute(
+        "UPDATE scenarios SET document_json = 'not-json' WHERE id = ?1",
+        [id.to_string()],
+    )?;
+    assert!(matches!(
+        store.open_project(id, timestamp(LATER)?).await,
+        Err(StoreError::Json(_))
+    ));
+    assert_eq!(store.library_metadata_snapshot().await?, before_failure);
+    let last_opened: String = connection.query_row(
+        "SELECT last_opened_at FROM scenarios WHERE id = ?1",
+        [id.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(timestamp(&last_opened)?, timestamp(UPDATED)?);
+    connection.execute(
+        "UPDATE scenarios SET document_json = ?2 WHERE id = ?1",
+        params![id.to_string(), serde_json::to_string(&expected)?],
+    )?;
+    drop(connection);
+    drop(store);
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    assert_eq!(reopened.library_metadata_snapshot().await?, before_failure);
+    let persisted = reopened.get_project(id).await?;
+    assert_eq!(persisted.summary.last_opened_at, Some(timestamp(UPDATED)?));
+    assert_eq!(persisted.document, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn staged_apply_cancelled_before_work_preserves_library() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let (store, _) = SqliteScenarioStore::open(directory.path().join("library.sqlite3")).await?;
+    let staged = staged_import(
+        Revision::INITIAL,
+        vec![(
+            Revision::new(1),
+            document(scenario_id(95)?)?,
+            StagedDisposition::Create,
+        )],
+        timestamp(CREATED)?,
+    );
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    assert!(matches!(
+        store
+            .apply_staged_library(
+                StagedLibraryApply::Import(staged),
+                timestamp(LATER)?,
+                cancellation,
+            )
+            .await,
+        Err(StoreError::OperationCancelled)
+    ));
+    let snapshot = store.library_snapshot().await?;
+    assert_eq!(snapshot.revision, Revision::INITIAL);
+    assert!(snapshot.projects.is_empty());
+    assert!(snapshot.scenario_revision_high_water.is_empty());
+    assert!(snapshot.provenance.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_crud_and_document_survive_reopen() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
@@ -772,7 +858,11 @@ async fn staged_apply_rejects_global_identity_collision_atomically() -> Result<(
 
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(staged), timestamp(LATER)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(staged),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::IdentityCollision(_))
     ));
@@ -1007,7 +1097,18 @@ async fn publication_revision_lease_blocks_other_store_instances() -> Result<(),
     let mutation = tokio::spawn(async move {
         let _ = attempt_tx.send(());
         mutation_store
-            .set_setting("appearance".to_owned(), json!({"theme": "dark"}), updated)
+            .replace_settings(
+                &["appearance"],
+                mutation_store.settings_snapshot(&["appearance"]).await?,
+                BTreeMap::from([(
+                    "appearance".to_owned(),
+                    AppSetting {
+                        value: json!({"theme": "dark"}),
+                        updated_at: updated,
+                    },
+                )]),
+                CancellationToken::new(),
+            )
             .await
     });
     attempt_rx.await?;
@@ -1072,6 +1173,7 @@ async fn apply_and_assert_revision_bound_import(
         .apply_staged_library(
             StagedLibraryApply::Import(staged.clone()),
             timestamp(LATER)?,
+            CancellationToken::new(),
         )
         .await?;
     assert_eq!(outcome.library_revision, Revision::new(2));
@@ -1103,7 +1205,7 @@ async fn apply_and_assert_revision_bound_import(
     );
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(staged), timestamp(LATER)?)
+            .apply_staged_library(StagedLibraryApply::Import(staged), timestamp(LATER)?, CancellationToken::new())
             .await,
         Err(StoreError::LibraryConflict { expected, actual })
             if expected == Revision::new(1) && actual == Revision::new(2)
@@ -1135,7 +1237,11 @@ async fn assert_failed_staged_imports_are_atomic(
     );
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(impossible), timestamp(LATER)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(impossible),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::InvalidStagedApply(_))
     ));
@@ -1166,7 +1272,7 @@ async fn assert_failed_staged_imports_are_atomic(
     );
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(invalid), timestamp(LATER)?)
+            .apply_staged_library(StagedLibraryApply::Import(invalid), timestamp(LATER)?, CancellationToken::new())
             .await,
         Err(StoreError::ScenarioAlreadyExists(id)) if id == created_id
     ));
@@ -1214,6 +1320,7 @@ async fn apply_and_assert_backup_restore(
                 settings: BTreeMap::new(),
             },
             timestamp(LATER)?,
+            CancellationToken::new(),
         )
         .await?;
     assert_eq!(outcome.library_revision, Revision::new(3));
@@ -1253,10 +1360,17 @@ async fn seed_portable_import(
         })
         .await?;
     store
-        .set_setting(
-            "appearance".to_owned(),
-            json!({"theme": "dark"}),
-            timestamp(UPDATED)?,
+        .replace_settings(
+            &["appearance"],
+            store.settings_snapshot(&["appearance"]).await?,
+            BTreeMap::from([(
+                "appearance".to_owned(),
+                AppSetting {
+                    value: json!({"theme": "dark"}),
+                    updated_at: timestamp(UPDATED)?,
+                },
+            )]),
+            CancellationToken::new(),
         )
         .await?;
     let mut imported = staged_import(
@@ -1314,7 +1428,11 @@ async fn seed_portable_import(
         .insert("vendor.display".to_owned(), json!({"color": "blue"}));
     let source_bundle_id = imported.provenance.source_bundle_id;
     store
-        .apply_staged_library(StagedLibraryApply::Import(imported), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(imported),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     Ok(source_bundle_id)
 }
@@ -1367,6 +1485,7 @@ async fn apply_add_backup(
                 )]),
             },
             timestamp(LATER)?,
+            CancellationToken::new(),
         )
         .await?;
     Ok(())
@@ -1438,6 +1557,151 @@ async fn record_failure_receipt(
     Ok(())
 }
 
+#[cfg(debug_assertions)]
+// Keep the final cancellation boundary and reopened durable state in one fixture.
+#[allow(clippy::too_many_lines)]
+async fn staged_apply_cancellation_at_final_boundary(
+    phase: CommandCommitTestPhase,
+    change: bool,
+) -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let id = scenario_id(96)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: document(id)?,
+        })
+        .await?;
+    store
+        .replace_settings(
+            &["appearance"],
+            store.settings_snapshot(&["appearance"]).await?,
+            BTreeMap::from([(
+                "appearance".to_owned(),
+                AppSetting {
+                    value: json!({"theme": "dark"}),
+                    updated_at: timestamp(UPDATED)?,
+                },
+            )]),
+            CancellationToken::new(),
+        )
+        .await?;
+    let before = store.library_snapshot().await?;
+    let staged = if change {
+        let proof = "cancelled-restore-receipt";
+        let plan = "d".repeat(64);
+        let staged = failed_receipt_restore(before.revision, id, proof, &plan)?;
+        record_failure_receipt(&store, proof, staged_apply_binding(&staged), &plan).await?;
+        staged
+    } else {
+        StagedLibraryApply::Import(staged_import(
+            before.revision,
+            Vec::new(),
+            timestamp(CREATED)?,
+        ))
+    };
+    drop(store);
+    let hook = CommandCommitTestHook::new(phase);
+    let (store, _) = SqliteScenarioStore::open_with_options(
+        &path,
+        OpenOptions::default().with_command_commit_test_hook(hook.clone()),
+    )
+    .await?;
+    let cancellation = CancellationToken::new();
+    let actor_cancellation = cancellation.clone();
+    let actor_store = store.clone();
+    let applied_at = timestamp(LATER)?;
+    let command = tokio::spawn(async move {
+        actor_store
+            .apply_staged_library(staged, applied_at, actor_cancellation)
+            .await
+    });
+    let wait_hook = hook.clone();
+    tokio::task::spawn_blocking(move || wait_hook.wait_until_reached()).await?;
+    cancellation.cancel();
+    hook.release();
+    let result = command.await?;
+    let committed = phase == CommandCommitTestPhase::AfterFinalCancellationCheck;
+    let changed = committed && change;
+    let expected_revision = if changed {
+        before.revision.checked_next()?
+    } else {
+        before.revision
+    };
+    if committed {
+        let outcome = result?;
+        assert_eq!(outcome.library_revision, expected_revision);
+        assert_eq!(outcome.created, 0);
+        assert_eq!(outcome.replaced, usize::from(change));
+        assert_eq!(outcome.removed, usize::from(change));
+    } else {
+        assert!(matches!(result, Err(StoreError::OperationCancelled)));
+    }
+    drop(store);
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    let durable = reopened.library_snapshot().await?;
+    assert_eq!(durable.revision, expected_revision);
+    assert_eq!(durable.projects.len(), 1);
+    assert_eq!(durable.projects[0].document, before.projects[0].document);
+    let expected_project_revision = if changed {
+        Revision::new(5)
+    } else {
+        Revision::INITIAL
+    };
+    assert_eq!(
+        durable.projects[0].summary.revision,
+        expected_project_revision
+    );
+    assert_eq!(
+        durable.scenario_revision_high_water.get(&id),
+        Some(&expected_project_revision)
+    );
+    assert_eq!(
+        durable.settings,
+        if changed {
+            BTreeMap::new()
+        } else {
+            before.settings
+        }
+    );
+    assert_eq!(durable.provenance.len(), usize::from(changed));
+    assert_eq!(receipt_count(&path)?, i64::from(change && !committed));
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn staged_apply_final_cancellation_rolls_back_restore_and_cancels_noop()
+-> Result<(), Box<dyn Error>> {
+    staged_apply_cancellation_at_final_boundary(
+        CommandCommitTestPhase::BeforeFinalCancellationCheck,
+        true,
+    )
+    .await?;
+    staged_apply_cancellation_at_final_boundary(
+        CommandCommitTestPhase::BeforeFinalCancellationCheck,
+        false,
+    )
+    .await
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn staged_apply_completion_wins_cancellation_after_final_check_including_noop()
+-> Result<(), Box<dyn Error>> {
+    staged_apply_cancellation_at_final_boundary(
+        CommandCommitTestPhase::AfterFinalCancellationCheck,
+        true,
+    )
+    .await?;
+    staged_apply_cancellation_at_final_boundary(
+        CommandCommitTestPhase::AfterFinalCancellationCheck,
+        false,
+    )
+    .await
+}
+
 #[tokio::test]
 async fn failure_receipt_persists_restarts_consumes_once_and_is_bounded()
 -> Result<(), Box<dyn Error>> {
@@ -1474,13 +1738,15 @@ async fn failure_receipt_persists_restarts_consumes_once_and_is_bounded()
     drop(connection);
     let (store, _) = SqliteScenarioStore::open(&path).await?;
     store
-        .apply_staged_library(staged, timestamp(LATER)?)
+        .apply_staged_library(staged, timestamp(LATER)?, CancellationToken::new())
         .await?;
     assert_eq!(receipt_count(&path)?, 0);
 
     let replay = failed_receipt_restore(Revision::new(2), id, proof, &plan)?;
     assert!(matches!(
-        store.apply_staged_library(replay, timestamp(LATER)?).await,
+        store
+            .apply_staged_library(replay, timestamp(LATER)?, CancellationToken::new())
+            .await,
         Err(StoreError::SafetyBackupFailureReceiptRejected)
     ));
     for index in 0..17 {
@@ -1512,7 +1778,7 @@ async fn failure_receipt_mismatch_and_failed_apply_do_not_consume() -> Result<()
     let plan_mismatch = failed_receipt_restore(Revision::new(1), id, proof, &"c".repeat(64))?;
     assert!(matches!(
         store
-            .apply_staged_library(plan_mismatch, timestamp(LATER)?)
+            .apply_staged_library(plan_mismatch, timestamp(LATER)?, CancellationToken::new())
             .await,
         Err(StoreError::SafetyBackupFailureReceiptRejected)
     ));
@@ -1522,7 +1788,11 @@ async fn failure_receipt_mismatch_and_failed_apply_do_not_consume() -> Result<()
     }
     assert!(matches!(
         store
-            .apply_staged_library(binding_mismatch, timestamp(LATER)?)
+            .apply_staged_library(
+                binding_mismatch,
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::SafetyBackupFailureReceiptRejected)
     ));
@@ -1535,7 +1805,7 @@ async fn failure_receipt_mismatch_and_failed_apply_do_not_consume() -> Result<()
     store.set_failpoint(Failpoint::AfterSupplementalWrite)?;
     assert!(matches!(
         store
-            .apply_staged_library(staged.clone(), timestamp(LATER)?)
+            .apply_staged_library(staged.clone(), timestamp(LATER)?, CancellationToken::new())
             .await,
         Err(StoreError::InjectedFailure)
     ));
@@ -1545,7 +1815,7 @@ async fn failure_receipt_mismatch_and_failed_apply_do_not_consume() -> Result<()
         Revision::INITIAL
     );
     store
-        .apply_staged_library(staged, timestamp(LATER)?)
+        .apply_staged_library(staged, timestamp(LATER)?, CancellationToken::new())
         .await?;
     assert_eq!(receipt_count(&path)?, 0);
     Ok(())
@@ -1664,7 +1934,11 @@ async fn supplemental_overwrite_requires_exact_replace_authorization_and_skip_is
         .shared_records
         .insert(skip_identity.key.clone(), br#"{"value":"keep"}"#.to_vec());
     store
-        .apply_staged_library(StagedLibraryApply::Import(baseline), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(baseline),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
 
     let mut unauthorized = staged_import(Revision::new(1), Vec::new(), timestamp(CREATED)?);
@@ -1674,7 +1948,11 @@ async fn supplemental_overwrite_requires_exact_replace_authorization_and_skip_is
     );
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(unauthorized), timestamp(LATER)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(unauthorized),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::InvalidStagedApply(_))
     ));
@@ -1691,7 +1969,11 @@ async fn supplemental_overwrite_requires_exact_replace_authorization_and_skip_is
         .insert(skip_identity.clone());
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(absent_skip), timestamp(LATER)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(absent_skip),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::InvalidStagedApply(_))
     ));
@@ -1705,7 +1987,11 @@ async fn supplemental_overwrite_requires_exact_replace_authorization_and_skip_is
         .supplemental_replacements
         .insert(replace_identity.clone());
     store
-        .apply_staged_library(StagedLibraryApply::Import(authorized), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(authorized),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     let snapshot = store.library_snapshot().await?;
     assert_eq!(
@@ -1798,6 +2084,7 @@ async fn replace_backup_replaces_settings_sections_and_preserves_archive_on_reop
                 )]),
             },
             timestamp(LATER)?,
+            CancellationToken::new(),
         )
         .await?;
     drop(store);
@@ -1827,6 +2114,8 @@ async fn replace_backup_replaces_settings_sections_and_preserves_archive_on_reop
 
 #[cfg(debug_assertions)]
 #[tokio::test]
+// The same failed transaction must preserve scenarios, sections and provenance.
+#[allow(clippy::too_many_lines)]
 async fn supplemental_failpoint_rolls_back_scenarios_sections_and_provenance()
 -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
@@ -1844,13 +2133,24 @@ async fn supplemental_failpoint_rolls_back_scenarios_sections_and_provenance()
         .shared_records
         .insert("stable".to_owned(), br#"{"value":"before"}"#.to_vec());
     store
-        .apply_staged_library(StagedLibraryApply::Import(baseline), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(baseline),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     store
-        .set_setting(
-            "stable-setting".to_owned(),
-            json!({"value": "before"}),
-            timestamp(UPDATED)?,
+        .replace_settings(
+            &["stable-setting"],
+            store.settings_snapshot(&["stable-setting"]).await?,
+            BTreeMap::from([(
+                "stable-setting".to_owned(),
+                AppSetting {
+                    value: json!({"value": "before"}),
+                    updated_at: timestamp(UPDATED)?,
+                },
+            )]),
+            CancellationToken::new(),
         )
         .await?;
     store.set_failpoint(Failpoint::AfterSupplementalWrite)?;
@@ -1900,7 +2200,8 @@ async fn supplemental_failpoint_rolls_back_scenarios_sections_and_provenance()
                         },
                     )]),
                 },
-                timestamp(LATER)?
+                timestamp(LATER)?,
+                CancellationToken::new(),
             )
             .await,
         Err(StoreError::InjectedFailure)
@@ -1989,6 +2290,8 @@ fn oversized_document(id: ScenarioId) -> Result<ScenarioDocument, Box<dyn Error>
 }
 
 #[tokio::test]
+// One fixture checks the shared document limit across every persistence entry point.
+#[allow(clippy::too_many_lines)]
 async fn authoritative_document_limit_covers_creation_commands_import_restore_and_snapshot_policy()
 -> Result<(), Box<dyn Error>> {
     let interval = NonZeroU32::new(1).ok_or("nonzero interval")?;
@@ -2046,7 +2349,11 @@ async fn authoritative_document_limit_covers_creation_commands_import_restore_an
     );
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(staged), timestamp(LATER)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(staged),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::ScenarioDocumentTooLarge)
     ));
@@ -2081,7 +2388,8 @@ async fn authoritative_document_limit_covers_creation_commands_import_restore_an
                     },
                     settings: BTreeMap::new(),
                 },
-                timestamp(LATER)?
+                timestamp(LATER)?,
+                CancellationToken::new(),
             )
             .await,
         Err(StoreError::ScenarioDocumentTooLarge)
@@ -2124,7 +2432,11 @@ async fn replace_revision_advances_past_a_newer_local_revision() -> Result<(), B
         timestamp(CREATED)?,
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(staged), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(staged),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     let project = store.get_project(id).await?;
     assert_eq!(project.summary.revision, Revision::new(2));
@@ -2205,7 +2517,11 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
         timestamp(CREATED)?,
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(initial), timestamp(UPDATED)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(initial),
+            timestamp(UPDATED)?,
+            CancellationToken::new(),
+        )
         .await?;
     store.delete_project(id, Revision::new(5)).await?;
     assert_eq!(
@@ -2220,7 +2536,11 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
     );
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(stale), timestamp(UPDATED)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(stale),
+                timestamp(UPDATED)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::InvalidStagedApply(_))
     ));
@@ -2249,6 +2569,7 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
             .apply_staged_library(
                 StagedLibraryApply::Import(unrepresented_source),
                 timestamp(UPDATED)?,
+                CancellationToken::new(),
             )
             .await,
         Err(StoreError::InvalidStagedApply(_))
@@ -2277,7 +2598,11 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
         }))?,
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(target_six), timestamp(UPDATED)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(target_six),
+            timestamp(UPDATED)?,
+            CancellationToken::new(),
+        )
         .await?;
     assert_eq!(
         store.get_project(id).await?.summary.revision,
@@ -2309,6 +2634,7 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
         .apply_staged_library(
             aba_replace_restore(id, removed_id, source_document.clone())?,
             timestamp(LATER)?,
+            CancellationToken::new(),
         )
         .await?;
     let snapshot = store.library_snapshot().await?;
@@ -2366,7 +2692,11 @@ async fn no_result_source_revision_bumps_create_tombstone_and_replace_without_hi
     );
     recreate.scenarios[0].source_revision = Revision::INITIAL;
     store
-        .apply_staged_library(StagedLibraryApply::Import(recreate), timestamp(UPDATED)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(recreate),
+            timestamp(UPDATED)?,
+            CancellationToken::new(),
+        )
         .await?;
     assert_eq!(
         store.get_project(id).await?.summary.revision,
@@ -2387,7 +2717,11 @@ async fn no_result_source_revision_bumps_create_tombstone_and_replace_without_hi
     );
     replace.scenarios[0].source_revision = Revision::new(1);
     store
-        .apply_staged_library(StagedLibraryApply::Import(replace), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(replace),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     let snapshot = store.library_snapshot().await?;
     assert_eq!(snapshot.projects[0].summary.revision, Revision::new(3));
@@ -2485,10 +2819,17 @@ async fn duplicate_settings_and_online_backup_are_persistent() -> Result<(), Box
     assert_eq!(copy.document.metadata.title, "Clinic plan copy");
 
     store
-        .set_setting(
-            "appearance".to_owned(),
-            json!({"theme": "system"}),
-            timestamp(UPDATED)?,
+        .replace_settings(
+            &["appearance"],
+            store.settings_snapshot(&["appearance"]).await?,
+            BTreeMap::from([(
+                "appearance".to_owned(),
+                AppSetting {
+                    value: json!({"theme": "system"}),
+                    updated_at: timestamp(UPDATED)?,
+                },
+            )]),
+            CancellationToken::new(),
         )
         .await?;
     let setting = store
@@ -2758,7 +3099,11 @@ async fn duplicate_remaps_owned_graph_and_preserves_portable_metadata_after_rest
         .insert("vendor.display".to_owned(), portable_nonsemantic);
     let (store, _) = SqliteScenarioStore::open(&path).await?;
     store
-        .apply_staged_library(StagedLibraryApply::Import(imported), timestamp(UPDATED)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(imported),
+            timestamp(UPDATED)?,
+            CancellationToken::new(),
+        )
         .await?;
 
     let id_remap = BTreeMap::from([
@@ -3632,7 +3977,11 @@ async fn seed_scenario_referencing_supplemental(
         },
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(supplemental), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(supplemental),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     Ok(())
 }
@@ -3936,7 +4285,11 @@ async fn seed_and_advance_retained_revision(
         }))?,
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(initial), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(initial),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     assert!(
         store
@@ -4030,7 +4383,11 @@ async fn assert_atomic_restore_preserves_exact_revision(
     store.set_failpoint(Failpoint::AfterSupplementalWrite)?;
     assert!(matches!(
         store
-            .apply_staged_library(staged_restore.clone(), timestamp(LATER)?)
+            .apply_staged_library(
+                staged_restore.clone(),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::InjectedFailure)
     ));
@@ -4045,7 +4402,7 @@ async fn assert_atomic_restore_preserves_exact_revision(
         *revision_seven
     );
     store
-        .apply_staged_library(staged_restore, timestamp(LATER)?)
+        .apply_staged_library(staged_restore, timestamp(LATER)?, CancellationToken::new())
         .await?;
     let restored = store.library_snapshot().await?;
     assert_eq!(restored.projects[0].summary.revision, Revision::new(20));
@@ -4086,6 +4443,7 @@ async fn replace_result_and_cleanup_retained_revision(
         .apply_staged_library(
             StagedLibraryApply::Import(replace_result),
             timestamp(LATER)?,
+            CancellationToken::new(),
         )
         .await?;
     assert!(
@@ -4156,7 +4514,11 @@ async fn all_skip_apply_is_a_true_no_effect() -> Result<(), Box<dyn Error>> {
         .nonsemantic_extensions
         .insert("vendor.skipped".to_owned());
     let outcome = store
-        .apply_staged_library(StagedLibraryApply::Import(skipped), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(skipped),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     assert_eq!(outcome.library_revision, Revision::INITIAL);
     assert_eq!(outcome.created, 0);
@@ -4194,7 +4556,11 @@ async fn oversized_provenance_refuses_the_entire_transaction() -> Result<(), Box
     staged.provenance.source_file_sha256 = "x".repeat(4 * 1024 * 1024 + 1);
     assert!(matches!(
         store
-            .apply_staged_library(StagedLibraryApply::Import(staged), timestamp(LATER)?)
+            .apply_staged_library(
+                StagedLibraryApply::Import(staged),
+                timestamp(LATER)?,
+                CancellationToken::new()
+            )
             .await,
         Err(StoreError::InvalidStagedApply(_))
     ));
@@ -4234,7 +4600,11 @@ async fn provenance_pruning_is_bounded_and_deterministic() -> Result<(), Box<dyn
         .shared_records
         .insert("retained".to_owned(), br#"{"value":true}"#.to_vec());
     store
-        .apply_staged_library(StagedLibraryApply::Import(effect), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(effect),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     let provenance = store.library_snapshot().await?.provenance;
     assert_eq!(provenance.len(), 128);
@@ -4291,7 +4661,11 @@ async fn provenance_pruning_counts_multibyte_utf8_bytes() -> Result<(), Box<dyn 
         .shared_records
         .insert("retained".to_owned(), br#"{"value":true}"#.to_vec());
     store
-        .apply_staged_library(StagedLibraryApply::Import(effect), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(effect),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     drop(store);
 
@@ -4329,7 +4703,11 @@ async fn results_excluded_replace_retains_the_exact_local_source_revision_after_
         }))?,
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(result), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(result),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
 
     let replacement_document = set_marker(document(id)?, Some(5), LATER)?;
@@ -4343,7 +4721,11 @@ async fn results_excluded_replace_retains_the_exact_local_source_revision_after_
         timestamp(CREATED)?,
     );
     store
-        .apply_staged_library(StagedLibraryApply::Import(replacement), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(replacement),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     let snapshot = store.library_snapshot().await?;
     assert_eq!(snapshot.projects[0].summary.revision, Revision::new(5));
@@ -4944,6 +5326,8 @@ async fn second_store_open_preserves_running_input_before_recovery_deadline()
 }
 
 #[tokio::test]
+// Keep edit, replacement and restart coupled to the original accepted revision.
+#[allow(clippy::too_many_lines)]
 async fn accepted_r0_survives_edit_ordinary_replace_and_reopen() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
@@ -5022,7 +5406,11 @@ async fn accepted_r0_survives_edit_ordinary_replace_and_reopen() -> Result<(), B
     );
     replacement.mode = RestoreMode::ImportScenario;
     store
-        .apply_staged_library(StagedLibraryApply::Import(replacement), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(replacement),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
     let snapshot = store.library_snapshot().await?;
     assert_eq!(snapshot.scenario_revisions[0].scenario.document, original);
@@ -5166,7 +5554,11 @@ async fn imported_v2_wrappers_remain_opaque_and_identity_conflicts_roll_back()
         .results
         .insert(format!("{result_key}.json"), canonical.clone());
     target
-        .apply_staged_library(StagedLibraryApply::Import(initial), timestamp(UPDATED)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(initial),
+            timestamp(UPDATED)?,
+            CancellationToken::new(),
+        )
         .await?;
     let restored = target.library_snapshot().await?;
     assert_eq!(
@@ -5194,7 +5586,11 @@ async fn imported_v2_wrappers_remain_opaque_and_identity_conflicts_roll_back()
             key: format!("{result_key}.json"),
         });
     target
-        .apply_staged_library(StagedLibraryApply::Import(identical), timestamp(LATER)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(identical),
+            timestamp(LATER)?,
+            CancellationToken::new(),
+        )
         .await?;
 
     let mut conflicting: Value = serde_json::from_slice(&canonical)?;
@@ -5219,6 +5615,7 @@ async fn imported_v2_wrappers_remain_opaque_and_identity_conflicts_roll_back()
             .apply_staged_library(
                 StagedLibraryApply::Import(staged_conflict),
                 timestamp(LATER)?,
+                CancellationToken::new(),
             )
             .await,
         Err(StoreError::InvalidStagedApply(_) | StoreError::IdentityCollision(_))
@@ -5245,7 +5642,11 @@ async fn imported_v2_wrappers_remain_opaque_and_identity_conflicts_roll_back()
         .results
         .insert(format!("{result_key}.json"), canonical);
     remapped_store
-        .apply_staged_library(StagedLibraryApply::Import(remapped), timestamp(UPDATED)?)
+        .apply_staged_library(
+            StagedLibraryApply::Import(remapped),
+            timestamp(UPDATED)?,
+            CancellationToken::new(),
+        )
         .await?;
     let connection = Connection::open(&remapped_path)?;
     let canonical_count: i64 = connection.query_row(

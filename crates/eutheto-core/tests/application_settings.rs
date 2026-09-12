@@ -1,4 +1,6 @@
-use eutheto_core::{AppCommand, AppDependencies, AppPaths, AppQuery, AppQueryResult, EuthetoApp};
+use eutheto_core::{
+    AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult, EuthetoApp,
+};
 use eutheto_store::{OpenOptions, SqliteScenarioStore};
 use eutheto_types::{
     AppError, CancellationToken, EventPayload, EventTopic, FixedClock, FixedMonotonicClock,
@@ -58,6 +60,85 @@ async fn preview(app: &EuthetoApp, bytes: Vec<u8>) -> TestResult<SettingsImportP
     app.preview_nonsecret_settings(bytes, app.setup_cancellation())
         .await
         .map_err(boxed)
+}
+
+#[tokio::test]
+async fn ordinary_settings_conflicts_preserve_writes_and_absent_reset_is_silent() -> TestResult {
+    let (_directory, app, _store) = fixture(OpenOptions::default()).await?;
+    let before = app.application_settings_snapshot().await.map_err(boxed)?;
+    let mut events = app
+        .subscribe(EventTopic::AppNotification)
+        .await
+        .map_err(boxed)?;
+    let AppCommandResult::SettingsWritten(written) = app
+        .execute(AppCommand::SetSetting {
+            request_id: RequestId::new(&SystemIdGenerator)?,
+            expected_library_revision: before.library_revision,
+            key: "locale".to_owned(),
+            value: json!("en-GB"),
+        })
+        .await
+        .map_err(boxed)?
+    else {
+        return Err("unexpected settings result".into());
+    };
+    assert!(written.changed);
+    assert!(events.try_recv().map_err(boxed)?.is_some());
+    for command in [
+        AppCommand::SetSetting {
+            request_id: RequestId::new(&SystemIdGenerator)?,
+            expected_library_revision: before.library_revision,
+            key: "locale".to_owned(),
+            value: json!("fr"),
+        },
+        AppCommand::DeleteSetting {
+            request_id: RequestId::new(&SystemIdGenerator)?,
+            expected_library_revision: before.library_revision,
+            key: "locale".to_owned(),
+        },
+    ] {
+        assert!(matches!(
+            app.execute(command).await,
+            Err(AppError::Conflict { expected_revision, actual_revision })
+                if expected_revision == before.library_revision
+                    && actual_revision == written.library_revision
+        ));
+    }
+    let AppCommandResult::SettingsWritten(reset) = app
+        .execute(AppCommand::DeleteSetting {
+            request_id: RequestId::new(&SystemIdGenerator)?,
+            expected_library_revision: written.library_revision,
+            key: "appearance".to_owned(),
+        })
+        .await
+        .map_err(boxed)?
+    else {
+        return Err("unexpected settings result".into());
+    };
+    assert!(!reset.changed);
+    assert_eq!(reset.library_revision, written.library_revision);
+    assert_eq!(
+        reset.settings.locale.ok_or("locale was removed")?.value,
+        json!("en-GB")
+    );
+    assert!(events.try_recv().map_err(boxed)?.is_none());
+    let AppCommandResult::SettingsWritten(deleted) = app
+        .execute(AppCommand::DeleteSetting {
+            request_id: RequestId::new(&SystemIdGenerator)?,
+            expected_library_revision: reset.library_revision,
+            key: "locale".to_owned(),
+        })
+        .await
+        .map_err(boxed)?
+    else {
+        return Err("unexpected settings result".into());
+    };
+    assert!(deleted.changed);
+    assert!(deleted.settings.locale.is_none());
+    let reopened = app.application_settings_snapshot().await.map_err(boxed)?;
+    assert_eq!(reopened.library_revision, deleted.library_revision);
+    assert!(reopened.settings.locale.is_none());
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -183,10 +264,17 @@ async fn library_change_rejects_and_consumes_owned_approval_without_notification
     )
     .await?;
     store
-        .set_setting(
-            "excluded-device-state".to_owned(),
-            json!(true),
-            UPDATED.parse()?,
+        .replace_settings(
+            &["excluded-device-state"],
+            store.settings_snapshot(&["excluded-device-state"]).await?,
+            std::collections::BTreeMap::from([(
+                "excluded-device-state".to_owned(),
+                eutheto_store::AppSetting {
+                    value: json!(true),
+                    updated_at: UPDATED.parse()?,
+                },
+            )]),
+            CancellationToken::new(),
         )
         .await?;
     let mut events = app
@@ -263,6 +351,11 @@ async fn unportable_local_setting_blocks_export_but_can_be_replaced_by_review() 
     let (_directory, app, _store) = fixture(OpenOptions::default()).await?;
     app.execute(AppCommand::SetSetting {
         request_id: RequestId::new(&SystemIdGenerator)?,
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .map_err(boxed)?
+            .library_revision,
         key: "locale".to_owned(),
         value: json!("con"),
     })

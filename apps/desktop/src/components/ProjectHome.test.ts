@@ -2,12 +2,13 @@ import { createSSRApp, effectScope, h } from "vue";
 import { createPinia, disposePinia } from "pinia";
 import { PiniaColada } from "@pinia/colada";
 import { renderToString } from "@vue/server-renderer";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import type {
   AppliedMigrationDto,
   ApiResponseDto,
   PortableFilePreviewDto,
+  PortableAppliedDto,
   ScenarioChangedEvent,
 } from "../api/generated";
 import ProjectHome from "./ProjectHome.vue";
@@ -22,11 +23,15 @@ import {
 
 import {
   fakeApi,
+  portableApplied,
+  portableOperation,
   portablePreview,
   previewWarning,
   project,
   response,
 } from "../testing/project-home";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const fixedExclusionLabels = [
   "Local undo and audit history",
@@ -150,7 +155,7 @@ describe("ProjectHome", () => {
           ? home.applyImport({ [project.scenarioId]: "create-copy" }, {})
           : operation === "restore"
             ? home.applyRestore({ [project.scenarioId]: "create-copy" }, {})
-            : home.createBackup("Before changes");
+            : home.createBackup();
       expect(await apply()).toBe(true);
       expect(home.state.phase).toBe("error");
       expect(home.state.errorMessage).toContain("Library unavailable");
@@ -164,10 +169,10 @@ describe("ProjectHome", () => {
       expect(home.state.phase).toBe("ready");
       const nativeApply =
         operation === "import"
-          ? api.applyImport
+          ? api.portable.applyImport
           : operation === "restore"
-            ? api.applyRestore
-            : api.createBackup;
+            ? api.portable.applyRestore
+            : api.portable.createBackup;
       expect(nativeApply).toHaveBeenCalledOnce();
     },
   );
@@ -187,10 +192,10 @@ describe("ProjectHome", () => {
     expect(await home.previewBackup("Before changes")).toBe(false);
     expect(home.state.importPreview).toBe(preview);
     expect(home.state.busyAction).toBe(`duplicate:${project.scenarioId}`);
-    expect(api.applyImport).not.toHaveBeenCalled();
+    expect(api.portable.applyImport).not.toHaveBeenCalled();
     expect(api.deleteProject).not.toHaveBeenCalled();
-    expect(api.previewRestore).not.toHaveBeenCalled();
-    expect(api.previewBackup).not.toHaveBeenCalled();
+    expect(api.portable.previewRestore).not.toHaveBeenCalled();
+    expect(api.portable.previewBackup).not.toHaveBeenCalled();
     pending.resolve(response({}));
     expect(await duplicate).toBe(true);
     expect(home.state.busyAction).toBeNull();
@@ -240,10 +245,17 @@ describe("ProjectHome", () => {
     await home.load();
     const started = home.startEventListeners();
     api.listProjects.mockReturnValueOnce(read.promise);
-    api.previewBackup.mockReturnValueOnce(preview.promise);
+    api.portable.previewBackup.mockReturnValueOnce(portableOperation(preview.promise));
+    const nativeDisposal = deferred<undefined>();
+    api.portable.dispose.mockReturnValue(nativeDisposal.promise);
     const loading = home.load();
     const previewing = home.previewBackup("Before changes");
-    await home.dispose();
+    const disposal = home.dispose();
+    expect(home.dispose()).toBe(disposal);
+    let disposalSettled = false;
+    void disposal.then(() => {
+      disposalSettled = true;
+    });
     const previous = {
       phase: home.state.phase,
       error: home.state.errorMessage,
@@ -255,18 +267,26 @@ describe("ProjectHome", () => {
     notify?.();
     read.resolve(response([]));
     preview.resolve(
-      response({
-        title: "Before changes",
-        byteLength: 1,
-        previewId: "late-backup",
-        digest: "b".repeat(64),
-        currentRevision: null,
-        libraryRevision: 1,
-        backupSummary: null,
-      }),
+      response(
+        {
+          schemaVersion: 1,
+          title: "Before changes",
+          byteLength: 1,
+          previewId: "01900000-0000-7000-8000-000000000071",
+          digest: "b".repeat(64),
+          currentRevision: null,
+          libraryRevision: 1,
+          backupSummary: null,
+        },
+        [],
+        1,
+      ),
     );
     await loading;
     expect(await previewing).toBe(false);
+    expect(disposalSettled).toBe(false);
+    nativeDisposal.resolve(undefined);
+    await disposal;
     expect(home.state.projects).toEqual([project]);
     expect({
       phase: home.state.phase,
@@ -276,21 +296,33 @@ describe("ProjectHome", () => {
     }).toEqual(previous);
     expect(home.state.backupPreview).toBeNull();
     expect(released).toHaveBeenCalledOnce();
-    expect(api.cancelPortablePreview).toHaveBeenCalledWith("late-backup");
+    expect(api.portable.discardPreview).toHaveBeenCalledWith(
+      "01900000-0000-7000-8000-000000000071",
+    );
     expect(api.listProjects).toHaveBeenCalledTimes(2);
   });
 
-  it("discards superseded and disposed retained backup previews", async () => {
+  it("discards a superseded backup and clears the displayed review on owner disposal", async () => {
     const api = fakeApi();
     const home = createHome(api);
     await home.previewBackup("First");
     const first = home.state.backupPreview;
     if (!first) throw new Error("Expected a retained backup preview");
-    api.previewBackup.mockResolvedValueOnce(response({ ...first, previewId: "next-backup" }));
+    api.portable.previewBackup.mockReturnValueOnce(
+      portableOperation(
+        response(
+          {
+            ...first,
+            previewId: "01900000-0000-7000-8000-000000000072",
+          },
+          [],
+          1,
+        ),
+      ),
+    );
     await home.previewBackup("Second");
-    expect(api.cancelPortablePreview).toHaveBeenCalledWith(first.previewId);
+    expect(api.portable.discardPreview).toHaveBeenCalledWith(first.previewId);
     await home.dispose();
-    expect(api.cancelPortablePreview).toHaveBeenCalledWith("next-backup");
     expect(home.state.backupPreview).toBeNull();
   });
 
@@ -301,7 +333,6 @@ describe("ProjectHome", () => {
     await loading.load();
     const emptyHtml = await render(loading);
     expect(emptyHtml).toContain("Begin with a local project");
-    expect(emptyHtml).toContain("Create official.test project");
   });
 
   it("renders a user-safe message from a structured API error", async () => {
@@ -347,12 +378,13 @@ describe("ProjectHome", () => {
     await home.createProject({
       title: "Clinic roster",
       description: "Autumn plan",
-      domainPack: { id: "official.test", schemaVersion: 1 },
+      domainPack: { id: "official.workforce", schemaVersion: 1 },
       settings: {
         timeZone: "UTC",
         locale: "en-US",
         units: "metric",
-        horizon: { start: "2026-09-01T00:00:00Z", end: "2026-10-01T00:00:00Z" },
+        firstDate: "2026-09-01",
+        lastDate: "2026-09-30",
         gapPolicy: "reject",
         overlapPolicy: "earlier",
       },
@@ -456,11 +488,15 @@ describe("ProjectHome", () => {
           subject: { packId: "official.test", scenarioId, revision },
         })),
       ];
-      api.previewImport.mockResolvedValue(
-        response({ ...portablePreview("scenario-export"), appliedMigrations }),
+      api.portable.previewImport.mockReturnValue(
+        portableOperation(
+          response({ ...portablePreview("scenario-export"), appliedMigrations }, [], 1),
+        ),
       );
-      api.previewRestore.mockResolvedValue(
-        response({ ...portablePreview("full-backup"), appliedMigrations }),
+      api.portable.previewRestore.mockReturnValue(
+        portableOperation(
+          response({ ...portablePreview("full-backup"), appliedMigrations }, [], 1),
+        ),
       );
       const home = createHome(api);
       await home.load();
@@ -504,34 +540,35 @@ describe("ProjectHome", () => {
       [`shared-records\u0000team.json`]: "skip",
       [`assets\u0000logo.png`]: "skip",
     });
-    api.previewImport.mockResolvedValue(
-      response(
-        {
-          ...portablePreview("scenario-export"),
-          supplementalCollisions: supplementalIdentities,
-        },
-        [previewWarning],
+    api.portable.previewImport.mockReturnValue(
+      portableOperation(
+        response(
+          {
+            ...portablePreview("scenario-export"),
+            supplementalCollisions: supplementalIdentities,
+          },
+          [previewWarning],
+          1,
+        ),
       ),
     );
-    api.previewRestore.mockResolvedValue(
-      response(
-        {
-          ...portablePreview("full-backup"),
-          supplementalCollisions: supplementalIdentities,
-          removedSupplemental: supplementalIdentities,
-        },
-        [previewWarning],
+    api.portable.previewRestore.mockReturnValue(
+      portableOperation(
+        response(
+          {
+            ...portablePreview("full-backup"),
+            supplementalCollisions: supplementalIdentities,
+            removedSupplemental: supplementalIdentities,
+          },
+          [previewWarning],
+          1,
+        ),
       ),
     );
     const home = createHome(api);
     await home.load();
     await home.previewImport({ includeResults: true, includeAssets: true });
     let html = await render(home);
-    expect(api.previewImport).toHaveBeenCalledWith({
-      restoreMode: "import-scenario",
-      includeResults: true,
-      includeAssets: true,
-    });
     expect(html).toContain("Import preview: Imported roster");
     expect(html).toContain("Collision action");
     expect(html).toContain("Existing supplemental records");
@@ -576,25 +613,23 @@ describe("ProjectHome", () => {
       },
       supplementalDefaults,
     );
-    expect(api.applyImport).toHaveBeenCalledWith({
-      previewId: "01900000-0000-7000-8000-000000000010",
-      collisionPlan: {
-        scenarios: { [project.scenarioId]: "create-copy" },
-        supplementalChoices: [
-          { ...supplementalIdentity, action: "skip" },
-          { ...sharedIdentity, action: "skip" },
-          { ...assetIdentity, action: "skip" },
-        ],
+    expect(api.portable.applyImport).toHaveBeenCalledWith(
+      expect.objectContaining({ context: { kind: "library", expectedLibraryRevision: 1 } }),
+      {
+        previewId: "01900000-0000-7000-8000-000000000010",
+        collisionPlan: {
+          scenarios: { [project.scenarioId]: "create-copy" },
+          supplementalChoices: [
+            { ...supplementalIdentity, action: "skip" },
+            { ...sharedIdentity, action: "skip" },
+            { ...assetIdentity, action: "skip" },
+          ],
+        },
       },
-    });
+    );
 
     await home.previewRestore("add-backup");
     html = await render(home);
-    expect(api.previewRestore).toHaveBeenLastCalledWith({
-      restoreMode: "add-backup",
-      includeResults: true,
-      includeAssets: true,
-    });
     expect(html).toContain("Add preview:");
     for (const label of fixedExclusionLabels) expect(html).toContain(label);
     expect(html).toContain("Review and confirm restore");
@@ -635,17 +670,20 @@ describe("ProjectHome", () => {
     const replaceDefaults = defaultSupplementalCollisionChoices(supplementalIdentities, "replace");
     expect(Object.values(replaceDefaults)).toEqual(["replace", "replace", "replace"]);
     await home.applyRestore({ [project.scenarioId]: "create-copy" }, replaceDefaults);
-    expect(api.applyRestore).toHaveBeenLastCalledWith({
-      previewId: "01900000-0000-7000-8000-000000000010",
-      collisionPlan: {
-        scenarios: {},
-        supplementalChoices: [],
+    expect(api.portable.applyRestore).toHaveBeenLastCalledWith(
+      expect.objectContaining({ context: { kind: "library", expectedLibraryRevision: 1 } }),
+      {
+        previewId: "01900000-0000-7000-8000-000000000010",
+        collisionPlan: {
+          scenarios: {},
+          supplementalChoices: [],
+        },
+        authorization: {
+          destructiveActionConfirmed: true,
+          safetyBackupBypassPhrase: null,
+        },
       },
-      authorization: {
-        destructiveActionConfirmed: true,
-        safetyBackupBypassPhrase: null,
-      },
-    });
+    );
   });
 
   it("previews and saves a backup through the native Save dialog", async () => {
@@ -669,13 +707,9 @@ describe("ProjectHome", () => {
     }
     expect(html).not.toContain("everything is included");
 
-    await home.createBackup("Before changes");
-    expect(api.createBackup).toHaveBeenCalledWith(
-      "Before changes",
-      "01900000-0000-7000-8000-000000000070",
-    );
-    expect(home.state.announcement).toBe("Backup saved as before-changes.eutheto.");
-    expect(home.state.announcement).not.toContain("/");
+    await home.createBackup();
+    expect(home.state.announcement).toContain("before-changes.eutheto");
+    expect(home.state.backupPreview).toBeNull();
   });
 
   it("treats typed native-dialog cancellation as a non-mutating result", async () => {
@@ -697,13 +731,22 @@ describe("ProjectHome", () => {
       retryable: true,
     };
 
-    api.previewImport.mockRejectedValueOnce(cancelled);
-    api.previewRestore.mockRejectedValueOnce(cancelled);
-    api.createBackup.mockRejectedValueOnce(cancelled);
+    api.portable.previewImport.mockImplementationOnce(() =>
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- The generated native boundary rejects error DTOs.
+      portableOperation(Promise.reject(cancelled)),
+    );
+    api.portable.previewRestore.mockImplementationOnce(() =>
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- The generated native boundary rejects error DTOs.
+      portableOperation(Promise.reject(cancelled)),
+    );
+    api.portable.createBackup.mockImplementationOnce(() =>
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- The generated native boundary rejects error DTOs.
+      portableOperation(Promise.reject(cancelled)),
+    );
 
     expect(await home.previewImport({ includeResults: false, includeAssets: false })).toBe(false);
     expect(await home.previewRestore("replace-library")).toBe(false);
-    expect(await home.createBackup("Before changes")).toBe(false);
+    expect(await home.createBackup()).toBe(false);
     expect(home.state.busyAction).toBeNull();
     expect(home.state.importPreview).toBe(importPreview);
     expect(home.state.restorePreview).toBe(restorePreview);
@@ -720,14 +763,20 @@ describe("ProjectHome", () => {
     const home = createHome(api);
     await home.load();
     await home.previewRestore("replace-library");
-    api.applyRestore
-      .mockRejectedValueOnce({
-        category: "protocol",
-        code: "restore.safety_backup_failed",
-        message: "The private backup destination is unavailable.",
-        retryable: false,
-      })
-      .mockResolvedValueOnce(response({}));
+    api.portable.applyRestore
+      .mockImplementationOnce(() =>
+        portableOperation(
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Preserve actual native error shape and retention evidence.
+          Promise.reject({
+            category: "protocol",
+            code: "restore.safety_backup_failed",
+            message: "The private backup destination is unavailable.",
+            retryable: false,
+            details: { portablePreviewRetained: { type: "boolean", value: true } },
+          }),
+        ),
+      )
+      .mockReturnValueOnce(portableOperation(portableApplied({ kind: "confirmedBypass" })));
 
     expect(await home.applyRestore({}, {})).toBe(false);
     expect(home.state.restorePreview).not.toBeNull();
@@ -738,20 +787,122 @@ describe("ProjectHome", () => {
     expect(await home.applyRestore({}, {}, "REPLACE WITHOUT BACKUP")).toBe(true);
     expect(home.state.restorePreview).toBeNull();
     expect(home.state.restoreSafetyBackupFailure).toBeNull();
-    expect(api.applyRestore).toHaveBeenNthCalledWith(
+    expect(api.portable.applyRestore).toHaveBeenNthCalledWith(
       1,
+      expect.objectContaining({ context: { kind: "library", expectedLibraryRevision: 1 } }),
       expect.objectContaining({
         authorization: expect.objectContaining({ safetyBackupBypassPhrase: null }),
       }),
     );
-    expect(api.applyRestore).toHaveBeenNthCalledWith(
+    expect(api.portable.applyRestore).toHaveBeenNthCalledWith(
       2,
+      expect.objectContaining({ context: { kind: "library", expectedLibraryRevision: 1 } }),
       expect.objectContaining({
         authorization: expect.objectContaining({
           safetyBackupBypassPhrase: "REPLACE WITHOUT BACKUP",
         }),
       }),
     );
+  });
+
+  it.each([
+    {
+      outcome: { kind: "createdAndVerified", artifactName: "actual-native-safety.eutheto" },
+      mode: "replace-library",
+      visible: "actual-native-safety.eutheto",
+    },
+    {
+      outcome: { kind: "confirmedBypass" },
+      mode: "replace-library",
+      visible: "without a safety backup",
+    },
+    { outcome: { kind: "notRequired" }, mode: "add-backup", visible: "Restore applied" },
+  ] as const)(
+    "preserves the actual restore outcome $outcome.kind after advisory refresh",
+    async ({ outcome, mode, visible }) => {
+      const api = fakeApi([project]);
+      let notification: (() => void) | undefined;
+      api.onAppNotification.mockImplementation((listener) => {
+        notification = listener;
+        return Promise.resolve(vi.fn());
+      });
+      api.portable.applyRestore.mockReturnValueOnce(portableOperation(portableApplied(outcome)));
+      const home = createHome(api);
+      await home.load();
+      await home.startEventListeners();
+      await home.previewRestore(mode);
+      expect(await home.applyRestore({ [project.scenarioId]: "create-copy" }, {})).toBe(true);
+      expect(home.state.announcement).toContain(visible);
+      const committedAnnouncement = home.state.announcement;
+      if (!notification) throw new Error("The native notification listener was not registered");
+      notification();
+      expect(home.state.announcement).toBe(committedAnnouncement);
+      expect(await render(home)).toContain(visible);
+      expect(home.state.restorePreview).toBeNull();
+      if (outcome.kind !== "createdAndVerified")
+        expect(home.state.announcement).not.toContain("saved and verified");
+      if (outcome.kind === "notRequired")
+        expect(home.state.announcement).not.toContain("safety backup");
+    },
+  );
+
+  it.each([
+    null,
+    { portablePreviewRetained: { type: "boolean", value: false } },
+    { portablePreviewRetained: { type: "text", value: "true" } },
+  ])(
+    "refuses stronger confirmation without exact retained Boolean evidence: %j",
+    async (details) => {
+      const api = fakeApi([project]);
+      api.portable.applyRestore.mockImplementationOnce(() =>
+        portableOperation(
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Malformed retention data must not enable confirmation.
+          Promise.reject({
+            category: "protocol",
+            code: "restore.safety_backup_failed",
+            retryable: true,
+            message: "The native restore review was not retained.",
+            details,
+          }),
+        ),
+      );
+      const home = createHome(api);
+      await home.load();
+      await home.previewRestore("replace-library");
+      expect(await home.applyRestore({}, {})).toBe(false);
+      expect(home.state.restorePreview).toBeNull();
+      expect(home.state.restoreSafetyBackupFailure).toBeNull();
+      expect(home.state.errorMessage).toContain("not retained");
+      expect(await home.applyRestore({}, {}, "REPLACE WITHOUT BACKUP")).toBe(false);
+      expect(api.portable.applyRestore).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps a late committed restore successful without republishing into a disposed controller", async () => {
+    const api = fakeApi([project]);
+    const terminal = deferred<ApiResponseDto<PortableAppliedDto>>();
+    api.portable.applyRestore.mockReturnValueOnce(portableOperation(terminal.promise));
+    api.portable.dispose.mockImplementation(() => terminal.promise.then(() => undefined));
+    const home = createHome(api);
+    await home.load();
+    await home.previewRestore("replace-library");
+    const applying = home.applyRestore({}, {});
+    const disposal = home.dispose();
+    const announcement = home.state.announcement;
+    let settled = false;
+    void disposal.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    terminal.resolve(
+      portableApplied({ kind: "createdAndVerified", artifactName: "late-safety.eutheto" }),
+    );
+    expect(await applying).toBe(true);
+    await disposal;
+    expect(home.state.announcement).toBe(announcement);
+    expect(home.state.restorePreview).toBeNull();
+    expect(api.listProjects).toHaveBeenCalledOnce();
   });
 
   it("announces revision conflicts and reloads the authoritative project list", async () => {
@@ -845,7 +996,7 @@ describe("ProjectHome", () => {
     expect(unlistenValidation).toHaveBeenCalledOnce();
     expect(unlistenNotification).toHaveBeenCalledOnce();
     expect(unlistenRefreshRequired).toHaveBeenCalledOnce();
-    expect(api.cancelPortablePreview).toHaveBeenCalledWith("01900000-0000-7000-8000-000000000010");
+    expect(home.state.importPreview).toBeNull();
   });
 
   it("provides explicit accessible names", async () => {

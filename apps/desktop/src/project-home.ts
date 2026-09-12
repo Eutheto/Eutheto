@@ -3,10 +3,8 @@ import { useQuery, useQueryCache } from "@pinia/colada";
 import { useWorkspaceStore } from "./stores/workspace";
 
 import {
-  applyImport,
-  applyRestore,
-  cancelPortablePreview,
-  createBackup,
+  LibraryOperationScope,
+  PortableReviewFlow,
   createProject,
   deleteProject,
   duplicateProject,
@@ -15,9 +13,6 @@ import {
   onLibraryRefreshRequired,
   onScenarioChanged,
   onScenarioValidationChanged,
-  previewBackup,
-  previewImport,
-  previewRestore,
   setProjectArchived,
 } from "./api/generated";
 import type {
@@ -26,16 +21,15 @@ import type {
   CollisionPlan,
   DomainPackRef,
   ImportOptions,
-  PortableArtifactDto,
   Revision,
   PortableFilePreviewDto,
   PortablePreviewDto,
   PortableScenarioDto,
-  ProjectSummaryDto,
+  ProjectListItemV1,
   ScenarioChangedEvent,
   SupplementalCollisionAction,
   SupplementalIdentity,
-  ScenarioSettings,
+  CalendarSettingsV1,
   ScenarioValidationChangedEvent,
   ValidationIssue,
 } from "./api/generated";
@@ -43,7 +37,7 @@ import type {
 export type ProjectPhase = "loading" | "ready" | "error";
 export type SupplementalCollisionChoice = SupplementalCollisionAction;
 export type CollisionChoice = CollisionAction;
-export type ProjectSummary = ProjectSummaryDto;
+export type ProjectSummary = ProjectListItemV1;
 export type PortablePreview = PortablePreviewDto;
 export type BackupPreview = PortableFilePreviewDto;
 
@@ -51,11 +45,11 @@ export interface CreateProjectInput {
   readonly title: string;
   readonly description: string;
   readonly domainPack: DomainPackRef;
-  readonly settings: ScenarioSettings;
+  readonly settings: CalendarSettingsV1;
 }
 
 export interface ProjectHomeApi {
-  listProjects(scope: "all"): Promise<ApiResponseDto<readonly ProjectSummaryDto[]>>;
+  listProjects(scope: "all"): Promise<ApiResponseDto<readonly ProjectListItemV1[]>>;
   createProject(input: CreateProjectInput): Promise<ApiResponseDto<unknown>>;
   duplicateProject(input: {
     readonly sourceId: string;
@@ -68,23 +62,17 @@ export interface ProjectHomeApi {
     readonly archived: boolean;
   }): Promise<ApiResponseDto<unknown>>;
   deleteProject(scenarioId: string, expectedRevision: Revision): Promise<ApiResponseDto<unknown>>;
-  previewImport(options: ImportOptions): Promise<ApiResponseDto<PortablePreviewDto>>;
-  applyImport(input: {
-    readonly previewId: string;
-    readonly collisionPlan: CollisionPlan;
-  }): Promise<ApiResponseDto<unknown>>;
-  previewBackup(title: string): Promise<ApiResponseDto<PortableFilePreviewDto>>;
-  createBackup(title: string, previewId: string): Promise<ApiResponseDto<PortableArtifactDto>>;
-  previewRestore(options: ImportOptions): Promise<ApiResponseDto<PortablePreviewDto>>;
-  applyRestore(input: {
-    readonly previewId: string;
-    readonly collisionPlan: CollisionPlan;
-    readonly authorization: {
-      readonly destructiveActionConfirmed: boolean;
-      readonly safetyBackupBypassPhrase: string | null;
-    };
-  }): Promise<ApiResponseDto<unknown>>;
-  cancelPortablePreview(previewId: string): Promise<ApiResponseDto<unknown>>;
+  readonly portable: Pick<
+    PortableReviewFlow,
+    | "previewImport"
+    | "applyImport"
+    | "previewBackup"
+    | "createBackup"
+    | "previewRestore"
+    | "applyRestore"
+    | "discardPreview"
+    | "dispose"
+  >;
   onAppNotification(listener: () => void): Promise<() => void>;
   onLibraryRefreshRequired(listener: () => void): Promise<() => void>;
   onScenarioChanged(listener: (event: ScenarioChangedEvent) => void): Promise<() => void>;
@@ -93,24 +81,20 @@ export interface ProjectHomeApi {
   ): Promise<() => void>;
 }
 
-const generatedProjectHomeApi: ProjectHomeApi = {
-  listProjects,
-  createProject,
-  duplicateProject,
-  setProjectArchived,
-  deleteProject,
-  previewImport,
-  applyImport,
-  previewBackup,
-  createBackup,
-  previewRestore,
-  applyRestore,
-  cancelPortablePreview,
-  onAppNotification,
-  onLibraryRefreshRequired,
-  onScenarioChanged,
-  onScenarioValidationChanged,
-};
+function generatedProjectHomeApi(): ProjectHomeApi {
+  return {
+    listProjects,
+    createProject,
+    duplicateProject,
+    setProjectArchived,
+    deleteProject,
+    portable: new PortableReviewFlow(),
+    onAppNotification,
+    onLibraryRefreshRequired,
+    onScenarioChanged,
+    onScenarioValidationChanged,
+  };
+}
 
 export interface ProjectHomeState {
   phase: ProjectPhase;
@@ -144,7 +128,7 @@ export interface ProjectHomeController {
     supplemental: Readonly<Record<string, SupplementalCollisionChoice>>,
   ): Promise<boolean>;
   previewBackup(title: string): Promise<boolean>;
-  createBackup(title: string): Promise<boolean>;
+  createBackup(): Promise<boolean>;
   previewRestore(mode: Exclude<ImportOptions["restoreMode"], "import-scenario">): Promise<boolean>;
   applyRestore(
     collisions: Readonly<Record<string, CollisionChoice>>,
@@ -166,6 +150,7 @@ interface ApiFailure {
   readonly code?: unknown;
   readonly message?: unknown;
   readonly retryable?: unknown;
+  readonly details?: unknown;
 }
 
 function safeMessage(error: unknown): string {
@@ -191,12 +176,32 @@ function isRevisionConflict(error: unknown): boolean {
   );
 }
 
-function isFileSelectionCancelled(error: unknown): boolean {
-  const failure = error as ApiFailure;
+function isOperationCancelled(error: unknown): boolean {
   return (
-    failure.code === "operation.cancelled" &&
-    failure.category === "protocol" &&
-    failure.retryable === true
+    typeof error === "object" &&
+    error !== null &&
+    (error as ApiFailure).code === "operation.cancelled"
+  );
+}
+
+function isRetainedRestoreFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const failure = error as ApiFailure;
+  if (
+    failure.code !== "restore.safety_backup_failed" ||
+    typeof failure.details !== "object" ||
+    failure.details === null ||
+    !("portablePreviewRetained" in failure.details)
+  )
+    return false;
+  const retained = failure.details.portablePreviewRetained;
+  return (
+    typeof retained === "object" &&
+    retained !== null &&
+    "type" in retained &&
+    retained.type === "boolean" &&
+    "value" in retained &&
+    retained.value === true
   );
 }
 
@@ -262,7 +267,7 @@ function collisionPlan(
 }
 
 export function createProjectHomeController(
-  api: ProjectHomeApi = generatedProjectHomeApi,
+  api: ProjectHomeApi = generatedProjectHomeApi(),
 ): ProjectHomeController {
   const workspace = useWorkspaceStore();
   const queryCache = useQueryCache();
@@ -301,6 +306,7 @@ export function createProjectHomeController(
   const eventUnlisteners: Array<() => void> = [];
   let listenersStarted = false;
   let disposed = false;
+  let disposal: Promise<void> | undefined;
 
   // Native awaits can outlive the controller; read the current lifetime each time.
   const isDisposed = (): boolean => disposed;
@@ -327,7 +333,7 @@ export function createProjectHomeController(
 
   async function reload(showLoading = true): Promise<boolean> {
     if (isDisposed()) return false;
-    state.announcement = "";
+    if (showLoading) state.announcement = "";
     if (showLoading) state.phase = "loading";
     state.errorMessage = null;
     const result = await projects.refetch();
@@ -381,35 +387,33 @@ export function createProjectHomeController(
 
   async function discardPreview(previewId: string): Promise<void> {
     try {
-      await api.cancelPortablePreview(previewId);
+      await api.portable.discardPreview(previewId);
     } catch {
       // A consumed or evicted preview is already unavailable.
     }
   }
 
-  async function dispose(): Promise<void> {
-    if (isDisposed()) return;
+  function dispose(): Promise<void> {
+    if (disposal) return disposal;
     disposed = true;
+    disposal = api.portable.dispose();
     // cancel() also detaches pending writes; scope untracking alone only aborts.
     const entry = queryCache.get(projectKey);
     if (entry) queryCache.cancel(entry);
     for (const unlisten of eventUnlisteners.splice(0)) releaseListener(unlisten);
-    const previewIds = [
-      state.importPreview?.previewId,
-      state.backupPreview?.previewId,
-      state.restorePreview?.previewId,
-    ].filter((previewId): previewId is string => previewId !== undefined);
     state.importPreview = null;
     state.importWarnings = [];
     state.backupPreview = null;
     state.restorePreview = null;
     state.restoreWarnings = [];
     state.restoreSafetyBackupFailure = null;
-    await Promise.all(previewIds.map(discardPreview));
+    return disposal;
   }
 
   onScopeDispose(() => {
-    void dispose();
+    void dispose().catch(() => {
+      // An unmounted owner cannot display cleanup errors; native teardown also owns cleanup.
+    });
   });
 
   async function mutate(
@@ -495,11 +499,11 @@ export function createProjectHomeController(
       state.errorMessage = null;
       try {
         const previousPreview = state.importPreview;
-        const response = await api.previewImport({
+        const response = await api.portable.previewImport(new LibraryOperationScope(null), {
           restoreMode: "import-scenario",
           includeResults: selection.includeResults,
           includeAssets: selection.includeAssets,
-        });
+        }).result;
         if (isDisposed()) {
           await discardPreview(response.result.previewId);
           return false;
@@ -514,7 +518,7 @@ export function createProjectHomeController(
         return true;
       } catch (error) {
         if (isDisposed()) return false;
-        state.errorMessage = isFileSelectionCancelled(error) ? previousError : safeMessage(error);
+        state.errorMessage = isOperationCancelled(error) ? previousError : safeMessage(error);
         return false;
       } finally {
         if (!isDisposed()) state.busyAction = null;
@@ -534,10 +538,10 @@ export function createProjectHomeController(
       return mutate(
         "apply-import",
         () =>
-          api.applyImport({
+          api.portable.applyImport(new LibraryOperationScope(preview.libraryRevision), {
             previewId: preview.previewId,
             collisionPlan: plan,
-          }),
+          }).result,
         "Import applied.",
       ).then((applied) => {
         if (!isDisposed()) {
@@ -553,7 +557,8 @@ export function createProjectHomeController(
       state.errorMessage = null;
       try {
         const previousPreview = state.backupPreview;
-        const response = await api.previewBackup(title);
+        const response = await api.portable.previewBackup(new LibraryOperationScope(null), title)
+          .result;
         if (isDisposed()) {
           await discardPreview(response.result.previewId);
           return false;
@@ -573,7 +578,7 @@ export function createProjectHomeController(
         if (!isDisposed()) state.busyAction = null;
       }
     },
-    async createBackup(title) {
+    async createBackup() {
       if (isDisposed() || state.busyAction) return false;
       const preview = state.backupPreview;
       if (!preview) return false;
@@ -581,14 +586,17 @@ export function createProjectHomeController(
       state.busyAction = "create-backup";
       state.errorMessage = null;
       try {
-        const response = await api.createBackup(title, preview.previewId);
+        const response = await api.portable.createBackup(
+          new LibraryOperationScope(preview.libraryRevision),
+          preview.previewId,
+        ).result;
         if (isDisposed()) return true;
         await reload(false);
         if (!isDisposed()) state.announcement = `Backup saved as ${response.result.artifactName}.`;
         return true;
       } catch (error) {
         if (isDisposed()) return false;
-        if (isFileSelectionCancelled(error)) {
+        if (isOperationCancelled(error)) {
           state.errorMessage = previousError;
         } else if (isRevisionConflict(error)) {
           const reloaded = await reload(false);
@@ -614,11 +622,15 @@ export function createProjectHomeController(
       state.errorMessage = null;
       try {
         const previousPreview = state.restorePreview;
-        const response = await api.previewRestore({
-          restoreMode: mode,
-          includeResults: true,
-          includeAssets: true,
-        });
+        const response = await api.portable.previewRestore(
+          new LibraryOperationScope(null),
+          {
+            restoreMode: mode,
+            includeResults: true,
+            includeAssets: true,
+          },
+          "userSelected",
+        ).result;
         if (isDisposed()) {
           await discardPreview(response.result.previewId);
           return false;
@@ -635,7 +647,7 @@ export function createProjectHomeController(
         return true;
       } catch (error) {
         if (isDisposed()) return false;
-        state.errorMessage = isFileSelectionCancelled(error) ? previousError : safeMessage(error);
+        state.errorMessage = isOperationCancelled(error) ? previousError : safeMessage(error);
         return false;
       } finally {
         if (!isDisposed()) state.busyAction = null;
@@ -658,24 +670,35 @@ export function createProjectHomeController(
       state.busyAction = "apply-restore";
       state.errorMessage = null;
       try {
-        await api.applyRestore({
-          previewId: preview.previewId,
-          collisionPlan: plan,
-          authorization: {
-            destructiveActionConfirmed: state.restoreMode === "replace-library",
-            safetyBackupBypassPhrase: safetyBackupBypassPhrase || null,
+        const response = await api.portable.applyRestore(
+          new LibraryOperationScope(preview.libraryRevision),
+          {
+            previewId: preview.previewId,
+            collisionPlan: plan,
+            authorization: {
+              destructiveActionConfirmed: state.restoreMode === "replace-library",
+              safetyBackupBypassPhrase: safetyBackupBypassPhrase || null,
+            },
           },
-        });
+        ).result;
         if (isDisposed()) return true;
         state.restorePreview = null;
         state.restoreWarnings = [];
         state.restoreSafetyBackupFailure = null;
         await reload(false);
-        if (!isDisposed()) state.announcement = "Restore applied.";
+        if (!isDisposed()) {
+          const outcome = response.result.safetyBackup;
+          state.announcement =
+            outcome.kind === "createdAndVerified"
+              ? `Restore applied. Safety backup saved and verified as ${outcome.artifactName}.`
+              : outcome.kind === "confirmedBypass"
+                ? "Restore applied without a safety backup after explicit confirmation."
+                : "Restore applied.";
+        }
         return true;
       } catch (error) {
         if (isDisposed()) return false;
-        if ((error as ApiFailure).code === "restore.safety_backup_failed") {
+        if (isRetainedRestoreFailure(error)) {
           state.restoreSafetyBackupFailure = safeMessage(error);
           state.errorMessage = null;
           state.announcement =

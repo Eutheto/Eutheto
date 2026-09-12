@@ -25,6 +25,34 @@ pub struct ApplicationSettingEntryV1 {
     pub updated_at: Rfc3339Timestamp,
 }
 
+/// Locally validated settings; portable-export policy is deliberately separate.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplicationSettingsValuesV1 {
+    pub appearance: Option<ApplicationSettingEntryV1>,
+    pub locale: Option<ApplicationSettingEntryV1>,
+    pub units: Option<ApplicationSettingEntryV1>,
+}
+
+/// One consistent local settings read at an authoritative library revision.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplicationSettingsSnapshotV1 {
+    pub schema_version: u32,
+    pub library_revision: Revision,
+    pub settings: ApplicationSettingsValuesV1,
+}
+
+/// Exact committed settings, not a potentially newer post-commit read.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplicationSettingsWriteResultV1 {
+    pub schema_version: u32,
+    pub library_revision: Revision,
+    pub settings: ApplicationSettingsValuesV1,
+    pub changed: bool,
+}
+
 /// Complete replacement of the supported nonsecret settings only.
 ///
 /// Absent keys mean removal after review. Application services validate the

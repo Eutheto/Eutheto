@@ -11,7 +11,13 @@ import type { ApiResponseDto } from "../api/generated";
 import * as generatedApi from "../api/generated";
 import App from "../App.vue";
 import { createAppRouter } from "../router";
-import { fakeApi, project, response } from "../testing/project-home";
+import {
+  fakeApi,
+  portableApplied,
+  portableOperation,
+  project,
+  response,
+} from "../testing/project-home";
 import ProjectHome from "./ProjectHome.vue";
 import "../styles.css";
 
@@ -40,6 +46,7 @@ async function renderHome(api: ProjectHomeApi): Promise<void> {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("ProjectHome confirmations in the browser", () => {
@@ -169,12 +176,18 @@ describe("ProjectHome confirmations in the browser", () => {
 
   it("keeps a failed safety backup and explicit bypass reachable in the restore modal", async () => {
     const api = fakeApi([project]);
-    api.applyRestore.mockRejectedValueOnce({
-      category: "protocol",
-      code: "restore.safety_backup_failed",
-      message: "The private backup destination is unavailable.",
-      retryable: false,
-    });
+    api.portable.applyRestore.mockImplementationOnce(() =>
+      portableOperation(
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Native failures are closed error DTOs.
+        Promise.reject({
+          category: "protocol",
+          code: "restore.safety_backup_failed",
+          message: "The private backup destination is unavailable.",
+          retryable: false,
+          details: { portablePreviewRetained: { type: "boolean", value: true } },
+        }),
+      ),
+    );
     await renderHome(api);
     await userEvent.click(screen.getByText("Restore backup", { selector: "summary" }));
     await userEvent.click(screen.getByRole("radio", { name: /Replace library/ }));
@@ -212,14 +225,43 @@ describe("ProjectHome confirmations in the browser", () => {
       .poll(() => screen.queryByRole("button", { name: "Review and confirm restore" }))
       .toBeNull();
     await expect.element(screen.getByRole("button", { name: "Choose backup file" })).toBeEnabled();
+    await expect.element(screen.getByRole("status")).toHaveTextContent(/without a safety backup/);
+  });
+
+  it("announces the verified native safety artifact after library replacement", async () => {
+    const api = fakeApi([project]);
+    api.portable.applyRestore.mockReturnValueOnce(
+      portableOperation(
+        portableApplied({
+          kind: "createdAndVerified",
+          artifactName: "actual-native-safety.eutheto",
+        }),
+      ),
+    );
+    await renderHome(api);
+    await userEvent.click(screen.getByText("Restore backup", { selector: "summary" }));
+    await userEvent.click(screen.getByRole("radio", { name: /Replace library/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Choose backup file" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Review and confirm restore" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Confirm library replacement" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Confirm restore" }));
+    await expect.poll(() => screen.queryByRole("dialog")).toBeNull();
+    await expect
+      .element(screen.getByRole("status"))
+      .toHaveTextContent("actual-native-safety.eutheto");
+    await expect.element(screen.getByRole("status")).toHaveTextContent(/verified/);
   });
 
   it("does not replace the library when Enter follows Escape during restore dismissal", async () => {
     const library = [project];
     const api = fakeApi(library);
-    api.applyRestore.mockImplementationOnce(() => {
+    api.portable.applyRestore.mockImplementationOnce(() => {
       library.splice(0);
-      return Promise.resolve(response({}));
+      return portableOperation(
+        portableApplied({ kind: "createdAndVerified", artifactName: "verified-safety.eutheto" }),
+      );
     });
     await renderHome(api);
     await userEvent.click(screen.getByText("Restore backup", { selector: "summary" }));
@@ -244,21 +286,28 @@ describe("ProjectHome confirmations in the browser", () => {
     expect(library).toEqual([project]);
   });
 
-  it("keeps an invalidated restore failure visible and returns to choosing a fresh backup", async () => {
+  it("refuses bypass after a nonretained safety failure and requires a fresh backup", async () => {
     const api = fakeApi([project]);
-    api.applyRestore.mockRejectedValueOnce({
-      category: "storage",
-      code: "restore.failed",
-      message: "The reviewed backup is no longer available.",
-    });
+    api.portable.applyRestore.mockImplementationOnce(() =>
+      portableOperation(
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Native failures are closed error DTOs.
+        Promise.reject({
+          category: "storage",
+          code: "restore.safety_backup_failed",
+          message: "The reviewed backup is no longer available.",
+          details: { portablePreviewRetained: { type: "boolean", value: false } },
+        }),
+      ),
+    );
     await renderHome(api);
     await userEvent.click(screen.getByText("Restore backup", { selector: "summary" }));
+    await userEvent.click(screen.getByRole("radio", { name: /Replace library/ }));
     const choose = screen.getByRole("button", { name: "Choose backup file" });
     await userEvent.click(choose);
     await userEvent.click(
       await screen.findByRole("button", { name: "Review and confirm restore" }),
     );
-    const dialog = await screen.findByRole("dialog", { name: "Confirm backup restore" });
+    const dialog = await screen.findByRole("dialog", { name: "Confirm library replacement" });
     await userEvent.tab();
     await userEvent.keyboard("{Enter}");
     await expect
@@ -271,6 +320,9 @@ describe("ProjectHome confirmations in the browser", () => {
     await expect
       .element(within(dialog).getByRole("button", { name: "Confirm restore" }))
       .toBeDisabled();
+    expect(
+      within(dialog).queryByRole("textbox", { name: "Continue without a safety backup" }),
+    ).toBeNull();
     await userEvent.keyboard("{Escape}");
     await expect.element(choose).toHaveFocus();
   });

@@ -65,11 +65,6 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-function collectKeys(value: unknown): readonly string[] {
-  if (Array.isArray(value)) return value.flatMap(collectKeys);
-  if (typeof value !== "object" || value === null) return [];
-  return Object.entries(value).flatMap(([key, child]) => [key, ...collectKeys(child)]);
-}
 
 let callbacks: Map<number, (message: unknown) => void>;
 beforeEach(() => {
@@ -308,12 +303,14 @@ describe("strict desktop response boundary", () => {
 
   it("accepts namespaced pack identities and rejects malformed envelope or project data without replay", async () => {
     const project = {
+      schemaVersion: 1,
       scenarioId,
       title: "Clinic",
       domainPackId: "official.workforce",
       revision: 3,
       updatedAt: "2026-09-10T12:00:00.123456789Z",
       archived: false,
+      lastOpenedAt: null,
     };
     tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
       Promise.resolve(response(input, [project])),
@@ -327,6 +324,7 @@ describe("strict desktop response boundary", () => {
         currentRevision: Number.MAX_SAFE_INTEGER + 1,
       }),
       (input: Invocation) => response(input, [{ ...project, scenarioId: "not-an-id" }]),
+      (input: Invocation) => response(input, [{ ...project, schemaVersion: 2 }]),
       (input: Invocation) => response(input, [{ ...project, revision: 1.5 }]),
       (input: Invocation) => response(input, [{ ...project, updatedAt: "2026-02-30T12:00:00Z" }]),
       (input: Invocation) => response(input, [{ ...project, unexpected: true }]),
@@ -424,32 +422,6 @@ describe("strict desktop response boundary", () => {
       }),
     ).rejects.toBeInstanceOf(RangeError);
     expect(tauri.invoke).not.toHaveBeenCalled();
-  });
-
-  it("keeps transfer paths and unopened bytes behind native custody", async () => {
-    tauri.invoke.mockRejectedValue(nativeError);
-    const options = {
-      restoreMode: "import-scenario",
-      includeResults: true,
-      includeAssets: false,
-    } as const;
-    for (const operation of [
-      () => generated.previewImport(options),
-      () => generated.previewRestore(options),
-      () => generated.createBackup("Before migration", operationId),
-      () => generated.createExport(scenarioId, operationId),
-      () => generated.inspectUnopenedBundle(),
-      () => generated.reexportUnopenedBundle(operationId),
-      () => generated.cancelPortablePreview(operationId),
-    ])
-      await expect(operation()).rejects.toEqual(nativeError);
-    for (const [, payload] of tauri.invoke.mock.calls) {
-      expect(
-        collectKeys(payload).some((key) =>
-          /^(?:bytes|sourceArtifact|fileName|path|url)$/i.test(key),
-        ),
-      ).toBe(false);
-    }
   });
 });
 
@@ -1339,6 +1311,30 @@ function nativeSettings() {
 }
 
 describe("settings library operations and native review custody", () => {
+  it("rejects a later library snapshot masquerading as the exact settings commit", async () => {
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(
+        response(
+          input,
+          {
+            schemaVersion: 1,
+            libraryRevision: 9,
+            settings: {
+              appearance: null,
+              locale: { value: "en-GB", updatedAt: "2026-09-01T00:00:00Z" },
+              units: null,
+            },
+            changed: true,
+          },
+          9,
+        ),
+      ),
+    );
+    await expect(generated.updateSetting("locale", "en-GB", 7)).rejects.toMatchObject(
+      invalidResponse,
+    );
+  });
+
   it("captures apply approval and owns strict action, identity and library revision before preparation", async () => {
     const native = nativeOperations();
     const scope = new generated.LibraryOperationScope(7);
@@ -1887,5 +1883,611 @@ describe("bounded offline inventory and redacted path reads", () => {
       ),
     );
     await expect(generated.getAppPathsSummary()).rejects.toMatchObject(invalidResponse);
+  });
+});
+
+const portableOptions: generated.ImportOptions = {
+  restoreMode: "replace-library",
+  includeResults: true,
+  includeAssets: false,
+};
+const portableCollisionPlan: generated.CollisionPlan = { scenarios: {}, supplementalChoices: [] };
+const portableAuthorization: generated.RestoreAuthorizationDto = {
+  destructiveActionConfirmed: true,
+  safetyBackupBypassPhrase: null,
+};
+function portablePreview(previewId: string): generated.PortablePreviewDto {
+  return {
+    schemaVersion: 1,
+    previewId,
+    libraryRevision: 7,
+    bundleId: scenarioId,
+    bundleKind: "full-backup",
+    title: "Review",
+    createdAt: "2026-09-12T12:00:00Z",
+    sourceApplication: { name: "Eutheto", version: "0.1.0" },
+    sourceFormatVersion: 1,
+    sourceSchemaVersion: 1,
+    counts: {
+      scenarios: 0,
+      scenarioRevisions: 0,
+      results: 0,
+      sharedRecords: 0,
+      preferences: 0,
+      assets: 0,
+    },
+    requiredCapabilities: [],
+    preservedExtensions: [],
+    includedSections: [],
+    excludedSections: [],
+    sourceBackupSelection: null,
+    omittedAssets: [],
+    scenarios: [],
+    supplementalCollisions: [],
+    removedScenarios: [],
+    removedSupplemental: [],
+    settingsChanged: [],
+    settingsRemoved: [],
+    appliedMigrations: [],
+  };
+}
+
+/** Deterministic transport fault fixtures; native custody itself is covered by Rust regressions. */
+function portableTransport(
+  override?: (command: string, input: Invocation) => Promise<unknown> | undefined,
+) {
+  const discards: Invocation[] = [];
+  let nextOperation = 0;
+  tauri.invoke.mockImplementation((command: string, input: Invocation) => {
+    if (command === "project_operation_cancel") discards.push(input);
+    const overridden = override?.(command, input);
+    if (overridden !== undefined) return overridden;
+    if (command === "operation_prepare")
+      return Promise.resolve(
+        response(input, {
+          schemaVersion: 1,
+          operationId: `01900000-0000-7000-8000-${String(++nextOperation).padStart(12, "0")}`,
+        }),
+      );
+    if (command === "operation_release" || command === "operation_cancel")
+      return Promise.resolve(
+        response(input, {
+          schemaVersion: 1,
+          acknowledgement: command === "operation_release" ? "released" : "cancellationRequested",
+        }),
+      );
+    if (command === "project_operation_cancel")
+      return Promise.resolve(response(input, { schemaVersion: 1 }));
+    if (command === "project_import_preview" || command === "project_restore_preview")
+      return Promise.resolve(response(input, portablePreview(input.request.requestId), 7));
+    if (command === "project_export_preview" || command === "project_backup_preview") {
+      const exporting = command === "project_export_preview";
+      return Promise.resolve(
+        response(
+          input,
+          {
+            schemaVersion: 1,
+            previewId: input.request.requestId,
+            title: "Output",
+            byteLength: 512,
+            digest: "a".repeat(64),
+            currentRevision: exporting ? 3 : null,
+            libraryRevision: 7,
+            backupSummary: exporting
+              ? null
+              : {
+                  includeResults: true,
+                  assetSelection: "all",
+                  excludedAssetCount: 0,
+                  excludedAssetIds: [],
+                  exclusionScope: null,
+                  thresholdVersion: null,
+                  thresholdBytes: null,
+                  fixedExclusions: [],
+                },
+          },
+          exporting ? 3 : 7,
+        ),
+      );
+    }
+    if (command === "project_unopened_bundle_inspect")
+      return Promise.resolve(
+        response(input, {
+          schemaVersion: 1,
+          previewId: input.request.requestId,
+          metadata: {
+            fileSha256: "a".repeat(64),
+            format: "eutheto",
+            formatVersion: 2,
+            portableSchemaVersion: 2,
+            bundleKind: null,
+            title: null,
+            requiredCapabilities: [],
+            scenarios: [],
+          },
+        }),
+      );
+    if (command === "project_import_apply" || command === "project_restore_apply")
+      return Promise.resolve(
+        response(
+          input,
+          {
+            schemaVersion: 1,
+            libraryRevision: 8,
+            scenarioIds: [],
+            safetyBackup:
+              command === "project_import_apply"
+                ? { kind: "notRequired" }
+                : { kind: "createdAndVerified", artifactName: "actual-safety.eutheto" },
+          },
+          8,
+        ),
+      );
+    if (
+      command === "project_export_create" ||
+      command === "project_backup_create" ||
+      command === "project_unopened_bundle_reexport"
+    ) {
+      const exporting = command === "project_export_create";
+      const unopened = command === "project_unopened_bundle_reexport";
+      return Promise.resolve(
+        response(
+          input,
+          {
+            schemaVersion: 1,
+            artifactName: "selected.eutheto",
+            currentRevision: exporting ? 3 : null,
+            libraryRevision: unopened ? null : 7,
+          },
+          exporting ? 3 : unopened ? null : 7,
+        ),
+      );
+    }
+    throw new Error(`Unexpected portable command: ${command}`);
+  });
+  return { discards };
+}
+
+describe("portable review ownership", () => {
+  it("cleans malformed and lost creator replies even when release acknowledgement fails", async () => {
+    const transport = portableTransport((command, input) => {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Native IPC rejects closed error DTOs, not Error instances.
+      if (command === "operation_release") return Promise.reject(nativeError);
+      if (command === "project_restore_preview")
+        return Promise.resolve(
+          response(input, { ...portablePreview(input.request.requestId), schemaVersion: 2 }, 7),
+        );
+      if (command === "project_import_preview") return Promise.reject(new Error("lost reply"));
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    const scope = new generated.LibraryOperationScope(null);
+    const malformed = flow.previewRestore(scope, portableOptions, "safetyBackups");
+    await expect(malformed.result).rejects.toMatchObject(invalidResponse);
+    const lost = flow.previewImport(scope, portableOptions);
+    await expect(lost.result).rejects.toMatchObject(invalidResponse);
+    expect(transport.discards.map((entry) => entry.request.target)).toEqual([
+      { kind: "creator", operationId: await malformed.operationId, requestId: malformed.requestId },
+      { kind: "creator", operationId: await lost.operationId, requestId: lost.requestId },
+    ]);
+    expect(callbacks.size).toBe(0);
+    await flow.dispose();
+  });
+
+  it("waits for a late creator and repeats cleanup after disposal acknowledgement", async () => {
+    const entered = deferred<Invocation>();
+    const terminal = deferred<unknown>();
+    const discarded = deferred<undefined>();
+    const transport = portableTransport((command, input) => {
+      if (command === "project_unopened_bundle_inspect") {
+        entered.resolve(input);
+        return terminal.promise;
+      }
+      if (command === "project_operation_cancel") discarded.resolve(undefined);
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    const operation = flow.inspectUnopenedBundle(new generated.LibraryOperationScope(null));
+    const invocation = await entered.promise;
+    let disposed = false;
+    const disposal = flow.dispose().then(() => {
+      disposed = true;
+    });
+    await discarded.promise;
+    expect(disposed).toBe(false);
+    const earlyDiscards = transport.discards.length;
+    terminal.resolve(
+      response(invocation, {
+        schemaVersion: 1,
+        previewId: scenarioId,
+        metadata: {
+          fileSha256: "a".repeat(64),
+          format: "eutheto",
+          formatVersion: 2,
+          portableSchemaVersion: 2,
+          bundleKind: null,
+          title: null,
+          requiredCapabilities: [],
+          scenarios: [],
+        },
+      }),
+    );
+    await operation.result;
+    await disposal;
+    expect(transport.discards.length).toBeGreaterThan(earlyDiscards);
+    expect(transport.discards.at(-1)?.request.target).toEqual({
+      kind: "creator",
+      operationId: await operation.operationId,
+      requestId: operation.requestId,
+    });
+    expect(operation.isCurrent()).toBe(false);
+    expect(callbacks.size).toBe(0);
+  });
+
+  it("reserves separate three-entry groups and refuses cross-kind or cross-revision consumption", async () => {
+    portableTransport();
+    const flow = new generated.PortableReviewFlow();
+    const library = new generated.LibraryOperationScope(null);
+    const scenario = new generated.SetupOperationScope(scenarioId, 3);
+    const imported = (await flow.previewImport(library, portableOptions).result).result;
+    await flow.previewRestore(library, portableOptions, "userSelected").result;
+    const unopened = (await flow.inspectUnopenedBundle(library).result).result;
+    const exported = (await flow.previewExport(scenario).result).result;
+    const backup = (await flow.previewBackup(library, "Backup").result).result;
+    await flow.previewExport(scenario).result;
+    expect(() => flow.previewImport(library, portableOptions)).toThrow(RangeError);
+    expect(() => flow.previewBackup(library, "Fourth")).toThrow(RangeError);
+    expect(() =>
+      flow.applyImport(new generated.LibraryOperationScope(8), {
+        previewId: imported.previewId,
+        collisionPlan: portableCollisionPlan,
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      flow.applyRestore(new generated.LibraryOperationScope(7), {
+        previewId: imported.previewId,
+        collisionPlan: portableCollisionPlan,
+        authorization: portableAuthorization,
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      flow.createExport(new generated.SetupOperationScope(operationId, 3), {
+        previewId: exported.previewId,
+        expectedLibraryRevision: 7,
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      flow.createExport(scenario, {
+        previewId: exported.previewId,
+        expectedLibraryRevision: 8,
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      new generated.PortableReviewFlow().createBackup(
+        new generated.LibraryOperationScope(7),
+        backup.previewId,
+      ),
+    ).toThrow(RangeError);
+    await flow.reexportUnopenedBundle(library, unopened.previewId).result;
+    await flow.inspectUnopenedBundle(library).result;
+    await flow.createBackup(new generated.LibraryOperationScope(7), backup.previewId).result;
+    await flow.previewBackup(library, "Freed prepared slot").result;
+    await flow.dispose();
+  });
+
+  it.each([
+    { detail: { type: "boolean", value: true }, restore: true, retained: true },
+    { detail: { type: "boolean", value: false }, restore: true, retained: false },
+    { detail: { type: "text", value: "true" }, restore: true, retained: false },
+    { detail: undefined, restore: true, retained: false },
+    { detail: { type: "boolean", value: true }, restore: false, retained: false },
+  ])(
+    "retains only an owned restore with actual Boolean evidence: %j",
+    async ({ detail, restore, retained }) => {
+      let attempts = 0;
+      portableTransport((command) => {
+        if (
+          (command === "project_restore_apply" || command === "project_import_apply") &&
+          ++attempts === 1
+        )
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Exercise the native error DTO and its typed retention evidence.
+          return Promise.reject({
+            ...nativeError,
+            code: "restore.safety_backup_failed",
+            retryable: true,
+            details: detail === undefined ? null : { portablePreviewRetained: detail },
+          });
+        return undefined;
+      });
+      const flow = new generated.PortableReviewFlow();
+      const library = new generated.LibraryOperationScope(null);
+      const preview = (
+        await (
+          restore
+            ? flow.previewRestore(library, portableOptions, "userSelected")
+            : flow.previewImport(library, portableOptions)
+        ).result
+      ).result;
+      const scope = new generated.LibraryOperationScope(7);
+      const apply = () =>
+        restore
+          ? flow.applyRestore(scope, {
+              previewId: preview.previewId,
+              collisionPlan: portableCollisionPlan,
+              authorization: portableAuthorization,
+            })
+          : flow.applyImport(scope, {
+              previewId: preview.previewId,
+              collisionPlan: portableCollisionPlan,
+            });
+      await expect(apply().result).rejects.toMatchObject({ code: "restore.safety_backup_failed" });
+      if (retained) {
+        expect((await apply().result).result.safetyBackup).toEqual({
+          kind: "createdAndVerified",
+          artifactName: "actual-safety.eutheto",
+        });
+      } else {
+        expect(apply).toThrow(RangeError);
+      }
+      await flow.dispose();
+    },
+  );
+
+  it("preserves an owned committed restore after late cancellation and disposal", async () => {
+    const entered = deferred<Invocation>();
+    const terminal = deferred<unknown>();
+    portableTransport((command, input) => {
+      if (command === "project_restore_apply") {
+        entered.resolve(input);
+        return terminal.promise;
+      }
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    const preview = (
+      await flow.previewRestore(
+        new generated.LibraryOperationScope(null),
+        portableOptions,
+        "userSelected",
+      ).result
+    ).result;
+    const apply = flow.applyRestore(new generated.LibraryOperationScope(7), {
+      previewId: preview.previewId,
+      collisionPlan: portableCollisionPlan,
+      authorization: portableAuthorization,
+    });
+    const invocation = await entered.promise;
+    await apply.cancel();
+    const disposal = flow.dispose();
+    terminal.resolve(
+      response(
+        invocation,
+        {
+          schemaVersion: 1,
+          libraryRevision: 8,
+          scenarioIds: [],
+          safetyBackup: {
+            kind: "createdAndVerified",
+            artifactName: "verified-before-cancel.eutheto",
+          },
+        },
+        8,
+      ),
+    );
+    expect((await apply.result).result.safetyBackup).toEqual({
+      kind: "createdAndVerified",
+      artifactName: "verified-before-cancel.eutheto",
+    });
+    await disposal;
+    expect(apply.isCurrent()).toBe(false);
+  });
+
+  it("rejects revision-bearing discovery contexts and malformed output bindings before exposing a review", async () => {
+    const transport = portableTransport((command, input) => {
+      if (command === "project_export_preview")
+        return Promise.resolve(
+          response(
+            input,
+            {
+              schemaVersion: 1,
+              previewId: scenarioId,
+              title: "Wrong revision",
+              byteLength: 512,
+              digest: "a".repeat(64),
+              backupSummary: null,
+              currentRevision: 4,
+              libraryRevision: 7,
+            },
+            4,
+          ),
+        );
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    const revisioned = new generated.LibraryOperationScope(7);
+    expect(() => flow.previewImport(revisioned, portableOptions)).toThrow(RangeError);
+    expect(() => flow.previewBackup(revisioned, "Invalid context")).toThrow(RangeError);
+    expect(() => flow.previewRestore(revisioned, portableOptions, "safetyBackups")).toThrow(
+      RangeError,
+    );
+    expect(() => flow.inspectUnopenedBundle(revisioned)).toThrow(RangeError);
+    expect(() => flow.previewExport(new generated.SetupOperationScope(scenarioId, null))).toThrow(
+      RangeError,
+    );
+    expect(tauri.invoke).not.toHaveBeenCalled();
+    await expect(
+      flow.previewExport(new generated.SetupOperationScope(scenarioId, 3)).result,
+    ).rejects.toMatchObject(invalidResponse);
+    expect(transport.discards).toHaveLength(1);
+    await flow.dispose();
+  });
+
+  it("enforces the portable compact result and final request caps and frees failed review custody", async () => {
+    const chunk = "x".repeat(1_048_576);
+    let oversized = true;
+    const transport = portableTransport((command, input) => {
+      if (command === "project_import_preview" && oversized)
+        return Promise.resolve(
+          response(
+            input,
+            {
+              ...portablePreview(input.request.requestId),
+              settingsChanged: Array<string>(65).fill(chunk),
+            },
+            7,
+          ),
+        );
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    const scope = new generated.LibraryOperationScope(null);
+    await expect(flow.previewImport(scope, portableOptions).result).rejects.toMatchObject(
+      invalidResponse,
+    );
+    oversized = false;
+    const preview = (await flow.previewImport(scope, portableOptions).result).result;
+    const choices = Array.from({ length: 63 }, () => ({
+      section: "assets" as const,
+      key: chunk,
+      action: "skip" as const,
+    }));
+    const last = { section: "assets" as const, key: "", action: "skip" as const };
+    choices.push(last);
+    const collisionPlan = { scenarios: {}, supplementalChoices: choices };
+    // Payload alone fits; native controls push the complete compact request one byte over.
+    const framed = {
+      schemaVersion: 1,
+      requestId: scenarioId,
+      operationId,
+      expectedLibraryRevision: 7,
+      previewId: preview.previewId,
+      collisionPlan,
+    };
+    last.key = "x".repeat(64 * 1_048_576 - JSON.stringify(framed).length + 1);
+    const apply = flow.applyImport(new generated.LibraryOperationScope(7), {
+      previewId: preview.previewId,
+      collisionPlan,
+    });
+    await expect(apply.result).rejects.toBeInstanceOf(RangeError);
+    await flow.dispose();
+    expect(
+      transport.discards.some((entry) => {
+        const target = entry.request.target;
+        return (
+          typeof target === "object" &&
+          target !== null &&
+          Reflect.get(target, "requestId") === preview.previewId
+        );
+      }),
+    ).toBe(true);
+    expect(tauri.invoke.mock.calls.map(([command]) => command)).not.toContain(
+      "project_import_apply",
+    );
+  }, 30_000);
+
+  it("captures approvals before preparation and preserves a native no-change receipt", async () => {
+    const prepared = deferred<unknown>();
+    const preparing = deferred<Invocation>();
+    const entered = deferred<Invocation>();
+    let holdPreparation = false;
+    portableTransport((command, input) => {
+      if (command === "operation_prepare" && holdPreparation) {
+        preparing.resolve(input);
+        return prepared.promise;
+      }
+      if (command === "project_import_apply") {
+        entered.resolve(input);
+        return Promise.resolve(
+          response(
+            input,
+            {
+              schemaVersion: 1,
+              libraryRevision: 7,
+              scenarioIds: [],
+              safetyBackup: { kind: "notRequired" },
+            },
+            7,
+          ),
+        );
+      }
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    const preview = (
+      await flow.previewImport(new generated.LibraryOperationScope(null), portableOptions).result
+    ).result;
+    holdPreparation = true;
+    const plan = {
+      scenarios: { [scenarioId]: "skip" as generated.CollisionAction },
+      supplementalChoices: [],
+    };
+    const draft = { previewId: preview.previewId, collisionPlan: plan };
+    Object.assign(draft, { schemaVersion: 99, expectedLibraryRevision: 900, scenarioId });
+    const apply = flow.applyImport(new generated.LibraryOperationScope(7), draft);
+    draft.previewId = operationId;
+    plan.scenarios[scenarioId] = "replace";
+    prepared.resolve(response(await preparing.promise, { schemaVersion: 1, operationId }));
+    const invocation = await entered.promise;
+    expect(invocation.request).toEqual({
+      schemaVersion: 1,
+      requestId: apply.requestId,
+      operationId,
+      expectedLibraryRevision: 7,
+      previewId: preview.previewId,
+      collisionPlan: {
+        scenarios: { [scenarioId]: "skip" },
+        supplementalChoices: [],
+      },
+    });
+    expect((await apply.result).result.libraryRevision).toBe(7);
+    await flow.dispose();
+  });
+
+  it("rejects an oversized encoded envelope without loosening compact portable metadata limits", async () => {
+    const chunk = "x".repeat(1_048_576);
+    const transport = portableTransport((command, input) => {
+      if (command === "project_import_preview")
+        return Promise.resolve({
+          ...response(input, portablePreview(input.request.requestId), 7),
+          warnings: Array.from({ length: 129 }, () => ({
+            code: "portable.warning",
+            severity: "warning",
+            message: chunk,
+            fieldPath: null,
+            resource: null,
+          })),
+        });
+      return undefined;
+    });
+    const flow = new generated.PortableReviewFlow();
+    await expect(
+      flow.previewImport(new generated.LibraryOperationScope(null), portableOptions).result,
+    ).rejects.toMatchObject(invalidResponse);
+    expect(transport.discards).toHaveLength(1);
+    await flow.dispose();
+  }, 30_000);
+
+  it("keeps creator identities available to retry a failed final disposal cleanup", async () => {
+    let cleanupUnavailable = true;
+    const transport = portableTransport((command) =>
+      command === "project_operation_cancel" && cleanupUnavailable
+        ? // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Native cleanup failure uses the same closed error DTO.
+          Promise.reject(nativeError)
+        : undefined,
+    );
+    const flow = new generated.PortableReviewFlow();
+    const creator = flow.previewImport(new generated.LibraryOperationScope(null), portableOptions);
+    await creator.result;
+    await expect(flow.dispose()).rejects.toEqual(nativeError);
+    cleanupUnavailable = false;
+    await flow.dispose();
+    expect(transport.discards.at(-1)?.request.target).toEqual({
+      kind: "creator",
+      operationId: await creator.operationId,
+      requestId: creator.requestId,
+    });
+    expect(() =>
+      flow.previewImport(new generated.LibraryOperationScope(null), portableOptions),
+    ).toThrow();
   });
 });

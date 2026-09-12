@@ -18,6 +18,7 @@ commands.allow = [
   "solver_get_support_matrix",
   "solver_get_deferred_gates",
   "project_list",
+  "project_open",
   "project_get_metadata",
   "project_create",
   "project_duplicate",

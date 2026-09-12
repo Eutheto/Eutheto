@@ -41,8 +41,8 @@ const createDescription = ref("");
 const timeZone = ref("UTC");
 const locale = ref("en-US");
 const units = ref<"metric" | "us-customary">("metric");
-const horizonStart = ref("");
-const horizonEnd = ref("");
+const firstDate = ref("");
+const lastDate = ref("");
 const gapPolicy = ref<"reject" | "moveForward" | "packDefined">("reject");
 const overlapPolicy = ref<"earlier" | "later" | "reject">("earlier");
 const duplicateTitle = ref("");
@@ -99,12 +99,13 @@ async function submitCreate(): Promise<void> {
   const created = await props.home.createProject({
     title: createTitle.value.trim(),
     description: createDescription.value.trim(),
-    domainPack: { id: "official.test", schemaVersion: 1 },
+    domainPack: { id: "official.workforce", schemaVersion: 1 },
     settings: {
       timeZone: timeZone.value.trim(),
       locale: locale.value.trim(),
       units: units.value,
-      horizon: { start: horizonStart.value.trim(), end: horizonEnd.value.trim() },
+      firstDate: firstDate.value,
+      lastDate: lastDate.value,
       gapPolicy: gapPolicy.value,
       overlapPolicy: overlapPolicy.value,
     },
@@ -112,8 +113,8 @@ async function submitCreate(): Promise<void> {
   if (created) {
     createTitle.value = "";
     createDescription.value = "";
-    horizonStart.value = "";
-    horizonEnd.value = "";
+    firstDate.value = "";
+    lastDate.value = "";
   }
 }
 
@@ -446,7 +447,7 @@ async function confirmRestore(): Promise<void> {
 
         <aside class="create-panel" aria-labelledby="create-heading">
           <p class="eyebrow">{{ messages.projects.newProject }}</p>
-          <h3 id="create-heading">Create official.test project</h3>
+          <h3 id="create-heading">Create Workforce project</h3>
           <p class="form-intro">
             {{ messages.projects.createIntroduction }}
           </p>
@@ -474,26 +475,27 @@ async function confirmRestore(): Promise<void> {
               <option value="us-customary">{{ messages.projects.usCustomary }}</option>
             </select>
 
-            <label for="horizon-start">{{ messages.projects.planningStarts }}</label>
+            <label for="first-date">{{ messages.projects.planningStarts }}</label>
             <input
-              id="horizon-start"
-              v-model="horizonStart"
+              id="first-date"
+              v-model="firstDate"
+              type="date"
               required
               autocomplete="off"
-              placeholder="2026-09-01T00:00:00Z"
               aria-describedby="horizon-help"
             />
-            <label for="horizon-end">{{ messages.projects.planningEnds }}</label>
+            <label for="last-date">{{ messages.projects.planningEnds }}</label>
             <input
-              id="horizon-end"
-              v-model="horizonEnd"
+              id="last-date"
+              v-model="lastDate"
+              type="date"
+              :min="firstDate || undefined"
               required
               autocomplete="off"
-              placeholder="2026-10-01T00:00:00Z"
               aria-describedby="horizon-help"
             />
             <p id="horizon-help" class="field-help">
-              {{ messages.projects.timestampHelp }}
+              {{ messages.projects.planningDatesHelp }}
             </p>
 
             <div class="field-grid">
@@ -867,7 +869,7 @@ async function confirmRestore(): Promise<void> {
                   </ul>
                 </section>
               </div>
-              <form class="stacked-form" @submit.prevent="home.createBackup(backupTitle.trim())">
+              <form class="stacked-form" @submit.prevent="home.createBackup()">
                 <p id="backup-save-help" class="field-help">
                   Choose where to save the reviewed backup.
                 </p>

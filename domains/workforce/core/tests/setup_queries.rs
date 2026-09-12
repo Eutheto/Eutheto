@@ -444,6 +444,45 @@ fn settings_preparation_respects_midnight_boundaries_without_a_display_window_ca
 }
 
 #[test]
+fn settings_preparation_rejects_skipped_date_at_either_boundary() -> Result<(), Box<dyn Error>> {
+    let document = support::fixture()?;
+    let control = OperationControl::Cancellation(CancellationToken::new());
+    for (start, end, expected_path) in [
+        (
+            "2011-12-30",
+            "2012-01-02",
+            "/query/parameters/dates/startDate",
+        ),
+        (
+            "2011-12-29",
+            "2011-12-30",
+            "/query/parameters/dates/endDateExclusive",
+        ),
+    ] {
+        let request = query(
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"Pacific/Apia", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":start, "endDateExclusive":end},
+                "gapPolicy":"moveForward", "overlapPolicy":"reject"
+            }),
+        );
+        assert!(matches!(
+            WorkforcePack.build_view(
+                DomainViewInput::StoredSetup {
+                    document: &document,
+                    query: &request,
+                    context: context()
+                },
+                &control
+            ),
+            Err(DomainPackError::InvalidPayload { path, .. }) if path == expected_path
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn command_change_pages_keep_repeated_path_edits_and_complete_records() -> Result<(), Box<dyn Error>>
 {
     use eutheto_domain_api::{DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand};

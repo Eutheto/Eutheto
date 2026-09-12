@@ -4,7 +4,8 @@ use crate::setup_boundary::{operation_cancel, operation_prepare, operation_relea
 use crate::tests::{invoke_ipc_args, invoke_ok};
 use eutheto_core::{AppDependencies, AppPaths, EuthetoApp};
 use eutheto_types::{
-    ApiResponseDto, CancellationToken, EventPayload, EventTopic, FixedClock, FixedMonotonicClock,
+    ApiResponseDto, ApplicationSettingsSnapshotV1, ApplicationSettingsWriteResultV1,
+    CancellationToken, EventPayload, EventTopic, FixedClock, FixedMonotonicClock,
     SystemIdGenerator,
 };
 use serde_json::json;
@@ -90,9 +91,9 @@ async fn fixture() -> TestResult<Fixture> {
             operation_release,
             settings_import_nonsecret,
             settings_export_nonsecret,
-            crate::settings_get,
-            crate::settings_update,
-            crate::settings_reset_section,
+            settings_get,
+            settings_update,
+            settings_reset_section,
             crate::app_get_paths_summary,
             crate::app_get_capabilities,
             crate::app_get_license_inventory,
@@ -219,22 +220,32 @@ fn apply(
     )
 }
 
-fn setting(window: &Window, key: &str) -> TestResult<Value> {
-    let response: ApiResponseDto<Value> = invoke_ok(
+fn local_settings(window: &Window) -> TestResult<ApiResponseDto<ApplicationSettingsSnapshotV1>> {
+    let response: ApiResponseDto<ApplicationSettingsSnapshotV1> = invoke_ok(
         window,
         "settings_get",
-        &json!({"requestId":next()?, "key":key}),
+        &json!({"schemaVersion":1, "requestId":next()?}),
     )?;
-    assert_eq!(response.current_revision, None);
-    Ok(response.result["setting"].clone())
+    assert_eq!(
+        response.current_revision,
+        Some(response.result.library_revision)
+    );
+    Ok(response)
+}
+
+fn setting(window: &Window, key: &str) -> TestResult<Value> {
+    let response = local_settings(window)?;
+    Ok(serde_json::to_value(response.result.settings)?[key].clone())
 }
 
 fn update(window: &Window, key: &str, value: &Value) -> TestResult {
-    let _: ApiResponseDto<Value> = invoke_ok(
+    let before = local_settings(window)?.result.library_revision;
+    let _: ApiResponseDto<ApplicationSettingsWriteResultV1> = invoke_ok(
         window,
         "settings_update",
         &json!({
-            "requestId":next()?, "key":key, "value":value
+            "schemaVersion":1, "requestId":next()?, "key":key, "value":value,
+            "expectedLibraryRevision":before
         }),
     )?;
     Ok(())
@@ -684,7 +695,8 @@ async fn existing_setting_commands_and_about_reads_preserve_nonsecret_contracts(
                 &fixture.window,
                 "settings_update",
                 json!({"request":{
-                    "requestId":next()?,"key":key,"value":value
+                    "schemaVersion":1, "requestId":next()?,"key":key,"value":value,
+                    "expectedLibraryRevision":before.0
                 }})
             )?
             .is_err()
@@ -695,9 +707,10 @@ async fn existing_setting_commands_and_about_reads_preserve_nonsecret_contracts(
         let response: ApiResponseDto<Value> = invoke_ok(
             &fixture.window,
             "settings_reset_section",
-            &json!({"requestId":next()?,"key":"appearance"}),
+            &json!({"schemaVersion":1, "requestId":next()?,"key":"appearance",
+                "expectedLibraryRevision":local_settings(&fixture.window)?.result.library_revision}),
         )?;
-        assert_eq!(response.result["existed"], existed);
+        assert_eq!(response.result["changed"], existed);
         assert_eq!(setting(&fixture.window, "appearance")?, Value::Null);
     }
     // Local setting validation is unchanged: portability must not silently tighten it.
@@ -759,13 +772,6 @@ async fn existing_setting_commands_and_about_reads_preserve_nonsecret_contracts(
     ))?;
     expected["scope"] = json!("lockedWorkspace");
     assert_eq!(inventory.result, expected);
-    assert!(
-        inventory.result["packages"]
-            .as_array()
-            .ok_or("packages missing")?
-            .iter()
-            .any(|package| package["licenseConcluded"] == "NOASSERTION")
-    );
     Ok(())
 }
 

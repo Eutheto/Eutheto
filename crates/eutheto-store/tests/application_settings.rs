@@ -1,4 +1,4 @@
-use eutheto_store::{AppSetting, SqliteScenarioStore, StoreError};
+use eutheto_store::{AppSetting, AppSettingsSnapshot, SqliteScenarioStore, StoreError};
 #[cfg(debug_assertions)]
 use eutheto_store::{CommandCommitTestHook, CommandCommitTestPhase, Failpoint, OpenOptions};
 use eutheto_types::{CancellationToken, REVISION_MAX_V1, Revision, Rfc3339Timestamp};
@@ -20,14 +20,17 @@ fn setting(value: Value, timestamp: &str) -> Result<AppSetting<Value>, jiff::Err
 }
 
 async fn seed_settings(store: &SqliteScenarioStore) -> Result<(), Box<dyn Error>> {
-    for (key, value) in [
-        ("appearance", json!({"theme": "system"})),
-        ("locale", json!("en-US")),
-    ] {
-        store
-            .set_setting(key.to_owned(), value, Rfc3339Timestamp::parse(CREATED)?)
-            .await?;
-    }
+    let before = store.settings_snapshot(KEYS).await?;
+    let after = BTreeMap::from([
+        (
+            "appearance".to_owned(),
+            setting(json!({"theme": "system"}), CREATED)?,
+        ),
+        ("locale".to_owned(), setting(json!("en-US"), CREATED)?),
+    ]);
+    store
+        .replace_settings(KEYS, before, after, CancellationToken::new())
+        .await?;
     Ok(())
 }
 
@@ -110,17 +113,37 @@ async fn scoped_replacement_adds_updates_removes_and_preserves_excluded_rows()
     assert_eq!(excluded_rows(&connection)?, excluded);
 
     let cleared = store
-        .replace_settings(KEYS, snapshot, BTreeMap::new(), CancellationToken::new())
+        .replace_settings(
+            KEYS,
+            AppSettingsSnapshot {
+                library_revision: committed.library_revision,
+                settings: committed.settings,
+            },
+            BTreeMap::new(),
+            CancellationToken::new(),
+        )
         .await?;
     assert!(cleared.changed);
     assert_eq!(
         cleared.library_revision,
         committed.library_revision.checked_next()?
     );
-    assert_eq!(
-        store.settings_snapshot(KEYS).await?.settings,
-        BTreeMap::new()
-    );
+    let empty = store.settings_snapshot(KEYS).await?;
+    assert!(empty.settings.is_empty());
+    let noop = store
+        .replace_settings(
+            KEYS,
+            AppSettingsSnapshot {
+                library_revision: cleared.library_revision,
+                settings: cleared.settings,
+            },
+            BTreeMap::new(),
+            CancellationToken::new(),
+        )
+        .await?;
+    assert!(!noop.changed);
+    assert_eq!(noop.library_revision, cleared.library_revision);
+    assert_eq!(store.settings_snapshot(KEYS).await?, empty);
     assert_eq!(excluded_rows(&connection)?, excluded);
     Ok(())
 }
@@ -178,8 +201,11 @@ async fn timestamp_change_commits_once_and_identical_entries_do_not_write()
         committed.library_revision,
         before.library_revision.checked_next()?
     );
-    let before_noop = store.settings_snapshot(KEYS).await?;
-    assert_eq!(before_noop.settings, after);
+    let before_noop = AppSettingsSnapshot {
+        library_revision: committed.library_revision,
+        settings: committed.settings,
+    };
+    assert_eq!(store.settings_snapshot(KEYS).await?, before_noop);
     connection.execute_batch(
         "CREATE TRIGGER prevent_setting_insert BEFORE INSERT ON app_settings
              BEGIN SELECT RAISE(ABORT, 'unexpected insert'); END;
@@ -207,10 +233,11 @@ async fn stale_revision_and_exact_before_state_are_rejected() -> Result<(), Box<
     seed_settings(&store).await?;
     let before = store.settings_snapshot(KEYS).await?;
     store
-        .set_setting(
-            "excluded".to_owned(),
-            json!(true),
-            Rfc3339Timestamp::parse(UPDATED)?,
+        .replace_settings(
+            &["excluded"],
+            store.settings_snapshot(&["excluded"]).await?,
+            BTreeMap::from([("excluded".to_owned(), setting(json!(true), UPDATED)?)]),
+            CancellationToken::new(),
         )
         .await?;
     let current = store.settings_snapshot(KEYS).await?;
@@ -394,13 +421,15 @@ async fn cancellation_at_final_boundary(
 ) -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    seed_settings(&store).await?;
+    drop(store);
     let hook = CommandCommitTestHook::new(phase);
     let (store, _) = SqliteScenarioStore::open_with_options(
         &path,
         OpenOptions::default().with_command_commit_test_hook(hook.clone()),
     )
     .await?;
-    seed_settings(&store).await?;
     let before = store.settings_snapshot(KEYS).await?;
     let after = if change {
         BTreeMap::new()
@@ -436,6 +465,10 @@ async fn cancellation_at_final_boundary(
         };
         assert_eq!(committed.library_revision, expected);
         assert_eq!(store.settings_snapshot(KEYS).await?.settings, after);
+        assert_eq!(
+            committed.settings,
+            store.settings_snapshot(KEYS).await?.settings
+        );
         expected
     };
     drop(store);

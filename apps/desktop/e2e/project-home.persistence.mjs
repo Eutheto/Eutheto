@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,6 +163,77 @@ async function waitForProjectResult(sessionId, projectTitle) {
   throw new Error("Project creation produced neither a saved project nor a request error");
 }
 
+async function previewSuccessiveBackups(sessionId) {
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/execute/sync`, {
+    script: "document.querySelector('#backup-title').closest('details').open = true;",
+    args: [],
+  });
+  // Four replacements exceed the three-review quota unless earlier native reviews are retired.
+  for (let index = 1; index <= 4; index += 1) {
+    const title = `Native portable review ${index.toString()}`;
+    await setValue(sessionId, "#backup-title", title);
+    await command("POST", `/session/${encodeURIComponent(sessionId)}/execute/sync`, {
+      script: "document.querySelector('#backup-title').form.requestSubmit();",
+      args: [],
+    });
+    const deadline = Date.now() + timeout;
+    let ready = false;
+    while (Date.now() < deadline) {
+      ready = await command("POST", `/session/${encodeURIComponent(sessionId)}/execute/sync`, {
+        script:
+          "return document.querySelector('#backup-preview-heading')?.textContent.includes(arguments[0]) === true && !document.querySelector('#backup-title').form.querySelector('button').disabled;",
+        args: [title],
+      });
+      if (ready) break;
+      await sleep(100);
+    }
+    assert(ready, `Native backup review ${index.toString()} did not settle successfully`);
+    assert.match(
+      await getText(sessionId, '[aria-labelledby="backup-preview-heading"] code'),
+      /^[a-f0-9]{64}$/u,
+    );
+  }
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/execute/sync`, {
+    script: "document.querySelector('#backup-preview-heading').scrollIntoView({block:'start'});",
+    args: [],
+  });
+  const screenshot = await command("GET", `/session/${encodeURIComponent(sessionId)}/screenshot`);
+  assert.equal(typeof screenshot, "string", "Native screenshot must contain encoded PNG bytes");
+  const artifacts = new URL("../../../.cache/e2e/", import.meta.url);
+  await mkdir(artifacts, { recursive: true });
+  await writeFile(new URL("portable-preview.png", artifacts), Buffer.from(screenshot, "base64"));
+}
+
+async function recordProjectOpen(sessionId, title) {
+  // Real IPC exercises the installed command ACL; mock-runtime handler tests do not.
+  const { before, after } = await command(
+    "POST",
+    `/session/${encodeURIComponent(sessionId)}/execute/async`,
+    {
+      script: `
+        const title = arguments[0];
+        const done = arguments[arguments.length - 1];
+        (async () => {
+          const listed = await window.__TAURI_INTERNALS__.invoke("project_list", {
+            request: { schemaVersion: 1, requestId: "01900000-0000-7000-8000-000000000091", scope: "all" },
+          });
+          const before = listed.result.find((project) => project.title === title);
+          if (!before) throw new Error("The created project was not listed");
+          const opened = await window.__TAURI_INTERNALS__.invoke("project_open", {
+            request: { schemaVersion: 1, requestId: "01900000-0000-7000-8000-000000000092", scenarioId: before.scenarioId },
+          });
+          return { before, after: opened.result };
+        })().then(done, (error) => done({ error: typeof error === "string" ? error : JSON.stringify(error) }));
+      `,
+      args: [title],
+    },
+  );
+  assert.equal(after.scenarioId, before.scenarioId);
+  assert.equal(after.revision, before.revision, "Opening must not mutate the scenario revision");
+  assert.equal(typeof after.lastOpenedAt, "string");
+  assert(Number.isFinite(Date.parse(after.lastOpenedAt)), "Native opening must record a timestamp");
+}
+
 async function stopDriver() {
   const child = tauriDriver;
   tauriDriver = undefined;
@@ -197,8 +269,8 @@ async function run() {
 
     await waitForElement(firstSessionId, ".project-home");
     await setValue(firstSessionId, "#create-title", projectTitle);
-    await setValue(firstSessionId, "#horizon-start", "2030-01-01T00:00:00Z");
-    await setValue(firstSessionId, "#horizon-end", "2030-02-01T00:00:00Z");
+    await setValue(firstSessionId, "#first-date", "2030-01-01");
+    await setValue(firstSessionId, "#last-date", "2030-01-31");
     await command("POST", `/session/${encodeURIComponent(firstSessionId)}/execute/sync`, {
       script:
         "const form = document.querySelector('.stacked-form'); if (!(form instanceof HTMLFormElement)) throw new Error('create form not found'); form.requestSubmit(); return null;",
@@ -208,15 +280,19 @@ async function run() {
     const projectHomeText = await waitForProjectResult(firstSessionId, projectTitle);
     assert.match(projectHomeText, new RegExp(projectTitle, "u"));
     const projectSelector = `[aria-label=${JSON.stringify(`Open project ${projectTitle}`)}]`;
-    assert.match(await getText(firstSessionId, projectSelector), /official\.test/u);
+    assert.match(await getText(firstSessionId, projectSelector), /official\.workforce/u);
+    await recordProjectOpen(firstSessionId, projectTitle);
+    await previewSuccessiveBackups(firstSessionId);
 
     await deleteSession();
     const secondSessionId = await createSession();
     assert.notStrictEqual(secondSessionId, firstSessionId);
     await waitForElement(secondSessionId, ".project-home");
-    assert.match(await getText(secondSessionId, projectSelector), /official\.test/u);
+    assert.match(await getText(secondSessionId, projectSelector), /official\.workforce/u);
 
-    console.log("PASS: project persisted across independent native application sessions");
+    console.log(
+      "PASS: native project_open passed its ACL and recorded opening metadata; four backup reviews settled without exhausting custody; project persisted across independent application sessions",
+    );
   } finally {
     try {
       await deleteSession();

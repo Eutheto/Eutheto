@@ -1,14 +1,16 @@
-//! Bounded standalone settings snapshots and one-use reviewed replacement authority.
+//! Bounded local settings snapshots, checked writes and reviewed portable replacement.
 
 use super::{
-    EuthetoApp, MAX_PENDING_PREVIEW_BYTES, MAX_PENDING_PREVIEWS, PendingPortablePreview,
-    join_error, operation_interrupted, pending_tree_memory_charge, preview_total_bytes,
-    protocol_error, store_error, validate_app_setting, validation_error,
+    AppCommand, AppCommandResult, EuthetoApp, MAX_PENDING_PREVIEW_BYTES, MAX_PENDING_PREVIEWS,
+    PendingPortablePreview, join_error, operation_interrupted, pending_tree_memory_charge,
+    preview_total_bytes, protocol_error, store_error, validate_app_setting,
+    validate_app_setting_key, validation_error,
 };
 use eutheto_store::{AppSetting, AppSettingsSnapshot};
 use eutheto_types::{
     APPLICATION_SETTINGS_SCHEMA_VERSION, AppError, ApplicationSettingEntryV1,
-    ApplicationSettingsFormat, CancellationToken, MAX_APPLICATION_SETTINGS_BYTES,
+    ApplicationSettingsFormat, ApplicationSettingsSnapshotV1, ApplicationSettingsValuesV1,
+    ApplicationSettingsWriteResultV1, CancellationToken, MAX_APPLICATION_SETTINGS_BYTES,
     NonsecretSettingsDocumentV1, OperationControl, PortableJsonLimits, RequestId, Revision,
     SettingsChangeV1, SettingsImportApplyDtoV1, SettingsImportApplyRequestV1,
     SettingsImportPreviewDtoV1, validate_nonsecret_portable_json_bytes,
@@ -64,6 +66,114 @@ impl PendingSettingsPreview {
 }
 
 impl EuthetoApp {
+    /// Reads all supported local settings at one authoritative library revision.
+    ///
+    /// # Errors
+    /// Rejects cancellation, storage failure and invalid stored setting values.
+    /// Portable-export policy does not restrict this local read.
+    pub async fn application_settings_snapshot(
+        &self,
+    ) -> Result<ApplicationSettingsSnapshotV1, AppError> {
+        self.check_cancelled()?;
+        let snapshot = self
+            .store
+            .settings_snapshot(SETTING_KEYS)
+            .await
+            .map_err(store_error)?;
+        for (key, entry) in &snapshot.settings {
+            validate_app_setting(key, &entry.value)?;
+        }
+        Ok(ApplicationSettingsSnapshotV1 {
+            schema_version: APPLICATION_SETTINGS_SCHEMA_VERSION,
+            library_revision: snapshot.library_revision,
+            settings: local_values(snapshot.settings),
+        })
+    }
+
+    pub(super) async fn execute_setting_command(
+        &self,
+        command: AppCommand,
+    ) -> Result<AppCommandResult, AppError> {
+        let (request_id, expected_library_revision, key, value, notification_code) = match command {
+            AppCommand::SetSetting {
+                request_id,
+                expected_library_revision,
+                key,
+                value,
+            } => {
+                validate_app_setting(&key, &value)?;
+                (
+                    request_id,
+                    expected_library_revision,
+                    key,
+                    Some(value),
+                    "settings.updated",
+                )
+            }
+            AppCommand::DeleteSetting {
+                request_id,
+                expected_library_revision,
+                key,
+            } => {
+                validate_app_setting_key(&key)?;
+                (
+                    request_id,
+                    expected_library_revision,
+                    key,
+                    None,
+                    "settings.deleted",
+                )
+            }
+            _ => unreachable!("dispatcher passes only setting commands"),
+        };
+        let before = self
+            .store
+            .settings_snapshot(SETTING_KEYS)
+            .await
+            .map_err(store_error)?;
+        if before.library_revision != expected_library_revision {
+            return Err(AppError::Conflict {
+                expected_revision: expected_library_revision,
+                actual_revision: before.library_revision,
+            });
+        }
+        for (key, entry) in &before.settings {
+            validate_app_setting(key, &entry.value)?;
+        }
+        let mut after = before.settings.clone();
+        if let Some(value) = value {
+            after.insert(
+                key,
+                AppSetting {
+                    value,
+                    updated_at: self.clock.now(),
+                },
+            );
+        } else {
+            after.remove(&key);
+        }
+        let committed = self
+            .store
+            .replace_settings(SETTING_KEYS, before, after, self.cancellation.clone())
+            .await
+            .map_err(store_error)?;
+        if committed.changed {
+            self.publish_app_notification(
+                request_id,
+                notification_code,
+                "Application settings changed.",
+            );
+        }
+        Ok(AppCommandResult::SettingsWritten(
+            ApplicationSettingsWriteResultV1 {
+                schema_version: APPLICATION_SETTINGS_SCHEMA_VERSION,
+                library_revision: committed.library_revision,
+                settings: local_values(committed.settings),
+                changed: committed.changed,
+            },
+        ))
+    }
+
     /// Captures and serializes only supported portable nonsecret settings.
     ///
     /// # Errors
@@ -326,6 +436,18 @@ impl EuthetoApp {
         ) {
             previews.remove(&preview_id);
         }
+    }
+}
+
+fn local_values(mut settings: BTreeMap<String, AppSetting<Value>>) -> ApplicationSettingsValuesV1 {
+    let entry = |entry: AppSetting<Value>| ApplicationSettingEntryV1 {
+        value: entry.value,
+        updated_at: entry.updated_at,
+    };
+    ApplicationSettingsValuesV1 {
+        appearance: settings.remove("appearance").map(entry),
+        locale: settings.remove("locale").map(entry),
+        units: settings.remove("units").map(entry),
     }
 }
 

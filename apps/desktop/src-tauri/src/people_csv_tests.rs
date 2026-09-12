@@ -127,10 +127,11 @@ async fn csv_native_snapshot_approval_commit_reports_and_undo_remain_separate() 
         &window,
         "project_create",
         &json!({
+            "schemaVersion":1,
             "requestId":next()?, "title":"CSV native integration", "description":"",
             "domainPack":{"id":"official.workforce","schemaVersion":1},
             "settings":{"timeZone":"UTC","locale":"en-US","units":"metric",
-                "horizon":{"start":"2026-09-01T00:00:00Z","end":"2026-09-02T00:00:00Z"},"gapPolicy":"reject","overlapPolicy":"earlier"}
+                "firstDate":"2026-09-01","lastDate":"2026-09-01","gapPolicy":"reject","overlapPolicy":"earlier"}
         }),
     )?;
     let scenario: ScenarioId = created.result["scenarioId"]
