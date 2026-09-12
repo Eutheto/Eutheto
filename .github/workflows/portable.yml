@@ -13,6 +13,11 @@ on:
   schedule:
     - cron: "13 04 * * 1"
   workflow_dispatch:
+    inputs:
+      include_candidate_builds:
+        description: Build non-distributable OR-Tools alternatives
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -49,6 +54,7 @@ jobs:
         id: policy
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.base_ref }}
           EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
@@ -63,11 +69,11 @@ jobs:
           if event_name == "pull_request":
               base_sha = os.environ["BASE_SHA"]
               changed = subprocess.run(
-                  ["git", "diff", "--name-only", f"{base_sha}...HEAD"],
+                  ["git", "diff", "--name-only", "--no-renames", "-z", f"{base_sha}...HEAD"],
                   check=True,
                   stdout=subprocess.PIPE,
                   text=True,
-              ).stdout.splitlines()
+              ).stdout.split("\0")[:-1]
 
           portable_prefixes = (
               ".cargo/",
@@ -122,6 +128,21 @@ jobs:
               matches(path, intel_prefixes, intel_exact) for path in changed
           )
           run_matrix = run_matrix or include_intel
+          if event_name == "pull_request" and os.environ["BASE_REF"] == "phase/06-desktop":
+              def source_only(path):
+                  return (
+                      path.startswith("apps/desktop/src/")
+                      and not path.startswith("apps/desktop/src/api/")
+                      or path.startswith("apps/desktop/public/")
+                      or path == "apps/desktop/index.html"
+                      or path.startswith("docs/") and path.endswith(".md")
+                      or "/" not in path and path.endswith(".md")
+                      or path in {".github/README.md", ".github/CONTRIBUTING.md"}
+                  )
+
+              run_matrix = not changed or not all(source_only(path) for path in changed)
+              include_intel = run_matrix
+
           targets = [
               {
                   "name": "Ubuntu x86_64",
@@ -374,7 +395,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   portable-gate:
-    name: Portable integration gate
+    name: ${{ github.event_name == 'pull_request' && github.base_ref == 'phase/06-desktop' && 'Phase06 package / native policy' || 'Portable integration gate' }}
     if: always()
     needs:
       - select-targets
@@ -389,16 +410,25 @@ jobs:
           RUN_MATRIX: ${{ needs.select-targets.outputs.run_matrix }}
         run: |
           test "$PLAN_RESULT" = "success"
-          if [ "$RUN_MATRIX" = "true" ]; then
-            test "$MATRIX_RESULT" = "success"
-          else
-            test "$MATRIX_RESULT" = "skipped"
-          fi
+          case "$RUN_MATRIX" in
+            true)
+              test "$MATRIX_RESULT" = "success"
+              echo "All selected native source targets succeeded." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            false)
+              test "$MATRIX_RESULT" = "skipped"
+              echo "Native targets not run: deferred by path policy. This gate is not platform acceptance evidence." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "Missing or unknown native target selection." >&2
+              exit 1
+              ;;
+          esac
 
 
   ortools-candidate-source-build-probe:
     name: ${{ matrix.name }} / OR-Tools candidate source build
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.include_candidate_builds
     strategy:
       fail-fast: false
       matrix:

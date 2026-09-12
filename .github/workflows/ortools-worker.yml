@@ -46,6 +46,7 @@ jobs:
         id: policy
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.base_ref }}
           EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
@@ -60,11 +61,11 @@ jobs:
           if event_name == "pull_request":
               base_sha = os.environ["BASE_SHA"]
               changed = subprocess.run(
-                  ["git", "diff", "--name-only", f"{base_sha}...HEAD"],
+                  ["git", "diff", "--name-only", "--no-renames", "-z", f"{base_sha}...HEAD"],
                   check=True,
                   stdout=subprocess.PIPE,
                   text=True,
-              ).stdout.splitlines()
+              ).stdout.split("\0")[:-1]
 
           worker_prefixes = (
               "apps/desktop/",
@@ -119,6 +120,21 @@ jobs:
               matches(path, intel_prefixes, intel_exact) for path in changed
           )
           run_workers = run_workers or include_intel
+          if event_name == "pull_request" and os.environ["BASE_REF"] == "phase/06-desktop":
+              def source_only(path):
+                  return (
+                      path.startswith("apps/desktop/src/")
+                      and not path.startswith("apps/desktop/src/api/")
+                      or path.startswith("apps/desktop/public/")
+                      or path == "apps/desktop/index.html"
+                      or path.startswith("docs/") and path.endswith(".md")
+                      or "/" not in path and path.endswith(".md")
+                      or path in {".github/README.md", ".github/CONTRIBUTING.md"}
+                  )
+
+              run_workers = not changed or not all(source_only(path) for path in changed)
+              include_intel = run_workers
+
           targets = [
               {
                   "name": "Linux x86_64",
@@ -578,7 +594,7 @@ jobs:
           "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
   worker-gate:
-    name: OR-Tools worker integration gate
+    name: ${{ github.event_name == 'pull_request' && github.base_ref == 'phase/06-desktop' && 'Phase06 package / packaged-worker policy' || 'OR-Tools worker integration gate' }}
     if: always()
     needs:
       - select-targets
@@ -595,10 +611,19 @@ jobs:
           WINDOWS_RESULT: ${{ needs.windows-native-worker.result }}
         run: |
           test "$PLAN_RESULT" = "success"
-          if [ "$RUN_WORKERS" = "true" ]; then
-            test "$UNIX_RESULT" = "success"
-            test "$WINDOWS_RESULT" = "success"
-          else
-            test "$UNIX_RESULT" = "skipped"
-            test "$WINDOWS_RESULT" = "skipped"
-          fi
+          case "$RUN_WORKERS" in
+            true)
+              test "$UNIX_RESULT" = "success"
+              test "$WINDOWS_RESULT" = "success"
+              echo "All selected approved worker/package targets succeeded." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            false)
+              test "$UNIX_RESULT" = "skipped"
+              test "$WINDOWS_RESULT" = "skipped"
+              echo "Worker/package targets not run: deferred by path policy. This gate is not packaged-artifact acceptance evidence." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "Missing or unknown worker target selection." >&2
+              exit 1
+              ;;
+          esac

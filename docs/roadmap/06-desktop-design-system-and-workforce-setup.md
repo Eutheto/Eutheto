@@ -496,6 +496,8 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 
 ## Ordered work packages
 
+For the remainder of this phase, follow the user-authorized [temporary integration workflow](../contributors/git-workflow.md#temporary-phase06-integration): coherent package PRs target protected `phase/06-desktop`, consume exact verified integrated phase commits, and receive full integrated-phase checkpoints after packages 3, 6, 9, and 10 below. This changes integration cadence, not package order, issue IDs, acceptance criteria, manual checkpoint, or final-main authority.
+
 1. **UI-001 — versioned foundation:** lock the compatible stack, migrate breaking-major APIs cleanly, configure Tailwind 4/Vite, copy/review minimal shadcn-vue/Reka components, and define semantic tokens/themes/motion/typography.
 2. **Generated API boundary:** generate DTOs/commands/events, implement the only Tauri client layer, strict import restrictions, typed errors/revision handling, event cleanup, and minimal capabilities.
 3. **UI-002 — shell/navigation and portability:** first launch, project home, proposed `.eutheto` inspect/import/export, Backup & Restore route, intent-led preview/collision/add/replace/safety-backup/recovery flows, workspace/view stores, command palette/shortcuts, focus restoration, empty/error boundaries.

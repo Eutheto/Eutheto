@@ -234,6 +234,8 @@ CI:
 - `security.yml`: deny/audit, pnpm lock/license/audit, secret scans, optional REUSE, SBOM smoke, capability diff;
 - benchmark/fuzz are scheduled/path-gated and never run arbitrary PR scripts; release has protected separate build/sign jobs.
 
+The user-authorized [temporary Phase06 integration trial](../contributors/git-workflow.md#temporary-phase06-integration) is the sole bounded cadence exception for exact phase-target PRs: locked Nix evaluation plus source/frontend-build/security checks on every package, risk-selected full matrices, and four named full integrated-phase checkpoints. It does not change protected-main, final phase, artifact, or release gates.
+
 Fixed clock/time zone/locale/seed/thread count and temp directories are mandatory test context. Future coverage gates are established: verifier/migrations/protocol ≥90% branch; command/persistence/domain/compiler ≥80% line; frontend business logic ≥75% line; documented exceptions only, never excluding difficult code to meet a number.
 
 ### Exact phase exit evidence
