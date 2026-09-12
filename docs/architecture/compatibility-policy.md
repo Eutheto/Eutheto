@@ -111,6 +111,42 @@ ordering where checksums depend on serialized bytes, and reject scenario revisio
 clients. Current writers never emit V1 report/result data. Legacy readers neither construct a V2
 result nor grant acceptance authority.
 
+## Phase 06 settings and library-operation compatibility
+
+| Surface | Current writer | Supported reader |
+|---|---:|---|
+| Standalone `eutheto/application-settings` document | V1 | V1 only; no legacy reader or extensions |
+| Settings import/export requests and results | V1 | The matching co-bundled desktop client |
+| Operation prepare/progress | V1 | The matching co-bundled desktop client |
+| API response envelope | V1, unchanged | The matching co-bundled desktop client |
+| Build-owned locked-workspace license inventory | V2 | V2 only, with explicit `lockedWorkspace` scope |
+
+The desktop Rust adapter and generated TypeScript client are one co-generated, co-bundled
+reader/writer pair. Independently deployed or mixed-version desktop clients are not supported.
+The additive library operation context, settings purposes and `publishingFile` progress phase
+do not change existing scenario context encoding. Unknown tags and outer versions fail safely;
+old clients cannot initiate library operations. This is not a claim that every older V1 decoder
+accepts the new tags.
+
+`ApiResponseDto.currentRevision` identifies the authoritative context revision, whether scenario
+or library, matching existing backup responses. Settings preview/export report their captured
+library revision; apply reports its committed or unchanged library revision. Unrevisioned reads
+and discard report null. Scenario response meaning is unchanged.
+
+Standalone settings are a complete replacement of only `appearance`, `locale`, and `units`.
+Entries contain both `value` and `updatedAt`; omitted keys mean reviewed removal, and an empty
+settings map means clear that scope. Device settings, credentials and unrelated library data
+are excluded. Unknown keys/fields/versions, duplicate source keys, invalid timestamps/values
+and oversized documents are rejected. Local validation and the existing nonsecret portable
+policy both apply: an unportable local value makes the whole export fail, never silently omit
+a key. A review binds exact before/after entries and library revision; valid apply ownership
+is one-use, including after failure. No database migration or backup-restore mode is introduced.
+
+Source documents and compact settings request/result families are bounded at64KiB; encoded
+settings envelopes allow136KiB. The offline inventory is bounded at2MiB compact/2,368KiB wire,
+with at most4,096packages. It reports the locked workspace, not exactly linked installer
+dependencies or completed license clearance; `NOASSERTION` retains its original meaning.
+
 ## Worker protocol compatibility
 
 The authoritative protocol source, protocol version declaration, generator and runtime, matched upstream protobuf inputs, generated bindings, worker, desktop adapter, golden frames, hashes, and manifests are one reviewed contract. Peers negotiate before accepting model/request traffic. An unsupported version, capability, target, source/hash, or lifecycle contract produces a typed incompatibility and starts no solve.

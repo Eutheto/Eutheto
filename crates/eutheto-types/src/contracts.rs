@@ -1074,7 +1074,7 @@ pub struct ApiResponseDto<T> {
     pub schema_version: u32,
     /// Request correlation identity.
     pub request_id: RequestId,
-    /// Current revision when the response is scenario-specific.
+    /// Authoritative context revision (scenario or library), or `None` for an unrevisioned result.
     pub current_revision: Option<Revision>,
     /// Nonblocking user-safe warnings.
     pub warnings: Vec<ValidationIssue>,

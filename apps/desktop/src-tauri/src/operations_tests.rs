@@ -520,3 +520,99 @@ async fn abandoned_preflight_stays_charged_until_its_blocking_work_finishes() ->
         .map_err(boxed)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn settings_operations_require_their_exact_library_revision_context() -> TestResult {
+    let (_directory, registry, _) = fixture().await?;
+    for (purpose, expected_library_revision) in [
+        (OperationPurposeV1::SettingsImportPreview, None),
+        (OperationPurposeV1::SettingsExport, None),
+        (
+            OperationPurposeV1::SettingsImportApply,
+            Some(Revision::new(7)),
+        ),
+    ] {
+        let mut request = request()?;
+        request.purpose = purpose;
+        let scenario_context = request.context.clone();
+        assert_eq!(
+            registry
+                .prepare("main", &request)
+                .err()
+                .ok_or("settings accepted scenario authority")?
+                .code,
+            "operation.context_mismatch"
+        );
+        request.context = OperationContextV1::Library {
+            expected_library_revision: if expected_library_revision.is_some() {
+                None
+            } else {
+                Some(Revision::new(7))
+            },
+        };
+        assert_eq!(
+            registry
+                .prepare("main", &request)
+                .err()
+                .ok_or("incorrect settings revision admission")?
+                .code,
+            "operation.library_revision_mismatch"
+        );
+        request.context = OperationContextV1::Library {
+            expected_library_revision,
+        };
+        let prepared = registry.prepare("main", &request).map_err(boxed)?;
+        let mut mismatch = request.clone();
+        mismatch.context = scenario_context;
+        assert_eq!(
+            run(&registry, "main", &prepared, &mismatch)
+                .await
+                .err()
+                .ok_or("cross-kind claim")?
+                .code,
+            "operation.claim_mismatch"
+        );
+        mismatch.context = OperationContextV1::Library {
+            expected_library_revision: Some(Revision::new(8)),
+        };
+        assert_eq!(
+            run(&registry, "main", &prepared, &mismatch)
+                .await
+                .err()
+                .ok_or("rebound library revision")?
+                .code,
+            "operation.claim_mismatch"
+        );
+        // Invalid claims preserve the original reservation; only its exact claim consumes it.
+        run(&registry, "main", &prepared, &request)
+            .await
+            .map_err(boxed)?;
+        assert_eq!(
+            run(&registry, "main", &prepared, &request)
+                .await
+                .err()
+                .ok_or("replayed library operation")?
+                .code,
+            "operation.not_active"
+        );
+    }
+    for purpose in [
+        OperationPurposeV1::ScenarioSummary,
+        OperationPurposeV1::CsvApply,
+    ] {
+        let mut request = request()?;
+        request.purpose = purpose;
+        request.context = OperationContextV1::Library {
+            expected_library_revision: Some(Revision::new(7)),
+        };
+        assert_eq!(
+            registry
+                .prepare("main", &request)
+                .err()
+                .ok_or("scenario purpose accepted library authority")?
+                .code,
+            "operation.context_mismatch"
+        );
+    }
+    Ok(())
+}

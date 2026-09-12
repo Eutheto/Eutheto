@@ -124,9 +124,13 @@ Seating, repair/comparison product flows, AI, and signed releases remain roadmap
 Phase 06 has added light/dark design-system foundations and a generated, bounded
 desktop setup API with native operation ownership, progress, and cancellation.
 Native people-CSV commands support picker-owned immutable snapshots, reviewed
-atomic imports, and separate rejected-row report saves. These are prerequisites
-for the Workforce editors, not a complete desktop planning or CSV-import screen.
-Use the headless Workforce workflow below for the currently available end-to-end
+atomic imports, and separate rejected-row report saves. Native application-settings
+import/export now provides library-revision-bound review, atomic replacement of
+nonsecret portable settings, and no-clobber saves. About APIs expose a bounded
+offline locked-workspace license inventory and redacted location status—not
+exact installer attribution or completed license clearance. These boundaries
+are prerequisites for the editors and settings/About screens, not completed UI.
+Use the headless Workforce workflow below for the available end-to-end
 optimization path.
 
 ## Quick start

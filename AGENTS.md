@@ -60,6 +60,7 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 - Secrets never enter Vue/JavaScript state, logs, SQLite, exports, diagnostics, Nix derivations, repository files, or normal IPC payloads.
 - Credentials are entered through a Rust/native-owned secure surface and stored only in the operating-system credential store; Vue receives opaque references and status.
 - Native-selected CSV paths and raw snapshots stay in Rust. Vue receives opaque source IDs, bounded review DTOs, and explicitly selected inert samples, not filesystem authority or a second CSV parser.
+- Standalone settings import is a library-revision-bound complete replacement of only `appearance`, `locale`, and `units`, including entry timestamps and reviewed removals. Keep picker paths native, excluded device/credential state untouched, and active review custody charged until its owner settles.
 - Use least-privilege Tauri commands, capabilities, CSP, filesystem grants, CI permissions, and release jobs.
 - Do not add telemetry or network access by default. AI and provider integrations remain optional and explicit.
 - Never commit `.env` files, credentials, signing material, local databases, captured user scenarios, or unsanitized support bundles.

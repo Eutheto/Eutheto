@@ -108,6 +108,7 @@ export interface ApiErrorDto {
 export interface ApiResponseDto<T> {
   readonly schemaVersion: typeof API_SCHEMA_VERSION;
   readonly requestId: UuidV7;
+  /** Authoritative revision for this response's scenario or library context; null for unrevisioned reads. */
   readonly currentRevision: Revision | null;
   readonly warnings: readonly ValidationIssue[];
   readonly result: T;
@@ -753,12 +754,20 @@ export type OperationPurposeV1 =
   | { readonly kind: "csvDetect" }
   | { readonly kind: "csvPreview" }
   | { readonly kind: "csvApply" }
-  | { readonly kind: "csvReportSave" };
-export interface OperationContextV1 {
+  | { readonly kind: "csvReportSave" }
+  | { readonly kind: "settingsImportPreview" }
+  | { readonly kind: "settingsImportApply" }
+  | { readonly kind: "settingsExport" };
+export type ScenarioOperationContextV1 = {
   readonly kind: "scenario";
   readonly scenarioId: UuidV7;
   readonly expectedRevision: Revision | null;
-}
+};
+export type LibraryOperationContextV1 = {
+  readonly kind: "library";
+  readonly expectedLibraryRevision: Revision | null;
+};
+export type OperationContextV1 = ScenarioOperationContextV1 | LibraryOperationContextV1;
 export interface OperationPreparedV1 {
   readonly schemaVersion: 1;
   readonly operationId: UuidV7;
@@ -780,7 +789,8 @@ export type OperationPhaseV1 =
   | "preparingResponse"
   | "selectingFile"
   | "detectingFormat"
-  | "publishingReport";
+  | "publishingReport"
+  | "publishingFile";
 export interface OperationProgressV1 {
   readonly eventVersion: 1;
   readonly timestamp: string;
@@ -790,6 +800,112 @@ export interface OperationProgressV1 {
   readonly context: OperationContextV1;
   readonly sequence: number;
   readonly phase: OperationPhaseV1;
+}
+
+export interface ApplicationSettingValues {
+  readonly appearance: {
+    readonly theme?: "system" | "light" | "dark";
+    readonly reducedMotion?: boolean;
+  };
+  readonly locale: string;
+  readonly units: "metric" | "us-customary";
+}
+export type ApplicationSettingKey = keyof ApplicationSettingValues;
+export interface ApplicationSettingEntryV1<
+  K extends ApplicationSettingKey = ApplicationSettingKey,
+> {
+  readonly value: ApplicationSettingValues[K];
+  readonly updatedAt: string;
+}
+export type NonsecretSettingsDocumentV1 = {
+  readonly format: "eutheto/application-settings";
+  readonly schemaVersion: 1;
+  readonly settings: { readonly [K in ApplicationSettingKey]?: ApplicationSettingEntryV1<K> };
+};
+export type SettingsChangeV1 = {
+  readonly [K in ApplicationSettingKey]: {
+    readonly key: K;
+    readonly before: ApplicationSettingEntryV1<K> | null;
+    readonly after: ApplicationSettingEntryV1<K> | null;
+  };
+}[ApplicationSettingKey];
+export interface SettingsImportPreviewV1 {
+  readonly kind: "preview";
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly sourceSha256: string;
+  readonly approvalSha256: string;
+  readonly libraryRevision: Revision;
+  readonly changes: readonly SettingsChangeV1[];
+}
+export interface SettingsImportAppliedV1 {
+  readonly kind: "applied";
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly libraryRevision: Revision;
+  readonly changed: boolean;
+}
+export interface SettingsImportDiscardedV1 {
+  readonly kind: "discarded";
+  readonly schemaVersion: 1;
+}
+export type SettingsImportResultV1 =
+  SettingsImportPreviewV1 | SettingsImportAppliedV1 | SettingsImportDiscardedV1;
+export type SettingsPreviewTarget =
+  | { readonly kind: "preview"; readonly previewId: UuidV7 }
+  | { readonly kind: "creator"; readonly operationId: UuidV7; readonly requestId: UuidV7 };
+export type SettingsImportRequestV1 =
+  | {
+      readonly action: "preview";
+      readonly schemaVersion: 1;
+      readonly requestId: UuidV7;
+      readonly operationId: UuidV7;
+    }
+  | {
+      readonly action: "apply";
+      readonly schemaVersion: 1;
+      readonly requestId: UuidV7;
+      readonly operationId: UuidV7;
+      readonly previewId: UuidV7;
+      readonly approvalSha256: string;
+      readonly expectedLibraryRevision: Revision;
+    }
+  | {
+      readonly action: "discard";
+      readonly schemaVersion: 1;
+      readonly requestId: UuidV7;
+      readonly target: SettingsPreviewTarget;
+    };
+export interface SettingsExportRequestV1 {
+  readonly schemaVersion: 1;
+  readonly requestId: UuidV7;
+  readonly operationId: UuidV7;
+}
+export interface SettingsExportV1 {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
+  readonly writtenBytes: number;
+}
+export interface LicenseInventoryPackageV2 {
+  readonly ecosystem: "cargo" | "npm";
+  readonly name: string;
+  readonly version: string;
+  readonly kind: "workspace" | "dependency";
+  readonly licenseConcluded: string;
+  readonly source: string;
+  readonly checksum?: { readonly algorithm: "SHA256" | "SHA512"; readonly value: string };
+}
+/** Locked-workspace metadata, not linked-artifact attribution or license approval. */
+export interface LicenseInventoryV2 {
+  readonly scope: "lockedWorkspace";
+  readonly schemaVersion: 2;
+  readonly generatedBy: "cargo xtask licenses generate";
+  readonly authoritativeInputs: readonly [
+    "Cargo.lock",
+    "pnpm-lock.yaml",
+    "xtask/supply-chain-inputs.json",
+  ];
+  readonly packages: readonly LicenseInventoryPackageV2[];
 }
 
 export type PeopleCsvDialect = "comma" | "semicolon" | "tab";
@@ -3476,11 +3592,24 @@ const isFullValidation = shape<FullValidationResultV2>({
   revision: isRevision,
   report: shape({ issues: arrayOf(isValidationIssue, 100_000) }),
 });
-const isOperationContext = shape<OperationContextV1>({
-  kind: literal("scenario"),
-  scenarioId: isUuid,
-  expectedRevision: nullable(isRevision),
-});
+const isOperationContext = union<OperationContextV1>(
+  shape<ScenarioOperationContextV1>({
+    kind: literal("scenario"),
+    scenarioId: isUuid,
+    expectedRevision: nullable(isRevision),
+  }),
+  shape<LibraryOperationContextV1>({
+    kind: literal("library"),
+    expectedLibraryRevision: nullable(isRevision),
+  }),
+);
+function sameOperationContext(left: OperationContextV1, right: OperationContextV1): boolean {
+  return left.kind === "scenario"
+    ? right.kind === "scenario" &&
+        left.scenarioId === right.scenarioId &&
+        left.expectedRevision === right.expectedRevision
+    : right.kind === "library" && left.expectedLibraryRevision === right.expectedLibraryRevision;
+}
 const isOperationPrepared = shape<OperationPreparedV1>({
   schemaVersion: literal(1),
   operationId: isUuid,
@@ -3511,8 +3640,142 @@ const isOperationProgress = shape<OperationProgressV1>({
     "selectingFile",
     "detectingFormat",
     "publishingReport",
+    "publishingFile",
   ),
 });
+
+const SETTINGS_COMPACT_BYTES = 64 * 1024;
+const SETTINGS_WIRE_BYTES = 136 * 1024;
+const INVENTORY_COMPACT_BYTES = 2 * 1_048_576;
+const INVENTORY_WIRE_BYTES = 2368 * 1024;
+const applicationSettingGuards: {
+  readonly [K in ApplicationSettingKey]: Guard<ApplicationSettingValues[K]>;
+} = {
+  appearance: shape<ApplicationSettingValues["appearance"]>({
+    theme: optional(choices("system", "light", "dark")),
+    reducedMotion: optional(isBoolean),
+  }),
+  locale: (value: unknown): value is string =>
+    typeof value === "string" &&
+    value.length <= 64 &&
+    /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value),
+  units: choices("metric", "us-customary"),
+};
+function applicationSettingEntry<K extends ApplicationSettingKey>(
+  key: K,
+): Guard<ApplicationSettingEntryV1<K>> {
+  return shape<ApplicationSettingEntryV1<K>>({
+    value: applicationSettingGuards[key],
+    updatedAt: isTimestamp,
+  });
+}
+const settingsChangeGuards = {
+  appearance: shape<Extract<SettingsChangeV1, { readonly key: "appearance" }>>({
+    key: literal("appearance"),
+    before: nullable(applicationSettingEntry("appearance")),
+    after: nullable(applicationSettingEntry("appearance")),
+  }),
+  locale: shape<Extract<SettingsChangeV1, { readonly key: "locale" }>>({
+    key: literal("locale"),
+    before: nullable(applicationSettingEntry("locale")),
+    after: nullable(applicationSettingEntry("locale")),
+  }),
+  units: shape<Extract<SettingsChangeV1, { readonly key: "units" }>>({
+    key: literal("units"),
+    before: nullable(applicationSettingEntry("units")),
+    after: nullable(applicationSettingEntry("units")),
+  }),
+};
+const isSettingsChange = union<SettingsChangeV1>(
+  settingsChangeGuards.appearance,
+  settingsChangeGuards.locale,
+  settingsChangeGuards.units,
+);
+function isChangedSettingEntry(change: SettingsChangeV1): boolean {
+  if (change.before === null || change.after === null) return change.before !== change.after;
+  if (change.before.updatedAt !== change.after.updatedAt) return true;
+  if (change.key === "appearance") {
+    return (
+      change.before.value.theme !== change.after.value.theme ||
+      change.before.value.reducedMotion !== change.after.value.reducedMotion
+    );
+  }
+  return change.before.value !== change.after.value;
+}
+const settingsPreviewShape = shape<SettingsImportPreviewV1>({
+  kind: literal("preview"),
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  sourceSha256: isDigest,
+  approvalSha256: isDigest,
+  libraryRevision: isRevision,
+  changes: arrayOf(isSettingsChange, 3),
+});
+const isSettingsPreview = (value: unknown): value is SettingsImportPreviewV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) &&
+  settingsPreviewShape(value) &&
+  value.changes.every(
+    (change, index) =>
+      isChangedSettingEntry(change) &&
+      (index === 0 || (value.changes[index - 1]?.key ?? "") < change.key),
+  );
+const settingsAppliedShape = shape<SettingsImportAppliedV1>({
+  kind: literal("applied"),
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  libraryRevision: isRevision,
+  changed: isBoolean,
+});
+const isSettingsApplied = (value: unknown): value is SettingsImportAppliedV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) && settingsAppliedShape(value);
+const isSettingsDiscarded = shape<SettingsImportDiscardedV1>({
+  kind: literal("discarded"),
+  schemaVersion: literal(1),
+});
+const settingsExportShape = shape<SettingsExportV1>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  writtenBytes: (value: unknown): value is number =>
+    isRevision(value) && value > 0 && value <= SETTINGS_COMPACT_BYTES,
+});
+const isSettingsExport = (value: unknown): value is SettingsExportV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) && settingsExportShape(value);
+// UTF-8 metadata limits are byte limits, not JavaScript code-unit limits.
+function inventoryText(maximum: number): Guard<string> {
+  return (value: unknown): value is string => isCsvText(value, maximum) && value.length > 0;
+}
+const inventoryChecksumShape = shape<NonNullable<LicenseInventoryPackageV2["checksum"]>>({
+  algorithm: choices("SHA256", "SHA512"),
+  value: (value: unknown): value is string =>
+    typeof value === "string" && /^[0-9a-fA-F]{64}(?:[0-9a-fA-F]{64})?$/.test(value),
+});
+const isInventoryChecksum = (
+  value: unknown,
+): value is NonNullable<LicenseInventoryPackageV2["checksum"]> =>
+  inventoryChecksumShape(value) && value.value.length === (value.algorithm === "SHA256" ? 64 : 128);
+const isInventoryPackage = shape<LicenseInventoryPackageV2>({
+  ecosystem: choices("cargo", "npm"),
+  name: inventoryText(1024),
+  version: inventoryText(1024),
+  kind: choices("workspace", "dependency"),
+  licenseConcluded: inventoryText(4096),
+  source: inventoryText(1024),
+  checksum: optional(isInventoryChecksum),
+});
+const inventoryShape = shape<LicenseInventoryV2>({
+  scope: literal("lockedWorkspace"),
+  schemaVersion: literal(2),
+  generatedBy: literal("cargo xtask licenses generate"),
+  authoritativeInputs: (value: unknown): value is LicenseInventoryV2["authoritativeInputs"] =>
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value[0] === "Cargo.lock" &&
+    value[1] === "pnpm-lock.yaml" &&
+    value[2] === "xtask/supply-chain-inputs.json",
+  packages: arrayOf(isInventoryPackage, 4096),
+});
+const isLicenseInventory = (value: unknown): value is LicenseInventoryV2 =>
+  boundedJson(value, INVENTORY_COMPACT_BYTES) && inventoryShape(value);
 
 const CSV_SOURCE_BYTES = 16 * 1_048_576;
 const CSV_PREVIEW_WIRE_BYTES = ((CSV_SOURCE_BYTES + 65_536) * 9) / 8 + 65_536;
@@ -3958,27 +4221,27 @@ function inactiveOperation(): Error & ApiErrorDto {
   return Object.assign(new Error(error.message), error);
 }
 
-/** One immutable scenario/revision presentation context; dispose it when that context changes. */
-export class SetupOperationScope {
-  readonly #context: OperationContextV1;
+/** Shared channel and reservation ownership for the two concrete presentation contexts. */
+class OperationScope<C extends OperationContextV1> {
+  readonly #context: C;
   readonly #windowLabel: string;
   readonly #callbacks: NativeCallbackRegistry;
   readonly #running = new Set<{ readonly dispose: () => void }>();
   #disposed = false;
 
-  constructor(scenarioId: UuidV7, expectedRevision: Revision | null) {
-    if (!isUuid(scenarioId) || (expectedRevision !== null && !isRevision(expectedRevision))) {
-      throw new RangeError("A canonical scenario identity and exact safe revision are required");
-    }
+  constructor(context: C) {
+    if (!isOperationContext(context))
+      throw new RangeError("A canonical operation context and exact safe revision are required");
     const callbacks: unknown = Reflect.get(window, "__TAURI_INTERNALS__");
     if (!hasCallbackRegistry(callbacks))
       throw new Error("The native operation channel is unavailable");
     this.#callbacks = callbacks;
     this.#windowLabel = getCurrentWebviewWindow().label;
-    this.#context = Object.freeze({ kind: "scenario", scenarioId, expectedRevision });
+    Object.freeze(context);
+    this.#context = context;
   }
 
-  get context(): OperationContextV1 {
+  get context(): C {
     return this.#context;
   }
 
@@ -3989,16 +4252,39 @@ export class SetupOperationScope {
   }
 
   run<T>(
-    command: SetupOperationCommand,
+    command: SetupOperationCommand | "settings_import_nonsecret" | "settings_export_nonsecret",
     purpose: OperationPurposeV1,
     payload: object,
     guard: Guard<T>,
     maximumBytes: number,
     revisionKey: ResponseRevision<T>,
     onProgress?: (event: OperationProgressV1) => void,
+    onAbandon?: () => void,
   ): SetupOperation<T> {
     if (this.#disposed) throw inactiveOperation();
-    if (!boundedJson(payload, RESPONSE_MAX_BYTES))
+    const libraryPurpose =
+      purpose.kind === "settingsImportPreview" ||
+      purpose.kind === "settingsImportApply" ||
+      purpose.kind === "settingsExport";
+    if (
+      (this.#context.kind === "library") !== libraryPurpose ||
+      (this.#context.kind === "scenario" &&
+        (command === "settings_import_nonsecret" || command === "settings_export_nonsecret"))
+    )
+      throw new RangeError("The operation purpose belongs to another context kind");
+    if (
+      this.#context.kind === "library" &&
+      ((purpose.kind === "settingsImportApply") !==
+        (this.#context.expectedLibraryRevision !== null) ||
+        command !==
+          (purpose.kind === "settingsExport"
+            ? "settings_export_nonsecret"
+            : "settings_import_nonsecret"))
+    )
+      throw new RangeError(
+        "The settings operation requires its matching command and revision context",
+      );
+    if (!boundedJson(payload, libraryPurpose ? SETTINGS_COMPACT_BYTES : RESPONSE_MAX_BYTES))
       throw new RangeError("The operation request exceeds its JSON limits");
     // Capture before the prepare await: later edits to a Vue draft cannot rebind this request.
     const snapshot: unknown = JSON.parse(JSON.stringify(payload));
@@ -4066,6 +4352,7 @@ export class SetupOperationScope {
     const owned = {
       dispose: (): void => {
         void release().catch(() => undefined);
+        onAbandon?.();
       },
     };
     this.#running.add(owned);
@@ -4094,8 +4381,7 @@ export class SetupOperationScope {
               value.operationId !== operationId ||
               value.requestId !== requestId ||
               value.windowLabel !== this.#windowLabel ||
-              value.context.scenarioId !== context.scenarioId ||
-              value.context.expectedRevision !== context.expectedRevision ||
+              !sameOperationContext(value.context, context) ||
               value.sequence <= sequence
             )
               return;
@@ -4112,13 +4398,32 @@ export class SetupOperationScope {
         };
         const response = await call(
           command,
-          {
-            ...snapshot,
-            requestId,
-            operationId,
-            scenarioId: context.scenarioId,
-            expectedRevision: context.expectedRevision,
-          },
+          context.kind === "scenario"
+            ? {
+                ...snapshot,
+                requestId,
+                operationId,
+                scenarioId: context.scenarioId,
+                expectedRevision: context.expectedRevision,
+              }
+            : purpose.kind === "settingsImportApply"
+              ? {
+                  previewId: snapshot.previewId,
+                  approvalSha256: snapshot.approvalSha256,
+                  action: "apply",
+                  schemaVersion: 1,
+                  requestId,
+                  operationId,
+                  expectedLibraryRevision: context.expectedLibraryRevision,
+                }
+              : purpose.kind === "settingsImportPreview"
+                ? {
+                    action: "preview",
+                    schemaVersion: 1,
+                    requestId,
+                    operationId,
+                  }
+                : { schemaVersion: 1, requestId, operationId },
           guard,
           { maximumBytes, onProgress: channel, revisionKey },
         );
@@ -4142,6 +4447,211 @@ export class SetupOperationScope {
       isCurrent,
     };
   }
+}
+
+/** One immutable scenario/revision presentation context; existing setup/CSV callers stay narrow. */
+export class SetupOperationScope extends OperationScope<ScenarioOperationContextV1> {
+  constructor(scenarioId: UuidV7, expectedRevision: Revision | null) {
+    super({ kind: "scenario", scenarioId, expectedRevision });
+  }
+}
+/** Preview/export discover a revision with null; apply owns an exact reviewed library revision. */
+export class LibraryOperationScope extends OperationScope<LibraryOperationContextV1> {
+  constructor(expectedLibraryRevision: Revision | null) {
+    super({ kind: "library", expectedLibraryRevision });
+  }
+}
+
+interface SettingsOwnedPreview {
+  readonly operation: SetupOperation<SettingsImportPreviewV1>;
+  id: UuidV7 | undefined;
+  closing: boolean;
+}
+/** Owns native reviews across library revision scopes, including undelivered creator results. */
+export class SettingsImportFlow {
+  readonly #previews = new Set<SettingsOwnedPreview>();
+  readonly #operations = new Set<SetupOperation<unknown>>();
+  #disposed = false;
+
+  async #cleanup(preview: SettingsOwnedPreview): Promise<void> {
+    preview.closing = true;
+    await preview.operation.release().catch(() => undefined);
+    let operationId: UuidV7;
+    try {
+      operationId = await preview.operation.operationId;
+    } catch {
+      this.#previews.delete(preview);
+      return;
+    }
+    await discardSettingsPreview({
+      kind: "creator",
+      operationId,
+      requestId: preview.operation.requestId,
+    });
+    this.#previews.delete(preview);
+  }
+
+  preview(
+    scope: LibraryOperationScope,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<SettingsImportPreviewV1> {
+    if (this.#disposed) throw inactiveOperation();
+    if (this.#previews.size >= 3)
+      throw new RangeError("Dismiss a settings review before opening another");
+    const operation = scope.run(
+      "settings_import_nonsecret",
+      { kind: "settingsImportPreview" },
+      { action: "preview", schemaVersion: 1 },
+      isSettingsPreview,
+      SETTINGS_WIRE_BYTES,
+      "libraryRevision",
+      onProgress,
+      () => {
+        void this.#cleanup(preview).catch(() => undefined);
+      },
+    );
+    const preview: SettingsOwnedPreview = { operation, id: undefined, closing: false };
+    this.#previews.add(preview);
+    const result = operation.result
+      .then((response) => {
+        preview.id = response.result.previewId;
+        return response;
+      })
+      .finally(async () => {
+        this.#operations.delete(tracked);
+        if (
+          preview.id === undefined ||
+          preview.closing ||
+          this.#disposed ||
+          !operation.isCurrent()
+        ) {
+          // Release can precede native reservation. Repeat creator cleanup after late settlement.
+          await this.#cleanup(preview).catch(() => undefined);
+        }
+      });
+    const tracked: SetupOperation<SettingsImportPreviewV1> = {
+      requestId: operation.requestId,
+      get operationId() {
+        return operation.operationId;
+      },
+      result,
+      cancel: () => operation.cancel(),
+      release: () =>
+        operation.release().finally(async () => {
+          await this.#cleanup(preview).catch(() => undefined);
+        }),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
+
+  apply(
+    scope: LibraryOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly approvalSha256: string;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<SettingsImportAppliedV1> {
+    if (this.#disposed) throw inactiveOperation();
+    const { previewId, approvalSha256 } = input;
+    if (!isUuid(previewId) || !isDigest(approvalSha256))
+      throw new RangeError("A canonical preview identity and approval digest are required");
+    const revision = scope.context.expectedLibraryRevision;
+    if (revision === null) throw new RangeError("Apply requires the reviewed library revision");
+    const guard = (value: unknown): value is SettingsImportAppliedV1 =>
+      isSettingsApplied(value) &&
+      value.previewId === previewId &&
+      value.libraryRevision === revision + (value.changed ? 1 : 0);
+    const operation = scope.run(
+      "settings_import_nonsecret",
+      { kind: "settingsImportApply" },
+      { action: "apply", schemaVersion: 1, previewId, approvalSha256 },
+      guard,
+      SETTINGS_WIRE_BYTES,
+      "libraryRevision",
+      onProgress,
+    );
+    const result = operation.result
+      .then((response) => {
+        for (const preview of this.#previews)
+          if (preview.id === previewId) this.#previews.delete(preview);
+        return response;
+      })
+      .finally(() => this.#operations.delete(tracked));
+    const tracked: SetupOperation<SettingsImportAppliedV1> = {
+      requestId: operation.requestId,
+      get operationId() {
+        return operation.operationId;
+      },
+      result,
+      cancel: () => operation.cancel(),
+      release: () => operation.release(),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
+
+  async discardPreview(previewId: UuidV7): Promise<void> {
+    await discardSettingsPreview({ kind: "preview", previewId });
+    for (const preview of this.#previews)
+      if (preview.id === previewId) this.#previews.delete(preview);
+  }
+
+  /** Signals immediately, then waits for native picker/transaction settlement and final cleanup. */
+  async dispose(): Promise<void> {
+    this.#disposed = true;
+    const operations = [...this.#operations];
+    await Promise.allSettled(operations.map((operation) => operation.release()));
+    await Promise.allSettled([...this.#previews].map((preview) => this.#cleanup(preview)));
+    await Promise.allSettled(operations.map((operation) => operation.result));
+    await Promise.all([...this.#previews].map((preview) => this.#cleanup(preview)));
+  }
+}
+
+export function discardSettingsPreview(
+  target: SettingsPreviewTarget,
+): Promise<ApiResponseDto<SettingsImportDiscardedV1>> {
+  const guard = union<SettingsPreviewTarget>(
+    shape({ kind: literal("preview"), previewId: isUuid }),
+    shape({ kind: literal("creator"), operationId: isUuid, requestId: isUuid }),
+  );
+  if (!guard(target)) throw new RangeError("A canonical settings preview target is required");
+  return call(
+    "settings_import_nonsecret",
+    {
+      action: "discard",
+      schemaVersion: 1,
+      requestId: newRequestId(),
+      target: { ...target },
+    },
+    isSettingsDiscarded,
+    { maximumBytes: SETTINGS_WIRE_BYTES, revisionKey: null },
+  );
+}
+
+export function exportNonsecretSettings(
+  scope: LibraryOperationScope,
+  onProgress?: (event: OperationProgressV1) => void,
+): SetupOperation<SettingsExportV1> {
+  return scope.run(
+    "settings_export_nonsecret",
+    { kind: "settingsExport" },
+    { schemaVersion: 1 },
+    isSettingsExport,
+    SETTINGS_WIRE_BYTES,
+    "libraryRevision",
+    onProgress,
+  );
+}
+
+export function getLicenseInventory(): Promise<ApiResponseDto<LicenseInventoryV2>> {
+  return call("app_get_license_inventory", { requestId: newRequestId() }, isLicenseInventory, {
+    maximumBytes: INVENTORY_WIRE_BYTES,
+    revisionKey: null,
+  });
 }
 
 interface CsvOwnedResource {
@@ -4453,7 +4963,10 @@ export function getAppCapabilities(): Promise<ApiResponseDto<AppCapabilitiesDto>
 }
 
 export function getAppPathsSummary(): Promise<ApiResponseDto<AppPathsSummaryDto>> {
-  return call("app_get_paths_summary", { requestId: newRequestId() }, isPaths);
+  return call("app_get_paths_summary", { requestId: newRequestId() }, isPaths, {
+    maximumBytes: 136 * 1024,
+    revisionKey: null,
+  });
 }
 
 export function previewSupportBundle(): Promise<ApiResponseDto<SupportPreviewDto>> {
@@ -4644,7 +5157,7 @@ function requireSetupRevision(scope: SetupOperationScope): Revision {
 }
 function sameSetupContext(
   value: { readonly scenarioId: UuidV7; readonly revision: Revision },
-  context: OperationContextV1,
+  context: ScenarioOperationContextV1,
 ): boolean {
   return (
     value.scenarioId === context.scenarioId &&
@@ -4659,7 +5172,7 @@ const isSetupViewEnvelope = shape({
 });
 function setupViewGuard<K extends SetupViewId>(
   viewId: K,
-  context: OperationContextV1,
+  context: ScenarioOperationContextV1,
 ): Guard<ScenarioSetupViewResultV2<K>> {
   return (value: unknown): value is ScenarioSetupViewResultV2<K> =>
     isSetupViewEnvelope(value) &&

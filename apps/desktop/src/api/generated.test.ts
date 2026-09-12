@@ -1290,3 +1290,602 @@ describe("native CSV receipt and custody boundary", () => {
     await flow.dispose();
   });
 });
+
+function settingsPreview(): generated.SettingsImportPreviewV1 {
+  return {
+    kind: "preview",
+    schemaVersion: 1,
+    previewId: scenarioId,
+    sourceSha256: "a".repeat(64),
+    approvalSha256: "b".repeat(64),
+    libraryRevision: 7,
+    changes: [
+      {
+        key: "appearance",
+        before: null,
+        after: {
+          value: { theme: "dark", reducedMotion: true },
+          updatedAt: "2026-09-12T12:00:00.123456789Z",
+        },
+      },
+    ],
+  };
+}
+
+function nativeSettings() {
+  const entered = deferred<Invocation>();
+  const terminal = deferred<unknown>();
+  const discarded = deferred<Invocation>();
+  const discards: Invocation[] = [];
+  tauri.invoke.mockImplementation((command: string, input: Invocation) => {
+    if (command === "operation_prepare")
+      return Promise.resolve(response(input, { schemaVersion: 1, operationId }));
+    if (command === "operation_cancel" || command === "operation_release")
+      return Promise.resolve(
+        response(input, {
+          schemaVersion: 1,
+          acknowledgement: command === "operation_cancel" ? "cancellationRequested" : "released",
+        }),
+      );
+    if (command === "settings_import_nonsecret" && input.request.action === "discard") {
+      discards.push(input);
+      discarded.resolve(input);
+      return Promise.resolve(response(input, { kind: "discarded", schemaVersion: 1 }));
+    }
+    entered.resolve(input);
+    return terminal.promise;
+  });
+  return { entered, terminal, discarded, discards };
+}
+
+describe("settings library operations and native review custody", () => {
+  it("captures apply approval and owns strict action, identity and library revision before preparation", async () => {
+    const native = nativeOperations();
+    const scope = new generated.LibraryOperationScope(7);
+    const flow = new generated.SettingsImportFlow();
+    const draft = { previewId: scenarioId, approvalSha256: "b".repeat(64) };
+    Object.assign(draft, {
+      action: "discard",
+      schemaVersion: 99,
+      requestId: scenarioId,
+      operationId: scenarioId,
+      scenarioId,
+      expectedRevision: 900,
+      expectedLibraryRevision: 900,
+    });
+    const apply = flow.apply(scope, draft);
+    draft.previewId = operationId;
+    draft.approvalSha256 = "c".repeat(64);
+    native.prepared();
+    const invocation = await native.claimed.promise;
+    expect(invocation.request).toEqual({
+      action: "apply",
+      schemaVersion: 1,
+      requestId: apply.requestId,
+      operationId,
+      previewId: scenarioId,
+      approvalSha256: "b".repeat(64),
+      expectedLibraryRevision: 7,
+    });
+    await apply.cancel();
+    await apply.release();
+    native.terminal.resolve(
+      response(
+        invocation,
+        {
+          kind: "applied",
+          schemaVersion: 1,
+          previewId: scenarioId,
+          libraryRevision: 8,
+          changed: true,
+        },
+        8,
+      ),
+    );
+    expect((await apply.result).result).toMatchObject({ changed: true, libraryRevision: 8 });
+    expect(apply.isCurrent()).toBe(false);
+    expect(callbacks.size).toBe(0);
+    await flow.dispose();
+  });
+
+  it("correlates full library progress identity and projects no scenario or expected revision into export", async () => {
+    const native = nativeOperations();
+    const scope = new generated.LibraryOperationScope(null);
+    const sequences: number[] = [];
+    const exported = generated.exportNonsecretSettings(scope, (event) =>
+      sequences.push(event.sequence),
+    );
+    native.prepared();
+    const invocation = await native.claimed.promise;
+    expect(invocation.request).toEqual({
+      schemaVersion: 1,
+      requestId: exported.requestId,
+      operationId,
+    });
+    const callback = invocation.onProgress && callbacks.get(invocation.onProgress.id);
+    if (!callback) throw new Error("No SDK callback");
+    const progress: generated.OperationProgressV1 = {
+      eventVersion: 1,
+      timestamp: "2026-09-12T12:00:00Z",
+      operationId,
+      requestId: exported.requestId,
+      windowLabel: "main",
+      context: scope.context,
+      sequence: 1,
+      phase: "publishingFile",
+    };
+    const messages = [
+      { ...progress, context: { kind: "scenario", scenarioId, expectedRevision: null } },
+      { ...progress, context: { kind: "library", expectedLibraryRevision: 7 } },
+      { ...progress, context: { ...scope.context, scenarioId } },
+      { ...progress, windowLabel: "other" },
+      { ...progress, requestId: scenarioId },
+      { ...progress, eventVersion: 2 },
+      progress,
+      { ...progress, sequence: 1 },
+      { ...progress, sequence: 2 },
+    ];
+    messages.forEach((message, index) => {
+      callback({ message, index });
+    });
+    expect(sequences).toEqual([1, 2]);
+    native.terminal.resolve(
+      response(invocation, { schemaVersion: 1, libraryRevision: 7, writtenBytes: 512 }, 7),
+    );
+    expect((await exported.result).result.libraryRevision).toBe(7);
+    expect(callbacks.size).toBe(0);
+    expect(() =>
+      generated.exportNonsecretSettings(new generated.LibraryOperationScope(7)),
+    ).toThrow();
+    expect(() =>
+      new generated.SettingsImportFlow().apply(scope, {
+        previewId: scenarioId,
+        approvalSha256: "a".repeat(64),
+      }),
+    ).toThrow();
+  });
+
+  it.each(["release", "scope", "flow"] as const)(
+    "cleans creator custody on %s abandonment and again after late native settlement",
+    async (abandonment) => {
+      const native = nativeSettings();
+      const scope = new generated.LibraryOperationScope(null);
+      const flow = new generated.SettingsImportFlow();
+      const preview = flow.preview(scope);
+      const invocation = await native.entered.promise;
+      expect(invocation.request).toEqual({
+        action: "preview",
+        schemaVersion: 1,
+        requestId: preview.requestId,
+        operationId,
+      });
+      let disposal: Promise<unknown> | undefined;
+      if (abandonment === "release") disposal = preview.release();
+      else if (abandonment === "scope") scope.dispose();
+      else disposal = flow.dispose();
+      const cleanup = await native.discarded.promise;
+      const target = { kind: "creator", operationId, requestId: preview.requestId };
+      expect(cleanup.request.target).toEqual(target);
+      expect(cleanup.onProgress).toBeUndefined();
+      expect(callbacks.size).toBe(0);
+      const beforeSettlement = native.discards.length;
+      native.terminal.resolve(response(invocation, settingsPreview(), 7));
+      expect((await preview.result).result.previewId).toBe(scenarioId);
+      await disposal;
+      expect(
+        native.discards.slice(beforeSettlement).map((input) => input.request.target),
+      ).toContainEqual(target);
+      expect(preview.isCurrent()).toBe(false);
+      await flow.dispose();
+    },
+  );
+
+  it("keeps a ready review discardable after revision scope replacement, without a progress channel", async () => {
+    const native = nativeSettings();
+    const scope = new generated.LibraryOperationScope(null);
+    const flow = new generated.SettingsImportFlow();
+    const preview = flow.preview(scope);
+    const invocation = await native.entered.promise;
+    native.terminal.resolve(response(invocation, settingsPreview(), 7));
+    const ready = await preview.result;
+    scope.dispose();
+    expect(native.discards).toEqual([]);
+    await flow.discardPreview(ready.result.previewId);
+    expect(native.discards.map((input) => input.request.target)).toEqual([
+      { kind: "preview", previewId: scenarioId },
+    ]);
+    await flow.dispose();
+  });
+
+  it("cleans an undelivered preview by creator without replacing its delivery error or replaying acquisition", async () => {
+    const native = nativeSettings();
+    const flow = new generated.SettingsImportFlow();
+    const preview = flow.preview(new generated.LibraryOperationScope(null));
+    await native.entered.promise;
+    const failed = expect(preview.result).rejects.toMatchObject(invalidResponse);
+    native.terminal.reject("result delivery failed");
+    await failed;
+    expect(native.discards.map((input) => input.request.target)).toEqual([
+      {
+        kind: "creator",
+        operationId,
+        requestId: preview.requestId,
+      },
+    ]);
+    expect(
+      tauri.invoke.mock.calls.filter(
+        ([command, input]) =>
+          command === "settings_import_nonsecret" &&
+          (input as Invocation).request.action === "preview",
+      ),
+    ).toHaveLength(1);
+    await flow.dispose();
+  });
+
+  it("still discards before and after settlement when release acknowledgement is malformed", async () => {
+    const native = nativeSettings();
+    const original = tauri.invoke.getMockImplementation();
+    tauri.invoke.mockImplementation((command: string, input: Invocation) =>
+      command === "operation_release"
+        ? Promise.resolve({ invalid: true })
+        : original?.(command, input),
+    );
+    const flow = new generated.SettingsImportFlow();
+    const preview = flow.preview(new generated.LibraryOperationScope(null));
+    const invocation = await native.entered.promise;
+    const disposal = flow.dispose();
+    await native.discarded.promise;
+    const beforeSettlement = native.discards.length;
+    native.terminal.resolve(response(invocation, settingsPreview(), 7));
+    await preview.result;
+    await disposal;
+    expect(
+      native.discards.slice(beforeSettlement).map((input) => input.request.target),
+    ).toContainEqual({
+      kind: "creator",
+      operationId,
+      requestId: preview.requestId,
+    });
+  });
+
+  it.each([
+    { kind: "applied", schemaVersion: 1, previewId: scenarioId, libraryRevision: 7, changed: true },
+    {
+      kind: "applied",
+      schemaVersion: 1,
+      previewId: scenarioId,
+      libraryRevision: 8,
+      changed: false,
+    },
+    {
+      kind: "applied",
+      schemaVersion: 1,
+      previewId: operationId,
+      libraryRevision: 8,
+      changed: true,
+    },
+    {
+      kind: "applied",
+      schemaVersion: 1,
+      previewId: scenarioId,
+      libraryRevision: 8,
+      changed: true,
+      changes: [],
+    },
+    { kind: "discarded", schemaVersion: 1 },
+  ])("rejects malformed apply receipt %# without replaying the mutation", async (result) => {
+    const native = nativeOperations();
+    const flow = new generated.SettingsImportFlow();
+    const apply = flow.apply(new generated.LibraryOperationScope(7), {
+      previewId: scenarioId,
+      approvalSha256: "b".repeat(64),
+    });
+    native.prepared();
+    const invocation = await native.claimed.promise;
+    const failed = expect(apply.result).rejects.toMatchObject(invalidResponse);
+    native.terminal.resolve(response(invocation, result, 8));
+    await failed;
+    expect(
+      tauri.invoke.mock.calls.filter(([command]) => command === "settings_import_nonsecret"),
+    ).toHaveLength(1);
+    expect(callbacks.size).toBe(0);
+    await flow.dispose();
+  });
+
+  it.each([
+    { schemaVersion: 2 },
+    {
+      changes: [
+        {
+          key: "secret",
+          before: null,
+          after: { value: "hidden", updatedAt: "2026-09-12T12:00:00Z" },
+        },
+      ],
+    },
+    {
+      changes: [
+        {
+          key: "appearance",
+          before: null,
+          after: { value: { theme: "blue" }, updatedAt: "2026-09-12T12:00:00Z" },
+        },
+      ],
+    },
+    {
+      changes: [
+        {
+          key: "appearance",
+          before: null,
+          after: { value: { reducedMotion: null }, updatedAt: "2026-09-12T12:00:00Z" },
+        },
+      ],
+    },
+    {
+      changes: [
+        {
+          key: "locale",
+          before: null,
+          after: { value: "en--US", updatedAt: "2026-09-12T12:00:00Z" },
+        },
+      ],
+    },
+    {
+      changes: [
+        {
+          key: "units",
+          before: null,
+          after: { value: "imperial", updatedAt: "2026-09-12T12:00:00Z" },
+        },
+      ],
+    },
+    {
+      changes: [
+        { key: "locale", before: null, after: { value: "en", updatedAt: "2026-02-30T00:00:00Z" } },
+      ],
+    },
+    {
+      changes: [
+        {
+          key: "locale",
+          before: null,
+          after: { value: "en", updatedAt: "2026-09-12T12:00:00Z", path: "/private" },
+        },
+      ],
+    },
+    { changes: [{ key: "locale", before: null, after: null }] },
+    {
+      changes: [
+        {
+          key: "locale",
+          before: { value: "en", updatedAt: "2026-09-12T12:00:00Z" },
+          after: { value: "en", updatedAt: "2026-09-12T12:00:00Z" },
+        },
+      ],
+    },
+    {
+      changes: [
+        {
+          key: "appearance",
+          before: {
+            value: { theme: "dark", reducedMotion: true },
+            updatedAt: "2026-09-12T12:00:00Z",
+          },
+          after: {
+            value: { reducedMotion: true, theme: "dark" },
+            updatedAt: "2026-09-12T12:00:00Z",
+          },
+        },
+      ],
+    },
+    { changes: [...settingsPreview().changes, ...settingsPreview().changes] },
+    {
+      changes: [
+        {
+          key: "units",
+          before: null,
+          after: { value: "metric", updatedAt: "2026-09-12T12:00:00Z" },
+        },
+        ...settingsPreview().changes,
+      ],
+    },
+    { sourceSha256: "A".repeat(64) },
+    { path: "/private/settings.json" },
+    { libraryRevision: 8 },
+  ])("rejects unsupported settings review data %# and discards its creator", async (patch) => {
+    const native = nativeSettings();
+    const flow = new generated.SettingsImportFlow();
+    const preview = flow.preview(new generated.LibraryOperationScope(null));
+    const invocation = await native.entered.promise;
+    const failed = expect(preview.result).rejects.toMatchObject(invalidResponse);
+    native.terminal.resolve(response(invocation, { ...settingsPreview(), ...patch }, 7));
+    await failed;
+    expect(native.discards.map((input) => input.request.target)).toContainEqual({
+      kind: "creator",
+      operationId,
+      requestId: preview.requestId,
+    });
+    await flow.dispose();
+  });
+
+  it("accepts all three ordered changes, complete entries and locally valid unportable before-state", async () => {
+    const entry = { value: "com1", updatedAt: "2026-09-12T12:00:00.123456789Z" };
+    const result: generated.SettingsImportPreviewV1 = {
+      ...settingsPreview(),
+      changes: [
+        { key: "appearance", before: { value: {}, updatedAt: entry.updatedAt }, after: null },
+        {
+          key: "locale",
+          before: entry,
+          after: { ...entry, value: "en-US", updatedAt: "2026-09-12T12:00:01Z" },
+        },
+        {
+          key: "units",
+          before: { value: "us-customary", updatedAt: entry.updatedAt },
+          after: { value: "us-customary", updatedAt: "2026-09-12T12:00:01Z" },
+        },
+      ],
+    };
+    const native = nativeSettings();
+    const flow = new generated.SettingsImportFlow();
+    const preview = flow.preview(new generated.LibraryOperationScope(null));
+    const invocation = await native.entered.promise;
+    native.terminal.resolve(response(invocation, result, 7));
+    expect((await preview.result).result.changes).toEqual(result.changes);
+    await flow.dispose();
+  });
+
+  it("accepts an identical no-op at the reviewed revision without requiring a revision increment", async () => {
+    const native = nativeOperations();
+    const flow = new generated.SettingsImportFlow();
+    const apply = flow.apply(new generated.LibraryOperationScope(7), {
+      previewId: scenarioId,
+      approvalSha256: "b".repeat(64),
+    });
+    native.prepared();
+    const invocation = await native.claimed.promise;
+    native.terminal.resolve(
+      response(
+        invocation,
+        {
+          kind: "applied",
+          schemaVersion: 1,
+          previewId: scenarioId,
+          libraryRevision: 7,
+          changed: false,
+        },
+        7,
+      ),
+    );
+    expect((await apply.result).result).toMatchObject({ changed: false, libraryRevision: 7 });
+    await flow.dispose();
+  });
+
+  it.each([
+    { schemaVersion: 1, libraryRevision: 8, writtenBytes: 512 },
+    { schemaVersion: 1, libraryRevision: 7, writtenBytes: 65_537 },
+    { schemaVersion: 1, libraryRevision: 7, writtenBytes: 0 },
+    { schemaVersion: 1, libraryRevision: 7, writtenBytes: 512, destination: "/private" },
+  ])("rejects malformed export receipt %# without republishing", async (result) => {
+    const native = nativeOperations();
+    const exported = generated.exportNonsecretSettings(new generated.LibraryOperationScope(null));
+    native.prepared();
+    const invocation = await native.claimed.promise;
+    const failed = expect(exported.result).rejects.toMatchObject(invalidResponse);
+    native.terminal.resolve(response(invocation, result, 7));
+    await failed;
+    expect(
+      tauri.invoke.mock.calls.filter(([command]) => command === "settings_export_nonsecret"),
+    ).toHaveLength(1);
+    expect(callbacks.size).toBe(0);
+  });
+});
+
+function licenseInventory(): generated.LicenseInventoryV2 {
+  return {
+    scope: "lockedWorkspace",
+    schemaVersion: 2,
+    generatedBy: "cargo xtask licenses generate",
+    authoritativeInputs: ["Cargo.lock", "pnpm-lock.yaml", "xtask/supply-chain-inputs.json"],
+    packages: [
+      {
+        ecosystem: "cargo",
+        name: "example",
+        version: "1.0.0",
+        kind: "dependency",
+        licenseConcluded: "NOASSERTION",
+        source: "registry+https://example.invalid/index",
+      },
+    ],
+  };
+}
+
+describe("bounded offline inventory and redacted path reads", () => {
+  it("preserves unknown license conclusions, required sources and omitted checksums", async () => {
+    const inventory = licenseInventory();
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, inventory)),
+    );
+    expect((await generated.getLicenseInventory()).result).toEqual(inventory);
+    const item = inventory.packages[0];
+    if (!item) throw new Error("Missing package");
+    const checksummed = {
+      ...inventory,
+      packages: [
+        { ...item, checksum: { algorithm: "SHA256", value: "a".repeat(64) } },
+        { ...item, checksum: { algorithm: "SHA512", value: "A".repeat(128) } },
+      ],
+    };
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, checksummed)),
+    );
+    expect((await generated.getLicenseInventory()).result.packages).toEqual(checksummed.packages);
+  });
+
+  it.each([
+    { source: null },
+    { checksum: null },
+    { checksum: { algorithm: "SHA256", value: "a".repeat(128) } },
+    { checksum: { algorithm: "SHA512", value: "z".repeat(128) } },
+    { checksum: { algorithm: "SHA1", value: "a".repeat(40) } },
+    { checksum: { algorithm: "SHA256", value: "a".repeat(64), approved: true } },
+    { name: "é".repeat(512) + "a" },
+    { licenseConcluded: "x".repeat(4097) },
+    { ecosystem: "pip" },
+    { kind: "installed" },
+    { source: "" },
+  ])("rejects unsupported or over-limit package metadata %#", async (patch) => {
+    const inventory = licenseInventory();
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(
+        response(input, {
+          ...inventory,
+          packages: [{ ...inventory.packages[0], ...patch }],
+        }),
+      ),
+    );
+    await expect(generated.getLicenseInventory()).rejects.toMatchObject(invalidResponse);
+  });
+
+  it("enforces inventory count, compact bytes, exact metadata and unrevisioned envelopes", async () => {
+    const inventory = licenseInventory();
+    const item = inventory.packages[0];
+    if (!item) throw new Error("Missing package");
+    for (const result of [
+      { ...inventory, schemaVersion: 3 },
+      { ...inventory, scope: "installedArtifact" },
+      { ...inventory, authoritativeInputs: ["Cargo.lock"] },
+      { ...inventory, packages: Array.from({ length: 4097 }, () => item) },
+      {
+        ...inventory,
+        packages: Array.from({ length: 600 }, () => ({
+          ...item,
+          licenseConcluded: "x".repeat(4096),
+        })),
+      },
+    ]) {
+      tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+        Promise.resolve(response(input, result)),
+      );
+      await expect(generated.getLicenseInventory()).rejects.toMatchObject(invalidResponse);
+    }
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, inventory, 7)),
+    );
+    await expect(generated.getLicenseInventory()).rejects.toMatchObject(invalidResponse);
+    const paths = { appDataConfigured: true, cacheConfigured: true, backupConfigured: false };
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, paths)),
+    );
+    expect((await generated.getAppPathsSummary()).result).toEqual(paths);
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(
+        response(input, {
+          ...paths,
+          appDataPath: "/private",
+        }),
+      ),
+    );
+    await expect(generated.getAppPathsSummary()).rejects.toMatchObject(invalidResponse);
+  });
+});
