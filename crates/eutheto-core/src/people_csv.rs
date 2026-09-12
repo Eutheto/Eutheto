@@ -4,15 +4,19 @@ use super::{
     EuthetoApp, MAX_PENDING_PREVIEW_BYTES, MAX_PENDING_PREVIEWS, PendingPortablePreview,
     pending_tree_memory_charge, preview_total_bytes, protocol_error, store_error,
 };
-use eutheto_domain_api::bounded_json_size;
+pub use eutheto_domain_api::bounded_json_size;
 use eutheto_types::{
     ActorRef, AppError, CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandSource,
     RequestId, Revision, ScenarioCommand, ScenarioId,
 };
+// Public CSV DTO fields and admission limits let native clients avoid a direct pack dependency.
 use eutheto_workforce::people_csv::{
     self as csv, CsvError, CsvErrorCode, MAX_CSV_REJECTED_REPORT_BYTES, MAX_CSV_REJECTED_ROWS,
-    MAX_CSV_REVIEW_BYTES, MAX_CSV_SOURCE_BYTES, PeopleCsvDetection, PeopleCsvMapping,
-    PeopleImportDisposition, PeopleImportPreview, RejectedRow, RowDecision,
+    MAX_CSV_REVIEW_BYTES, PeopleCsvDetection, PeopleImportDisposition, RejectedRow,
+};
+pub use eutheto_workforce::people_csv::{
+    MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_MAPPING_BYTES, MAX_CSV_SOURCE_BYTES,
+    PeopleCsvMapping, PeopleImportPreview, RowDecision,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -54,6 +58,17 @@ pub struct PeopleCsvOperation {
 }
 
 impl PeopleCsvOperation {
+    /// Creates a cancel-on-drop child of a caller-owned operation.
+    ///
+    /// Parent cancellation reaches CSV work; dropping this guard never cancels
+    /// the parent or sibling operations.
+    #[must_use]
+    pub fn child_of(parent: &CancellationToken) -> Self {
+        Self {
+            token: parent.child(),
+        }
+    }
+
     /// Returns a signal without sharing ownership of this guard.
     #[must_use]
     pub fn cancellation(&self) -> PeopleCsvCancellation {
@@ -215,9 +230,7 @@ impl EuthetoApp {
     /// Creates an app-rooted operation guard; pass it by value to one native CSV operation.
     #[must_use]
     pub fn people_csv_operation(&self) -> PeopleCsvOperation {
-        PeopleCsvOperation {
-            token: self.cancellation.child(),
-        }
+        PeopleCsvOperation::child_of(&self.cancellation)
     }
 
     /// Reads at most the source cap plus one overflow byte on the blocking pool.

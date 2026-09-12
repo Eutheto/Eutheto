@@ -9,6 +9,9 @@ extern crate self as eutheto_export;
 #[cfg(test)]
 #[path = "../../../tests/support/portable_encode.rs"]
 mod portable_encode;
+#[cfg(all(test, windows))]
+#[path = "private_publication_tests.rs"]
+mod private_publication_tests;
 
 use eutheto_types::{
     BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl,
@@ -2144,6 +2147,9 @@ fn read_zip_entry<R: Read + Seek>(
 pub struct PreparedPublication {
     destination: PathBuf,
     temporary: NamedTempFile,
+    // Fields drop in declaration order: remove the staged file before its directory.
+    #[cfg(windows)]
+    private_directory: PrivatePublicationDirectory,
 }
 
 impl PreparedPublication {
@@ -2159,8 +2165,159 @@ impl PreparedPublication {
     }
 }
 
+#[cfg(windows)]
+struct PrivatePublicationDirectory {
+    path: PathBuf,
+    handle: Option<File>,
+}
+
+#[cfg(windows)]
+impl PrivatePublicationDirectory {
+    fn new_in(parent: &Path) -> std::io::Result<Self> {
+        use eutheto_types::{IdGenerator, SystemIdGenerator};
+        let id = SystemIdGenerator
+            .next_uuid()
+            .map_err(|_| std::io::Error::other("private staging name generation failed"))?;
+        Self::create(std::path::absolute(
+            parent.join(format!(".eutheto-publication-{id}")),
+        )?)
+    }
+
+    fn create(path: PathBuf) -> std::io::Result<Self> {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        // .NET CreateDirectory is recursive. Require an existing parent and deny
+        // its deletion while creating the private child, rather than creating an
+        // unrequested destination hierarchy as a side effect of staging.
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "staging parent is missing",
+            )
+        })?;
+        let parent_handle = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .share_mode(0x0000_0001 | 0x0000_0002)
+            .custom_flags(0x0200_0000)
+            .open(parent)?;
+        if !parent_handle.metadata()?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "staging parent is not a directory",
+            ));
+        }
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "private staging entry already exists",
+                ));
+            }
+        }
+        windows_private_publication_directory(&path, true)?;
+        // No delete sharing: keep the verified final directory entry from being renamed
+        // or replaced until the staged file has been published or removed.
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x0000_0001 | 0x0000_0002)
+            .custom_flags(0x0200_0000 | 0x0020_0000)
+            .open(&path)?;
+        let metadata = handle.metadata()?;
+        if !metadata.is_dir() || metadata.file_attributes() & 0x0000_0400 != 0 {
+            return Err(std::io::Error::other(
+                "private staging entry is not a directory",
+            ));
+        }
+        // Recheck ownership and DACL after acquiring the non-replaceable handle.
+        // Never repair/adopt an existing directory or recursively clean an untrusted path.
+        windows_private_publication_directory(&path, false)?;
+        Ok(Self {
+            path,
+            handle: Some(handle),
+        })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PrivatePublicationDirectory {
+    fn drop(&mut self) {
+        drop(self.handle.take());
+        // Only remove our now-empty staging directory, never recursively traverse entries.
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
+#[cfg(windows)]
+fn windows_private_publication_directory(path: &Path, create: bool) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    // Match the store's approved PowerShell/.NET creation boundary: the protected DACL
+    // is supplied to CreateDirectory, not repaired after an inherited-ACL creation.
+    let script = r"
+$ErrorActionPreference = 'Stop'
+$path = $env:EUTHETO_PRIVATE_PATH
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+if ($env:EUTHETO_PRIVATE_CREATE -eq 'true') {
+  if (Test-Path -LiteralPath $path) { throw 'private staging entry already exists' }
+  $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.SetOwner($sid)
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    $sid,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    $inheritance,
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow)
+  $acl.AddAccessRule($rule)
+  [System.IO.Directory]::CreateDirectory($path, $acl) | Out-Null
+}
+$attributes = [System.IO.File]::GetAttributes($path)
+if (($attributes -band [System.IO.FileAttributes]::Directory) -eq 0 -or
+    ($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'private staging entry is not a directory'
+}
+$verified = Get-Acl -LiteralPath $path
+$rules = @($verified.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if ($verified.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $sid -or
+    -not $verified.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+    $rules[0].IdentityReference -ne $sid -or $rules[0].IsInherited -or
+    $rules[0].AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+    $rules[0].InheritanceFlags -ne $inheritance -or
+    $rules[0].PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None -or
+    (($rules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne
+      [System.Security.AccessControl.FileSystemRights]::FullControl)) {
+  throw 'owner-private staging ACL verification failed'
+}
+";
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .env_remove("PSModulePath")
+        .env("EUTHETO_PRIVATE_PATH", path)
+        .env(
+            "EUTHETO_PRIVATE_CREATE",
+            if create { "true" } else { "false" },
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(
+            "owner-private staging creation or verification failed",
+        ));
+    }
+    Ok(())
+}
+
 /// Writes, flushes, reopens, and verifies a bundle in an owner-private
-/// temporary sibling without publishing it.
+/// temporary output on the destination filesystem without publishing it.
 ///
 /// # Errors
 ///
@@ -2339,6 +2496,10 @@ where
     let _ = failpoint;
     check_cancelled(cancelled)?;
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    #[cfg(windows)]
+    let private_directory = PrivatePublicationDirectory::new_in(parent)?;
+    #[cfg(windows)]
+    let parent = private_directory.path.as_path();
     let mut temporary = TempFileBuilder::new()
         .prefix(".eutheto-publication-")
         .suffix(".tmp")
@@ -2352,7 +2513,7 @@ where
     check_cancelled(cancelled)?;
     temporary.as_file().sync_all()?;
 
-    let mut reopened = File::open(temporary.path())?;
+    let mut reopened = temporary.reopen()?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; WRITE_CHUNK_BYTES].into_boxed_slice();
     loop {
@@ -2382,6 +2543,8 @@ where
     Ok(PreparedPublication {
         destination: destination.to_path_buf(),
         temporary,
+        #[cfg(windows)]
+        private_directory,
     })
 }
 
@@ -2411,6 +2574,8 @@ where
     // Publication is the commit point: cancellation after this cannot turn a
     // successfully published output into an ambiguous failure.
     drop(published);
+    #[cfg(windows)]
+    drop(prepared.private_directory);
     #[cfg(test)]
     if failpoint == PublicationFailpoint::AfterPublish {
         return Ok(());

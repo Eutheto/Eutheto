@@ -34,6 +34,11 @@ pub(super) enum OperationPurposeV1 {
     CommandPreview { view_id: String },
     FullValidation,
     ApplyReviewedGeneration,
+    CsvSourceOpen,
+    CsvDetect,
+    CsvPreview,
+    CsvApply,
+    CsvReportSave,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -112,6 +117,9 @@ pub(super) enum OperationPhaseV1 {
     ApplyingPreview,
     Validating,
     PreparingResponse,
+    SelectingFile,
+    DetectingFormat,
+    PublishingReport,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -540,7 +548,7 @@ impl OperationExecution {
         self.report(OperationPhaseV1::PreparingResponse);
     }
 
-    fn report(&mut self, phase: OperationPhaseV1) {
+    pub(super) fn report(&mut self, phase: OperationPhaseV1) {
         if let Some(progress) = &mut self.progress
             && let Some(sequence) = progress.event.sequence.checked_add(1)
         {

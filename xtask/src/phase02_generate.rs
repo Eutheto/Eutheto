@@ -238,7 +238,11 @@ pub fn generated_files(repo_root: &Path) -> Result<Vec<(&'static str, String)>> 
     files.extend([
         (
             GENERATED_TYPESCRIPT_PACK,
-            format_typescript(repo_root, &typescript)?,
+            format_typescript(
+                repo_root,
+                "src/api/generated-domain-pack-contracts.ts",
+                &typescript,
+            )?,
         ),
         (GENERATED_RUST_MATRIX, render_rust_matrix(&matrix)),
         (GENERATED_MATRIX_DOCS, render_matrix_docs(&matrix)?),
@@ -1048,7 +1052,7 @@ fn render_typescript_setup_guards(
         expanded.insert(name);
     }
     // Static predicates use the existing restricted schema vocabulary, not a runtime interpreter.
-    // Native typed IDs serialize canonically; broad UUID input spellings are not response spellings.
+    // Typed setup DTO IDs are canonical; raw CSV domain values use a separate schema guard.
     output.push_str(&r#"
 const __PREFIX__WireUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function is__PREFIX__WireObject(value: unknown): value is Record<string, unknown> {
@@ -1090,8 +1094,11 @@ function is__PREFIX__WireString(value: unknown, minimum: number, maximum: number
         writeln!(
             output,
             "function is{prefix}{name}(value: unknown): value is {prefix}{name} {{ return {}; }}",
-            typescript_guard(schema, source, "value", 0)?
+            typescript_guard(schema, source, "value", 0, None)?
         )?;
+    }
+    if prefix == "Workforce" {
+        render_typescript_csv_person_guard(pack, source, output)?;
     }
     writeln!(
         output,
@@ -1103,7 +1110,7 @@ function is__PREFIX__WireString(value: unknown, minimum: number, maximum: number
             "{}: (value: unknown): value is {prefix}SetupQueryResults[{}] => {},",
             serde_json::to_string(&query.id)?,
             serde_json::to_string(&query.id)?,
-            typescript_guard(&query.result_schema, source, "value", 0)?
+            typescript_guard(&query.result_schema, source, "value", 0, None)?
         )?;
     }
     writeln!(
@@ -1117,11 +1124,41 @@ function is__PREFIX__WireString(value: unknown, minimum: number, maximum: number
     Ok(())
 }
 
+fn render_typescript_csv_person_guard(
+    pack: &PackContract,
+    source: &PackSource,
+    output: &mut String,
+) -> Result<()> {
+    // Raw domain Value payloads preserve schema-valid UUID case. Expand this one
+    // schema so its UUID policy cannot widen canonical typed setup DTO guards.
+    let mut expander = SchemaExpander {
+        definitions: &pack.definitions,
+        stack: Vec::new(),
+        used: BTreeSet::new(),
+        nodes: 0,
+        remaining_bytes: MAX_PACK_CONTRACT_BYTES,
+    };
+    let person = expander.expand(
+        pack.definitions
+            .get("Person")
+            .context("CSV person schema missing")?,
+        0,
+    )?;
+    output.push_str("const WorkforceCsvUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\n");
+    writeln!(
+        output,
+        "export function isWorkforceCsvPerson(value: unknown): value is WorkforcePerson {{ return {}; }}",
+        typescript_guard(&person, source, "value", 0, Some("WorkforceCsvUuid"))?
+    )?;
+    Ok(())
+}
+
 fn typescript_guard(
     schema: &Value,
     source: &PackSource,
     value: &str,
     depth: usize,
+    uuid_pattern: Option<&str>,
 ) -> Result<String> {
     if depth > 32 {
         bail!("wire guard rendering exceeds its depth limit");
@@ -1130,6 +1167,9 @@ fn typescript_guard(
         .as_object()
         .context("wire guard schema must be an object")?;
     if let Some(reference) = object.get("$ref") {
+        if uuid_pattern.is_some() {
+            bail!("schema-value UUID policy requires expanded references");
+        }
         let name = reference
             .as_str()
             .and_then(|reference| reference.strip_prefix("#/$defs/"))
@@ -1148,14 +1188,19 @@ fn typescript_guard(
         let alternatives = options
             .iter()
             .map(|option| {
-                typescript_guard(option, source, value, depth + 1)
+                typescript_guard(option, source, value, depth + 1, uuid_pattern)
                     .map(|guard| format!("Number({guard})"))
             })
             .collect::<Result<Vec<_>>>()?;
         clauses.push(format!("({}) === 1", alternatives.join(" + ")));
     }
     match object.get("type").and_then(Value::as_str) {
-        Some("string") => clauses.push(typescript_guard_string(object, source, value)?),
+        Some("string") => clauses.push(typescript_guard_string(
+            object,
+            source,
+            value,
+            uuid_pattern,
+        )?),
         Some("integer") => {
             clauses.push(format!(
                 "typeof {value} === \"number\" && Number.isSafeInteger({value})"
@@ -1184,10 +1229,17 @@ fn typescript_guard(
                 source,
                 &item,
                 depth + 1,
+                uuid_pattern,
             )?;
             clauses.push(format!("Array.isArray({value}) && {value}.length >= {minimum} && {value}.length <= {maximum} && {value}.every(({item}: unknown) => {child})"));
         }
-        Some("object") => clauses.push(typescript_guard_object(object, source, value, depth)?),
+        Some("object") => clauses.push(typescript_guard_object(
+            object,
+            source,
+            value,
+            depth,
+            uuid_pattern,
+        )?),
         None => {}
         _ => bail!("unsupported wire guard schema type"),
     }
@@ -1203,6 +1255,7 @@ fn typescript_guard_string(
     schema: &Map<String, Value>,
     source: &PackSource,
     value: &str,
+    uuid_pattern: Option<&str>,
 ) -> Result<String> {
     let prefix = source.typescript_prefix;
     let minimum = schema.get("minLength").and_then(Value::as_u64).unwrap_or(0);
@@ -1215,7 +1268,10 @@ fn typescript_guard_string(
     )];
     if let Some(format) = schema.get("format").and_then(Value::as_str) {
         clauses.push(match format {
-            "uuid" => format!("{prefix}WireUuid.test({value})"),
+            "uuid" => match uuid_pattern {
+                Some(pattern) => format!("{pattern}.test({value})"),
+                None => format!("{prefix}WireUuid.test({value})"),
+            },
             "scenario-change-path" => {
                 format!("({value} === \"/settings\" || {value}.startsWith(\"/domain/\"))")
             }
@@ -1239,6 +1295,7 @@ fn typescript_guard_object(
     source: &PackSource,
     value: &str,
     depth: usize,
+    uuid_pattern: Option<&str>,
 ) -> Result<String> {
     let mut clauses = vec![format!("is{}WireObject({value})", source.typescript_prefix)];
     let properties = schema.get("properties").and_then(Value::as_object);
@@ -1266,7 +1323,7 @@ fn typescript_guard_object(
         for (name, child) in ordered {
             let key = serde_json::to_string(name)?;
             let member = format!("{value}[{key}]");
-            let guard = typescript_guard(child, source, &member, depth + 1)?;
+            let guard = typescript_guard(child, source, &member, depth + 1, uuid_pattern)?;
             if required
                 .is_some_and(|required| required.iter().any(|item| item.as_str() == Some(name)))
             {
@@ -1290,7 +1347,7 @@ fn typescript_guard_object(
         Some(Value::Bool(false)) => {}
         Some(additional) if additional.is_object() => {
             let member = format!("member{depth}");
-            let guard = typescript_guard(additional, source, &member, depth + 1)?;
+            let guard = typescript_guard(additional, source, &member, depth + 1, uuid_pattern)?;
             if guard == "true" {
                 return Ok(format!("({})", clauses.join(" && ")));
             }
@@ -1351,7 +1408,11 @@ fn render_typescript_constants(pack: &PackContract, source: &PackSource) -> Resu
     Ok(output)
 }
 
-fn format_typescript(repo_root: &Path, contents: &str) -> Result<String> {
+pub(crate) fn format_typescript(
+    repo_root: &Path,
+    relative_path: &str,
+    contents: &str,
+) -> Result<String> {
     let desktop = repo_root.join("apps/desktop");
     let prettier = || {
         let mut command = Command::new(if cfg!(windows) { "pnpm.cmd" } else { "pnpm" });
@@ -1367,9 +1428,7 @@ fn format_typescript(repo_root: &Path, contents: &str) -> Result<String> {
     {
         bail!("generation requires installed Prettier {PRETTIER_VERSION}; run `just install`")
     }
-    let info = prettier()
-        .args(["--file-info", "src/api/generated-domain-pack-contracts.ts"])
-        .output()?;
+    let info = prettier().args(["--file-info", relative_path]).output()?;
     let info_json: Value =
         serde_json::from_slice(&info.stdout).context("Prettier did not return file information")?;
     if !info.status.success()
@@ -1388,7 +1447,7 @@ fn format_typescript(repo_root: &Path, contents: &str) -> Result<String> {
             ".prettierrc.json",
             "--no-editorconfig",
             "--stdin-filepath",
-            "src/api/generated-domain-pack-contracts.ts",
+            relative_path,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

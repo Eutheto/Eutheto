@@ -20,10 +20,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("cargo:rustc-env={SOLVER_MANIFEST_DIGEST_ENV}={UNTRUSTED_MANIFEST_SHA256}");
         }
     }
-    tauri_build::try_build(
-        tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(REGISTERED_COMMANDS)),
-    )?;
+    let mut attributes = tauri_build::Attributes::new()
+        .app_manifest(tauri_build::AppManifest::new().commands(REGISTERED_COMMANDS));
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let manifest =
+            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        let windows = if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            // Tauri's resource helper links only application binaries. The library
+            // unit-test executable also needs Common Controls v6 for RFD's
+            // TaskDialogIndirect import. Embed once for every MSVC link target.
+            println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+            println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+            tauri_build::WindowsAttributes::new_without_app_manifest()
+        } else {
+            tauri_build::WindowsAttributes::new()
+                .app_manifest(include_str!("windows-app-manifest.xml"))
+        };
+        attributes = attributes.windows_attributes(windows);
+    }
+    tauri_build::try_build(attributes)?;
     Ok(())
 }
 
