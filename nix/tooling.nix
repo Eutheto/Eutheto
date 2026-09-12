@@ -222,6 +222,7 @@ let
     pkgs.util-linux
     pkgs.iproute2
     pkgs.xvfb-run
+    pkgs.xdotool
     pkgs.webkitgtk_4_1
     tauriDriver
     desktopRuntime

@@ -13,9 +13,7 @@ type MethodMocks<Api> = {
     ? Mock<(...args: Arguments) => Result>
     : never;
 };
-export type ProjectHomeApiMocks = MethodMocks<Omit<ProjectHomeApi, "portable">> & {
-  readonly portable: MethodMocks<ProjectHomeApi["portable"]>;
-};
+export type ProjectHomeApiMocks = MethodMocks<ProjectHomeApi>;
 export const project: ProjectSummary = {
   schemaVersion: 1,
   scenarioId: "01900000-0000-7000-8000-000000000001",
@@ -99,75 +97,32 @@ export function fakeApi(projects: ProjectSummary[] = []): ProjectHomeApiMocks {
   });
   return {
     listProjects: vi.fn(() => Promise.resolve(response([...projects]))),
-    createProject: vi.fn(() => Promise.resolve(response({}))),
+    openProject: vi.fn<ProjectHomeApi["openProject"]>((scenarioId) =>
+      Promise.resolve(
+        response({
+          ...(projects.find((item) => item.scenarioId === scenarioId) ?? project),
+          scenarioId,
+          lastOpenedAt: "2026-08-29T13:00:00Z",
+        }),
+      ),
+    ),
+    createProject: vi.fn<ProjectHomeApi["createProject"]>((input) =>
+      Promise.resolve(
+        response({
+          scenarioId: project.scenarioId,
+          title: input.title,
+          description: input.description,
+          domainPack: input.domainPack,
+          revision: 0,
+          createdAt: "2026-08-29T13:00:00Z",
+          updatedAt: "2026-08-29T13:00:00Z",
+          archivedAt: null,
+        }),
+      ),
+    ),
     duplicateProject: vi.fn(() => Promise.resolve(response({}))),
     setProjectArchived: vi.fn(() => Promise.resolve(response({}))),
     deleteProject: vi.fn(() => Promise.resolve(response({}))),
-    portable: {
-      previewImport: vi.fn<ProjectHomeApi["portable"]["previewImport"]>(() =>
-        portableOperation(response(portablePreview("scenario-export"), [], 1)),
-      ),
-      applyImport: vi.fn<ProjectHomeApi["portable"]["applyImport"]>(() =>
-        portableOperation(portableApplied()),
-      ),
-      previewBackup: vi.fn<ProjectHomeApi["portable"]["previewBackup"]>((_scope, title) =>
-        portableOperation(
-          response(
-            {
-              schemaVersion: 1 as const,
-              title,
-              byteLength: 4096,
-              previewId: "01900000-0000-7000-8000-000000000070",
-              digest: "b".repeat(64),
-              currentRevision: null,
-              libraryRevision: 1,
-              backupSummary: {
-                includeResults: true,
-                assetSelection: "all" as const,
-                excludedAssetCount: 1,
-                excludedAssetIds: ["inherited-placeholder.png"],
-                exclusionScope: "inherited-placeholder",
-                thresholdVersion: null,
-                thresholdBytes: null,
-                fixedExclusions,
-              },
-            },
-            [],
-            1,
-          ),
-        ),
-      ),
-      createBackup: vi.fn<ProjectHomeApi["portable"]["createBackup"]>(() =>
-        portableOperation(
-          response(
-            {
-              schemaVersion: 1 as const,
-              artifactName: "before-changes.eutheto",
-              currentRevision: null,
-              libraryRevision: 1,
-            },
-            [],
-            1,
-          ),
-        ),
-      ),
-      previewRestore: vi.fn<ProjectHomeApi["portable"]["previewRestore"]>(() =>
-        portableOperation(response(portablePreview("full-backup"), [], 1)),
-      ),
-      applyRestore: vi.fn<ProjectHomeApi["portable"]["applyRestore"]>((_scope, input) =>
-        portableOperation(
-          portableApplied(
-            input.authorization.destructiveActionConfirmed
-              ? input.authorization.safetyBackupBypassPhrase === null
-                ? { kind: "createdAndVerified", artifactName: "verified-safety.eutheto" }
-                : { kind: "confirmedBypass" }
-              : { kind: "notRequired" },
-          ),
-        ),
-      ),
-      discardPreview: vi.fn(() => Promise.resolve()),
-      dispose: vi.fn(() => Promise.resolve()),
-    },
     onAppNotification: vi.fn(() => Promise.resolve(vi.fn())),
     onLibraryRefreshRequired: vi.fn(() => Promise.resolve(vi.fn())),
     onScenarioChanged: vi.fn(() => Promise.resolve(vi.fn())),

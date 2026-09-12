@@ -559,7 +559,7 @@ For the remainder of this phase, follow the user-authorized [temporary integrati
 - representative 100-person matrices remain usable under measured render/input/scroll budgets with current Table 9/Virtual 3 APIs;
 - sub-threshold operations avoid progress flicker; longer operations show only real phases, remain cancellable, keep input/focus responsive, and coalesce screen-reader announcements;
 - raw backend incumbents never trigger verified-result copy, and optional later explanation work never blocks the already accepted result shell.
-- real Chromium component tests supplement but never replace native Tauri/WebKit coverage; `just e2e` currently exercises a Linux unbundled debug executable, not an installer. Extend the existing native W3C runner where supported and retain the later exact packaged-artifact/platform gates plus manual picker and screen-reader evidence.
+- Real Chromium component tests supplement but never replace native Tauri/WebKit coverage. `just e2e` exercises the Linux unbundled debug shell, native settings and portable file workflows, real safety-backup failure/bypass/recovery, deletion/history boundaries, offline inventory, route recovery and restart persistence; see [desktop behavior and verification limits](../../apps/desktop/README.md). This is not installer, native screen-reader, or cross-platform acceptance. Keep the later exact packaged-artifact/platform gates and manual picker/screen-reader evidence; unconsumed native editing shortcuts still need platform binding verification.
 
 ### Phase exit gate
 

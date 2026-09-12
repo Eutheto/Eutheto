@@ -4,12 +4,11 @@ import { useWorkspaceStore } from "./stores/workspace";
 import { messages } from "./messages";
 
 import {
-  LibraryOperationScope,
-  PortableReviewFlow,
   createProject,
   deleteProject,
   duplicateProject,
   listProjects,
+  openProject,
   onAppNotification,
   onLibraryRefreshRequired,
   onScenarioChanged,
@@ -18,31 +17,23 @@ import {
 } from "./api/generated";
 import type {
   ApiResponseDto,
+  PortableReviewFlow,
   CollisionAction,
-  CollisionPlan,
   DomainPackRef,
-  ImportOptions,
   OperationPhaseV1,
   OperationProgressV1,
   Revision,
-  PortableFilePreviewDto,
-  PortablePreviewDto,
   PortableScenarioDto,
   ProjectListItemV1,
+  ProjectMetadataDto,
   ScenarioChangedEvent,
-  SupplementalCollisionAction,
   SupplementalIdentity,
   CalendarSettingsV1,
   ScenarioValidationChangedEvent,
-  ValidationIssue,
 } from "./api/generated";
 
 export type ProjectPhase = "loading" | "ready" | "error";
-export type SupplementalCollisionChoice = SupplementalCollisionAction;
-export type CollisionChoice = CollisionAction;
 export type ProjectSummary = ProjectListItemV1;
-export type PortablePreview = PortablePreviewDto;
-export type BackupPreview = PortableFilePreviewDto;
 
 export interface CreateProjectInput {
   readonly title: string;
@@ -53,7 +44,8 @@ export interface CreateProjectInput {
 
 export interface ProjectHomeApi {
   listProjects(scope: "all"): Promise<ApiResponseDto<readonly ProjectListItemV1[]>>;
-  createProject(input: CreateProjectInput): Promise<ApiResponseDto<unknown>>;
+  openProject(scenarioId: string): Promise<ApiResponseDto<ProjectListItemV1>>;
+  createProject(input: CreateProjectInput): Promise<ApiResponseDto<ProjectMetadataDto>>;
   duplicateProject(input: {
     readonly sourceId: string;
     readonly expectedRevision: Revision;
@@ -65,17 +57,6 @@ export interface ProjectHomeApi {
     readonly archived: boolean;
   }): Promise<ApiResponseDto<unknown>>;
   deleteProject(scenarioId: string, expectedRevision: Revision): Promise<ApiResponseDto<unknown>>;
-  readonly portable: Pick<
-    PortableReviewFlow,
-    | "previewImport"
-    | "applyImport"
-    | "previewBackup"
-    | "createBackup"
-    | "previewRestore"
-    | "applyRestore"
-    | "discardPreview"
-    | "dispose"
-  >;
   onAppNotification(listener: () => void): Promise<() => void>;
   onLibraryRefreshRequired(listener: () => void): Promise<() => void>;
   onScenarioChanged(listener: (event: ScenarioChangedEvent) => void): Promise<() => void>;
@@ -87,11 +68,11 @@ export interface ProjectHomeApi {
 function generatedProjectHomeApi(): ProjectHomeApi {
   return {
     listProjects,
+    openProject,
     createProject,
     duplicateProject,
     setProjectArchived,
     deleteProject,
-    portable: new PortableReviewFlow(),
     onAppNotification,
     onLibraryRefreshRequired,
     onScenarioChanged,
@@ -129,18 +110,12 @@ export interface ProjectHomeState {
   retryingReviewCleanup: boolean;
   errorMessage: string | null;
   announcement: string;
-  importPreview: PortablePreview | null;
-  importWarnings: readonly ValidationIssue[];
-  backupPreview: BackupPreview | null;
-  restorePreview: PortablePreview | null;
-  restoreWarnings: readonly ValidationIssue[];
-  restoreSafetyBackupFailure: string | null;
-  restoreMode: "add-backup" | "replace-library";
 }
 
 export interface ProjectHomeController {
   readonly state: ProjectHomeState;
   load(): Promise<void>;
+  refreshLibrary(): Promise<boolean>;
   startEventListeners(): Promise<void>;
   dispose(): Promise<void>;
   runOperation<T>(operation: WorkspaceOperation<T>): Promise<ApiResponseDto<T>>;
@@ -148,32 +123,12 @@ export interface ProjectHomeController {
   registerReviewOwner(owner: ReviewOwner): void;
   retireReviewOwner(owner: ReviewOwner): Promise<boolean>;
   retryReviewCleanup(): Promise<void>;
-  selectProject(scenarioId: string): void;
-  createProject(input: CreateProjectInput): Promise<boolean>;
+  selectProject(scenarioId: string | null): void;
+  openProject(scenarioId: string): Promise<ProjectSummary | null>;
+  createProject(input: CreateProjectInput): Promise<ProjectMetadataDto | null>;
   duplicateProject(project: ProjectSummary, title: string): Promise<boolean>;
   setArchived(project: ProjectSummary): Promise<boolean>;
   deleteProject(project: ProjectSummary): Promise<boolean>;
-  previewImport(options: Pick<ImportOptions, "includeResults" | "includeAssets">): Promise<boolean>;
-  applyImport(
-    collisions: Readonly<Record<string, CollisionChoice>>,
-    supplemental: Readonly<Record<string, SupplementalCollisionChoice>>,
-  ): Promise<boolean>;
-  previewBackup(title: string): Promise<boolean>;
-  createBackup(): Promise<boolean>;
-  previewRestore(mode: Exclude<ImportOptions["restoreMode"], "import-scenario">): Promise<boolean>;
-  applyRestore(
-    collisions: Readonly<Record<string, CollisionChoice>>,
-    supplemental: Readonly<Record<string, SupplementalCollisionChoice>>,
-    safetyBackupBypassPhrase?: string,
-  ): Promise<boolean>;
-}
-
-export interface FocusTarget {
-  focus(): void;
-}
-
-export function recoverFocus(target: FocusTarget | null | undefined): void {
-  target?.focus();
 }
 
 interface ApiFailure {
@@ -200,6 +155,7 @@ export function safeMessage(error: unknown): string {
 }
 
 export function isRevisionConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
   const failure = error as ApiFailure;
   return (
     failure.category === "conflict" ||
@@ -240,14 +196,6 @@ export function supplementalIdentityKey(identity: SupplementalIdentity): string 
   return `${identity.section}\u0000${identity.key}`;
 }
 
-export function defaultSupplementalCollisionChoices(
-  identities: readonly SupplementalIdentity[],
-  action: SupplementalCollisionChoice = "skip",
-): Record<string, SupplementalCollisionChoice> {
-  const choices: Record<string, SupplementalCollisionChoice> = {};
-  for (const identity of identities) choices[supplementalIdentityKey(identity)] = action;
-  return choices;
-}
 export interface ScenarioRevisionOutcome {
   readonly revision: Revision | null;
   readonly warning: string | null;
@@ -255,7 +203,7 @@ export interface ScenarioRevisionOutcome {
 
 export function scenarioRevisionOutcome(
   scenario: PortableScenarioDto,
-  action: CollisionChoice | undefined,
+  action: CollisionAction | undefined,
   replaceLibrary = false,
 ): ScenarioRevisionOutcome {
   if (scenario.collides && !replaceLibrary && action === "skip") {
@@ -268,33 +216,6 @@ export function scenarioRevisionOutcome(
     };
   }
   return { revision: scenario.sourceRevision, warning: null };
-}
-
-function collisionPlan(
-  preview: PortablePreviewDto,
-  scenarios: Readonly<Record<string, CollisionChoice>>,
-  supplemental: Readonly<Record<string, SupplementalCollisionChoice>>,
-  replaceLibrary = false,
-): CollisionPlan | null {
-  if (replaceLibrary) return { scenarios: {}, supplementalChoices: [] };
-  const scenarioChoices: Record<string, CollisionChoice> = {};
-  for (const scenario of preview.scenarios) {
-    if (!scenario.collides) continue;
-    const action = scenarios[scenario.scenarioId];
-    if (!action) return null;
-    scenarioChoices[scenario.scenarioId] = action;
-  }
-  const supplementalChoices = preview.supplementalCollisions.map((identity) => {
-    const action = supplemental[supplementalIdentityKey(identity)];
-    return action ? { ...identity, action } : null;
-  });
-  if (supplementalChoices.some((choice) => choice === null)) return null;
-  return {
-    scenarios: scenarioChoices,
-    supplementalChoices: supplementalChoices.filter(
-      (choice): choice is NonNullable<typeof choice> => choice !== null,
-    ),
-  };
 }
 
 export function createProjectHomeController(
@@ -330,16 +251,9 @@ export function createProjectHomeController(
     retryingReviewCleanup: false,
     errorMessage: null,
     announcement: "",
-    importPreview: null,
-    importWarnings: [],
-    backupPreview: null,
-    restorePreview: null,
-    restoreWarnings: [],
-    restoreSafetyBackupFailure: null,
-    restoreMode: "add-backup",
   });
   const eventUnlisteners: Array<() => void> = [];
-  const reviewOwners = new Set<ReviewOwner>([api.portable]);
+  const reviewOwners = new Set<ReviewOwner>();
   const failedReviewCleanup = new Set<ReviewOwner>();
   let listenersStarted = false;
   let disposed = false;
@@ -356,7 +270,7 @@ export function createProjectHomeController(
       if (isDisposed()) return;
       if (result.status === "success") {
         if (!result.data.some(({ scenarioId }) => scenarioId === state.selectedId)) {
-          state.selectedId = result.data[0]?.scenarioId ?? null;
+          state.selectedId = null;
         }
         state.phase = "ready";
         state.libraryEpoch += 1;
@@ -423,14 +337,6 @@ export function createProjectHomeController(
     listenersStarted = eventUnlisteners.length > 0;
   }
 
-  async function discardPreview(previewId: string): Promise<void> {
-    try {
-      await api.portable.discardPreview(previewId);
-    } catch {
-      // A consumed or evicted preview is already unavailable.
-    }
-  }
-
   function dispose(): Promise<void> {
     if (disposal) return disposal;
     disposed = true;
@@ -440,12 +346,6 @@ export function createProjectHomeController(
     if (entry) queryCache.cancel(entry);
     for (const unlisten of eventUnlisteners.splice(0)) releaseListener(unlisten);
     state.operation = null;
-    state.importPreview = null;
-    state.importWarnings = [];
-    state.backupPreview = null;
-    state.restorePreview = null;
-    state.restoreWarnings = [];
-    state.restoreSafetyBackupFailure = null;
     return disposal;
   }
 
@@ -579,11 +479,35 @@ export function createProjectHomeController(
     load: async () => {
       await reload();
     },
+    refreshLibrary: () => reload(false),
     selectProject(scenarioId) {
       if (!isDisposed() && !state.busyAction) state.selectedId = scenarioId;
     },
-    createProject(input) {
-      return mutate("create", () => api.createProject(input), `Created ${input.title}.`);
+    async openProject(scenarioId) {
+      try {
+        const response = await runOperation({
+          action: `open:${scenarioId}`,
+          label: messages.projects.opening,
+          execute: () => api.openProject(scenarioId),
+          success: (project) => messages.projects.opened(project.title),
+        });
+        return response.result;
+      } catch {
+        return null;
+      }
+    },
+    async createProject(input) {
+      try {
+        const response = await runOperation({
+          action: "create",
+          label: messages.projects.creating,
+          execute: () => api.createProject(input),
+          success: (project) => messages.projects.created(project.title),
+        });
+        return response.result;
+      } catch {
+        return null;
+      }
     },
     duplicateProject(project, title) {
       return mutate(
@@ -616,236 +540,6 @@ export function createProjectHomeController(
         () => api.deleteProject(project.scenarioId, project.revision),
         `Deleted ${project.title}.`,
       );
-    },
-    async previewImport(selection) {
-      if (isDisposed() || state.busyAction) return false;
-      const previousError = state.errorMessage;
-      state.busyAction = "preview-import";
-      state.errorMessage = null;
-      try {
-        const previousPreview = state.importPreview;
-        const response = await api.portable.previewImport(new LibraryOperationScope(null), {
-          restoreMode: "import-scenario",
-          includeResults: selection.includeResults,
-          includeAssets: selection.includeAssets,
-        }).result;
-        if (isDisposed()) {
-          await discardPreview(response.result.previewId);
-          return false;
-        }
-        state.importPreview = response.result;
-        state.importWarnings = response.warnings;
-        if (previousPreview && previousPreview.previewId !== response.result.previewId) {
-          await discardPreview(previousPreview.previewId);
-        }
-        if (isDisposed()) return false;
-        state.announcement = "Import preview ready. Review every collision before applying it.";
-        return true;
-      } catch (error) {
-        if (isDisposed()) return false;
-        state.errorMessage = isOperationCancelled(error) ? previousError : safeMessage(error);
-        return false;
-      } finally {
-        if (!isDisposed()) state.busyAction = null;
-      }
-    },
-    applyImport(collisions, supplemental) {
-      if (isDisposed() || state.busyAction) return Promise.resolve(false);
-      const preview = state.importPreview;
-      if (!preview) {
-        return Promise.resolve(false);
-      }
-      const plan = collisionPlan(preview, collisions, supplemental);
-      if (!plan) {
-        state.errorMessage = "Choose an action for every collision shown in the preview.";
-        return Promise.resolve(false);
-      }
-      return mutate(
-        "apply-import",
-        () =>
-          api.portable.applyImport(new LibraryOperationScope(preview.libraryRevision), {
-            previewId: preview.previewId,
-            collisionPlan: plan,
-          }).result,
-        "Import applied.",
-      ).then((applied) => {
-        if (!isDisposed()) {
-          state.importPreview = null;
-          state.importWarnings = [];
-        }
-        return applied;
-      });
-    },
-    async previewBackup(title) {
-      if (isDisposed() || state.busyAction) return false;
-      state.busyAction = "preview-backup";
-      state.errorMessage = null;
-      try {
-        const previousPreview = state.backupPreview;
-        const response = await api.portable.previewBackup(new LibraryOperationScope(null), title)
-          .result;
-        if (isDisposed()) {
-          await discardPreview(response.result.previewId);
-          return false;
-        }
-        state.backupPreview = response.result;
-        if (previousPreview && previousPreview.previewId !== response.result.previewId) {
-          await discardPreview(previousPreview.previewId);
-        }
-        if (isDisposed()) return false;
-        state.announcement = "Backup preview ready.";
-        return true;
-      } catch (error) {
-        if (isDisposed()) return false;
-        state.errorMessage = safeMessage(error);
-        return false;
-      } finally {
-        if (!isDisposed()) state.busyAction = null;
-      }
-    },
-    async createBackup() {
-      if (isDisposed() || state.busyAction) return false;
-      const preview = state.backupPreview;
-      if (!preview) return false;
-      const previousError = state.errorMessage;
-      state.busyAction = "create-backup";
-      state.errorMessage = null;
-      try {
-        const response = await api.portable.createBackup(
-          new LibraryOperationScope(preview.libraryRevision),
-          preview.previewId,
-        ).result;
-        if (isDisposed()) return true;
-        await reload(false);
-        if (!isDisposed()) state.announcement = `Backup saved as ${response.result.artifactName}.`;
-        return true;
-      } catch (error) {
-        if (isDisposed()) return false;
-        if (isOperationCancelled(error)) {
-          state.errorMessage = previousError;
-        } else if (isRevisionConflict(error)) {
-          const reloaded = await reload(false);
-          if (!isDisposed())
-            state.announcement = reloaded
-              ? "The project changed in another window. The latest saved version has been reloaded."
-              : "The project changed in another window. Refresh the library before trying the change again.";
-        } else {
-          state.errorMessage = safeMessage(error);
-        }
-        return false;
-      } finally {
-        if (!isDisposed()) {
-          state.backupPreview = null;
-          state.busyAction = null;
-        }
-      }
-    },
-    async previewRestore(mode) {
-      if (isDisposed() || state.busyAction) return false;
-      const previousError = state.errorMessage;
-      state.busyAction = "preview-restore";
-      state.errorMessage = null;
-      try {
-        const previousPreview = state.restorePreview;
-        const response = await api.portable.previewRestore(
-          new LibraryOperationScope(null),
-          {
-            restoreMode: mode,
-            includeResults: true,
-            includeAssets: true,
-          },
-          "userSelected",
-        ).result;
-        if (isDisposed()) {
-          await discardPreview(response.result.previewId);
-          return false;
-        }
-        state.restoreSafetyBackupFailure = null;
-        state.restorePreview = response.result;
-        state.restoreWarnings = response.warnings;
-        if (previousPreview && previousPreview.previewId !== response.result.previewId) {
-          await discardPreview(previousPreview.previewId);
-        }
-        if (isDisposed()) return false;
-        state.restoreMode = mode;
-        state.announcement = `${mode === "replace-library" ? "Replace" : "Add"} restore preview ready.`;
-        return true;
-      } catch (error) {
-        if (isDisposed()) return false;
-        state.errorMessage = isOperationCancelled(error) ? previousError : safeMessage(error);
-        return false;
-      } finally {
-        if (!isDisposed()) state.busyAction = null;
-      }
-    },
-    async applyRestore(collisions, supplemental, safetyBackupBypassPhrase = "") {
-      if (isDisposed() || state.busyAction) return false;
-      const preview = state.restorePreview;
-      if (!preview) return false;
-      const plan = collisionPlan(
-        preview,
-        collisions,
-        supplemental,
-        state.restoreMode === "replace-library",
-      );
-      if (!plan) {
-        state.errorMessage = "Choose an action for every collision shown in the preview.";
-        return false;
-      }
-      state.busyAction = "apply-restore";
-      state.errorMessage = null;
-      try {
-        const response = await api.portable.applyRestore(
-          new LibraryOperationScope(preview.libraryRevision),
-          {
-            previewId: preview.previewId,
-            collisionPlan: plan,
-            authorization: {
-              destructiveActionConfirmed: state.restoreMode === "replace-library",
-              safetyBackupBypassPhrase: safetyBackupBypassPhrase || null,
-            },
-          },
-        ).result;
-        if (isDisposed()) return true;
-        state.restorePreview = null;
-        state.restoreWarnings = [];
-        state.restoreSafetyBackupFailure = null;
-        await reload(false);
-        if (!isDisposed()) {
-          const outcome = response.result.safetyBackup;
-          state.announcement =
-            outcome.kind === "createdAndVerified"
-              ? `Restore applied. Safety backup saved and verified as ${outcome.artifactName}.`
-              : outcome.kind === "confirmedBypass"
-                ? "Restore applied without a safety backup after explicit confirmation."
-                : "Restore applied.";
-        }
-        return true;
-      } catch (error) {
-        if (isDisposed()) return false;
-        if (isRetainedRestoreFailure(error)) {
-          state.restoreSafetyBackupFailure = safeMessage(error);
-          state.errorMessage = null;
-          state.announcement =
-            "The safety backup failed. Review the reason before choosing whether to continue.";
-        } else {
-          state.restorePreview = null;
-          state.restoreWarnings = [];
-          state.restoreSafetyBackupFailure = null;
-          if (isRevisionConflict(error)) {
-            const reloaded = await reload(false);
-            if (!isDisposed())
-              state.announcement = reloaded
-                ? "The project changed in another window. The latest saved version has been reloaded."
-                : "The project changed in another window. Refresh the library before trying the change again.";
-          } else {
-            state.errorMessage = safeMessage(error);
-          }
-        }
-        return false;
-      } finally {
-        if (!isDisposed()) state.busyAction = null;
-      }
     },
   };
 }
