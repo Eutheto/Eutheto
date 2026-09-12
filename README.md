@@ -121,15 +121,20 @@ results, explain recorded assignments, and export accepted JSON or assignment CS
 This remains a bounded development planner: the complete Workforce desktop flow,
 Seating, repair/comparison product flows, AI, and signed releases remain roadmap work.
 
-Phase 06 has added light/dark design-system foundations and a generated, bounded
-desktop setup API with native operation ownership, progress, and cancellation.
+Phase 06 now provides first launch, Workforce project creation, a searchable
+active/archived library, a revision-bound setup overview, and reviewed portable
+inspection/import/export and backup/restore/recovery screens. Application Settings
+provides separate revision-checked drafts, reviewed nonsecret import/export, and
+persisted appearance preferences. About renders the bounded offline workspace
+license inventory and redacted configured-location status—not exact installer
+attribution or completed license clearance.
+
+The generated setup API owns native operation lifetime, progress and cancellation.
 Native people-CSV commands support picker-owned immutable snapshots, reviewed
-atomic imports, and separate rejected-row report saves. Native application-settings
-import/export now provides library-revision-bound review, atomic replacement of
-nonsecret portable settings, and no-clobber saves. About APIs expose a bounded
-offline locked-workspace license inventory and redacted location status—not
-exact installer attribution or completed license clearance. These boundaries
-are prerequisites for the editors and settings/About screens, not completed UI.
+atomic imports and separate rejected-row report saves; their editor/import screens
+and the remaining Workforce editors are still roadmap work. See
+[desktop behavior and verification limits](apps/desktop/README.md), including
+native editing-accelerator, accessibility and packaged-platform gates.
 Use the headless Workforce workflow below for the available end-to-end
 optimization path.
 
@@ -157,10 +162,11 @@ just desktop-dev
 ```
 
 `just cli` runs the non-final working CLI. `just desktop-dev` runs the persisted
-Vue project home inside the Tauri development shell; it does not provide domain
-planning or solving. On Linux, `just e2e` builds the unbundled Tauri application
-and exercises project persistence across a new application process in an
-isolated local-data directory.
+desktop shell and implemented project, portable-file, Settings and About workflows;
+it does not provide Workforce editors or live solving. On Linux, `just e2e` builds
+the unbundled Tauri application and exercises native settings/portable workflows,
+real safety-backup failure/recovery, deletion/history boundaries and restart
+persistence with isolated local data and networking.
 
 Run `just` to list every supported command. In particular,
 `just generate-check`, `just protocol-check`, and `just fixtures-check` verify
@@ -199,7 +205,7 @@ endpoints when required; recurring templates retain local intent. The command
 uses the same revision checks and atomic history as other edits. Stored undo/redo
 restores exact endpoint representations, including DST-gap intent and timestamp
 spelling; inverse restoration payloads are pack-owned. This command authority
-does not yet provide the Phase-06 desktop settings editor.
+does not yet provide the Phase-06 Workforce calendar-settings editor.
 
 ```sh
 optimizer scenario validate ./scenario.json
