@@ -53,6 +53,14 @@ A risky package's full pre-merge run is package-head evidence, not exact integra
 
 At phase closure, preserve full protected-main/merge-queue verification, exact artifact gates, the unfamiliar-user/accessibility evidence, and the explicit [Phase06 manual checkpoint](../roadmap/06-desktop-design-system-and-workforce-setup.md#phase-exit-gate). Obtain the existing final-main authority rather than treating this trial as blanket merge permission. After authorized integration or abandonment, retire the phase branch and its exact-ref ruleset deliberately; never force-push it or carry it into the next phase.
 
+### Adoption evidence
+
+The trial was installed on 2026-09-12 in [phase ruleset 23035682](https://github.com/Eutheto/Eutheto/rules/23035682), initially from tested `main` commit `2aa323274d9c54ffe5865ffd372696695bfe39a8`. [Settings PR46](https://github.com/Eutheto/Eutheto/pull/46) integrated as `b6e686729f342a2a408262797e1085a6851a7847`; [policy PR47](https://github.com/Eutheto/Eutheto/pull/47) integrated as `972a262d6b95a99475e7b0afa059f4f315c4682b`. Both integrated trees matched their verified source trees, and the trusted initial-base through policy-integration DCO check passed for both squash commits.
+
+Policy source `a6da81c5c6eed96a3c964ca4bf92de8b8cbe9988` passed [PR/source](https://github.com/Eutheto/Eutheto/actions/runs/34688984061), [Portable](https://github.com/Eutheto/Eutheto/actions/runs/34688984209), [approved worker/package](https://github.com/Eutheto/Eutheto/actions/runs/34688984128), [Security](https://github.com/Eutheto/Eutheto/actions/runs/34688984064), and [Dependency policy](https://github.com/Eutheto/Eutheto/actions/runs/34688984114): all six native source targets and four approved package targets succeeded. The source report explicitly recorded evaluation-only Nix, successful production frontend compilation, canonical checks, and browser checks. Optional non-distributable candidates were not run.
+
+Only after the new app-bound checks passed were the three phase context names changed. The full phase rule payload read back as intended, and [main ruleset 22282266](https://github.com/Eutheto/Eutheto/rules/22282266) remained identical to its capture. This is bootstrap/package evidence, not one of the four exact-phase checkpoints, Phase06 acceptance, or final-main/release authorization.
+
 ## Before committing
 
 1. Confirm that the change belongs to the active phase and preserves its prerequisites, non-goals, named gates, and acceptance criteria.
