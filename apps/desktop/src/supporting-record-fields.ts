@@ -6,6 +6,7 @@ import type {
 import { parseDurationDraft } from "./components/planner/duration-field";
 import type { DurationDraft } from "./components/planner/field-contracts";
 import { messages } from "./messages";
+import { sameField } from "./entity-draft";
 
 export type SupportingRecord = WorkforceQualification | WorkforceTeam | WorkforceAssignmentType;
 
@@ -35,6 +36,7 @@ export type SupportingRecordDraft =
 
 export function createSupportingRecordDraft(
   value: SupportingRecord | SupportingRecord["kind"],
+  retained?: { readonly value: SupportingRecord; readonly raw: SupportingRecordDraft },
 ): SupportingRecordDraft {
   if (typeof value === "string") {
     switch (value) {
@@ -63,22 +65,40 @@ export function createSupportingRecordDraft(
       return { kind: value.kind, name: value.name, description: value.description };
     case "team":
       return { kind: value.kind, name: value.name };
-    case "assignmentType":
+    case "assignmentType": {
+      const previous =
+        retained?.value.kind === value.kind && retained.raw.kind === value.kind
+          ? retained
+          : undefined;
+      const raw = previous?.raw.kind === "assignmentType" ? previous.raw : undefined;
+      const native = previous?.value.kind === "assignmentType" ? previous.value : undefined;
+      const qualifications =
+        raw && sameField(value.qualifications, native?.qualifications) ? raw : undefined;
+      const location =
+        raw && sameField(value.locationBehavior, native?.locationBehavior) ? raw : undefined;
       return {
         kind: value.kind,
         name: value.name,
         category: value.category,
-        duration: parseDurationDraft(String(value.defaultDurationMinutes), "minutes", 1),
-        qualificationMode: value.qualifications.kind,
+        duration:
+          raw && value.defaultDurationMinutes === native?.defaultDurationMinutes
+            ? raw.duration
+            : parseDurationDraft(String(value.defaultDurationMinutes), "minutes", 1),
+        qualificationMode: qualifications?.qualificationMode ?? value.qualifications.kind,
         allQualificationIds:
-          value.qualifications.kind === "matches" ? value.qualifications.allQualificationIds : [],
+          qualifications?.allQualificationIds ??
+          (value.qualifications.kind === "matches" ? value.qualifications.allQualificationIds : []),
         anyQualificationIds:
-          value.qualifications.kind === "matches" ? value.qualifications.anyQualificationIds : [],
-        locationMode: value.locationBehavior.kind,
-        locationId: value.locationBehavior.kind === "fixed" ? value.locationBehavior.locationId : "",
+          qualifications?.anyQualificationIds ??
+          (value.qualifications.kind === "matches" ? value.qualifications.anyQualificationIds : []),
+        locationMode: location?.locationMode ?? value.locationBehavior.kind,
+        locationId:
+          location?.locationId ??
+          (value.locationBehavior.kind === "fixed" ? value.locationBehavior.locationId : ""),
         timeBehavior: value.timeBehavior,
         workloadBucketIds: value.workloadBucketIds,
       };
+    }
   }
 }
 

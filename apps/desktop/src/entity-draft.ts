@@ -3,14 +3,18 @@ export interface EntityRecord {
   readonly kind: string;
 }
 
+/** Include variant-specific fields when a controller edits a discriminated union. */
+export type EntityField<T extends EntityRecord> = T extends EntityRecord ? keyof T : never;
+
 /** Arrays and nested objects are whole fields, not an implicit element merge. */
 export interface EntityRebase<T extends EntityRecord> {
+  readonly local: T;
   readonly current: T;
   readonly value: T;
-  readonly conflicts: readonly (keyof T)[];
+  readonly conflicts: readonly EntityField<T>[];
 }
 
-function sameField(left: unknown, right: unknown): boolean {
+export function sameField(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   if (typeof left !== "object" || left === null || typeof right !== "object" || right === null)
     return false;
@@ -30,9 +34,10 @@ function sameField(left: unknown, right: unknown): boolean {
   );
 }
 
-function copyField<T extends EntityRecord>(target: T, source: T, field: keyof T): void {
-  if (Object.hasOwn(source, field)) target[field] = source[field];
-  else Reflect.deleteProperty(target, field);
+function copyField<T extends EntityRecord>(target: T, source: T, field: EntityField<T>): void {
+  const key = field as keyof T;
+  if (Object.hasOwn(source, key)) target[key] = source[key];
+  else Reflect.deleteProperty(target, key);
 }
 
 /** Called only for a typed candidate after preserving/repairing any invalid raw input. */
@@ -49,26 +54,28 @@ export function rebaseEntityDraft<T extends EntityRecord>(
   )
     throw new Error("A draft cannot be rebased onto a different record identity.");
   const value = { ...current };
-  const conflicts: (keyof T)[] = [];
-  const fields = Object.keys({ ...base, ...local, ...current }) as (keyof T)[];
+  const conflicts: EntityField<T>[] = [];
+  const fields = Object.keys({ ...base, ...local, ...current }) as EntityField<T>[];
   for (const field of fields) {
-    if (field === "id" || field === "kind" || sameField(local[field], base[field])) continue;
-    if (!sameField(current[field], base[field]) && !sameField(current[field], local[field]))
+    const key = field as keyof T;
+    if (field === "id" || field === "kind" || sameField(local[key], base[key])) continue;
+    if (!sameField(current[key], base[key]) && !sameField(current[key], local[key]))
       conflicts.push(field);
     copyField(value, local, field);
   }
-  return { current, value, conflicts };
+  return { local, current, value, conflicts };
 }
 
 export function resolveEntityDraftField<T extends EntityRecord>(
   rebase: EntityRebase<T>,
-  field: keyof T,
+  field: EntityField<T>,
   choice: "current" | "draft",
 ): EntityRebase<T> {
   if (!rebase.conflicts.includes(field)) return rebase;
   const value = { ...rebase.value };
   if (choice === "current") copyField(value, rebase.current, field);
   return {
+    local: rebase.local,
     current: rebase.current,
     value,
     conflicts: rebase.conflicts.filter((item) => item !== field),

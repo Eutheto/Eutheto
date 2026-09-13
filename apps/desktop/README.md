@@ -18,8 +18,9 @@ sends typed requests back to it; browser state is not a second persistence
 layer.
 
 Hash routing exposes first launch, Workforce creation, the active/archived
-project library, selected-project setup, history and editable export, portable import,
-Settings, Backup and restore, offline About/licenses, and unknown-route recovery.
+project library, selected-project setup, People/supporting records, history and
+editable export, portable import, Settings, Backup and restore, offline About/licenses,
+and unknown-route recovery.
 Pinia retains transient selection and deletion-review context; Colada caches
 native list projections. Neither owns scenario data or replays native writes.
 
@@ -65,9 +66,45 @@ accepted-only solution projections. It shows saved calendar/count facts, actual
 fast/full readiness, and current/stale/selected accepted-result state. Counts do
 not imply readiness; an empty accepted list does not imply that solving never
 ran. Missing, deleted, unsupported and stale contexts recover explicitly without
-substituting another project. This is not a Workforce editor or result workspace.
+substituting another project. The overview is not an editor or result workspace.
 Preview does not commit; apply, history, undo/redo, and local settings retain
 their existing application-service authority.
+
+The separate People and supporting records route reads 50 native summaries at a
+time and complete typed details on selection. People, qualifications, teams and
+assignment types have explicit create/edit buffers and native command review;
+deletion requires a successful native reference check. Person fields include
+external identity, active dates, temporal qualification grants, eligible assignment
+types, teams, existing home-location/workload-target references, rational weight,
+tags and display metadata. Assignment types retain their complete policy fields.
+
+A revision or library-epoch change preserves raw drafts but invalidates approval.
+Whole-field rebase carries independent current changes and requires explicit choices
+for conflicts. Inactive optional input and numeric spelling survive when the resolved
+native field still has the draft's meaning. An unavailable record is not assumed
+deleted; copying its draft requires a fresh identity. Root-owned write receipts and
+unknown-outcome recovery survive route exit without replaying the command.
+People bulk actions remain incomplete.
+
+People links to a native CSV import route. The picker and raw snapshot remain in
+Rust; the screen receives an opaque source ID, native encoding/delimiter evidence,
+and bounded inert samples. Delimiter, header handling, physical columns, creation
+defaults and exact reference tokens are explicit choices, never a browser CSV parser.
+Names do not choose identity. Add allocates a stable draft ID; Update requires a
+native exact match or an explicitly selected existing person; Skip is explicit.
+Decisions remain repairable after a failed preview, including record-specific native
+errors. Interpretation changes discard prior decisions; revision-only re-preview
+retains them while invalidating approval.
+
+Native row status, typed proposed people and draft validation precede one atomic
+apply. A blocked review cannot be applied; an exact no-change import creates no
+history entry. The screen never splits an oversized import into separate commits.
+Source limits are 16 MiB, 64 columns and 10,000 data records, with at most 1,000
+changed people per apply. Rejection reports contain bounded record numbers/codes,
+not raw cells. Save them through the separate native chooser before replacing the
+preview/source or leaving the route. A received import receipt remains authoritative
+if report saving fails or is cancelled; uncertain writes use root history recovery,
+not automatic replay.
 
 The workspace History route reads revision-bound metadata pages through
 `getScenarioHistoryPage`, not command/inverse/actor payloads. It shows 50 entries
@@ -83,8 +120,8 @@ The setup overview now reuses `ValidationSummary` for bounded fast findings and
 native total/displayed/omitted counts; full-validation status remains separate.
 Empty library/history states use the same named `EmptyState`. Shared controlled
 pickers, exact duration/local-time drafts, rule strength/scope and physical CSV
-mapping fields are available for the ordered editor packages; they are not mounted
-as a production playground and do not implement people/import or rule editors.
+mapping fields support these and the remaining ordered editor packages; they are
+not mounted as a production playground or evidence of completed import/rule editors.
 Their [native and accessibility contracts](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#common-field-consumer-contracts)
 also identify later-only components and the distinct Phase 07 Share Result gate.
 
@@ -281,8 +318,17 @@ isolated SQLite/XDG data and network namespace, GTK file pickers, and hardware
 keyboard input via the existing Nix `xdotool` tool. It exercises settings
 conflicts/import/export, portable inspection/re-export/import, backup/add/replace,
 real safety-backup I/O failure and explicit bypass/recovery, deletion review,
-scoped scenario undo/redo, offline inventory, route recovery and restart
-persistence. Screenshots are written only under ignored `.cache/e2e`.
+scoped scenario undo/redo, offline inventory, route recovery and restart persistence.
+The People scenario exercises all four record kinds, a real second writer,
+stale-approval invalidation, whole-field conflict choices, retained inactive input,
+referenced-deletion refusal, explicit fresh-identity recovery and keyboard focus
+without stealing focus from an existing draft input. Screenshots are written only
+under ignored `.cache/e2e`.
+The CSV scenario adds native picker cancellation and unsupported encoding,
+explicit column/identity review, inert hostile header text, a real Add-ID collision,
+record-specific error focus, duplicate/rejected rows, selected sample/proposed-person
+inspection, stale re-preview with stable Add IDs, atomic apply, independent report
+save/cancellation, exact no-change apply, and one-step undo/redo after restart.
 
 Chromium checks supplement this native surface with focus, keyboard and axe
 coverage. Neither suite proves native screen-reader behavior, installers, or

@@ -204,10 +204,11 @@ export function isRevisionConflict(error: unknown): boolean {
 }
 
 export function isOperationCancelled(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const failure = error as ApiFailure;
   return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as ApiFailure).code === "operation.cancelled"
+    failure.code === "operation.cancelled" ||
+    (failure.category === "protocol" && failure.code === "operation.context_disposed")
   );
 }
 
@@ -236,7 +237,6 @@ function isUncommittedMutationRejection(error: unknown): boolean {
   // Do not infer rollback from generic validation, transport or publication errors.
   return (
     (failure.category === "conflict" && failure.code === "scenario.revision_conflict") ||
-    (failure.category === "protocol" && failure.code === "operation.context_disposed") ||
     isRedoBranchTruncation(error) ||
     isOperationCancelled(error)
   );

@@ -130,10 +130,18 @@ persisted appearance preferences. About renders the bounded offline workspace
 license inventory and redacted configured-location status—not exact installer
 attribution or completed license clearance.
 
+The People and supporting records route provides native record search/detail and
+explicit create/edit/delete review for people, qualifications, teams and assignment
+types. Concurrent changes invalidate approval; whole-field rebase preserves
+unrelated current values and inactive raw input until an explicit choice replaces it.
+
 The generated setup API owns native operation lifetime, progress and cancellation.
-Native people-CSV commands support picker-owned immutable snapshots, reviewed
-atomic imports and separate rejected-row report saves; their editor/import screens
-and the remaining Workforce editors are still roadmap work. See
+The People CSV screen selects a Rust-owned immutable snapshot, requires explicit
+delimiter/header/column mapping and identity decisions, and displays native proposed
+people and draft validation before one atomic apply. Rejected-row reports can be
+saved separately, including after apply; an exact no-change import creates no history
+entry. Names are never used to guess identity. People bulk actions and remaining
+Workforce editors are still roadmap work. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
 native editing-accelerator, accessibility and packaged-platform gates.
 Use the headless Workforce workflow below for the available end-to-end
@@ -163,11 +171,13 @@ just desktop-dev
 ```
 
 `just cli` runs the non-final working CLI. `just desktop-dev` runs the persisted
-desktop shell and implemented project, portable-file, Settings and About workflows;
-it does not provide Workforce editors or live solving. On Linux, `just e2e` builds
-the unbundled Tauri application and exercises native settings/portable workflows,
-real safety-backup failure/recovery, deletion/history boundaries and restart
-persistence with isolated local data and networking.
+desktop shell and implemented project, People/supporting-record, portable-file,
+Settings and About workflows; live desktop solving remains unavailable.
+On Linux, `just e2e` builds the unbundled Tauri application and exercises native
+settings/portable workflows, People editing and concurrent-change recovery, native
+CSV import/report/no-change behavior and restart-safe undo/redo, safety-backup
+failure/recovery, deletion/history boundaries and persistence with isolated local
+data and networking.
 
 Run `just` to list every supported command. In particular,
 `just generate-check`, `just protocol-check`, and `just fixtures-check` verify

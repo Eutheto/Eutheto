@@ -70,6 +70,7 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 
 - Use human domain language before solver terminology: `Required`, `Preference`, `Optimize`, and `Repair plan`.
 - Rust remains authoritative; Pinia and query state are presentation caches only.
+- Full-record editor rebases preserve independent current fields and inactive raw input. Replace a raw field only when adopting different native meaning; resolve collections and nested objects as whole fields, not hidden element merges.
 - Every primary flow is keyboard-complete, has correct focus behavior and screen-reader names/announcements, and does not rely on color alone.
 - Canvas and charts require an equivalent accessible list/table representation.
 - Implement normal, empty, loading, stale, error, cancellation, and offline-capable states as applicable.

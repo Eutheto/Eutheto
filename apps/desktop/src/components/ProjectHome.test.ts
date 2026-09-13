@@ -354,6 +354,39 @@ describe("root project controller", () => {
     expect(home.state.mutation?.outcome).toBe("outcomeUnknown");
   });
 
+  it("ends an owned read teardown without leaving an error on the destination route", async () => {
+    const home = createHome(fakeApi([project]));
+    const pending = deferred<ApiResponseDto<unknown>>();
+    const operation = {
+      action: "people:preview",
+      label: "Review people",
+      execute: () => pending.promise,
+      success: () => "Review ready",
+      refreshLibrary: false,
+    };
+    const result = home.runOperation(operation);
+    const closed = Object.assign(new Error("Context closed"), {
+      category: "protocol",
+      code: "operation.context_disposed",
+    });
+    pending.reject(closed);
+    await expect(result).rejects.toBe(closed);
+    expect(home.state.errorMessage).toBeNull();
+    expect(home.state.operation).toBeNull();
+    expect(home.state.busyAction).toBeNull();
+    const realFailure = Object.assign(new Error("Storage failed"), {
+      category: "storage",
+      code: "operation.context_disposed",
+    });
+    await expect(
+      home.runOperation({
+        ...operation,
+        execute: () => Promise.reject(realFailure),
+      }),
+    ).rejects.toBe(realFailure);
+    expect(home.state.errorMessage).not.toBeNull();
+  });
+
   it("releases partial and late listener acquisitions even when another release throws", async () => {
     const api = fakeApi();
     const late = deferred<() => void>();

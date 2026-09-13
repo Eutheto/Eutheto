@@ -4,6 +4,7 @@ import type {
   WorkforceWindowMembership,
 } from "./api/generated-domain-pack-contracts";
 import { messages } from "./messages";
+import { sameField } from "./entity-draft";
 
 /** Temporary row keys are UI identity; the native grant remains the complete temporal tuple. */
 export interface GrantDraft {
@@ -46,27 +47,45 @@ export function grantDraft(value?: WorkforceQualificationGrant): GrantDraft {
     expiresAt: value?.expiresAt ?? "",
   };
 }
-export function createPersonFieldsDraft(value?: PeopleCsvNewPersonDefaults): PersonFieldsDraft {
+export function createPersonFieldsDraft(
+  value?: PeopleCsvNewPersonDefaults,
+  retained?: { readonly value: PeopleCsvNewPersonDefaults; readonly raw: PersonFieldsDraft },
+): PersonFieldsDraft {
+  const keep = (field: keyof PeopleCsvNewPersonDefaults): PersonFieldsDraft | undefined =>
+    value !== undefined && retained !== undefined && sameField(value[field], retained.value[field])
+      ? retained.raw
+      : undefined;
+  const active = keep("activeRange");
+  const weight = keep("workloadWeight");
+  const target = keep("workloadTarget");
+  const display = keep("display");
   const dates = value?.activeRange.kind === "dateRange" ? value.activeRange : null;
   return {
-    activeDatesEnabled: dates !== null,
-    startDate: dates?.startDate ?? "",
-    endDateExclusive: dates?.endDateExclusive ?? "",
-    qualificationGrants: value?.qualificationGrants.map(grantDraft) ?? [],
-    eligibleAssignmentTypeIds: value?.eligibleAssignmentTypeIds ?? [],
-    teamIds: value?.teamIds ?? [],
-    homeLocationId: value?.homeLocationId ?? "",
-    weightNumerator: String(value?.workloadWeight.numerator ?? 1),
-    weightDenominator: String(value?.workloadWeight.denominator ?? 1),
-    targetEnabled: value?.workloadTarget !== undefined,
-    targetBucketId: value?.workloadTarget?.bucketId ?? "",
-    targetCalendarId: value?.workloadTarget?.calendarId ?? "",
-    targetMembership: value?.workloadTarget?.membership ?? "reportingDate",
-    target: String(value?.workloadTarget?.target ?? 0),
-    tags: value?.tags.map((text) => ({ key: newUuidV7(), text })) ?? [],
-    displayEnabled: value?.display !== undefined,
-    color: value?.display?.color ?? "",
-    avatarInitials: value?.display?.avatarInitials ?? "",
+    activeDatesEnabled: active?.activeDatesEnabled ?? dates !== null,
+    startDate: active?.startDate ?? dates?.startDate ?? "",
+    endDateExclusive: active?.endDateExclusive ?? dates?.endDateExclusive ?? "",
+    qualificationGrants:
+      keep("qualificationGrants")?.qualificationGrants ??
+      value?.qualificationGrants.map(grantDraft) ??
+      [],
+    eligibleAssignmentTypeIds:
+      keep("eligibleAssignmentTypeIds")?.eligibleAssignmentTypeIds ??
+      value?.eligibleAssignmentTypeIds ??
+      [],
+    teamIds: keep("teamIds")?.teamIds ?? value?.teamIds ?? [],
+    homeLocationId: keep("homeLocationId")?.homeLocationId ?? value?.homeLocationId ?? "",
+    weightNumerator: weight?.weightNumerator ?? String(value?.workloadWeight.numerator ?? 1),
+    weightDenominator: weight?.weightDenominator ?? String(value?.workloadWeight.denominator ?? 1),
+    targetEnabled: target?.targetEnabled ?? value?.workloadTarget !== undefined,
+    targetBucketId: target?.targetBucketId ?? value?.workloadTarget?.bucketId ?? "",
+    targetCalendarId: target?.targetCalendarId ?? value?.workloadTarget?.calendarId ?? "",
+    targetMembership:
+      target?.targetMembership ?? value?.workloadTarget?.membership ?? "reportingDate",
+    target: target?.target ?? String(value?.workloadTarget?.target ?? 0),
+    tags: keep("tags")?.tags ?? value?.tags.map((text) => ({ key: newUuidV7(), text })) ?? [],
+    displayEnabled: display?.displayEnabled ?? value?.display !== undefined,
+    color: display?.color ?? value?.display?.color ?? "",
+    avatarInitials: display?.avatarInitials ?? value?.display?.avatarInitials ?? "",
   };
 }
 

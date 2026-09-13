@@ -42,8 +42,7 @@ export function csvDecisionValues(drafts: readonly CsvDecisionDraft[]): {
     if (records.has(record))
       errors.push({ record, message: plannerMessage("csvDecision.duplicateRecord") });
     records.add(record);
-    if (index === 10_000)
-      errors.push({ record, message: plannerMessage("csvDecision.limit") });
+    if (index === 10_000) errors.push({ record, message: plannerMessage("csvDecision.limit") });
     if (decision.kind === "skip") {
       decisions.push({ record, decision: { kind: "skip" } });
     } else if (decision.personId === null || decision.personId.trim() === "") {

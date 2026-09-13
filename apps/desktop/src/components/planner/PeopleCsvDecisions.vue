@@ -44,7 +44,9 @@ const decisions = computed(() =>
 const reviewRows = computed(() =>
   props.rows.slice(reviewPage.value * pageSize, (reviewPage.value + 1) * pageSize),
 );
-const decisionsByRecord = computed(() => new Map(props.modelValue.map((draft) => [draft.record, draft])));
+const decisionsByRecord = computed(
+  () => new Map(props.modelValue.map((draft) => [draft.record, draft])),
+);
 const errorsByRecord = computed(() => {
   const messages = new Map<number, string[]>();
   for (const error of props.errors ?? []) {
@@ -65,9 +67,12 @@ const sampleStatus = computed(() => {
     case "error":
       return message("csvDecision.sampleError", { record: sample.record });
     case "ready":
-      return message(sample.sample.cells === null ? "csvDecision.sampleMissing" : "csvDecision.sampleReady", {
-        record: sample.sample.record,
-      });
+      return message(
+        sample.sample.cells === null ? "csvDecision.sampleMissing" : "csvDecision.sampleReady",
+        {
+          record: sample.sample.record,
+        },
+      );
   }
 });
 const pickerContext = computed(() => ({
@@ -82,7 +87,10 @@ watch([decisionPages, reviewPages, () => props.errors?.length ?? 0], () => {
   errorIndex.value = Math.min(errorIndex.value, Math.max(0, (props.errors?.length ?? 0) - 1));
 });
 
-function message(key: PlannerMessageKey, parameters: Readonly<Record<string, string | number>> = {}): string {
+function message(
+  key: PlannerMessageKey,
+  parameters: Readonly<Record<string, string | number>> = {},
+): string {
   return plannerMessage(key, parameters, props.locale);
 }
 async function focus(id: string): Promise<void> {
@@ -94,10 +102,10 @@ async function focusRecord(record: number): Promise<void> {
   const rowIndex = props.rows.findIndex((row) => row.record === record);
   if (decisionIndex !== -1) {
     decisionPage.value = Math.floor(decisionIndex / pageSize);
-    await focus(`${prefix}-decision-${record}`);
+    await focus(`${prefix}-decision-${String(record)}`);
   } else if (rowIndex !== -1) {
     reviewPage.value = Math.floor(rowIndex / pageSize);
-    await focus(`${prefix}-review-${record}`);
+    await focus(`${prefix}-review-${String(record)}`);
   } else {
     rawRecord.value = String(record);
     recordError.value = "";
@@ -118,7 +126,9 @@ function admitRecord(): number | null {
   }
   return record;
 }
-async function manual(action: CsvDecisionDraft["decision"]["kind"] | "inspect" | "go"): Promise<void> {
+async function manual(
+  action: CsvDecisionDraft["decision"]["kind"] | "inspect" | "go",
+): Promise<void> {
   if (props.disabled) return;
   const record = admitRecord();
   if (record === null) return;
@@ -137,32 +147,49 @@ async function choose(record: number, kind: CsvDecisionDraft["decision"]["kind"]
   }
   // A repeated Add or Update retains its explicit identity; native row IDs are never fallbacks.
   if (previous?.decision.kind !== kind) {
-    const decision: CsvDecisionDraft["decision"] = kind === "add"
-      ? { kind, personId: newUuidV7() }
-      : kind === "update" ? { kind, personId: null } : { kind };
+    const decision: CsvDecisionDraft["decision"] =
+      kind === "add"
+        ? { kind, personId: newUuidV7() }
+        : kind === "update"
+          ? { kind, personId: null }
+          : { kind };
     const draft = { record, decision };
-    emit("update:modelValue", previous
-      ? props.modelValue.map((value) => value.record === record ? draft : value)
-      : [...props.modelValue, draft]);
+    emit(
+      "update:modelValue",
+      previous
+        ? props.modelValue.map((value) => (value.record === record ? draft : value))
+        : [...props.modelValue, draft],
+    );
   }
   await nextTick();
   await focusRecord(record);
-  if (kind === "update") await focus(`${prefix}-person-${record}`);
-  announcement.value = message("csvDecision.changed", { record, choice: message(`csvDecision.${kind}`) });
+  if (kind === "update") await focus(`${prefix}-person-${String(record)}`);
+  announcement.value = message("csvDecision.changed", {
+    record,
+    choice: message(`csvDecision.${kind}`),
+  });
 }
 function selectPerson(record: number, ids: readonly string[]): void {
   if (props.disabled || decisionsByRecord.value.get(record)?.decision.kind !== "update") return;
-  emit("update:modelValue", props.modelValue.map((draft) => draft.record === record
-    ? { record, decision: { kind: "update", personId: ids[0] ?? null } }
-    : draft));
+  emit(
+    "update:modelValue",
+    props.modelValue.map((draft) =>
+      draft.record === record
+        ? { record, decision: { kind: "update", personId: ids[0] ?? null } }
+        : draft,
+    ),
+  );
   announcement.value = message("csvDecision.identityChanged", { record });
 }
 function rotate(record: number): void {
   if (props.disabled || decisionsByRecord.value.get(record)?.decision.kind !== "add") return;
   const personId = newUuidV7();
-  emit("update:modelValue", props.modelValue.map((draft) => draft.record === record
-    ? { record, decision: { kind: "add", personId } }
-    : draft));
+  emit(
+    "update:modelValue",
+    props.modelValue.map((draft) =>
+      draft.record === record ? { record, decision: { kind: "add", personId } } : draft,
+    ),
+  );
   announcement.value = message("csvDecision.rotated", { record });
 }
 async function remove(record: number): Promise<void> {
@@ -188,13 +215,20 @@ async function changePage(section: "decisions" | "review", direction: number): P
   const pages = section === "decisions" ? decisionPages.value : reviewPages.value;
   page.value = Math.max(0, Math.min(pages - 1, page.value + direction));
   await focus(`${prefix}-${section}-heading`);
-  announcement.value = message(section === "decisions" ? "csvDecision.decisionsPage" : "csvDecision.reviewPage", {
-    page: page.value + 1, pages,
-  });
+  announcement.value = message(
+    section === "decisions" ? "csvDecision.decisionsPage" : "csvDecision.reviewPage",
+    {
+      page: page.value + 1,
+      pages,
+    },
+  );
 }
 async function changeError(direction: number): Promise<void> {
   if (props.disabled) return;
-  errorIndex.value = Math.max(0, Math.min((props.errors?.length ?? 1) - 1, errorIndex.value + direction));
+  errorIndex.value = Math.max(
+    0,
+    Math.min((props.errors?.length ?? 1) - 1, errorIndex.value + direction),
+  );
   await focus(`${prefix}-error`);
 }
 </script>
@@ -216,16 +250,23 @@ async function changeError(direction: number): Promise<void> {
         :value="rawRecord"
         :aria-invalid="recordError ? true : undefined"
         :aria-describedby="`${prefix}-record-help ${prefix}-record-error`"
-        @input="rawRecord = ($event.target as HTMLInputElement).value; recordError = ''"
+        @input="
+          rawRecord = ($event.target as HTMLInputElement).value;
+          recordError = '';
+        "
         @keydown.enter.prevent="manual('go')"
       />
-      <p :id="`${prefix}-record-help`" class="field-help">{{ message("csvDecision.recordHelp") }}</p>
+      <p :id="`${prefix}-record-help`" class="field-help">
+        {{ message("csvDecision.recordHelp") }}
+      </p>
       <p :id="`${prefix}-record-error`" class="field-error">{{ recordError }}</p>
       <div class="flex flex-wrap gap-2">
         <button v-for="kind in kinds" :key="kind" type="button" @click="manual(kind)">
           {{ message(`csvDecision.${kind}`) }}
         </button>
-        <button type="button" @click="manual('inspect')">{{ message("csvDecision.inspect") }}</button>
+        <button type="button" @click="manual('inspect')">
+          {{ message("csvDecision.inspect") }}
+        </button>
         <button type="button" @click="manual('go')">{{ message("csvDecision.go") }}</button>
       </div>
     </section>
@@ -233,21 +274,46 @@ async function changeError(direction: number): Promise<void> {
     <section v-if="selectedError" :aria-labelledby="`${prefix}-errors-heading`" class="field-stack">
       <h3 :id="`${prefix}-errors-heading`">{{ message("csvDecision.errors") }}</h3>
       <div :id="`${prefix}-error`" tabindex="-1">
-        <p>{{ message("csvDecision.errorCount", { position: errorIndex + 1, total: errors?.length ?? 0 }) }}</p>
+        <p>
+          {{
+            message("csvDecision.errorCount", {
+              position: errorIndex + 1,
+              total: errors?.length ?? 0,
+            })
+          }}
+        </p>
         <p>{{ message("csvDecision.logicalRecord", { record: selectedError.record }) }}</p>
         <p class="field-error">{{ selectedError.message }}</p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <button type="button" :disabled="errorIndex === 0" @click="changeError(-1)">{{ message("csvDecision.previousError") }}</button>
-        <button type="button" :disabled="errorIndex + 1 >= (errors?.length ?? 0)" @click="changeError(1)">{{ message("csvDecision.nextError") }}</button>
-        <button type="button" @click="focusRecord(selectedError.record)">{{ message("csvDecision.go") }}</button>
+        <button type="button" :disabled="errorIndex === 0" @click="changeError(-1)">
+          {{ message("csvDecision.previousError") }}
+        </button>
+        <button
+          type="button"
+          :disabled="errorIndex + 1 >= (errors?.length ?? 0)"
+          @click="changeError(1)"
+        >
+          {{ message("csvDecision.nextError") }}
+        </button>
+        <button type="button" @click="focusRecord(selectedError.record)">
+          {{ message("csvDecision.go") }}
+        </button>
       </div>
     </section>
 
     <section :aria-labelledby="`${prefix}-decisions-heading`" class="field-stack">
       <h3 :id="`${prefix}-decisions-heading`" tabindex="-1">{{ message("csvDecision.title") }}</h3>
       <p v-if="modelValue.length === 0">{{ message("csvDecision.empty") }}</p>
-      <p v-else>{{ message("csvDecision.page", { start: decisionPage * pageSize + 1, end: Math.min((decisionPage + 1) * pageSize, modelValue.length), total: modelValue.length }) }}</p>
+      <p v-else>
+        {{
+          message("csvDecision.page", {
+            start: decisionPage * pageSize + 1,
+            end: Math.min((decisionPage + 1) * pageSize, modelValue.length),
+            total: modelValue.length,
+          })
+        }}
+      </p>
       <article
         v-for="draft in decisions"
         :id="`${prefix}-decision-${draft.record}`"
@@ -255,19 +321,43 @@ async function changeError(direction: number): Promise<void> {
         tabindex="-1"
         class="field-stack min-w-0 rounded border p-3"
         :aria-labelledby="`${prefix}-decision-title-${draft.record}`"
-        :aria-describedby="errorsByRecord.has(draft.record) ? `${prefix}-decision-error-${draft.record}` : undefined"
+        :aria-describedby="
+          errorsByRecord.has(draft.record) ? `${prefix}-decision-error-${draft.record}` : undefined
+        "
       >
-        <h4 :id="`${prefix}-decision-title-${draft.record}`">{{ message("csvDecision.logicalRecord", { record: draft.record }) }}</h4>
-        <p>{{ message("csvDecision.choice", { choice: message(`csvDecision.${draft.decision.kind}`) }) }}</p>
+        <h4 :id="`${prefix}-decision-title-${draft.record}`">
+          {{ message("csvDecision.logicalRecord", { record: draft.record }) }}
+        </h4>
+        <p>
+          {{
+            message("csvDecision.choice", { choice: message(`csvDecision.${draft.decision.kind}`) })
+          }}
+        </p>
         <div class="flex flex-wrap gap-2">
-          <button v-for="kind in kinds" :key="kind" type="button" :aria-pressed="draft.decision.kind === kind" @click="choose(draft.record, kind)">{{ message(`csvDecision.${kind}`) }}</button>
-          <button type="button" @click="inspect(draft.record)">{{ message("csvDecision.inspect") }}</button>
-          <button type="button" @click="remove(draft.record)">{{ message("csvDecision.remove") }}</button>
+          <button
+            v-for="kind in kinds"
+            :key="kind"
+            type="button"
+            :aria-pressed="draft.decision.kind === kind"
+            @click="choose(draft.record, kind)"
+          >
+            {{ message(`csvDecision.${kind}`) }}
+          </button>
+          <button type="button" @click="inspect(draft.record)">
+            {{ message("csvDecision.inspect") }}
+          </button>
+          <button type="button" @click="remove(draft.record)">
+            {{ message("csvDecision.remove") }}
+          </button>
         </div>
         <template v-if="draft.decision.kind === 'add'">
-          <p class="break-all">{{ message("csvDecision.personId", { id: draft.decision.personId }) }}</p>
+          <p class="break-all">
+            {{ message("csvDecision.personId", { id: draft.decision.personId }) }}
+          </p>
           <p class="field-help">{{ message("csvDecision.rotateHelp") }}</p>
-          <button type="button" @click="rotate(draft.record)">{{ message("csvDecision.rotate") }}</button>
+          <button type="button" @click="rotate(draft.record)">
+            {{ message("csvDecision.rotate") }}
+          </button>
         </template>
         <template v-else-if="draft.decision.kind === 'update'">
           <WorkforceEntityPicker
@@ -277,25 +367,55 @@ async function changeError(direction: number): Promise<void> {
             :label="message('csvDecision.existingPerson', { record: draft.record })"
             :description="message('csvDecision.updateHelp')"
             :model-value="draft.decision.personId === null ? [] : [draft.decision.personId]"
-            :error="draft.decision.personId === null || draft.decision.personId.trim() === '' ? message('csvDecision.updateRequired') : undefined"
+            :error="
+              draft.decision.personId === null || draft.decision.personId.trim() === ''
+                ? message('csvDecision.updateRequired')
+                : undefined
+            "
             required
             @update:model-value="selectPerson(draft.record, $event)"
           />
-          <p v-if="draft.decision.personId !== null" class="break-all">{{ message("csvDecision.personId", { id: draft.decision.personId }) }}</p>
+          <p v-if="draft.decision.personId !== null" class="break-all">
+            {{ message("csvDecision.personId", { id: draft.decision.personId }) }}
+          </p>
         </template>
-        <p v-if="errorsByRecord.has(draft.record)" :id="`${prefix}-decision-error-${draft.record}`" class="field-error">{{ errorsByRecord.get(draft.record) }}</p>
+        <p
+          v-if="errorsByRecord.has(draft.record)"
+          :id="`${prefix}-decision-error-${draft.record}`"
+          class="field-error"
+        >
+          {{ errorsByRecord.get(draft.record) }}
+        </p>
       </article>
       <nav :aria-label="message('csvDecision.title')" class="flex flex-wrap gap-2">
-        <button type="button" :disabled="decisionPage === 0" @click="changePage('decisions', -1)">{{ message("csvDecision.previous") }}</button>
-        <button type="button" :disabled="decisionPage + 1 >= decisionPages" @click="changePage('decisions', 1)">{{ message("csvDecision.next") }}</button>
+        <button type="button" :disabled="decisionPage === 0" @click="changePage('decisions', -1)">
+          {{ message("csvDecision.previous") }}
+        </button>
+        <button
+          type="button"
+          :disabled="decisionPage + 1 >= decisionPages"
+          @click="changePage('decisions', 1)"
+        >
+          {{ message("csvDecision.next") }}
+        </button>
       </nav>
     </section>
 
     <section :aria-labelledby="`${prefix}-review-heading`" class="field-stack">
-      <h3 :id="`${prefix}-review-heading`" tabindex="-1">{{ message("csvDecision.reviewTitle") }}</h3>
+      <h3 :id="`${prefix}-review-heading`" tabindex="-1">
+        {{ message("csvDecision.reviewTitle") }}
+      </h3>
       <p class="field-help">{{ message("csvDecision.reviewHelp") }}</p>
       <p v-if="rows.length === 0">{{ message("csvDecision.reviewEmpty") }}</p>
-      <p v-else>{{ message("csvDecision.page", { start: reviewPage * pageSize + 1, end: Math.min((reviewPage + 1) * pageSize, rows.length), total: rows.length }) }}</p>
+      <p v-else>
+        {{
+          message("csvDecision.page", {
+            start: reviewPage * pageSize + 1,
+            end: Math.min((reviewPage + 1) * pageSize, rows.length),
+            total: rows.length,
+          })
+        }}
+      </p>
       <article
         v-for="row in reviewRows"
         :id="`${prefix}-review-${row.record}`"
@@ -304,27 +424,57 @@ async function changeError(direction: number): Promise<void> {
         class="field-stack min-w-0 rounded border p-3"
         :aria-labelledby="`${prefix}-review-title-${row.record}`"
       >
-        <h4 :id="`${prefix}-review-title-${row.record}`">{{ message("csvDecision.logicalRecord", { record: row.record }) }}</h4>
+        <h4 :id="`${prefix}-review-title-${row.record}`">
+          {{ message("csvDecision.logicalRecord", { record: row.record }) }}
+        </h4>
         <p>{{ message("csvDecision.nativeStatus", { status: row.status }) }}</p>
-        <p v-if="row.personId !== null" class="break-all">{{ message("csvDecision.personId", { id: row.personId }) }}</p>
+        <p v-if="row.personId !== null" class="break-all">
+          {{ message("csvDecision.personId", { id: row.personId }) }}
+        </p>
         <template v-if="row.rejection !== null">
           <p>{{ message("csvDecision.rejection", { code: row.rejection }) }}</p>
           <p>{{ message(`csvDecision.rejection.${row.rejection}`) }}</p>
         </template>
-        <p v-if="!decisionsByRecord.has(row.record)" class="field-help">{{ message("csvDecision.noDecision") }}</p>
+        <p v-if="!decisionsByRecord.has(row.record)" class="field-help">
+          {{ message("csvDecision.noDecision") }}
+        </p>
         <div class="flex flex-wrap gap-2">
-          <button v-for="kind in kinds" :key="kind" type="button" :aria-pressed="decisionsByRecord.get(row.record)?.decision.kind === kind" @click="choose(row.record, kind)">{{ message(`csvDecision.${kind}`) }}</button>
-          <button type="button" @click="inspect(row.record)">{{ message("csvDecision.inspect") }}</button>
+          <button
+            v-for="kind in kinds"
+            :key="kind"
+            type="button"
+            :aria-pressed="decisionsByRecord.get(row.record)?.decision.kind === kind"
+            @click="choose(row.record, kind)"
+          >
+            {{ message(`csvDecision.${kind}`) }}
+          </button>
+          <button type="button" @click="inspect(row.record)">
+            {{ message("csvDecision.inspect") }}
+          </button>
         </div>
-        <p v-if="errorsByRecord.has(row.record)" class="field-error">{{ errorsByRecord.get(row.record) }}</p>
+        <p v-if="errorsByRecord.has(row.record)" class="field-error">
+          {{ errorsByRecord.get(row.record) }}
+        </p>
       </article>
       <nav :aria-label="message('csvDecision.reviewTitle')" class="flex flex-wrap gap-2">
-        <button type="button" :disabled="reviewPage === 0" @click="changePage('review', -1)">{{ message("csvDecision.previous") }}</button>
-        <button type="button" :disabled="reviewPage + 1 >= reviewPages" @click="changePage('review', 1)">{{ message("csvDecision.next") }}</button>
+        <button type="button" :disabled="reviewPage === 0" @click="changePage('review', -1)">
+          {{ message("csvDecision.previous") }}
+        </button>
+        <button
+          type="button"
+          :disabled="reviewPage + 1 >= reviewPages"
+          @click="changePage('review', 1)"
+        >
+          {{ message("csvDecision.next") }}
+        </button>
       </nav>
     </section>
 
-    <section :aria-labelledby="`${prefix}-sample`" class="field-stack" :aria-busy="sample.status === 'loading'">
+    <section
+      :aria-labelledby="`${prefix}-sample`"
+      class="field-stack"
+      :aria-busy="sample.status === 'loading'"
+    >
       <h3 :id="`${prefix}-sample`" tabindex="-1">{{ message("csvDecision.sampleTitle") }}</h3>
       <p class="field-help">{{ message("csvDecision.sampleHelp") }}</p>
       <p role="status" aria-live="polite" aria-atomic="true">{{ sampleStatus }}</p>
@@ -335,7 +485,10 @@ async function changeError(direction: number): Promise<void> {
       <dl v-else-if="sample.status === 'ready' && sample.sample.cells !== null" class="field-stack">
         <template v-for="(cell, index) in sample.sample.cells.slice(0, 64)" :key="index">
           <dt>{{ message("csvDecision.column", { column: index + 1 }) }}</dt>
-          <dd class="min-w-0 whitespace-pre-wrap break-all">{{ cell.text === "" ? message("csvDecision.emptyCell") : cell.text }}<span v-if="cell.truncated"> {{ message("csvDecision.truncated") }}</span></dd>
+          <dd class="min-w-0 whitespace-pre-wrap break-all">
+            {{ cell.text === "" ? message("csvDecision.emptyCell") : cell.text
+            }}<span v-if="cell.truncated"> {{ message("csvDecision.truncated") }}</span>
+          </dd>
         </template>
       </dl>
     </section>

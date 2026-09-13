@@ -259,6 +259,12 @@ async function refresh(): Promise<void> {
               <dd>{{ formatNumber(count.count, locale) }}</dd>
             </div>
           </dl>
+          <RouterLink
+            v-if="group.id === 'people'"
+            :to="{ name: 'project-people', params: { scenarioId: project.scenarioId } }"
+          >
+            {{ messages.people.heading }}
+          </RouterLink>
         </section>
         <section class="state-panel" aria-labelledby="setup-rules">
           <h3 id="setup-rules" tabindex="-1">{{ messages.setup.rules }}</h3>
