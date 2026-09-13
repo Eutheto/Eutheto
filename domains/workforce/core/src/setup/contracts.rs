@@ -57,6 +57,8 @@ pub const SETUP_OUTPUT_LIMITS: eutheto_domain_api::ContractJsonLimits =
 pub enum WorkforceSetupQueryV1 {
     #[serde(rename = "official.workforce.setup.overview")]
     Overview(EmptyParametersV1),
+    #[serde(rename = "official.workforce.setup.local_time_resolution")]
+    LocalTimeResolution(LocalTimeResolutionParametersV1),
     #[serde(rename = "official.workforce.setup.settings_preparation")]
     SettingsPreparation(SettingsPreparationParametersV1),
     #[serde(rename = "eutheto.setup.entity_page")]
@@ -299,6 +301,7 @@ pub struct WorkforceSetupResultV1 {
 )]
 pub enum WorkforceSetupViewDataV1 {
     Overview(WorkforceSetupFactsV1),
+    LocalTimeResolution(eutheto_types::ResolvedLocalTime),
     SettingsPreparation(ScenarioSettings),
     EntityPage(SetupPageV1<EntitySummaryV1>),
     EntityDetail(Box<WorkforceEntity>),
@@ -321,6 +324,8 @@ pub enum WorkforceSetupViewDataV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkforceSetupFactsV1 {
     pub settings: ScenarioSettings,
+    pub planning_dates: DateRange,
+    pub initial_work_window: DateRange,
     pub entities: Vec<EntityKindCountV1>,
     pub required_rules: u32,
     pub active_required_rules: u32,
@@ -547,6 +552,8 @@ pub struct PriorUnresolvedShiftV1 {
     // Strict mapped TemporalIssueKind, not Debug text. The separate source enum remains
     // nonserializable; the wire mapping includes its exact resolution subtype.
     pub issue: TemporalIssueCodeV1,
+    pub field_path: Option<String>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -671,6 +678,14 @@ pub struct CommandChangeV1 {
     pub change: Change,
 }
 
+/// Stored-only scalar preparation; the catalog bounds input before typed allocation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalTimeResolutionParametersV1 {
+    // Parse in the handler to retain the exact field address on malformed local input.
+    pub local: String,
+}
+
 // Stored-only, no continuation. Rust resolves local midnight boundaries and checks the
 // existing Workforce planning_dates contract; Vue only wraps the result in SetScenarioSettings.
 // dates is the desired entire horizon, NOT a presentation window: no366-day view cap.
@@ -678,7 +693,8 @@ pub struct CommandChangeV1 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPreparationParametersV1 {
-    pub time_zone: eutheto_types::IanaTimeZone,
+    // Schema-bounded before decoding; parse in the handler to retain the exact field.
+    pub time_zone: String,
     pub dates: DateRange,
     pub locale: eutheto_types::LocaleTag,
     pub units: eutheto_types::UnitSystem,
@@ -703,6 +719,9 @@ impl WorkforceSetupQueryV1 {
         match query.view_id.as_str() {
             "official.workforce.setup.overview" => {
                 Deserialize::deserialize(&query.parameters).map(Self::Overview)
+            }
+            "official.workforce.setup.local_time_resolution" => {
+                Deserialize::deserialize(&query.parameters).map(Self::LocalTimeResolution)
             }
             "official.workforce.setup.settings_preparation" => {
                 Deserialize::deserialize(&query.parameters).map(Self::SettingsPreparation)
@@ -755,6 +774,7 @@ impl WorkforceSetupQueryV1 {
     pub const fn view_id(&self) -> &'static str {
         match self {
             Self::Overview(_) => "official.workforce.setup.overview",
+            Self::LocalTimeResolution(_) => "official.workforce.setup.local_time_resolution",
             Self::SettingsPreparation(_) => "official.workforce.setup.settings_preparation",
             Self::EntityPage(_) => "eutheto.setup.entity_page",
             Self::EntityDetail(_) => "eutheto.setup.entity_detail",
@@ -779,6 +799,7 @@ impl WorkforceSetupViewDataV1 {
     pub const fn view_id(&self) -> &'static str {
         match self {
             Self::Overview(_) => "official.workforce.setup.overview",
+            Self::LocalTimeResolution(_) => "official.workforce.setup.local_time_resolution",
             Self::SettingsPreparation(_) => "official.workforce.setup.settings_preparation",
             Self::EntityPage(_) => "eutheto.setup.entity_page",
             Self::EntityDetail(_) => "eutheto.setup.entity_detail",

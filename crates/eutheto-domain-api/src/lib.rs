@@ -1156,6 +1156,9 @@ pub enum DomainPackError {
     UnknownCommand(String),
     #[error("invalid domain payload at {path}: {message}")]
     InvalidPayload { path: String, message: String },
+    /// Explicit user-safe setup finding, never raw parser or internal error text.
+    #[error("setup values require review")]
+    SetupValidation(Box<ValidationIssue>),
     #[error("domain batch inverse exceeds its byte bound")]
     BatchInverseTooLarge,
     #[error("domain mutation output exceeds its bound")]

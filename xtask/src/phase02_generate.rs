@@ -1273,7 +1273,9 @@ fn typescript_guard_string(
                 None => format!("{prefix}WireUuid.test({value})"),
             },
             "scenario-change-path" => {
-                format!("({value} === \"/settings\" || {value}.startsWith(\"/domain/\"))")
+                format!(
+                    "({value} === \"/settings\" || {value}.startsWith(\"/settings/\") || {value}.startsWith(\"/domain/\"))"
+                )
             }
             _ => bail!("unsupported wire string format"),
         });

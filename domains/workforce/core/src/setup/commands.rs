@@ -1,3 +1,4 @@
+use super::time::validation_error;
 use super::{
     contracts::{
         CommandChangeV1, PREVIEW_DATA_BYTES, PageParametersV1, SettingsPreparationParametersV1,
@@ -20,27 +21,41 @@ pub(super) fn settings_preparation(
         ));
     }
     if parameters.dates.start_date >= parameters.dates.end_date_exclusive {
-        return Err(invalid(
+        return Err(validation_error(
+            "workforce.settings.invalid_dates",
             "/query/parameters/dates",
-            "planning dates must be nonempty and increasing",
+            "Planning dates must be nonempty and increasing.",
         ));
     }
+    budget.visit()?;
+    let time_zone = parameters
+        .time_zone
+        .parse::<eutheto_types::IanaTimeZone>()
+        .map_err(|_| {
+            validation_error(
+                "workforce.time.invalid_zone",
+                "/query/parameters/timeZone",
+                "Choose an available IANA time zone.",
+            )
+        })?;
     // These dates define the entire desired horizon, not a 366-day display window.
     let mut endpoint = |date: jiff::civil::Date, path| {
         budget.visit()?;
         resolve_local_midnight(
             date,
-            &parameters.time_zone,
+            &time_zone,
             parameters.gap_policy,
             parameters.overlap_policy,
         )
         .map_err(|error| {
-            invalid(
-                path,
-                &format!(
-                    "planning boundary requires local-time resolution: {:?}",
-                    error.kind
-                ),
+            super::time::resolution_error(
+                error.kind,
+                if error.kind == eutheto_types::TimeResolutionFailureKind::InvalidTimeZone {
+                    "/query/parameters/timeZone"
+                } else {
+                    path
+                },
+                date,
             )
         })
     };
@@ -53,13 +68,14 @@ pub(super) fn settings_preparation(
         "/query/parameters/dates/endDateExclusive",
     )?;
     let horizon = Horizon::new(start, end).map_err(|_| {
-        invalid(
+        validation_error(
+            "workforce.settings.invalid_dates",
             "/query/parameters/dates",
-            "resolved planning horizon must be nonempty and increasing",
+            "The resolved planning horizon must be nonempty and increasing.",
         )
     })?;
     let settings = ScenarioSettings {
-        time_zone: parameters.time_zone,
+        time_zone,
         locale: parameters.locale,
         units: parameters.units,
         horizon,
@@ -67,7 +83,13 @@ pub(super) fn settings_preparation(
         overlap_policy: parameters.overlap_policy,
     };
     budget.visit()?;
-    crate::model::planning_dates(&settings)?;
+    crate::model::planning_dates(&settings).map_err(|_| {
+        validation_error(
+            "workforce.settings.non_midnight_horizon",
+            "/query/parameters/dates",
+            "Planning dates must resolve to local midnight boundaries in the selected time zone.",
+        )
+    })?;
     Ok(WorkforceSetupViewDataV1::SettingsPreparation(settings))
 }
 

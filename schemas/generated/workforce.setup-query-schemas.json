@@ -4580,6 +4580,19 @@
                                         "data": {
                                           "additionalProperties": false,
                                           "properties": {
+                                            "fieldPath": {
+                                              "oneOf": [
+                                                {
+                                                  "format": "scenario-change-path",
+                                                  "maxLength": 256,
+                                                  "minLength": 1,
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "issue": {
                                               "oneOf": [
                                                 {
@@ -4794,6 +4807,11 @@
                                               ],
                                               "type": "object"
                                             },
+                                            "message": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
                                             "origin": {
                                               "oneOf": [
                                                 {
@@ -4859,7 +4877,9 @@
                                             }
                                           },
                                           "required": [
+                                            "fieldPath",
                                             "issue",
+                                            "message",
                                             "origin"
                                           ],
                                           "type": "object"
@@ -5015,6 +5035,110 @@
         }
       ]
     },
+    "official.workforce.setup.local_time_resolution": {
+      "invalidExamples": [
+        {},
+        {
+          "local": ""
+        },
+        {
+          "local": 12
+        },
+        {
+          "local": "12345678901234567890123456789012345678901234567890123456789012345"
+        },
+        {
+          "local": "2026-11-01T01:30:00",
+          "timeZone": "Etc/UTC"
+        },
+        {
+          "local": "2026-11-01T01:30:00",
+          "offsetSeconds": 0
+        },
+        {
+          "limit": 1,
+          "local": "2026-11-01T01:30:00"
+        }
+      ],
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "local": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "local"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "additionalProperties": false,
+                "properties": {
+                  "instant": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "local": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "offsetSeconds": {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "instant",
+                  "local",
+                  "offsetSeconds"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "localTimeResolution"
+              }
+            },
+            "required": [
+              "data",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "result",
+          "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "sources": [
+        "stored"
+      ],
+      "supportsContinuation": false,
+      "validExamples": [
+        {
+          "local": "2026-03-08T02:30:00"
+        },
+        {
+          "local": "2026-11-01T01:30:00"
+        }
+      ]
+    },
     "official.workforce.setup.overview": {
       "invalidExamples": [
         null,
@@ -5115,10 +5239,50 @@
                     "minItems": 13,
                     "type": "array"
                   },
+                  "initialWorkWindow": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "endDateExclusive": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "startDate": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "endDateExclusive",
+                      "startDate"
+                    ],
+                    "type": "object"
+                  },
                   "lockedAssignments": {
                     "maximum": 4294967295,
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "planningDates": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "endDateExclusive": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "startDate": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "endDateExclusive",
+                      "startDate"
+                    ],
+                    "type": "object"
                   },
                   "preferences": {
                     "maximum": 4294967295,
@@ -5216,7 +5380,9 @@
                   "activeRequiredRules",
                   "configuredTypeMemberships",
                   "entities",
+                  "initialWorkWindow",
                   "lockedAssignments",
+                  "planningDates",
                   "preferences",
                   "requiredRules",
                   "settings"

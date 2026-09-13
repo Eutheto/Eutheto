@@ -93,10 +93,19 @@ pub enum TemporalIssueKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TemporalEndpoint {
+    Start,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TemporalIssue {
     pub kind: TemporalIssueKind,
     pub entity_id: Option<EntityId>,
     pub local_date: Option<Date>,
+    pub endpoint: Option<TemporalEndpoint>,
+    /// Recurrence start date, distinct from an overnight failing endpoint's date.
+    pub occurrence_date: Option<Date>,
 }
 
 #[derive(Debug)]
@@ -141,7 +150,7 @@ pub enum PriorShift {
     Unresolved {
         id: ShiftId,
         origin: ResolvedShiftOrigin,
-        issue: TemporalIssueKind,
+        issue: TemporalIssue,
     },
 }
 

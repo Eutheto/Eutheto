@@ -216,7 +216,10 @@ fn repair_preserves_unresolved_prior_identity_without_inventing_old_instants() -
     assert!(matches!(
         reviewed.before.as_slice(),
         [PriorShift::Unresolved {
-            issue: TemporalIssueKind::Resolution(TimeResolutionFailureKind::Overlap),
+            issue: eutheto_workforce::temporal::TemporalIssue {
+                kind: TemporalIssueKind::Resolution(TimeResolutionFailureKind::Overlap),
+                ..
+            },
             ..
         }]
     ));

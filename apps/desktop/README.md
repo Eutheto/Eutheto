@@ -138,6 +138,14 @@ ownership on settlement or disposal. Cancellation acknowledgement is not a
 terminal result. Full readiness distinguishes not-run, running, completed,
 failed, cancelled, and stale input; an empty fast report is not full readiness.
 
+The native Workforce overview supplies exact half-open planning dates and a
+bounded initial work window. The stored-only `local_time_resolution` setup query
+prepares one raw local endpoint against the captured scenario settings, including
+outside the visible horizon; offset and timezone annotations are not accepted as
+local input. Settings preparation and temporal failures return safe exact-field
+findings, and overnight generation diagnostics retain both occurrence and endpoint
+dates. These are native prerequisites, not a claim that the Work editor is complete.
+
 `/settings` exposes separate appearance, locale, and units drafts backed by
 native get/update/reset commands. Each write requires the captured library
 revision and returns its exact committed snapshot. Dirty drafts survive external

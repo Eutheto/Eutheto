@@ -212,3 +212,56 @@ fn existing_numeric_uuid_prefix_const_and_closed_object_constraints_remain_in_fo
     assert!(validate_contract_schema(&json!({"uniqueItems": true})).is_err());
     Ok(())
 }
+
+#[test]
+fn diagnostic_unions_admit_only_schema_authorized_scenario_references()
+-> Result<(), DomainPackError> {
+    let schema = json!({
+        "oneOf": [
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "field"],
+                "properties": {
+                    "kind": {"const": "diagnostic"},
+                    "field": {"oneOf": [
+                        {"type": "string", "format": "scenario-change-path"},
+                        {"type": "null"}
+                    ]}
+                }
+            },
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "field"],
+                "properties": {
+                    "kind": {"const": "note"},
+                    "field": {"type": "string"}
+                }
+            }
+        ]
+    });
+    let endpoint = "/domain/entities/00000000-0000-0000-0000-000000000006/timing/endTime";
+    validate(&schema, &json!({"kind": "diagnostic", "field": endpoint}))?;
+    validate(
+        &schema,
+        &json!({"kind": "diagnostic", "field": "/settings/timeZone"}),
+    )?;
+    validate(&schema, &json!({"kind": "diagnostic", "field": null}))?;
+    // A declaration in an inactive branch must not launder an ordinary string.
+    assert!(validate(&schema, &json!({"kind": "note", "field": endpoint})).is_err());
+    assert!(
+        validate(
+            &schema,
+            &json!({"kind": "diagnostic", "field": "/private/local-data"}),
+        )
+        .is_err()
+    );
+    let overlapping = json!({"oneOf": [schema["oneOf"][0], schema["oneOf"][0]]});
+    assert!(
+        validate(
+            &overlapping,
+            &json!({"kind": "diagnostic", "field": endpoint})
+        )
+        .is_err()
+    );
+    Ok(())
+}
