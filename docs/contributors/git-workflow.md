@@ -10,6 +10,8 @@ The user's explicit 2026-09-12 instruction authorizes a bounded operational tria
 
 Create short-lived package branches from an exact **verified, integrated phase commit**, not another worker's unintegrated branch. Keep one integration owner, coherent reviewable work packages, and all affected authoritative inputs, callers, generated artifacts, tests, and documentation together. Do not create a PR for every checkbox. Record the consumed phase SHA in each package handoff.
 
+The user-approved remaining Phase06 delivery grouping is four implementation branches: **packages 5–6** (people/import and work/shift setup), **packages 7–8** (eligibility/availability and rules/validation), **package 9** (solve/status handoff), and **package 10** (accessibility/performance hardening). This groups delivery, not requirements: preserve every ordered package, issue ID, acceptance criterion and checkpoint. Implement and verify dependent behavior in order within each branch; keep coupled changes with the primary and delegate only independent work against established contracts. Do not create intermediate prerequisite PRs merely to enable delegation. Remote publication and final-main integration still require their existing explicit authorization.
+
 ### Package admission and evidence
 
 The exact phase ref has an active ruleset with no bypass actors, deletion/non-fast-forward protection, linear history, squash-only PRs, and strict up-to-date required checks. Its complete pull-request review parameter block is copied from protected `main`, including extra approval for unattributed changes. The phase branch intentionally has no merge queue; `main` retains its existing queue and every protection unchanged.

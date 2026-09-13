@@ -8,6 +8,7 @@ import {
   deleteProject,
   duplicateProject,
   listProjects,
+  getScenarioHistoryPage,
   openProject,
   onAppNotification,
   onLibraryRefreshRequired,
@@ -23,6 +24,9 @@ import type {
   OperationPhaseV1,
   OperationProgressV1,
   Revision,
+  HistoryPageContinuationV1,
+  HistoryPageRequestV1,
+  HistoryPageDtoV1,
   PortableScenarioDto,
   ProjectListItemV1,
   ProjectMetadataDto,
@@ -44,6 +48,7 @@ export interface CreateProjectInput {
 
 export interface ProjectHomeApi {
   listProjects(scope: "all"): Promise<ApiResponseDto<readonly ProjectListItemV1[]>>;
+  getScenarioHistoryPage(request: HistoryPageRequestV1): Promise<ApiResponseDto<HistoryPageDtoV1>>;
   openProject(scenarioId: string): Promise<ApiResponseDto<ProjectListItemV1>>;
   createProject(input: CreateProjectInput): Promise<ApiResponseDto<ProjectMetadataDto>>;
   duplicateProject(input: {
@@ -68,6 +73,7 @@ export interface ProjectHomeApi {
 function generatedProjectHomeApi(): ProjectHomeApi {
   return {
     listProjects,
+    getScenarioHistoryPage,
     openProject,
     createProject,
     duplicateProject,
@@ -88,13 +94,43 @@ export interface WorkspaceOperationState {
   settled: boolean;
 }
 
+export interface WorkspaceMutationIdentity {
+  readonly scenarioId: string;
+  readonly expectedRevision: Revision;
+  readonly commandId: string;
+}
+
+export type WorkspaceMutationHistory =
+  | { readonly kind: "unread" | "checking" }
+  | {
+      readonly kind: "notFound";
+      readonly revision: Revision;
+      readonly continuation: HistoryPageContinuationV1 | null;
+    }
+  | { readonly kind: "found"; readonly revision: Revision; readonly applied: boolean }
+  | { readonly kind: "error"; readonly message: string };
+
+export interface WorkspaceMutationState extends WorkspaceMutationIdentity {
+  readonly label: string;
+  outcome: "dispatched" | "outcomeUnknown" | "applied" | "noChanges";
+  revision: Revision | null;
+  history: WorkspaceMutationHistory;
+}
+
 export interface WorkspaceOperation<T> {
   readonly action: string;
   readonly label: string;
+  /** Identified mutations must resolve the write receipt before any follow-up I/O. */
   readonly execute: (report: (event: OperationProgressV1) => void) => Promise<ApiResponseDto<T>>;
   readonly success: (result: T) => string;
   readonly cancel?: () => Promise<unknown>;
   readonly refreshLibrary?: boolean;
+  readonly mutation?: WorkspaceMutationIdentity & {
+    readonly receipt: (result: T) => {
+      readonly kind: "applied" | "noChanges";
+      readonly revision: Revision;
+    };
+  };
 }
 
 type ReviewOwner = Pick<PortableReviewFlow, "dispose">;
@@ -105,6 +141,7 @@ export interface ProjectHomeState {
   selectedId: string | null;
   busyAction: string | null;
   operation: WorkspaceOperationState | null;
+  mutation: WorkspaceMutationState | null;
   libraryEpoch: number;
   reviewCleanupError: string | null;
   retryingReviewCleanup: boolean;
@@ -120,6 +157,8 @@ export interface ProjectHomeController {
   dispose(): Promise<void>;
   runOperation<T>(operation: WorkspaceOperation<T>): Promise<ApiResponseDto<T>>;
   cancelOperation(): Promise<void>;
+  reconcileMutation(): Promise<void>;
+  acknowledgeMutation(): void;
   registerReviewOwner(owner: ReviewOwner): void;
   retireReviewOwner(owner: ReviewOwner): Promise<boolean>;
   retryReviewCleanup(): Promise<void>;
@@ -137,6 +176,7 @@ interface ApiFailure {
   readonly message?: unknown;
   readonly retryable?: unknown;
   readonly details?: unknown;
+  readonly fieldErrors?: unknown;
 }
 
 export function safeMessage(error: unknown): string {
@@ -168,6 +208,37 @@ export function isOperationCancelled(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     (error as ApiFailure).code === "operation.cancelled"
+  );
+}
+
+export function isRedoBranchTruncation(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const failure = error as ApiFailure;
+  return (
+    failure.category === "validation" &&
+    failure.code === "history.redo_branch_requires_truncation" &&
+    Array.isArray(failure.fieldErrors) &&
+    failure.fieldErrors.some(
+      (field: unknown) =>
+        typeof field === "object" &&
+        field !== null &&
+        "field" in field &&
+        field.field === "/truncateRedo" &&
+        "code" in field &&
+        field.code === failure.code,
+    )
+  );
+}
+
+function isUncommittedMutationRejection(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const failure = error as ApiFailure;
+  // Do not infer rollback from generic validation, transport or publication errors.
+  return (
+    (failure.category === "conflict" && failure.code === "scenario.revision_conflict") ||
+    (failure.category === "protocol" && failure.code === "operation.context_disposed") ||
+    isRedoBranchTruncation(error) ||
+    isOperationCancelled(error)
   );
 }
 
@@ -246,6 +317,7 @@ export function createProjectHomeController(
     },
     busyAction: null,
     operation: null,
+    mutation: null,
     libraryEpoch: 0,
     reviewCleanupError: null,
     retryingReviewCleanup: false,
@@ -400,9 +472,103 @@ export function createProjectHomeController(
     }
   }
 
+  async function reconcileMutation(): Promise<void> {
+    const attempt = state.mutation;
+    if (
+      isDisposed() ||
+      !attempt ||
+      attempt.outcome !== "outcomeUnknown" ||
+      attempt.history.kind === "checking" ||
+      state.busyAction
+    )
+      return;
+    const previous = attempt.history;
+    const current = () =>
+      !isDisposed() && state.mutation === attempt && attempt.outcome === "outcomeUnknown";
+    attempt.history = { kind: "checking" };
+    try {
+      if (!(await reload(false))) throw new Error(messages.operations.mutationHistoryUnavailable);
+      if (!current()) return;
+      const project = state.projects.find((item) => item.scenarioId === attempt.scenarioId);
+      if (!project) {
+        attempt.history = {
+          kind: "error",
+          message: messages.operations.mutationProjectUnavailable,
+        };
+        return;
+      }
+      const epoch = state.libraryEpoch;
+      const page = (
+        await api.getScenarioHistoryPage({
+          schemaVersion: 1,
+          scenarioId: attempt.scenarioId,
+          expectedRevision: project.revision,
+          limit: 50,
+          continuation:
+            previous.kind === "notFound" && previous.revision === project.revision
+              ? previous.continuation
+              : null,
+        })
+      ).result;
+      if (!current()) return;
+      if (epoch !== state.libraryEpoch) {
+        attempt.history = { kind: "error", message: messages.operations.mutationHistoryChanged };
+        return;
+      }
+      const entry = page.entries.find(
+        (item) => item.id === attempt.commandId && item.revisionBefore === attempt.expectedRevision,
+      );
+      if (entry) {
+        attempt.outcome = "applied";
+        attempt.revision = entry.revisionAfter;
+        attempt.history = { kind: "found", revision: page.revision, applied: entry.applied };
+        state.announcement = messages.operations.mutationRecorded(
+          String(page.revision),
+          entry.applied,
+        );
+      } else {
+        attempt.history = {
+          kind: "notFound",
+          revision: page.revision,
+          continuation: page.continuation,
+        };
+        state.announcement = messages.operations.mutationNotFound;
+      }
+    } catch (error) {
+      if (current()) attempt.history = { kind: "error", message: safeMessage(error) };
+    }
+  }
+
+  function acknowledgeMutation(): void {
+    const attempt = state.mutation;
+    if (
+      !isDisposed() &&
+      attempt &&
+      attempt.outcome !== "dispatched" &&
+      attempt.history.kind !== "checking"
+    )
+      state.mutation = null;
+  }
+
   async function runOperation<T>(operation: WorkspaceOperation<T>): Promise<ApiResponseDto<T>> {
     if (isDisposed()) throw new Error(messages.operations.closed);
     if (state.busyAction) throw new Error(messages.operations.busy);
+    const mutation = operation.mutation;
+    if (mutation && state.mutation?.outcome === "outcomeUnknown")
+      throw new Error(messages.operations.mutationUnresolved);
+    const attempt = mutation
+      ? shallowReactive<WorkspaceMutationState>({
+          scenarioId: mutation.scenarioId,
+          expectedRevision: mutation.expectedRevision,
+          commandId: mutation.commandId,
+          label: operation.label,
+          outcome: "dispatched",
+          revision: null,
+          history: { kind: "unread" },
+        })
+      : null;
+    const receipt = mutation?.receipt;
+    if (attempt) state.mutation = attempt;
     const active = shallowReactive<WorkspaceOperationState>({
       label: operation.label,
       cancel: operation.cancel ?? null,
@@ -420,6 +586,11 @@ export function createProjectHomeController(
       });
       active.settled = true;
       if (!isDisposed()) {
+        if (attempt && receipt) {
+          const confirmed = receipt(response.result);
+          attempt.outcome = confirmed.kind;
+          attempt.revision = confirmed.revision;
+        }
         state.announcement = operation.success(response.result);
         if (operation.refreshLibrary !== false) await reload(false);
       }
@@ -427,6 +598,13 @@ export function createProjectHomeController(
     } catch (error) {
       active.settled = true;
       if (!isDisposed()) {
+        if (attempt?.outcome === "dispatched") {
+          if (isUncommittedMutationRejection(error)) state.mutation = null;
+          else {
+            attempt.outcome = "outcomeUnknown";
+            state.announcement = messages.operations.mutationUnknown;
+          }
+        }
         if (isRevisionConflict(error)) {
           const reloaded = await reload(false);
           if (!isDisposed())
@@ -473,6 +651,8 @@ export function createProjectHomeController(
     dispose,
     runOperation,
     cancelOperation,
+    reconcileMutation,
+    acknowledgeMutation,
     registerReviewOwner,
     retireReviewOwner,
     retryReviewCleanup,

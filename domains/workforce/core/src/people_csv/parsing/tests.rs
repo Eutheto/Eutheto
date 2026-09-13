@@ -430,6 +430,99 @@ fn samples_truncate_on_utf8_boundaries_without_changing_source_or_consistency()
 }
 
 #[test]
+fn selected_logical_record_retains_complete_identity_beyond_detection_prefix()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first = format!("{}Alice", "x".repeat(240));
+    let second = format!("{}Alina", "x".repeat(240));
+    let input = format!("name,id\n\"two\nlines\",one\n{first},two\n{second},three\n");
+    let cancellation = CancellationToken::new();
+    let mut reader = Chunks {
+        remaining: input.as_bytes(),
+        maximum: 3,
+    };
+    let sample = sample_people_csv_record(&mut reader, CsvDialect::Comma, 3, &cancellation)?
+        .ok_or("missing selected record")?;
+    assert_eq!(sample.record, 3);
+    assert_eq!(
+        sample.cells[0],
+        CsvSampleCell {
+            text: first,
+            truncated: false
+        }
+    );
+    assert_eq!(sample.cells[1].text, "two");
+    let other = sample_people_csv_record(
+        &mut io::Cursor::new(input.as_bytes()),
+        CsvDialect::Comma,
+        4,
+        &cancellation,
+    )?
+    .ok_or("missing later identity")?;
+    assert_eq!(
+        other.cells[0],
+        CsvSampleCell {
+            text: second,
+            truncated: false
+        }
+    );
+    assert_ne!(sample.cells[0], other.cells[0]);
+    assert_eq!(
+        sample_people_csv_record(
+            &mut io::Cursor::new(input.as_bytes()),
+            CsvDialect::Comma,
+            5,
+            &cancellation,
+        )?,
+        None,
+    );
+    Ok(())
+}
+
+#[test]
+fn selected_record_truncation_is_utf8_safe_and_never_hides_late_invalid_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let input = format!("{}é,other\n", "x".repeat(255));
+    let cancellation = CancellationToken::new();
+    let sample = sample_people_csv_record(
+        &mut io::Cursor::new(input.as_bytes()),
+        CsvDialect::Comma,
+        1,
+        &cancellation,
+    )?
+    .ok_or("missing selected record")?;
+    assert_eq!(
+        sample.cells[0],
+        CsvSampleCell {
+            text: "x".repeat(255),
+            truncated: true
+        }
+    );
+    let mut invalid = b"valid,name\n".to_vec();
+    invalid.extend_from_slice("later,row\n".repeat(1000).as_bytes());
+    invalid.push(0xc3);
+    assert_eq!(
+        sample_people_csv_record(
+            &mut io::Cursor::new(&invalid),
+            CsvDialect::Comma,
+            1,
+            &cancellation,
+        ),
+        Err(CsvError::source(CsvErrorCode::InvalidUtf8)),
+    );
+    cancellation.cancel();
+    assert_eq!(
+        sample_people_csv_record(
+            &mut io::Cursor::new(input.as_bytes()),
+            CsvDialect::Comma,
+            1,
+            &cancellation,
+        ),
+        Err(CsvError::source(CsvErrorCode::Cancelled)),
+    );
+    Ok(())
+}
+
+#[test]
 fn record_count_failure_is_dialect_local_not_a_global_data_limit()
 -> Result<(), Box<dyn std::error::Error>> {
     let input = format!("x;\"{}\";\"{}\"", "\nx".repeat(5000), "\nx".repeat(5001));

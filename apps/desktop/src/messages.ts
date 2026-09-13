@@ -21,6 +21,81 @@ export function formatUnit(value: number, unit: string, locale?: string): string
 }
 
 export const messages = {
+  personFields: {
+    activeDates: "Active dates",
+    limitActiveDates: "Limit active dates",
+    dateHelp: "Dates use the scenario's reporting calendar. The end date is not included.",
+    startDate: "Active from",
+    endDate: "Active until (not including)",
+    grants: "Qualification grants",
+    grantHelp:
+      "A qualification may have several distinct validity intervals. Optional timestamps must include an explicit UTC offset, for example 2026-09-01T08:00:00+02:00.",
+    qualification: "Qualification",
+    effectiveFrom: "Effective from (optional instant)",
+    expiresAt: "Expires at (optional instant)",
+    removeGrant: "Remove grant",
+    previousGrants: "Previous grants",
+    nextGrants: "Next grants",
+    addGrant: "Add qualification grant",
+    eligibleTypes: "Eligible assignment types",
+    teams: "Teams",
+    homeLocation: "Home location (optional)",
+    weight: "Relative workload weight",
+    weightHelp:
+      "A dimensionless ratio, not a duration or a promised fairness outcome. Both parts are whole numbers from 1 to 1,000,000.",
+    numerator: "Numerator",
+    denominator: "Denominator",
+    target: "Workload target",
+    enableTarget: "Store an optional workload target",
+    targetHelp:
+      "This records a target in an existing workload bucket and calendar. It does not create a Required rule or a payroll guarantee.",
+    bucket: "Workload bucket",
+    calendar: "Workload calendar",
+    membership: "Window membership",
+    reportingDate: "Reporting date",
+    startInstant: "Start instant",
+    intersection: "Intersection with the window",
+    assignments: "assignments",
+    elapsedMinutes: "elapsed minutes",
+    scheduledMinutes: "scheduled minutes",
+    unknownUnit: "units from the selected workload bucket",
+    bucketPending: "Select a workload bucket and wait for its native unit.",
+    calendarPending: "Select a calendar and wait for its native period.",
+    metadataRequired:
+      "Read the selected workload bucket and calendar before reviewing this target.",
+    retryMetadata: "Retry target metadata",
+    tags: "Tags",
+    removeTag: "Remove tag",
+    previousTags: "Previous tags",
+    nextTags: "Next tags",
+    addTag: "Add tag",
+    display: "Display metadata",
+    enableDisplay: "Store display metadata",
+    color: "Color (optional #RRGGBB)",
+    initials: "Avatar initials (optional, at most 16 UTF-8 bytes)",
+    grantNumber: (number: number, locale?: string) => `Grant ${formatNumber(number, locale)}`,
+    tagNumber: (number: number, locale?: string) => `Tag ${formatNumber(number, locale)}`,
+    removeGrantNumber: (number: number, locale?: string) =>
+      `Remove grant ${formatNumber(number, locale)}`,
+    removeTagNumber: (number: number, locale?: string) =>
+      `Remove tag ${formatNumber(number, locale)}`,
+    grantPage: (count: number, page: number, pages: number, locale?: string) =>
+      `${formatNumber(count, locale)} grants. Page ${formatNumber(page, locale)} of ${formatNumber(pages, locale)}.`,
+    tagPage: (count: number, page: number, pages: number, locale?: string) =>
+      `${formatNumber(count, locale)} tags. Page ${formatNumber(page, locale)} of ${formatNumber(pages, locale)}.`,
+    targetUnit: (unit: string) => `Target (${unit})`,
+    unitStatus: (unit: string, contribution: string) =>
+      `Unit: ${unit}. Overlapping contributions: ${contribution}.`,
+    dayPeriod: (start: string) => `Daily, starting at ${start}.`,
+    weekPeriod: (anchor: string, start: string) =>
+      `Weekly, anchored on ${anchor}, starting at ${start}.`,
+    payPeriod: (days: number, anchor: string, locale?: string) =>
+      `${formatNumber(days, locale)} days, anchored on ${anchor}.`,
+    customPeriod: (count: number, locale?: string) =>
+      `Custom calendar with ${formatNumber(count, locale)} explicit intervals.`,
+    integer: (min: number, max: number) =>
+      `Enter a whole number from ${String(min)} to ${String(max)}.`,
+  },
   app: {
     eyebrow: "Local-first workspace",
     title: "Eutheto",
@@ -44,6 +119,31 @@ export const messages = {
       "Native review cleanup could not be confirmed. Retry cleanup to release any retained resources.",
     retryCleanup: "Retry review cleanup",
     retryingCleanup: "Releasing retained native reviews…",
+    mutationUnknownTitle: "Save outcome not confirmed",
+    mutationUnknown:
+      "The reply was lost or could not be accepted. The change may already be saved; it has not been repeated.",
+    mutationUnresolved:
+      "Review and acknowledge the unconfirmed save before submitting another change.",
+    mutationAdvice:
+      "Check the current records and saved history before deciding what to do. A missing history entry does not prove rollback: work may still be finishing, a no-change import creates no entry, and discarded history is unavailable.",
+    mutationCommandId: "Command ID",
+    mutationScenarioId: "Project ID",
+    mutationExpectedRevision: "Captured revision",
+    mutationCheckHistory: "Check saved history",
+    mutationNextHistory: "Check next history page",
+    mutationCheckingHistory: "Checking saved history…",
+    mutationNotFound:
+      "This history page does not confirm the command. Its outcome remains unknown.",
+    mutationHistoryUnavailable: "Saved history could not be checked.",
+    mutationProjectUnavailable:
+      "This project is not in the current library. The earlier save outcome remains unknown.",
+    mutationHistoryChanged:
+      "The library changed during the history check. Check again against its current revision.",
+    mutationRecordedTitle: "Saved command confirmed",
+    mutationRecorded: (revision: string, applied: boolean) =>
+      `The command is recorded in saved history. At revision ${revision}, it was ${applied ? "applied" : "undone"}.`,
+    mutationOpenHistory: "Open project history",
+    mutationAcknowledge: "Acknowledge and dismiss",
     phases: {
       waitingForAdmission: "Waiting for native admission",
       capturingSnapshot: "Reading a saved snapshot",

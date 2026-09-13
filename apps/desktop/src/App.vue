@@ -34,6 +34,10 @@ const modifier = /Macintosh|Mac OS X/u.test(navigator.userAgent) ? "Command" : "
 let current = true;
 let modalReturnFocus: HTMLElement | null = null;
 let paletteNavigation = false;
+function dismissMutation(): void {
+  home.acknowledgeMutation();
+  if (home.state.mutation === null) main.value?.focus();
+}
 function updateSystemTheme(event: MediaQueryListEvent): void {
   systemDark.value = event.matches;
 }
@@ -393,6 +397,84 @@ onUnmounted(() => {
           @click="home.cancelOperation"
         >
           {{ messages.operations.cancel }}
+        </button>
+      </section>
+      <section
+        v-if="
+          home.state.mutation &&
+          (home.state.mutation.outcome === 'outcomeUnknown' ||
+            home.state.mutation.history.kind === 'found')
+        "
+        class="inline-alert"
+        aria-labelledby="mutation-recovery-title"
+      >
+        <h2 id="mutation-recovery-title">
+          {{
+            home.state.mutation.outcome === "outcomeUnknown"
+              ? messages.operations.mutationUnknownTitle
+              : messages.operations.mutationRecordedTitle
+          }}
+        </h2>
+        <p>{{ home.state.mutation.label }}</p>
+        <dl>
+          <dt>{{ messages.operations.mutationCommandId }}</dt>
+          <dd>
+            <code>{{ home.state.mutation.commandId }}</code>
+          </dd>
+          <dt>{{ messages.operations.mutationScenarioId }}</dt>
+          <dd>
+            <code>{{ home.state.mutation.scenarioId }}</code>
+          </dd>
+          <dt>{{ messages.operations.mutationExpectedRevision }}</dt>
+          <dd>{{ home.state.mutation.expectedRevision }}</dd>
+        </dl>
+        <template v-if="home.state.mutation.outcome === 'outcomeUnknown'">
+          <p>{{ messages.operations.mutationUnknown }}</p>
+          <p>{{ messages.operations.mutationAdvice }}</p>
+          <p v-if="home.state.mutation.history.kind === 'notFound'" role="status">
+            {{ messages.operations.mutationNotFound }}
+          </p>
+          <p v-if="home.state.mutation.history.kind === 'error'" role="alert">
+            {{ home.state.mutation.history.message }}
+          </p>
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="
+              home.state.mutation.history.kind === 'checking' || home.state.busyAction !== null
+            "
+            @click="home.reconcileMutation"
+          >
+            {{
+              home.state.mutation.history.kind === "checking"
+                ? messages.operations.mutationCheckingHistory
+                : home.state.mutation.history.kind === "notFound" &&
+                    home.state.mutation.history.continuation
+                  ? messages.operations.mutationNextHistory
+                  : messages.operations.mutationCheckHistory
+            }}
+          </button>
+        </template>
+        <p v-else-if="home.state.mutation.history.kind === 'found'" role="status">
+          {{
+            messages.operations.mutationRecorded(
+              String(home.state.mutation.history.revision),
+              home.state.mutation.history.applied,
+            )
+          }}
+        </p>
+        <RouterLink
+          :to="{ name: 'project-history', params: { scenarioId: home.state.mutation.scenarioId } }"
+        >
+          {{ messages.operations.mutationOpenHistory }}
+        </RouterLink>
+        <button
+          type="button"
+          class="button-secondary"
+          :disabled="home.state.mutation.history.kind === 'checking'"
+          @click="dismissMutation"
+        >
+          {{ messages.operations.mutationAcknowledge }}
         </button>
       </section>
       <section v-if="home.state.reviewCleanupError" class="inline-alert" role="alert">

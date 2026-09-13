@@ -831,6 +831,40 @@ describe("native CSV receipt and custody boundary", () => {
     await flow.dispose();
   });
 
+  it("inspects complete later identities and rejects mismatched or over-limit samples", async () => {
+    const { flow, scope } = csvContext();
+    const sourceId = peopleCsvNative.sourceOpened.sourceId;
+    const selected = { dialect: "comma", record: 3 } as const;
+    const valid = {
+      schemaVersion: 1,
+      sourceId,
+      ...selected,
+      cells: [{ text: "é".repeat(128), truncated: false }],
+    };
+    let sample: unknown = valid;
+    nativeCsv((command, input) =>
+      command === "people_csv_record_sample" ? Promise.resolve(response(input, sample)) : undefined,
+    );
+    const inspected = await flow.sample(scope, sourceId, selected).result;
+    expect(inspected.result.cells?.[0]).toEqual(valid.cells[0]);
+    for (const malformed of [
+      { ...valid, sourceId: scenarioId },
+      { ...valid, dialect: "tab" },
+      { ...valid, record: 4 },
+      { ...valid, cells: [{ text: `${"é".repeat(128)}x`, truncated: true }] },
+      { ...valid, cells: Array.from({ length: 65 }, () => ({ text: "", truncated: false })) },
+    ]) {
+      sample = malformed;
+      await expect(flow.sample(scope, sourceId, selected).result).rejects.toMatchObject(
+        invalidResponse,
+      );
+    }
+    sample = { ...valid, cells: null };
+    expect((await flow.sample(scope, sourceId, selected).result).result.cells).toBeNull();
+    expect(() => flow.sample(scope, sourceId, { ...selected, record: 10_002 })).toThrow(RangeError);
+    await flow.dispose();
+  });
+
   it("allows schema-valid uppercase raw domain UUIDs without loosening native binding identities", async () => {
     const { flow, scope } = csvContext();
     const preview = structuredClone(peopleCsvNative.preview);

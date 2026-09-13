@@ -43,6 +43,7 @@ commands.allow = [
   "people_csv_source_open",
   "people_csv_source_close",
   "people_csv_detect",
+  "people_csv_record_sample",
   "people_csv_preview",
   "people_csv_apply",
   "people_csv_preview_discard",
