@@ -80,11 +80,18 @@ tags and display metadata. Assignment types retain their complete policy fields.
 
 A revision or library-epoch change preserves raw drafts but invalidates approval.
 Whole-field rebase carries independent current changes and requires explicit choices
-for conflicts. Inactive optional input and numeric spelling survive when the resolved
+for conflicts. Partial choices survive later revisions, but stale choices remain
+disabled until a fresh explicit rebase. Inactive optional input and numeric spelling survive when the resolved
 native field still has the draft's meaning. An unavailable record is not assumed
 deleted; copying its draft requires a fresh identity. Root-owned write receipts and
 unknown-outcome recovery survive route exit without replaying the command.
-People bulk actions remain incomplete.
+
+Bulk actions capture up to 50 people selected on the current native page. Set their
+active dates, add/remove one team, or explicitly confirm deletion; native change
+review, selected proposed-person inspection and validation precede one atomic,
+undoable batch. A concurrent target-field change requires a whole-field choice,
+including when the original action was a no-op. Partial choices survive unrelated
+revisions; stale choices cannot be accepted before the complete selection is reread.
 
 People links to a native CSV import route. The picker and raw snapshot remain in
 Rust; the screen receives an opaque source ID, native encoding/delimiter evidence,
@@ -319,11 +326,17 @@ keyboard input via the existing Nix `xdotool` tool. It exercises settings
 conflicts/import/export, portable inspection/re-export/import, backup/add/replace,
 real safety-backup I/O failure and explicit bypass/recovery, deletion review,
 scoped scenario undo/redo, offline inventory, route recovery and restart persistence.
-The People scenario exercises all four record kinds, a real second writer,
-stale-approval invalidation, whole-field conflict choices, retained inactive input,
-referenced-deletion refusal, explicit fresh-identity recovery and keyboard focus
+The People scenario exercises all four record kinds, distinct temporal grants,
+existing location/target references, native target rejection and repair, active dates,
+rational weight and display fields. It covers real concurrent writers,
+stale-approval invalidation, partial whole-field choices across another revision,
+retained inactive input, referenced-deletion refusal, fresh-identity recovery and keyboard focus
 without stealing focus from an existing draft input. Screenshots are written only
 under ignored `.cache/e2e`.
+The bulk scenario covers native add/remove-team and date changes, invalid-date
+refusal without mutation, initially no-op target conflicts, mixed field choices
+across another revision, preservation of unrelated fields and references, selected
+native proposal inspection, confirmed batch deletion and one-step undo/redo.
 The CSV scenario adds native picker cancellation and unsupported encoding,
 explicit column/identity review, inert hostile header text, a real Add-ID collision,
 record-specific error focus, duplicate/rejected rows, selected sample/proposed-person

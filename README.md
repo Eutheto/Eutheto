@@ -70,23 +70,23 @@ The core accepts candidates only after projection, structural validation, indepe
 
 The implementation plan lives in [`docs/roadmap/`](docs/roadmap/README.md). Phases are dependency gates, not calendar estimates:
 
-| Phase | Outcome |
-|---:|---|
-| [00](docs/roadmap/00-repository-and-reproducible-tooling.md) | Repository, reproducible tooling, legal baseline, CI, and real desktop boundary |
-| [01](docs/roadmap/01-core-application-shell-and-persistence.md) | Core types, commands, SQLite persistence, CLI/Tauri shell |
-| [02](docs/roadmap/02-domain-pack-and-planning-ir-contracts.md) | Domain-pack API, planning IR, command and solver/verifier contracts |
-| [03](docs/roadmap/03-ortools-worker-vertical-slice.md) | OR-Tools worker protocol and first real solver vertical slice |
-| [04](docs/roadmap/04-independent-verifier-and-explanations.md) | Pack-neutral independent verification and explanation foundations |
-| [05](docs/roadmap/05-workforce-core-vertical-slice.md) | Workforce domain core and first complete verified domain slice |
-| [06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) | Accessible desktop design system and workforce setup experience |
-| [07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) | Workforce solve, results, repair, explanations, import, and export |
-| [08](docs/roadmap/08-pumpkin-backend-and-router.md) | Experimental Pumpkin adapter and deterministic backend router |
-| [09](docs/roadmap/09-seating-domain-and-venue-experience.md) | Seating domain, deterministic geometry, and accessible venue experience |
-| [10](docs/roadmap/10-ai-assistant-mvp.md) | Optional provider-neutral AI proposal and review workflow |
-| [11](docs/roadmap/11-public-mvp-packaging-and-documentation.md) | Cross-platform packaging, updater, support data, and public documentation |
-| [12](docs/roadmap/12-stabilization-and-public-release-gate.md) | Stabilization, conformance, and public release gate |
-| [13](docs/roadmap/13-post-mvp-roadmap.md) | School timetabling and post-MVP platform evolution |
-| [14](docs/roadmap/14-transportation-domain-pack.md) | Proposed post-MVP household transportation pack with provider-neutral snapshots and independently verified trajectories |
+|                                                                Phase | Outcome                                                                                                                 |
+| -------------------------------------------------------------------: | ----------------------------------------------------------------------------------------------------------------------- |
+|         [00](docs/roadmap/00-repository-and-reproducible-tooling.md) | Repository, reproducible tooling, legal baseline, CI, and real desktop boundary                                         |
+|      [01](docs/roadmap/01-core-application-shell-and-persistence.md) | Core types, commands, SQLite persistence, CLI/Tauri shell                                                               |
+|       [02](docs/roadmap/02-domain-pack-and-planning-ir-contracts.md) | Domain-pack API, planning IR, command and solver/verifier contracts                                                     |
+|               [03](docs/roadmap/03-ortools-worker-vertical-slice.md) | OR-Tools worker protocol and first real solver vertical slice                                                           |
+|       [04](docs/roadmap/04-independent-verifier-and-explanations.md) | Pack-neutral independent verification and explanation foundations                                                       |
+|               [05](docs/roadmap/05-workforce-core-vertical-slice.md) | Workforce domain core and first complete verified domain slice                                                          |
+|   [06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) | Accessible desktop design system and workforce setup experience                                                         |
+| [07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) | Workforce solve, results, repair, explanations, import, and export                                                      |
+|                  [08](docs/roadmap/08-pumpkin-backend-and-router.md) | Experimental Pumpkin adapter and deterministic backend router                                                           |
+|         [09](docs/roadmap/09-seating-domain-and-venue-experience.md) | Seating domain, deterministic geometry, and accessible venue experience                                                 |
+|                            [10](docs/roadmap/10-ai-assistant-mvp.md) | Optional provider-neutral AI proposal and review workflow                                                               |
+|      [11](docs/roadmap/11-public-mvp-packaging-and-documentation.md) | Cross-platform packaging, updater, support data, and public documentation                                               |
+|       [12](docs/roadmap/12-stabilization-and-public-release-gate.md) | Stabilization, conformance, and public release gate                                                                     |
+|                            [13](docs/roadmap/13-post-mvp-roadmap.md) | School timetabling and post-MVP platform evolution                                                                      |
+|                  [14](docs/roadmap/14-transportation-domain-pack.md) | Proposed post-MVP household transportation pack with provider-neutral snapshots and independently verified trajectories |
 
 See [`docs/roadmap/assumptions.md`](docs/roadmap/assumptions.md) for dated package/tool evidence, compatibility exceptions, and unresolved product gates.
 
@@ -134,14 +134,16 @@ The People and supporting records route provides native record search/detail and
 explicit create/edit/delete review for people, qualifications, teams and assignment
 types. Concurrent changes invalidate approval; whole-field rebase preserves
 unrelated current values and inactive raw input until an explicit choice replaces it.
+Current-page bulk actions select up to 50 people for active-date changes, team
+addition/removal or confirmed deletion, reviewed and applied as one undoable batch.
 
 The generated setup API owns native operation lifetime, progress and cancellation.
 The People CSV screen selects a Rust-owned immutable snapshot, requires explicit
 delimiter/header/column mapping and identity decisions, and displays native proposed
 people and draft validation before one atomic apply. Rejected-row reports can be
 saved separately, including after apply; an exact no-change import creates no history
-entry. Names are never used to guess identity. People bulk actions and remaining
-Workforce editors are still roadmap work. See
+entry. Names are never used to guess identity. Remaining Workforce editors are
+still roadmap work. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
 native editing-accelerator, accessibility and packaged-platform gates.
 Use the headless Workforce workflow below for the available end-to-end
@@ -174,8 +176,8 @@ just desktop-dev
 desktop shell and implemented project, People/supporting-record, portable-file,
 Settings and About workflows; live desktop solving remains unavailable.
 On Linux, `just e2e` builds the unbundled Tauri application and exercises native
-settings/portable workflows, People editing and concurrent-change recovery, native
-CSV import/report/no-change behavior and restart-safe undo/redo, safety-backup
+settings/portable workflows, People editing and bulk actions with concurrent-change
+recovery, native CSV import/report/no-change behavior and restart-safe undo/redo, safety-backup
 failure/recovery, deletion/history boundaries and persistence with isolated local
 data and networking.
 

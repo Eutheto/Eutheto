@@ -8,6 +8,7 @@ export type EntityField<T extends EntityRecord> = T extends EntityRecord ? keyof
 
 /** Arrays and nested objects are whole fields, not an implicit element merge. */
 export interface EntityRebase<T extends EntityRecord> {
+  /** Original typed meaning of the raw buffer, retained through partial choices. */
   readonly local: T;
   readonly current: T;
   readonly value: T;
@@ -45,25 +46,32 @@ export function rebaseEntityDraft<T extends EntityRecord>(
   base: T,
   local: T,
   current: T,
+  previous: EntityRebase<T> | null = null,
 ): EntityRebase<T> {
   if (
     base.id !== local.id ||
     base.id !== current.id ||
     base.kind !== local.kind ||
-    base.kind !== current.kind
+    base.kind !== current.kind ||
+    (previous !== null && (previous.current.id !== base.id || previous.current.kind !== base.kind))
   )
     throw new Error("A draft cannot be rebased onto a different record identity.");
+  const baseline = previous?.current ?? base;
+  const candidate = previous?.value ?? local;
   const value = { ...current };
   const conflicts: EntityField<T>[] = [];
-  const fields = Object.keys({ ...base, ...local, ...current }) as EntityField<T>[];
+  const fields = Object.keys({ ...baseline, ...candidate, ...current }) as EntityField<T>[];
   for (const field of fields) {
     const key = field as keyof T;
-    if (field === "id" || field === "kind" || sameField(local[key], base[key])) continue;
-    if (!sameField(current[key], base[key]) && !sameField(current[key], local[key]))
+    if (field === "id" || field === "kind" || sameField(candidate[key], baseline[key])) continue;
+    if (
+      !sameField(current[key], candidate[key]) &&
+      (!sameField(current[key], baseline[key]) || previous?.conflicts.includes(field) === true)
+    )
       conflicts.push(field);
-    copyField(value, local, field);
+    copyField(value, candidate, field);
   }
-  return { local, current, value, conflicts };
+  return { local: previous?.local ?? local, current, value, conflicts };
 }
 
 export function resolveEntityDraftField<T extends EntityRecord>(

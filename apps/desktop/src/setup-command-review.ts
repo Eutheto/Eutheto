@@ -37,7 +37,10 @@ export interface SetupCommandReview {
   readonly snapshot: SetupCommandSnapshot;
   readonly changes: WorkforceSetupCommandChangePage;
   readonly proposed: WorkforceEntity | null;
-  readonly warnings: readonly ValidationIssue[];
+  readonly warnings: {
+    readonly changes: readonly ValidationIssue[];
+    readonly proposed: readonly ValidationIssue[];
+  };
 }
 
 /** Owns one explicit command approval, not the editor's raw draft or authoritative scenario. */
@@ -84,6 +87,7 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
     snapshot: SetupCommandSnapshot,
     previous: SetupCommandReview | null,
     continuation: WorkforceSetupOrdinalContinuation | null,
+    inspectTarget: SetupCommandSnapshot["target"] = null,
   ): Promise<boolean> {
     if (!sameContext(snapshot) || home.state.busyAction !== null || state.pending) return false;
     const captured = ++generation;
@@ -106,6 +110,33 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
           await cancelCurrent?.();
         },
         execute: async (report) => {
+          if (inspectTarget !== null && previous !== null) {
+            const operation = getScenarioView(
+              owned,
+              {
+                source: { kind: "commandPreview", command: snapshot.command },
+                query: {
+                  schemaVersion: 1,
+                  viewId: "eutheto.setup.entity_detail",
+                  parameters: { entityId: inspectTarget.id, entityKind: inspectTarget.kind },
+                },
+              },
+              report,
+            );
+            cancelCurrent = () => operation.cancel();
+            const detail = await operation.result;
+            const proposed = detail.result.view.data.result.data;
+            if (proposed.id !== inspectTarget.id || proposed.kind !== inspectTarget.kind)
+              throw new Error("The native proposed record did not match the requested identity.");
+            return {
+              ...detail,
+              result: {
+                ...previous,
+                proposed,
+                warnings: { changes: previous.warnings.changes, proposed: detail.warnings },
+              },
+            };
+          }
           const operation = getScenarioView(
             owned,
             {
@@ -122,7 +153,7 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
           cancelCurrent = () => operation.cancel();
           const changes = await operation.result;
           let proposed = previous?.proposed ?? null;
-          let warnings = changes.warnings;
+          let proposedWarnings = previous?.warnings.proposed ?? [];
           if (previous === null && snapshot.target !== null) {
             // Cancellation between the two reads must not start another native operation.
             if (cancelled || captured !== generation || !sameContext(snapshot)) {
@@ -149,11 +180,16 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
             proposed = detail.result.view.data.result.data;
             if (proposed.id !== snapshot.target.id || proposed.kind !== snapshot.target.kind)
               throw new Error("The native proposed record did not match the requested identity.");
-            warnings = [...warnings, ...detail.warnings];
+            proposedWarnings = detail.warnings;
           }
           return {
             ...changes,
-            result: { snapshot, changes: changes.result.view.data.result.data, proposed, warnings },
+            result: {
+              snapshot,
+              changes: changes.result.view.data.result.data,
+              proposed,
+              warnings: { changes: changes.warnings, proposed: proposedWarnings },
+            },
           };
         },
         success: () =>
@@ -205,6 +241,12 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
     if (review === null || state.redoRequired || (!first && review.changes.continuation === null))
       return false;
     return readPreview(review.snapshot, review, first ? null : review.changes.continuation);
+  }
+
+  async function inspect(target: NonNullable<SetupCommandSnapshot["target"]>): Promise<boolean> {
+    const review = state.review;
+    if (review === null || state.redoRequired) return false;
+    return readPreview(review.snapshot, review, null, { ...target });
   }
 
   async function apply(truncateRedo = false): Promise<CommandResultDto | null> {
@@ -277,5 +319,5 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
     alive = false;
     invalidate();
   });
-  return { state, invalidate, preview, page, apply };
+  return { state, invalidate, preview, page, inspect, apply };
 }

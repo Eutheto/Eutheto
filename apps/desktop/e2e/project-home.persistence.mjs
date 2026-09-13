@@ -935,13 +935,154 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
   await selectValue(sessionId, `${editorRoot} select[name="locationMode"]`, "none");
   await selectValue(sessionId, `${editorRoot} select[name="timeBehavior"]`, "elapsed");
   await save();
+  const locationId = requestId();
+  const bucketId = requestId();
+  const calendarId = requestId();
+  const referenceRevision = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  await nativeRequest(sessionId, "scenario_apply_command", {
+    scenarioId,
+    expectedRevision: referenceRevision,
+    commandId: requestId(),
+    actor: { actorId: null, displayName: "Native E2E existing reference writer" },
+    truncateRedo: false,
+    command: {
+      type: "applyBatch",
+      payload: {
+        label: "Existing person reference records",
+        commands: [
+          { id: locationId, kind: "location", name: "Existing home ward", transitions: [] },
+          {
+            id: bucketId,
+            kind: "workloadBucket",
+            name: "Existing scheduled minutes",
+            measurement: "scheduledMinutes",
+            overlappingContribution: "sum",
+          },
+          {
+            id: calendarId,
+            kind: "calendar",
+            name: "Existing daily target",
+            period: { kind: "day", startTime: "00:00:00" },
+          },
+        ].map((entity) => ({
+          type: "applyDomainCommand",
+          payload: { commandType: "official.workforce.add_entity", payload: { entity } },
+        })),
+      },
+    },
+  });
+  await waitFor(
+    sessionId,
+    "return [...document.querySelectorAll('dt')].find(term => term.textContent.trim() === 'Revision')?.nextElementSibling?.textContent.trim() === arguments[0];",
+    [String(referenceRevision + 1)],
+  );
   const personId = await begin("person", "Native person");
   await choosePeopleReference(sessionId, "Teams", "Native ward");
   await choosePeopleReference(sessionId, "Eligible assignment types", "Native day work");
   await activateButton(sessionId, "Add qualification grant", editorRoot);
   await choosePeopleReference(sessionId, "Qualification", "Native training");
+  await setValue(
+    sessionId,
+    `${editorRoot} input[id$="-effectiveFrom"]`,
+    "2026-09-01T08:00:00+02:00",
+  );
+  await setValue(sessionId, `${editorRoot} input[id$="-expiresAt"]`, "2026-10-01T08:00:00+02:00");
+  await activateButton(sessionId, "Add qualification grant", editorRoot);
+  await evaluate(
+    sessionId,
+    "const row = [...document.querySelectorAll(arguments[0] + ' fieldset')].find(item => item.querySelector(':scope > legend')?.textContent.trim() === 'Grant 2'); row.id = 'native-second-grant';",
+    [editorRoot],
+  );
+  await choosePeopleReference(
+    sessionId,
+    "Qualification",
+    "Native training",
+    "#native-second-grant",
+  );
+  await setValue(
+    sessionId,
+    "#native-second-grant input[id$='-effectiveFrom']",
+    "2026-10-01T08:00:00+02:00",
+  );
+  await activateCheckbox(sessionId, "Limit active dates", editorRoot);
+  await setValue(sessionId, `${editorRoot} input[id$="-startDate"]`, "2026-09-01");
+  await setValue(sessionId, `${editorRoot} input[id$="-endDateExclusive"]`, "2026-11-01");
+  await choosePeopleReference(sessionId, "Home location (optional)", "Existing home ward");
+  await setValue(sessionId, `${editorRoot} input[id$="-weightNumerator"]`, "2");
+  await setValue(sessionId, `${editorRoot} input[id$="-weightDenominator"]`, "3");
+  await activateCheckbox(sessionId, "Store an optional workload target", editorRoot);
+  await choosePeopleReference(sessionId, "Workload bucket", "Existing scheduled minutes");
+  await choosePeopleReference(sessionId, "Workload calendar", "Existing daily target");
+  await selectValue(sessionId, `${editorRoot} select[id$="-membership"]`, "intersection");
+  await setValue(sessionId, `${editorRoot} input[id$="-target"]`, "480");
+  await activateCheckbox(sessionId, "Store display metadata", editorRoot);
+  await setValue(sessionId, `${editorRoot} input[id$="-color"]`, "#123456");
+  await setValue(sessionId, `${editorRoot} input[id$="-initials"]`, "NP");
+  // Intersection is deliberately invalid for this scheduled-minute bucket.
+  // Native validation must refuse approval without discarding the editable target.
+  const beforeInvalidTarget = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  await activateButton(sessionId, "Review changes", editorRoot);
+  await idle(sessionId);
+  assert(
+    await evaluate(
+      sessionId,
+      "return !document.querySelector('#people-review-heading') && !!document.querySelector('section[aria-labelledby=\"people-heading\"] > [role=\"alert\"]');",
+    ),
+    "An incompatible target membership must not receive native approval",
+  );
+  assert.equal(
+    (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
+    beforeInvalidTarget,
+    "Rejected target preview must not mutate the scenario",
+  );
+  assert.equal(
+    await evaluate(sessionId, "return document.querySelector(arguments[0]).value;", [
+      `${editorRoot} input[id$="-target"]`,
+    ]),
+    "480",
+    "Native refusal must preserve the editable target",
+  );
+  await selectValue(sessionId, `${editorRoot} select[id$="-membership"]`, "startInstant");
   await save();
   await activateButton(sessionId, `Native person · ${personId}`, listRoot);
+  await waitForElement(sessionId, `${editorRoot} input[id$="-target"]`);
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0]).textContent.includes('Unit: scheduled minutes. Overlapping contributions: sum.') && document.querySelector(arguments[0]).textContent.includes('Existing daily target');",
+    [editorRoot],
+  );
+  assert.deepEqual(
+    await evaluate(
+      sessionId,
+      "const root = document.querySelector(arguments[0]); return { starts: [...root.querySelectorAll('input[id$=\"-effectiveFrom\"]')].map(input => Date.parse(input.value)), ends: [...root.querySelectorAll('input[id$=\"-expiresAt\"]')].map(input => input.value ? Date.parse(input.value) : null), activeStart: root.querySelector('input[id$=\"-startDate\"]').value, activeEnd: root.querySelector('input[id$=\"-endDateExclusive\"]').value, weight: ['weightNumerator', 'weightDenominator'].map(key => root.querySelector('input[id$=\"-' + key + '\"]').value), target: root.querySelector('input[id$=\"-target\"]').value, membership: root.querySelector('select[id$=\"-membership\"]').value, color: root.querySelector('input[id$=\"-color\"]').value, initials: root.querySelector('input[id$=\"-initials\"]').value };",
+      [editorRoot],
+    ),
+    {
+      starts: [Date.parse("2026-09-01T08:00:00+02:00"), Date.parse("2026-10-01T08:00:00+02:00")],
+      ends: [Date.parse("2026-10-01T08:00:00+02:00"), null],
+      activeStart: "2026-09-01",
+      activeEnd: "2026-11-01",
+      weight: ["2", "3"],
+      target: "480",
+      membership: "startInstant",
+      color: "#123456",
+      initials: "NP",
+    },
+    "Native saved detail must retain distinct grants and their exact instants, active dates and target/display semantics",
+  );
+  assert(
+    await evaluate(
+      sessionId,
+      "return arguments[1].every(id => document.querySelector(arguments[0]).textContent.includes(id));",
+      [editorRoot, [locationId, bucketId, calendarId]],
+    ),
+    "Native saved person references must retain their exact identities",
+  );
+  await screenshot(sessionId, "people-native-optional-fields.png");
   await activateButton(sessionId, "Edit draft", editorRoot);
   await waitFor(
     sessionId,
@@ -952,12 +1093,14 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
   await activateCheckbox(sessionId, "Use an external person ID", editorRoot);
   await setValue(sessionId, `${editorRoot} input[name="externalId"]`, "Retained inactive identity");
   await activateCheckbox(sessionId, "Use an external person ID", editorRoot);
+  await activateButton(sessionId, "Add tag", editorRoot);
+  await setValue(sessionId, `${editorRoot} input[id*="-tag-"]`, "local-tag");
   await activateButton(sessionId, "Review changes", editorRoot);
   await waitForElement(sessionId, "#people-review-heading");
   const beforeConcurrent = (await projects(sessionId)).find(
     (project) => project.scenarioId === scenarioId,
   );
-  // A real second writer changes the same name plus an independent field at the captured revision.
+  // A real second writer conflicts with local name/tags and removes untouched optional fields.
   await nativeRequest(sessionId, "scenario_apply_command", {
     scenarioId,
     expectedRevision: beforeConcurrent.revision,
@@ -1013,6 +1156,64 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
     "return document.activeElement?.textContent.trim() === 'Concurrent field changes';",
   );
   await screenshot(sessionId, "people-native-rebase.png");
+  await evaluate(
+    sessionId,
+    "const row = [...document.querySelectorAll(arguments[0] + ' section[aria-label=\"Concurrent field changes\"] li')].find(item => item.querySelector('h5')?.textContent === 'Tags'); row.id = 'manual-tag-conflict';",
+    [editorRoot],
+  );
+  await activateButton(sessionId, "Use current field", "#manual-tag-conflict");
+  const beforeNextRevision = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  await nativeRequest(sessionId, "scenario_apply_command", {
+    scenarioId,
+    expectedRevision: beforeNextRevision,
+    commandId: requestId(),
+    actor: { actorId: null, displayName: "Native E2E third writer" },
+    truncateRedo: false,
+    command: {
+      type: "applyDomainCommand",
+      payload: {
+        commandType: "official.workforce.update_entity",
+        payload: {
+          entity: {
+            id: qualificationId,
+            kind: "qualification",
+            name: "Native training",
+            description: "Unrelated revision during explicit field choices",
+          },
+        },
+      },
+    },
+  });
+  await waitFor(
+    sessionId,
+    "return [...document.querySelectorAll('dt')].find(term => term.textContent.trim() === 'Revision')?.nextElementSibling?.textContent.trim() === arguments[0];",
+    [String(beforeNextRevision + 1)],
+  );
+  assert.deepEqual(
+    await evaluate(
+      sessionId,
+      "return [...document.querySelectorAll(arguments[0] + ' section[aria-label=\"Concurrent field changes\"] button')].filter(button => button.textContent.trim() !== 'Inspect the complete current record').map(button => button.disabled);",
+      [editorRoot],
+    ),
+    [true, true],
+    "Retained manual choices must stay disabled until the new revision is explicitly rebased",
+  );
+  await activateButton(sessionId, "Review current changes", editorRoot);
+  await waitFor(
+    sessionId,
+    "return document.activeElement?.textContent.trim() === 'Concurrent field changes';",
+  );
+  assert.deepEqual(
+    await evaluate(
+      sessionId,
+      "return [...document.querySelectorAll(arguments[0] + ' section[aria-label=\"Concurrent field changes\"] h5')].map(heading => heading.textContent);",
+      [editorRoot],
+    ),
+    ["Name"],
+    "A resolved current field must survive a later unrelated revision while the unresolved name remains",
+  );
   await activateButton(sessionId, "Keep draft field", editorRoot);
   await waitFor(
     sessionId,
@@ -1042,7 +1243,7 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
       "return [...document.querySelectorAll(arguments[0])].some(input => input.value === 'concurrent-tag');",
       [`${proposal} input`],
     ),
-    "The native proposal must preserve the independent concurrent tag instead of restoring stale fields",
+    "The native proposal must preserve the explicit current-tag choice instead of restoring stale raw fields",
   );
   await screenshot(sessionId, "people-native-proposal.png");
   await activateButton(sessionId, "Save this reviewed proposal");
@@ -1146,6 +1347,309 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
   await activateButton(sessionId, `Recovered team · ${recoveredTeamId}`, listRoot);
   await activateButton(sessionId, "Close record", editorRoot);
   return { personId, qualificationId, teamId, assignmentTypeId };
+}
+
+async function peopleBulkAcceptance(sessionId, scenarioId, support) {
+  const listRoot = 'section[aria-labelledby="people-list-heading"]';
+  const bulkRoot = 'section[aria-labelledby="people-bulk-heading"]';
+  const seedTeamId = requestId();
+  const people = ["A", "B"].map((letter) => ({
+    id: requestId(),
+    kind: "person",
+    name: `Bulk native ${letter}`,
+    externalId: `bulk-${letter}`,
+    activeRange: { kind: "always" },
+    qualificationGrants: [
+      { qualificationId: support.qualificationId },
+      { qualificationId: support.qualificationId, effectiveFrom: "2026-01-01T00:00:00Z" },
+    ],
+    eligibleAssignmentTypeIds: [support.assignmentTypeId],
+    workloadWeight: { numerator: 2, denominator: 3 },
+    tags: ["bulk-preserved"],
+    teamIds: letter === "A" ? [seedTeamId, support.teamId] : [seedTeamId],
+    display: { color: "#334455", avatarInitials: letter },
+  }));
+  const revision = async () =>
+    (await projects(sessionId)).find((item) => item.scenarioId === scenarioId).revision;
+  async function writeEntities(entities, commandType) {
+    return nativeRequest(sessionId, "scenario_apply_command", {
+      scenarioId,
+      expectedRevision: await revision(),
+      commandId: requestId(),
+      actor: { actorId: null, displayName: "Native E2E bulk fixture writer" },
+      truncateRedo: false,
+      command: {
+        type: "applyBatch",
+        payload: {
+          label: "Native bulk fixture",
+          commands: entities.map((entity) => ({
+            type: "applyDomainCommand",
+            payload: { commandType, payload: { entity } },
+          })),
+        },
+      },
+    });
+  }
+  await writeEntities(
+    [{ id: seedTeamId, kind: "team", name: "Bulk seed team" }, ...people],
+    "official.workforce.add_entity",
+  );
+  await navigate(sessionId, `/project/${scenarioId}/people`);
+  await selectValue(sessionId, "#people-kind", "person");
+  async function open() {
+    for (const person of people)
+      await activateCheckbox(
+        sessionId,
+        `Select for a bulk action · ${person.name} · ${person.id}`,
+        listRoot,
+      );
+    await activateButton(sessionId, "Edit selected people", listRoot);
+    await waitForElement(sessionId, "#bulk-action");
+    assert.equal(
+      await evaluate(sessionId, "return document.activeElement?.id;"),
+      "people-bulk-heading",
+    );
+  }
+  async function preview() {
+    await activateButton(sessionId, "Review this one native batch", bulkRoot);
+    await waitForElement(sessionId, "#bulk-review-heading");
+    assert.equal(
+      await evaluate(sessionId, "return document.activeElement?.id;"),
+      "bulk-review-heading",
+    );
+  }
+  async function save() {
+    const before = await revision();
+    await activateButton(sessionId, "Save this reviewed People batch", bulkRoot);
+    await idle(sessionId);
+    await waitFor(sessionId, "return !document.querySelector('#people-bulk-heading');");
+    assert.equal(await revision(), before + 1, "A People bulk action commits exactly one revision");
+    assert.equal(
+      await evaluate(sessionId, "return document.activeElement?.id;"),
+      "people-list-heading",
+    );
+  }
+  await open();
+  await selectValue(sessionId, "#bulk-action", "addTeam");
+  await choosePeopleReference(sessionId, "Team for this bulk action", "Native ward", bulkRoot);
+  await preview();
+  // Add is initially a no-op for A, but still owns the explicitly selected team field.
+  await writeEntities(
+    [{ ...people[0], teamIds: [seedTeamId] }],
+    "official.workforce.update_entity",
+  );
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0]).textContent.includes('The saved context changed');",
+    [bulkRoot],
+  );
+  await activateButton(sessionId, "Read current people and review draft conflicts", bulkRoot);
+  await waitFor(
+    sessionId,
+    "return document.activeElement?.textContent === 'Concurrent field changes';",
+  );
+  assert.equal(
+    await evaluate(
+      sessionId,
+      "return [...document.querySelectorAll(arguments[0] + ' fieldset')].some(field => field.querySelector('legend')?.textContent.includes(arguments[1]));",
+      [bulkRoot, people[0].id],
+    ),
+    true,
+    "An explicitly targeted no-op field must require a choice after a concurrent change",
+  );
+  await activateButton(sessionId, "Keep draft field", bulkRoot);
+  await activateButton(sessionId, "Use these resolved drafts", bulkRoot);
+  await preview();
+  await selectValue(sessionId, "#bulk-proposed-person", people[1].id);
+  await waitFor(sessionId, "return document.querySelector(arguments[0])?.value === arguments[1];", [
+    `${bulkRoot} section[aria-label="Proposed complete record"] input[name="name"]`,
+    people[1].name,
+  ]);
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0]).textContent.includes(arguments[1]);",
+    [`${bulkRoot} section[aria-label="Proposed complete record"]`, support.teamId],
+  );
+  await evaluate(sessionId, "document.querySelector('#bulk-review-heading').scrollIntoView();");
+  await screenshot(sessionId, "people-bulk-native-proposal.png");
+  await save();
+  await open();
+  await waitFor(
+    sessionId,
+    "const text = document.querySelector(arguments[0]).textContent; return text.includes(arguments[1]) && text.includes(arguments[2]);",
+    [bulkRoot, support.teamId, seedTeamId],
+  );
+  await selectValue(sessionId, "#bulk-action", "removeTeam");
+  await choosePeopleReference(sessionId, "Team for this bulk action", "Native ward", bulkRoot);
+  await preview();
+  await save();
+  await open();
+  await selectValue(sessionId, "#bulk-action", "activeRange");
+  await activateCheckbox(sessionId, "Limit active dates", `${bulkRoot} form`);
+  await setValue(sessionId, "#bulk-start-date", "not-a-date");
+  await setValue(sessionId, "#bulk-end-date", "2030-02-01");
+  const beforeInvalid = await revision();
+  await activateButton(sessionId, "Review this one native batch", bulkRoot);
+  await waitFor(
+    sessionId,
+    "return document.activeElement?.textContent === 'Bulk action needs attention';",
+  );
+  assert.equal(
+    await revision(),
+    beforeInvalid,
+    "Native rejection cannot partially apply a bulk proposal",
+  );
+  await setValue(sessionId, "#bulk-start-date", "2030-01-01");
+  await preview();
+  // Both active-range fields conflict, while an independent name/tag change must survive.
+  const remoteRange = {
+    kind: "dateRange",
+    startDate: "2030-02-01",
+    endDateExclusive: "2030-03-01",
+  };
+  const remote = people.map((person, index) => ({
+    ...person,
+    activeRange: remoteRange,
+    teamIds: [seedTeamId],
+    ...(index === 0
+      ? { name: "Bulk native A updated", tags: ["bulk-preserved", "bulk-concurrent"] }
+      : {}),
+  }));
+  await writeEntities(remote, "official.workforce.update_entity");
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0]).textContent.includes('The saved context changed');",
+    [bulkRoot],
+  );
+  assert.equal(
+    await evaluate(sessionId, "return !!document.querySelector('#bulk-review-heading');"),
+    false,
+  );
+  assert.equal(
+    await evaluate(sessionId, "return document.querySelector('#bulk-start-date').value;"),
+    "2030-01-01",
+  );
+  await activateButton(sessionId, "Read current people and review draft conflicts", bulkRoot);
+  await waitFor(
+    sessionId,
+    "return document.activeElement?.textContent === 'Concurrent field changes';",
+  );
+  await screenshot(sessionId, "people-bulk-native-rebase.png");
+  // Scope each keyboard choice to its native stable identity, not a duplicate display name.
+  for (const [index, person] of people.entries()) {
+    await waitFor(
+      sessionId,
+      "return [...document.querySelectorAll(arguments[0] + ' fieldset')].some(field => field.querySelector('legend')?.textContent.includes(arguments[1]));",
+      [bulkRoot, person.id],
+    );
+    await evaluate(
+      sessionId,
+      "const group = [...document.querySelectorAll(arguments[0] + ' fieldset')].find(field => field.querySelector('legend')?.textContent.includes(arguments[1])); group.id = arguments[2];",
+      [bulkRoot, person.id, `bulk-conflict-${String(index)}`],
+    );
+    await activateButton(
+      sessionId,
+      index === 0 ? "Keep draft field" : "Use current field",
+      `#bulk-conflict-${String(index)}`,
+    );
+    if (index === 0) {
+      // Another revision must retain A's explicit choice and B's unresolved conflict.
+      await writeEntities(
+        [{ id: seedTeamId, kind: "team", name: "Bulk seed team revised" }],
+        "official.workforce.update_entity",
+      );
+      await waitFor(
+        sessionId,
+        "return document.querySelector(arguments[0]).textContent.includes('The saved context changed');",
+        [bulkRoot],
+      );
+      await activateButton(sessionId, "Read current people and review draft conflicts", bulkRoot);
+      await waitFor(
+        sessionId,
+        "return document.activeElement?.textContent === 'Concurrent field changes';",
+      );
+      assert.equal(
+        await evaluate(
+          sessionId,
+          "return [...document.querySelectorAll(arguments[0] + ' fieldset')].some(field => field.querySelector('legend')?.textContent.includes(arguments[1]));",
+          [bulkRoot, person.id],
+        ),
+        false,
+        "An already resolved draft choice survives an unrelated revision",
+      );
+    }
+  }
+  await activateButton(sessionId, "Use these resolved drafts", bulkRoot);
+  await preview();
+  await selectValue(sessionId, "#bulk-proposed-person", people[1].id);
+  await waitFor(sessionId, "return document.querySelector(arguments[0])?.value === '2030-02-01';", [
+    `${bulkRoot} section[aria-label="Proposed complete record"] input[id$="-startDate"]`,
+  ]);
+  await save();
+  people[0].name = remote[0].name;
+  await open();
+  const preserved = await evaluate(
+    sessionId,
+    "const root = document.querySelector(arguments[0]); return {name: root.querySelector('input[name=\"name\"]').value, externalId: root.querySelector('input[name=\"externalId\"]').value, from: root.querySelector('input[id$=\"-startDate\"]').value, values: [...root.querySelectorAll('input')].map(input => input.value), text: root.textContent};",
+    [bulkRoot],
+  );
+  assert.equal(preserved.name, "Bulk native A updated");
+  assert.equal(preserved.externalId, "bulk-A");
+  assert.equal(preserved.from, "2030-01-01");
+  assert(
+    preserved.values.includes("bulk-preserved") && preserved.values.includes("bulk-concurrent"),
+  );
+  await waitFor(
+    sessionId,
+    "const text = document.querySelector(arguments[0]).textContent; return arguments[1].every(id => text.includes(id));",
+    [bulkRoot, [seedTeamId, support.qualificationId, support.assignmentTypeId]],
+  );
+  await selectValue(sessionId, "#bulk-person-inspection", people[1].id);
+  await waitFor(sessionId, "return document.querySelector(arguments[0])?.value === '2030-02-01';", [
+    `${bulkRoot} input[id$="-startDate"]`,
+  ]);
+  await selectValue(sessionId, "#bulk-action", "delete");
+  const beforeConfirmation = await revision();
+  await activateButton(sessionId, "Review this one native batch", bulkRoot);
+  assert.equal(await revision(), beforeConfirmation);
+  assert.equal(
+    await evaluate(sessionId, "return !!document.querySelector('#bulk-review-heading');"),
+    false,
+  );
+  await activateCheckbox(sessionId, "I intend to delete these selected people", bulkRoot);
+  await preview();
+  await save();
+  const historyRoot = '[aria-labelledby="history-heading"]';
+  await navigate(sessionId, `/project/${scenarioId}/history`);
+  await activateButton(sessionId, "Undo scenario change", historyRoot);
+  await idle(sessionId);
+  await navigate(sessionId, `/project/${scenarioId}/people`);
+  for (const person of people)
+    await waitFor(
+      sessionId,
+      "return document.querySelector(arguments[0]).textContent.includes(arguments[1]);",
+      [listRoot, person.id],
+    );
+  await navigate(sessionId, `/project/${scenarioId}/history`);
+  await activateButton(sessionId, "Redo scenario change", historyRoot);
+  await idle(sessionId);
+  await navigate(sessionId, `/project/${scenarioId}/people`);
+  await waitForElement(sessionId, "#people-list-heading");
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0]).textContent.includes('Matching records:');",
+    [listRoot],
+  );
+  for (const person of people)
+    assert.equal(
+      await evaluate(
+        sessionId,
+        "return document.querySelector(arguments[0]).textContent.includes(arguments[1]);",
+        [listRoot, person.id],
+      ),
+      false,
+      "One redo removes both reviewed people",
+    );
 }
 
 async function peopleRestartAcceptance(sessionId, scenarioId, personId) {
@@ -1632,6 +2136,7 @@ async function run() {
       configuration.app.windows[0].title,
     );
     const people = await peopleEditorAcceptance(firstSessionId, scenarioId);
+    await peopleBulkAcceptance(firstSessionId, scenarioId, people);
     const importedPeople = await peopleCsvAcceptance(firstSessionId, scenarioId, directory, people);
     await navigate(firstSessionId, "/about/licenses");
     await waitForElement(firstSessionId, "#about-inventory-title");
@@ -1678,7 +2183,7 @@ async function run() {
       "PASS: real Workforce creation/setup and one-open-per-entry; native settings CAS/draft/self-commit/import/export/reset; four bounded backup reviews; editable export/unopened exact re-export/import; additive restore, verified safety backup, real failure/bypass/recovery; cancelled export and changed-revision deletion review; unconsumed editing shortcuts and scoped scenario undo/redo; History route committed metadata, one-step undo/redo, authoritative revision refresh and persisted scenario settings; confirmed deletion; offline About; independent restart persistence and unknown-route recovery",
     );
     console.log(
-      "PASS: native qualification/team/assignment-type/person creation; keyboard edit and conflict focus; invalidated approval after a real second writer; explicit whole-field choice preserving independent current tags; referenced deletion refused without mutation; rebased fields retained after restart",
+      "PASS: native supporting-record/person creation with temporal grants, existing target/location references and display fields; manual and bulk choices across concurrent revisions; no-op bulk target conflicts; native batch preview/delete and one-step undo/redo; CSV identity/proposal/report/no-change flow and restart-safe history; referenced deletion refusal and fresh-identity recovery",
     );
   } catch (error) {
     if (activeSessionId !== undefined) {

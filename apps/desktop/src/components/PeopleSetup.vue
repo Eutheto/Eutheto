@@ -32,6 +32,8 @@ import { useSetupCommandReview } from "../setup-command-review";
 import { messages, formatNumber } from "../messages";
 import PeopleRecordFields from "./PeopleRecordFields.vue";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
+import PeopleBulkEditor from "./PeopleBulkEditor.vue";
+import type { PeopleBulkSelection } from "../people-bulk-draft";
 
 const props = defineProps<{
   home: ProjectHomeController;
@@ -44,6 +46,9 @@ const kind = ref<PeopleRecord["kind"]>("person");
 const search = ref("");
 const page = shallowRef<WorkforceSetupEntityPage | null>(null);
 const pageLoading = ref(false);
+const selectedIds = shallowRef<readonly string[]>([]);
+const bulkSelection = shallowRef<PeopleBulkSelection | null>(null);
+const bulkEditor = ref<InstanceType<typeof PeopleBulkEditor>>();
 const pageError = ref<string | null>(null);
 const detailLoading = ref(false);
 const detailError = ref<string | null>(null);
@@ -60,6 +65,10 @@ const showCurrent = ref(false);
 const currentRaw = shallowRef<PeopleRecordDraft | null>(null);
 const proposedRaw = shallowRef<PeopleRecordDraft | null>(null);
 const review = useSetupCommandReview(props.home, () => props.project);
+const reviewWarnings = computed(() => {
+  const warnings = review.state.review?.warnings;
+  return warnings === undefined ? [] : [...warnings.changes, ...warnings.proposed];
+});
 const fieldContext = computed(() => ({
   project: props.project,
   libraryEpoch: props.home.state.libraryEpoch,
@@ -77,17 +86,29 @@ interface Editor {
   readonly current: PeopleRecord | null;
   readonly currentRevision: number | null;
   readonly currentEpoch: number | null;
-  readonly rebase: EntityRebase<PeopleRecord> | null;
+  readonly rebase:
+    (EntityRebase<PeopleRecord> & { readonly revision: number; readonly epoch: number }) | null;
 }
 const editor = shallowRef<Editor | null>(null);
 const busy = computed(() => props.home.state.busyAction !== null);
-const dirty = computed(() => editor.value?.dirty === true);
+const dirty = computed(() => editor.value?.dirty === true || bulkSelection.value !== null);
 const stale = computed(
   () =>
     editor.value !== null &&
     (editor.value.revision !== props.project.revision ||
       editor.value.epoch !== props.home.state.libraryEpoch),
 );
+const rebaseCurrent = computed(() => {
+  const value = editor.value;
+  return (
+    value?.rebase != null &&
+    value.rebase.revision === props.project.revision &&
+    value.rebase.epoch === props.home.state.libraryEpoch &&
+    value.currentRevision === props.project.revision &&
+    value.currentEpoch === props.home.state.libraryEpoch &&
+    !detailLoading.value
+  );
+});
 let alive = true;
 let listGeneration = 0;
 let detailGeneration = 0;
@@ -104,6 +125,8 @@ function invalidateDraft(): void {
 }
 function discard(): void {
   invalidateDraft();
+  bulkEditor.value?.discard();
+  bulkSelection.value = null;
   detailGeneration += 1;
   detailScope?.dispose();
   detailScope = null;
@@ -129,6 +152,7 @@ function contextMatches(scenarioId: string, revision: number, epoch: number): bo
 }
 async function loadPage(cursor: WorkforceSetupEntityContinuation | null = null): Promise<void> {
   const captured = ++listGeneration;
+  selectedIds.value = [];
   listScope?.dispose();
   listScope = null;
   page.value = null;
@@ -166,7 +190,7 @@ async function loadDetail(
   entityKind: PeopleRecord["kind"],
   refresh = false,
 ): Promise<void> {
-  if (!alive || (!refresh && editor.value?.editing)) return;
+  if (!alive || bulkSelection.value !== null || (!refresh && editor.value?.editing)) return;
   const captured = ++detailGeneration;
   detailScope?.dispose();
   const { scenarioId, revision } = props.project;
@@ -192,7 +216,6 @@ async function loadDetail(
         current: entity,
         currentRevision: revision,
         currentEpoch: epoch,
-        rebase: null,
       };
     } else {
       editor.value = {
@@ -223,7 +246,7 @@ async function loadDetail(
   }
 }
 async function create(): Promise<void> {
-  if (busy.value || editor.value?.editing) return;
+  if (busy.value || editor.value?.editing || bulkSelection.value !== null) return;
   discard();
   editor.value = {
     scenarioId: props.project.scenarioId,
@@ -296,7 +319,10 @@ async function previewDelete(): Promise<void> {
 }
 function acceptRebase(value: Editor, merged: EntityRebase<PeopleRecord>): void {
   if (merged.conflicts.length !== 0) {
-    editor.value = { ...value, rebase: merged };
+    editor.value = {
+      ...value,
+      rebase: { ...merged, revision: props.project.revision, epoch: props.home.state.libraryEpoch },
+    };
     return;
   }
   editor.value = {
@@ -342,7 +368,7 @@ async function rebase(): Promise<void> {
   )
     return;
   invalidateDraft();
-  acceptRebase(value, rebaseEntityDraft(value.base, local, value.current));
+  acceptRebase(value, rebaseEntityDraft(value.base, local, value.current, value.rebase));
   await focusRebaseOutcome();
 }
 async function chooseField(
@@ -350,13 +376,7 @@ async function chooseField(
   choice: "current" | "draft",
 ): Promise<void> {
   const value = editor.value;
-  if (
-    value?.rebase == null ||
-    busy.value ||
-    value.currentRevision !== props.project.revision ||
-    value.currentEpoch !== props.home.state.libraryEpoch
-  )
-    return;
+  if (value?.rebase == null || busy.value || !rebaseCurrent.value) return;
   acceptRebase(value, resolveEntityDraftField(value.rebase, field, choice));
   await focusRebaseOutcome();
 }
@@ -458,6 +478,8 @@ watch(
     detailLoading.value = false;
     showCurrent.value = false;
     currentRaw.value = null;
+    if (bulkSelection.value !== null && bulkSelection.value.scenarioId !== props.project.scenarioId)
+      discard();
     const value = editor.value;
     if (value !== null) {
       if (value.scenarioId !== props.project.scenarioId) {
@@ -469,7 +491,6 @@ watch(
         current: null,
         currentRevision: null,
         currentEpoch: null,
-        rebase: null,
       };
       if (value.base !== null) void loadDetail(value.id, value.raw.kind, true);
       if (restoreFocus) {
@@ -503,12 +524,13 @@ watch(
 );
 async function changePage(cursor: WorkforceSetupEntityContinuation | null = null): Promise<void> {
   await loadPage(cursor);
+  selectedIds.value = [];
   await nextTick();
   listHeading.value?.focus();
 }
 function chooseKind(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
-  if (editor.value?.editing || busy.value) return;
+  if (editor.value?.editing || busy.value || bulkSelection.value !== null) return;
   if (
     value === "person" ||
     value === "qualification" ||
@@ -521,6 +543,43 @@ function chooseKind(event: Event): void {
     clearTimeout(searchTimer);
     void loadPage();
   }
+}
+function selectPerson(id: string, checked: boolean): void {
+  if (
+    kind.value !== "person" ||
+    bulkSelection.value !== null ||
+    busy.value ||
+    editor.value?.editing ||
+    page.value?.items.some((item) => item.entityId === id) !== true
+  )
+    return;
+  if (checked && !selectedIds.value.includes(id) && selectedIds.value.length < 50)
+    selectedIds.value = [...selectedIds.value, id];
+  else if (!checked) selectedIds.value = selectedIds.value.filter((value) => value !== id);
+}
+function openBulk(): void {
+  if (
+    kind.value !== "person" ||
+    selectedIds.value.length === 0 ||
+    busy.value ||
+    editor.value?.editing ||
+    bulkSelection.value !== null ||
+    selectedIds.value.some((id) => page.value?.items.some((item) => item.entityId === id) !== true)
+  )
+    return;
+  discard();
+  bulkSelection.value = {
+    scenarioId: props.project.scenarioId,
+    revision: props.project.revision,
+    libraryEpoch: props.home.state.libraryEpoch,
+    ids: [...selectedIds.value],
+  };
+}
+async function closeBulk(): Promise<void> {
+  discard();
+  selectedIds.value = [];
+  await nextTick();
+  listHeading.value?.focus();
 }
 onScopeDispose(() => {
   alive = false;
@@ -549,7 +608,7 @@ onScopeDispose(() => {
         <select
           id="people-kind"
           :value="kind"
-          :disabled="editor?.editing || busy"
+          :disabled="editor?.editing || busy || bulkSelection !== null"
           @change="chooseKind"
         >
           <option v-for="item in kinds" :key="item" :value="item">{{ copy.kinds[item] }}</option>
@@ -559,11 +618,16 @@ onScopeDispose(() => {
           id="people-search"
           v-model="search"
           type="search"
+          :disabled="bulkSelection !== null"
           :aria-describedby="'people-search-help'"
         />
         <p id="people-search-help" class="field-help">{{ copy.searchHelp }}</p>
         <div class="action-row">
-          <button type="button" :disabled="busy || editor?.editing" @click="create">
+          <button
+            type="button"
+            :disabled="busy || editor?.editing || bulkSelection !== null"
+            @click="create"
+          >
             {{ copy.create }}
           </button>
           <button type="button" :disabled="busy" @click="refresh">
@@ -576,10 +640,20 @@ onScopeDispose(() => {
           <p v-if="page.items.length === 0">{{ copy.empty }}</p>
           <ul v-else class="field-stack">
             <li v-for="item in page.items" :key="item.entityId">
+              <label v-if="kind === 'person'" class="break-all">
+                <input
+                  type="checkbox"
+                  :checked="selectedIds.includes(item.entityId)"
+                  :disabled="busy || editor?.editing || bulkSelection !== null"
+                  @change="selectPerson(item.entityId, ($event.target as HTMLInputElement).checked)"
+                />
+                {{ messages.bulkPeople.select }} · {{ item.name ?? copy.unnamed }} ·
+                {{ item.entityId }}
+              </label>
               <button
                 type="button"
                 class="break-all"
-                :disabled="busy || editor?.editing"
+                :disabled="busy || editor?.editing || bulkSelection !== null"
                 @click="loadDetail(item.entityId, kind)"
               >
                 {{ item.name ?? copy.unnamed }} · {{ item.entityId }}
@@ -587,13 +661,29 @@ onScopeDispose(() => {
             </li>
           </ul>
           <p>{{ copy.matching }} {{ formatNumber(page.totalItems, locale) }}</p>
+          <div v-if="kind === 'person'" class="action-row">
+            <p>{{ messages.bulkPeople.selected }} {{ formatNumber(selectedIds.length, locale) }}</p>
+            <button
+              type="button"
+              :disabled="
+                selectedIds.length === 0 || busy || editor?.editing || bulkSelection !== null
+              "
+              @click="openBulk"
+            >
+              {{ messages.bulkPeople.open }}
+            </button>
+          </div>
           <nav class="action-row" :aria-label="copy.pages">
-            <button type="button" :disabled="pageLoading" @click="changePage()">
+            <button
+              type="button"
+              :disabled="pageLoading || bulkSelection !== null"
+              @click="changePage()"
+            >
               {{ copy.first }}
             </button>
             <button
               type="button"
-              :disabled="page.continuation === null || pageLoading"
+              :disabled="page.continuation === null || pageLoading || bulkSelection !== null"
               @click="changePage(page.continuation)"
             >
               {{ copy.next }}
@@ -601,6 +691,15 @@ onScopeDispose(() => {
           </nav>
         </template>
       </section>
+      <PeopleBulkEditor
+        v-if="bulkSelection"
+        ref="bulkEditor"
+        :home="home"
+        :project="project"
+        :selection="bulkSelection"
+        v-bind="locale === undefined ? {} : { locale }"
+        @close="closeBulk"
+      />
       <p v-if="detailLoading" role="status">{{ copy.loadingDetail }}</p>
       <div v-if="detailError" class="state-panel" role="alert">
         <p>{{ detailError }}</p>
@@ -683,10 +782,18 @@ onScopeDispose(() => {
               <p>{{ copy.currentValue }} {{ fieldSummary(editor.rebase.current, field) }}</p>
               <p>{{ copy.draftValue }} {{ fieldSummary(editor.rebase.value, field) }}</p>
               <div class="action-row">
-                <button type="button" :disabled="busy" @click="chooseField(field, 'current')">
+                <button
+                  type="button"
+                  :disabled="busy || !rebaseCurrent"
+                  @click="chooseField(field, 'current')"
+                >
                   {{ copy.useCurrent }}
                 </button>
-                <button type="button" :disabled="busy" @click="chooseField(field, 'draft')">
+                <button
+                  type="button"
+                  :disabled="busy || !rebaseCurrent"
+                  @click="chooseField(field, 'draft')"
+                >
                   {{ copy.keepDraft }}
                 </button>
               </div>
@@ -751,11 +858,11 @@ onScopeDispose(() => {
           <PeopleRecordFields v-bind="fieldContext" :model-value="proposedRaw" read-only />
         </section>
         <p v-else>{{ copy.deleteProposal }}</p>
-        <section v-if="review.state.review.warnings.length" :aria-label="copy.warnings">
+        <section v-if="reviewWarnings.length" :aria-label="copy.warnings">
           <h4>{{ copy.warnings }}</h4>
           <ul>
             <li
-              v-for="(warning, index) in review.state.review.warnings.slice(
+              v-for="(warning, index) in reviewWarnings.slice(
                 warningsPage * 50,
                 (warningsPage + 1) * 50,
               )"
@@ -769,7 +876,7 @@ onScopeDispose(() => {
           </button>
           <button
             type="button"
-            :disabled="(warningsPage + 1) * 50 >= review.state.review.warnings.length"
+            :disabled="(warningsPage + 1) * 50 >= reviewWarnings.length"
             @click="warningsPage += 1"
           >
             {{ copy.next }}
@@ -792,7 +899,7 @@ onScopeDispose(() => {
     <RouteLeaveGuard
       :home="home"
       :dirty="dirty"
-      :pending="review.state.pending"
+      :pending="review.state.pending || bulkEditor?.pending === true"
       :discard="discard"
     />
   </section>

@@ -54,6 +54,30 @@ describe("explicit entity draft rebase", () => {
     );
   });
 
+  it("retains partial choices and unresolved fields across another revision", () => {
+    const local = { ...base, name: "Local", tags: ["local-tag"] };
+    const current = { ...base, name: "Current", tags: ["current-tag"] };
+    const initial = rebaseEntityDraft(base, local, current);
+    const partial = resolveEntityDraftField(initial, "tags", "current");
+    const next = { ...current, display: { color: "#445566" } };
+    const continued = rebaseEntityDraft(base, local, next, partial);
+    expect(continued.conflicts).toEqual(["name"]);
+    expect(resolveEntityDraftField(continued, "name", "draft").value).toEqual({
+      ...next,
+      name: "Local",
+    });
+    const keptDraft = resolveEntityDraftField(initial, "tags", "draft");
+    const continuedDraft = rebaseEntityDraft(base, local, next, keptDraft);
+    expect(continuedDraft.conflicts).toEqual(["name"]);
+    expect(resolveEntityDraftField(continuedDraft, "name", "current").value).toEqual({
+      ...next,
+      tags: ["local-tag"],
+    });
+    expect(
+      rebaseEntityDraft(base, local, { ...next, tags: ["new-current"] }, keptDraft).conflicts,
+    ).toEqual(["name", "tags"]);
+  });
+
   it("does not report an agreed change as a conflict and refuses identity substitution", () => {
     const same = { ...base, name: "Agreed" };
     expect(rebaseEntityDraft(base, same, same).conflicts).toEqual([]);
