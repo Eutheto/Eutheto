@@ -393,27 +393,28 @@ async fn summary_limit_is_utf8_bytes_and_omits_without_truncation() -> TestResul
 #[tokio::test]
 async fn bulk_valid_command_and_inverse_remain_usable_as_small_metadata() -> TestResult {
     let mut document = workforce_fixture::fixture()?;
-    let original_description = "Original qualification guidance. ".repeat(120);
-    let updated_description = "Revised qualification guidance. ".repeat(120);
-    let mut updates = Vec::new();
-    for index in 200..328 {
-        let id = workforce_fixture::id(index);
-        document.domain.entities.insert(
-            id.parse()?,
-            json!({
-                "kind": "qualification", "id": id, "name": format!("Qualification {index}"),
-                "description": original_description,
-            }),
-        );
-        updates.push(update_qualification(
-            index,
-            &format!("Qualification {index}"),
-            &updated_description,
-        ));
-    }
+    let padding = "x".repeat(220);
+    let tags = |prefix: &str| {
+        (0..2048)
+            .map(|index| format!("{prefix} tag {index}: {padding}"))
+            .collect::<Vec<_>>()
+    };
+    let person = document
+        .domain
+        .entities
+        .get_mut(&workforce_fixture::id(1).parse()?)
+        .ok_or("missing fixture person")?;
+    person["tags"] = json!(tags("Original"));
+    let mut updated = person.clone();
+    updated["tags"] = json!(tags("Revised"));
+    // One large valid mutation exercises payload isolation without benchmarking
+    // repeated full-document preparation for hundreds of unrelated mutations.
     let command = ScenarioCommand::ApplyBatch(CommandBatch {
-        label: Some("Revise qualification guidance".to_owned()),
-        commands: updates,
+        label: Some("Revise person tags".to_owned()),
+        commands: vec![ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+            command_type: commands::UPDATE_ENTITY.to_owned(),
+            payload: json!({"entity": updated}),
+        })],
     });
     assert!(serde_json::to_vec(&command)?.len() > 400 * 1024);
     let (_directory, _dependencies, app) = stored(&document).await?;
