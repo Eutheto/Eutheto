@@ -21,6 +21,47 @@ export function formatUnit(value: number, unit: string, locale?: string): string
 }
 
 export const messages = {
+  supportingFields: {
+    name: "Name",
+    description: "Description",
+    descriptionHelp: "Plain text only. Formatting and HTML are not interpreted.",
+    category: "Category",
+    duration: "Default duration",
+    durationHelp: "Creation default, in exact whole minutes. Existing shift timing is unchanged.",
+    qualificationMode: "Qualification requirement",
+    chooseQualificationMode: "Choose a qualification requirement",
+    unconstrained: "Unconstrained",
+    matches: "Match qualifications",
+    allQualifications: "All of these qualifications",
+    anyQualifications: "At least one of these qualifications",
+    qualificationHelp:
+      "Matching requires every all-list qualification and, when the any-list is nonempty, at least one any-list qualification. Selections are retained while unconstrained.",
+    locationMode: "Location policy",
+    chooseLocationMode: "Choose a location policy",
+    noLocation: "No location",
+    optionalLocation: "Optional location",
+    requiredLocation: "Required location",
+    fixedLocation: "Fixed location",
+    locationHelp: "The fixed location selection is retained while another policy is selected.",
+    timeBehavior: "Time behavior",
+    chooseTimeBehavior: "Choose a time behavior",
+    localWallClock: "Local wall clock",
+    elapsed: "Elapsed time",
+    timeBehaviorHelp:
+      "Creation default only. Explicit template timing and stored shift endpoints remain authoritative.",
+    workloadBuckets: "Workload buckets",
+    nativeValidation: "Native review validates names, categories, references, and domain rules.",
+    durationRequired: "Enter a default duration.",
+    durationErrors: {
+      syntax: "Enter a decimal duration without signs, spaces, or exponents.",
+      wholeMinutes: "Enter a duration that represents exact whole minutes.",
+      range: "Enter a duration from 1 to 4294967295 minutes.",
+    },
+    qualificationRequired: "Choose a qualification requirement.",
+    locationRequired: "Choose a location policy.",
+    fixedLocationRequired: "Select the fixed location.",
+    timeBehaviorRequired: "Choose a time behavior.",
+  },
   personFields: {
     activeDates: "Active dates",
     limitActiveDates: "Limit active dates",
