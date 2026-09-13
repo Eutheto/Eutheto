@@ -115,6 +115,12 @@ function pageProps(location: RouteLocationNormalizedLoaded) {
     return {
       ...common,
       libraryRevision: settings.state.snapshot?.libraryRevision ?? null,
+      ...(typeof location.params.scenarioId === "string"
+        ? {
+            onUndo: () => changeScenario("undo"),
+            onRedo: () => changeScenario("redo"),
+          }
+        : {}),
       ...(location.name === "project-export"
         ? {
             onExported,

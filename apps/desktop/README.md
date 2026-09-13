@@ -18,7 +18,7 @@ sends typed requests back to it; browser state is not a second persistence
 layer.
 
 Hash routing exposes first launch, Workforce creation, the active/archived
-project library, selected-project setup and editable export, portable import,
+project library, selected-project setup, history and editable export, portable import,
 Settings, Backup and restore, offline About/licenses, and unknown-route recovery.
 Pinia retains transient selection and deletion-review context; Colada caches
 native list projections. Neither owns scenario data or replays native writes.
@@ -68,6 +68,25 @@ ran. Missing, deleted, unsupported and stale contexts recover explicitly without
 substituting another project. This is not a Workforce editor or result workspace.
 Preview does not commit; apply, history, undo/redo, and local settings retain
 their existing application-service authority.
+
+The workspace History route reads revision-bound metadata pages through
+`getScenarioHistoryPage`, not command/inverse/actor payloads. It shows 50 entries
+at a time (native maximum 100); request and response ceilings are 4 KiB and 4 MiB.
+Summaries exceeding 4096 UTF-8 bytes are explicitly omitted, distinct from an
+empty recorded summary. Older/newest paging does not replay individual entries
+or expose discarded branches. Undo/Redo uses the existing root operation owner
+and native availability; archived, unsupported and busy contexts cannot mutate.
+Pending reads are invalidated on mutation, revision/scenario/library-epoch change
+or navigation. A conflict refreshes the library rather than applying stale history.
+
+The setup overview now reuses `ValidationSummary` for bounded fast findings and
+native total/displayed/omitted counts; full-validation status remains separate.
+Empty library/history states use the same named `EmptyState`. Shared controlled
+pickers, exact duration/local-time drafts, rule strength/scope and physical CSV
+mapping fields are available for the ordered editor packages; they are not mounted
+as a production playground and do not implement people/import or rule editors.
+Their [native and accessibility contracts](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#common-field-consumer-contracts)
+also identify later-only components and the distinct Phase 07 Share Result gate.
 
 Setup operations reserve a window/context-bound identity before work, use
 bounded admission and an invocation-owned progress channel, and release

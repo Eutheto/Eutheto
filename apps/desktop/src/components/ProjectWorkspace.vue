@@ -5,6 +5,7 @@ import type { Revision } from "../api/generated";
 import type { ProjectHomeController } from "../project-home";
 import { formatDateTime, formatNumber, messages } from "../messages";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
+import { plannerMessage } from "./planner/messages";
 
 const props = defineProps<{
   home: ProjectHomeController;
@@ -16,6 +17,8 @@ const emit = defineEmits<{
   exported: [outcome: { artifactName: string }];
   exportCancelled: [];
   exportFailed: [];
+  undo: [];
+  redo: [];
 }>();
 const project = computed(() =>
   props.home.state.projects.find((item) => item.scenarioId === props.scenarioId),
@@ -105,6 +108,9 @@ function discardFeedback(): void {
           <RouterLink :to="{ name: 'project-setup', params: { scenarioId } }">
             {{ messages.setup.heading }}
           </RouterLink>
+          <RouterLink :to="{ name: 'project-history', params: { scenarioId } }">
+            {{ plannerMessage("history.title") }}
+          </RouterLink>
           <RouterLink :to="{ name: 'project-export', params: { scenarioId } }">
             {{ messages.shell.export }}
           </RouterLink>
@@ -174,6 +180,8 @@ function discardFeedback(): void {
           @exported="emit('exported', $event)"
           @export-cancelled="emit('exportCancelled')"
           @export-failed="emit('exportFailed')"
+          @undo="emit('undo')"
+          @redo="emit('redo')"
         />
       </RouterView>
     </template>

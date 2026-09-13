@@ -86,6 +86,10 @@ pub use headless::*;
 mod setup;
 pub use setup::*;
 
+#[path = "history.rs"]
+mod history;
+pub use history::*;
+
 const EVENT_VERSION: u32 = 1;
 /// Current application solution-read wire schema.
 pub const SOLUTION_API_SCHEMA_VERSION: u32 = 1;
@@ -505,6 +509,7 @@ pub enum AppQuery {
     ScenarioView(ScenarioId),
     ValidateScenario(ScenarioId),
     History(ScenarioId),
+    HistoryPage(HistoryPageRequestV1),
     Setting(String),
     SolutionList(SolutionListRequestV1),
     SolutionGetSummary(SolutionSummaryRequestV1),
@@ -582,6 +587,7 @@ pub enum AppQueryResult {
     Scenario(Box<ScenarioViewDto>),
     Validation(ValidationReport),
     History(Vec<HistoryEntry>),
+    HistoryPage(HistoryPageDtoV1),
     Setting(Option<AppSetting<Value>>),
     SolutionList(SolutionListDtoV1),
     SolutionSummary(Box<SolutionDetailDtoV1>),
@@ -1490,6 +1496,10 @@ impl EuthetoApp {
                 .await
                 .map(AppQueryResult::History)
                 .map_err(store_error),
+            AppQuery::HistoryPage(request) => self
+                .history_page(request)
+                .await
+                .map(AppQueryResult::HistoryPage),
             AppQuery::Setting(key) => {
                 validate_app_setting_key(&key)?;
                 self.store

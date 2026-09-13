@@ -444,7 +444,7 @@ scenario_search_entities        scenario_get_rule_catalog
 scenario_get_command_catalog    scenario_apply_command
 scenario_apply_batch            scenario_validate
 scenario_undo                   scenario_redo
-scenario_get_history            scenario_migrate_preview
+scenario_get_history_page       scenario_migrate_preview
 
 solve_get_backend_options       solve_estimate_model
 solve_start                     solve_cancel

@@ -982,6 +982,37 @@ pub struct HistoryEntry {
     pub branch_generation: u64,
     pub applied: bool,
 }
+
+/// Maximum number of entries returned by a metadata history page.
+pub const HISTORY_PAGE_MAX_ENTRIES: u32 = 100;
+/// Maximum UTF-8 bytes returned for one recorded history summary.
+pub const HISTORY_SUMMARY_MAX_BYTES: usize = 4 * 1024;
+
+/// Bounded journal metadata, without command, inverse, or actor payloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryEntrySummary {
+    pub id: CommandId,
+    pub revision_before: Revision,
+    pub revision_after: Revision,
+    pub source: CommandSource,
+    /// `None` means the recorded summary exceeds the display byte limit.
+    pub summary: Option<String>,
+    pub created_at: Rfc3339Timestamp,
+    pub history_sequence: u64,
+    pub branch_generation: u64,
+    pub applied: bool,
+}
+
+/// One revision-consistent metadata page and current journal availability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryPage {
+    pub scenario_id: ScenarioId,
+    pub revision: Revision,
+    pub entries: Vec<HistoryEntrySummary>,
+    pub next_before_sequence: Option<u64>,
+    pub undo_available: bool,
+    pub redo_available: bool,
+}
 /// Live connection settings and installed schema objects, used by startup
 /// diagnostics without exposing `SQLite` access to callers.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2422,6 +2453,112 @@ impl SqliteScenarioStore {
                 entries.push(parse_history_row(row, cursor)?);
             }
             Ok(entries)
+        })
+        .await
+    }
+
+    /// Reads bounded journal metadata in descending sequence order in one snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid numeric bounds, missing scenarios, revision conflicts,
+    /// inconsistent persisted history metadata, and actor or database failures.
+    pub async fn history_page(
+        &self,
+        scenario_id: ScenarioId,
+        expected_revision: Revision,
+        limit: u32,
+        before_sequence: Option<u64>,
+    ) -> Result<HistoryPage, StoreError> {
+        if !(1..=HISTORY_PAGE_MAX_ENTRIES).contains(&limit) {
+            return Err(StoreError::NumericRange);
+        }
+        if let Some(sequence) = before_sequence {
+            if sequence == 0 {
+                return Err(StoreError::NumericRange);
+            }
+            checked_revision(sequence)?;
+        }
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let scenario_key = scenario_id.to_string();
+            let revision: Option<i64> = transaction
+                .query_row(
+                    "SELECT revision FROM scenarios WHERE id = ?1",
+                    [&scenario_key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let revision = checked_revision(i64_to_u64(
+                revision.ok_or(StoreError::ScenarioNotFound(scenario_id))?,
+            )?)?;
+            ensure_revision(expected_revision, revision.value())?;
+            let (cursor, generation, max_sequence) = history_state(&transaction, scenario_id)?;
+            if cursor > max_sequence
+                || max_sequence > revision.value()
+                || generation > revision.value()
+                || (max_sequence == 0 && generation != 0)
+            {
+                return Err(StoreError::Integrity("invalid history cursor state".to_owned()));
+            }
+            let (undo_available, redo_available) = history_page_availability(
+                &transaction, &scenario_key, cursor, generation, max_sequence,
+            )?;
+            let mut entries = Vec::with_capacity(limit as usize);
+            let mut next_before_sequence = None;
+            {
+                let mut statement = transaction.prepare(
+                    "SELECT
+                       CASE WHEN length(CAST(id AS BLOB)) <= 36 THEN id ELSE NULL END,
+                       revision_before, revision_after,
+                       CASE WHEN length(CAST(source AS BLOB)) <= 16 THEN source ELSE NULL END,
+                       CASE WHEN length(CAST(summary AS BLOB)) <= ?4 THEN summary ELSE NULL END,
+                       CASE WHEN length(CAST(created_at AS BLOB)) <= 64 THEN created_at ELSE NULL END,
+                       history_sequence, branch_generation
+                     FROM command_journal
+                     WHERE scenario_id = ?1 AND (?2 IS NULL OR history_sequence < ?2)
+                     ORDER BY history_sequence DESC LIMIT ?3",
+                )?;
+                let mut rows = statement.query(params![
+                    &scenario_key,
+                    before_sequence.map(u64_to_i64).transpose()?,
+                    i64::from(limit) + 1,
+                    i64::try_from(HISTORY_SUMMARY_MAX_BYTES).map_err(|_| StoreError::NumericRange)?,
+                ])?;
+                let mut expected_sequence =
+                    before_sequence.map_or(max_sequence, |before| max_sequence.min(before - 1));
+                while let Some(row) = rows.next()? {
+                    let entry = parse_history_summary_row(row, cursor, generation, revision)?;
+                    if entry.history_sequence != expected_sequence {
+                        return Err(StoreError::Integrity(
+                            "history page contains a missing or ambiguous sequence".to_owned(),
+                        ));
+                    }
+                    expected_sequence -= 1;
+                    if entries.len() == limit as usize {
+                        next_before_sequence = entries.last().map(
+                            |entry: &HistoryEntrySummary| entry.history_sequence,
+                        );
+                        break;
+                    }
+                    entries.push(entry);
+                }
+                if next_before_sequence.is_none() && expected_sequence != 0 {
+                    return Err(StoreError::Integrity(
+                        "history page ends before its expected sequence".to_owned(),
+                    ));
+                }
+            }
+            transaction.commit()?;
+            Ok(HistoryPage {
+                scenario_id,
+                revision,
+                entries,
+                next_before_sequence,
+                undo_available,
+                redo_available,
+            })
         })
         .await
     }
@@ -6783,6 +6920,86 @@ fn load_history_entry(
         ));
     };
     parse_history_row(row, cursor)
+}
+
+/// Checks retained-tail/cursor links without loading journal payloads.
+fn history_page_availability(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_key: &str,
+    cursor: u64,
+    generation: u64,
+    max_sequence: u64,
+) -> Result<(bool, bool), StoreError> {
+    let (tail_count, tail_generation): (i64, Option<i64>) = transaction.query_row(
+        "SELECT COUNT(*), MAX(branch_generation) FROM command_journal
+         WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(max_sequence)?],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if tail_count != i64::from(max_sequence > 0)
+        || tail_generation.map(i64_to_u64).transpose()? != (max_sequence > 0).then_some(generation)
+    {
+        return Err(StoreError::Integrity(
+            "history branch does not match its retained tail".to_owned(),
+        ));
+    }
+    let (cursor_count, reversible): (i64, bool) = transaction.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(inverse_json IS NOT NULL), 0)
+         FROM command_journal WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(cursor)?],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let redo_count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM command_journal
+         WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(cursor + 1)?],
+        |row| row.get(0),
+    )?;
+    if cursor_count != i64::from(cursor > 0) || redo_count != i64::from(cursor < max_sequence) {
+        return Err(StoreError::Integrity(
+            "history cursor references missing or ambiguous journal entries".to_owned(),
+        ));
+    }
+    Ok((cursor > 0 && reversible, cursor < max_sequence))
+}
+
+fn parse_history_summary_row(
+    row: &rusqlite::Row<'_>,
+    cursor: u64,
+    generation: u64,
+    revision: Revision,
+) -> Result<HistoryEntrySummary, StoreError> {
+    let sequence = i64_to_u64(row.get(6)?)?;
+    let branch_generation = i64_to_u64(row.get(7)?)?;
+    let revision_before = checked_revision(i64_to_u64(row.get(1)?)?)?;
+    let revision_after = checked_revision(i64_to_u64(row.get(2)?)?)?;
+    if sequence == 0
+        || sequence > revision_after.value()
+        || branch_generation > generation
+        || revision_before >= revision_after
+        || revision_after > revision
+    {
+        return Err(StoreError::Integrity(
+            "invalid history entry numbers".to_owned(),
+        ));
+    }
+    let id_text: String = row.get(0)?;
+    let id = id_text
+        .parse()
+        .map_err(|error| StoreError::Integrity(format!("invalid stored command id: {error}")))?;
+    let source: String = row.get(3)?;
+    let created_at: String = row.get(5)?;
+    Ok(HistoryEntrySummary {
+        id,
+        revision_before,
+        revision_after,
+        source: parse_command_source(&source)?,
+        summary: row.get(4)?,
+        created_at: parse_timestamp(&created_at, "journal created_at")?,
+        history_sequence: sequence,
+        branch_generation,
+        applied: sequence <= cursor,
+    })
 }
 
 fn parse_history_row(row: &rusqlite::Row<'_>, cursor: u64) -> Result<HistoryEntry, StoreError> {

@@ -2491,3 +2491,79 @@ describe("portable review ownership", () => {
     ).toThrow();
   });
 });
+
+describe("bounded revision-bound history metadata", () => {
+  const request: generated.HistoryPageRequestV1 = {
+    schemaVersion: 1,
+    scenarioId,
+    expectedRevision: 3,
+    limit: 1,
+    continuation: null,
+  };
+  const entry: generated.HistoryEntrySummaryDtoV1 = {
+    id: operationId,
+    revisionBefore: 0,
+    revisionAfter: 1,
+    source: "desktop",
+    summary: "é".repeat(2048),
+    createdAt: "2026-09-01T00:00:00Z",
+    historySequence: 1,
+    branchGeneration: 0,
+    applied: true,
+  };
+  const page: generated.HistoryPageDtoV1 = {
+    schemaVersion: 1,
+    scenarioId,
+    revision: 3,
+    entries: [entry],
+    continuation: null,
+    undoAvailable: true,
+    redoAvailable: false,
+  };
+
+  it("preserves a maximum UTF-8 summary but rejects payload leakage and oversized metadata", async () => {
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, page, 3)),
+    );
+    const accepted = await generated.getScenarioHistoryPage(request);
+    expect(accepted.result.entries[0]?.summary).toBe(entry.summary);
+    for (const invalid of [
+      { ...page, schemaVersion: 2 },
+      { ...page, entries: [{ ...entry, summary: "é".repeat(2049) }] },
+      { ...page, entries: [{ ...entry, command: { privatePayload: true } }] },
+      { ...page, entries: [entry, { ...entry, id: scenarioId }] },
+    ]) {
+      tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+        Promise.resolve(response(input, invalid, 3)),
+      );
+      await expect(generated.getScenarioHistoryPage(request)).rejects.toMatchObject(
+        invalidResponse,
+      );
+    }
+  });
+
+  it("rejects pagination outside its captured request and response context", async () => {
+    expect(() => generated.getScenarioHistoryPage({ ...request, limit: 101 })).toThrow(RangeError);
+    expect(() =>
+      generated.getScenarioHistoryPage({
+        ...request,
+        continuation: { scenarioId, revision: 2, beforeSequence: 1 },
+      }),
+    ).toThrow(RangeError);
+    expect(tauri.invoke).not.toHaveBeenCalled();
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, { ...page, revision: 2 }, 2)),
+    );
+    await expect(generated.getScenarioHistoryPage(request)).rejects.toMatchObject(invalidResponse);
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(
+        response(
+          input,
+          { ...page, continuation: { scenarioId: operationId, revision: 3, beforeSequence: 1 } },
+          3,
+        ),
+      ),
+    );
+    await expect(generated.getScenarioHistoryPage(request)).rejects.toMatchObject(invalidResponse);
+  });
+});

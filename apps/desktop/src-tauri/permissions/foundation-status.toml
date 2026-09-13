@@ -60,7 +60,7 @@ commands.allow = [
   "scenario_validate",
   "scenario_undo",
   "scenario_redo",
-  "scenario_get_history",
+  "scenario_get_history_page",
   "scenario_migrate_preview",
   "solve_get_backend_options",
   "solve_estimate_model",

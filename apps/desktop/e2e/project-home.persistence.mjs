@@ -468,6 +468,8 @@ async function portableAcceptance(sessionId, scenarioId, directory, backupDirect
   const before = (await projects(sessionId)).find((project) => project.scenarioId === scenarioId);
   assert(before && typeof before.lastOpenedAt === "string");
   await screenshot(sessionId, "setup.png");
+  await evaluate(sessionId, "document.querySelector('#setup-validation').scrollIntoView();");
+  await screenshot(sessionId, "validation.png");
   await navigate(sessionId, `/project/${scenarioId}/export`);
   await waitForElement(sessionId, "#portable-workspace-heading");
   const after = (await projects(sessionId)).find((project) => project.scenarioId === scenarioId);
@@ -628,6 +630,95 @@ async function keyboardChord(sessionId, shift = false) {
   });
 }
 
+async function historyRouteAcceptance(sessionId, scenarioId, settingsCommandId, revisionBefore) {
+  const historyRoot = '[aria-labelledby="history-heading"]';
+  const entryRoot = `${historyRoot} ol[aria-label="Recorded changes"] > li:first-child`;
+  const locale = (await settingsSnapshot(sessionId)).settings.locale.value;
+  async function observeHistory(applied, previousRevision = null) {
+    const project = (await projects(sessionId)).find((item) => item.scenarioId === scenarioId);
+    assert(project && !project.archived && project.domainPackId === "official.workforce");
+    if (previousRevision !== null) {
+      assert.equal(project.revision, previousRevision + 1, "History actions must commit one step");
+    }
+    const page = (
+      await nativeRequest(sessionId, "scenario_get_history_page", {
+        schemaVersion: 1,
+        scenarioId,
+        expectedRevision: project.revision,
+        limit: 50,
+        continuation: null,
+      })
+    ).result;
+    assert.equal(page.revision, project.revision);
+    const entry = page.entries[0];
+    assert.equal(entry?.id, settingsCommandId, "Undo/redo must retain the settings journal entry");
+    assert.equal(entry.revisionBefore, revisionBefore);
+    assert.equal(entry.revisionAfter, revisionBefore + 1);
+    assert.equal(entry.applied, applied);
+    assert.equal(page.redoAvailable, !applied);
+    await waitFor(
+      sessionId,
+      `const status = document.querySelector(arguments[0] + ' [role="status"]');
+      return status?.getAttribute('aria-busy') === 'false'
+        && status.textContent.trim() === 'History captured at revision '
+          + new Intl.NumberFormat(arguments[2]).format(arguments[1]) + '.';`,
+      [historyRoot, project.revision, locale],
+    );
+    await waitFor(
+      sessionId,
+      `const entry = document.querySelector(arguments[0]);
+      return entry?.querySelector('dd')?.textContent.trim() === arguments[1]
+        && entry.querySelector('.field-help')?.textContent.includes(arguments[2]);`,
+      [entryRoot, settingsCommandId, applied ? "Applied" : "Undone"],
+    );
+    await activate(sessionId, `${entryRoot} details > summary`);
+    await waitFor(sessionId, "return document.querySelector(arguments[0]).open;", [
+      `${entryRoot} details`,
+    ]);
+    const details = await getText(sessionId, `${entryRoot} details`);
+    assert(
+      details.includes(settingsCommandId),
+      "History must expose the committed change identity",
+    );
+    const number = new Intl.NumberFormat(locale);
+    assert(
+      details.includes(
+        `${number.format(entry.revisionBefore)} → ${number.format(entry.revisionAfter)}`,
+      ),
+      "Recorded revisions must remain the original commit, not the current undo/redo revision",
+    );
+    return project.revision;
+  }
+  async function observeSavedLocale(expected) {
+    await navigate(sessionId, `/project/${scenarioId}/setup`);
+    await waitForElement(sessionId, "#setup-calendar");
+    assert(
+      (await getText(sessionId, '[aria-labelledby="setup-calendar"]')).includes(expected),
+      `A fresh native setup read must expose the persisted scenario locale ${expected}`,
+    );
+  }
+  // The shortcut exercise already restored this command. Reuse its journal tail rather than
+  // creating another change or treating an audit row as an individually replayable command.
+  await navigate(sessionId, `/project/${scenarioId}/setup`);
+  await waitForElement(sessionId, "#setup-calendar");
+  assert((await getText(sessionId, '[aria-labelledby="setup-calendar"]')).includes("en-GB"));
+  await navigate(sessionId, `/project/${scenarioId}/history`);
+  await waitForElement(sessionId, "#history-heading");
+  const committedRevision = await observeHistory(true);
+  await screenshot(sessionId, "history.png");
+  await activateButton(sessionId, "Undo scenario change", historyRoot);
+  await waitForOutcome(sessionId, "Scenario undo committed");
+  const undoneRevision = await observeHistory(false, committedRevision);
+  await observeSavedLocale("en-US");
+  await navigate(sessionId, `/project/${scenarioId}/history`);
+  await waitForElement(sessionId, "#history-heading");
+  await activateButton(sessionId, "Redo scenario change", historyRoot);
+  await waitForOutcome(sessionId, "Scenario redo committed");
+  await observeHistory(true, undoneRevision);
+  await observeSavedLocale("en-GB");
+  await navigate(sessionId, "/projects");
+}
+
 async function deletionAndHistoryAcceptance(sessionId, scenarioId, copyId, windowTitle) {
   await navigate(sessionId, "/projects");
   await navigate(sessionId, `/projects?project=${scenarioId}`);
@@ -648,8 +739,9 @@ async function deletionAndHistoryAcceptance(sessionId, scenarioId, copyId, windo
     "A cancelled export must not delete the source project",
   );
   const original = (await projects(sessionId)).find((project) => project.scenarioId === scenarioId);
+  const settingsCommandId = requestId();
   await nativeRequest(sessionId, "scenario_apply_command", {
-    commandId: requestId(),
+    commandId: settingsCommandId,
     scenarioId,
     expectedRevision: original.revision,
     actor: { actorId: null, displayName: "Native E2E external change" },
@@ -752,6 +844,7 @@ async function deletionAndHistoryAcceptance(sessionId, scenarioId, copyId, windo
     (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision >
       undone,
   );
+  await historyRouteAcceptance(sessionId, scenarioId, settingsCommandId, original.revision);
   await navigate(sessionId, `/projects?project=${copyId}`);
   await activateButton(sessionId, "Delete project");
   await activateButton(sessionId, "Delete permanently", '[role="dialog"]');
@@ -905,7 +998,7 @@ async function run() {
       [scenarioId],
     );
     console.log(
-      "PASS: real Workforce creation/setup and one-open-per-entry; native settings CAS/draft/self-commit/import/export/reset; four bounded backup reviews; editable export/unopened exact re-export/import; additive restore, verified safety backup, real failure/bypass/recovery; cancelled export and changed-revision deletion review; unconsumed editing shortcuts and scoped scenario undo/redo; confirmed deletion; offline About; independent restart persistence and unknown-route recovery",
+      "PASS: real Workforce creation/setup and one-open-per-entry; native settings CAS/draft/self-commit/import/export/reset; four bounded backup reviews; editable export/unopened exact re-export/import; additive restore, verified safety backup, real failure/bypass/recovery; cancelled export and changed-revision deletion review; unconsumed editing shortcuts and scoped scenario undo/redo; History route committed metadata, one-step undo/redo, authoritative revision refresh and persisted scenario settings; confirmed deletion; offline About; independent restart persistence and unknown-route recovery",
     );
   } catch (error) {
     if (activeSessionId !== undefined) {

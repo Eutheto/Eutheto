@@ -4,6 +4,7 @@ import ProjectHome from "./components/ProjectHome.vue";
 import WelcomePage from "./components/WelcomePage.vue";
 import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import WorkforceSetupOverview from "./components/WorkforceSetupOverview.vue";
+import HistoryPage from "./components/HistoryPage.vue";
 import SettingsPage from "./components/SettingsPage.vue";
 import AboutPage from "./components/AboutPage.vue";
 import PortableWorkspace from "./components/PortableWorkspace.vue";
@@ -34,6 +35,7 @@ export function createAppRouter() {
         children: [
           { path: "", redirect: (to) => ({ name: "project-setup", params: to.params }) },
           { path: "setup", name: "project-setup", component: WorkforceSetupOverview },
+          { path: "history", name: "project-history", component: HistoryPage },
           {
             path: "export",
             name: "project-export",

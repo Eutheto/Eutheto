@@ -67,7 +67,7 @@ const COMMAND_CATALOG: &[&str] = &[
     "scenario_validate",
     "scenario_undo",
     "scenario_redo",
-    "scenario_get_history",
+    "scenario_get_history_page",
     "scenario_migrate_preview",
     "solve_get_backend_options",
     "solve_estimate_model",
@@ -731,20 +731,38 @@ export interface ActorRef {
 
 export type CommandSource = "desktop" | "cli" | "import" | "system" | "undo" | "redo";
 
-export interface HistoryEntryDto {
+export interface HistoryPageContinuationV1 {
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly beforeSequence: number;
+}
+export interface HistoryPageRequestV1 {
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly limit: number;
+  readonly continuation: HistoryPageContinuationV1 | null;
+}
+export interface HistoryEntrySummaryDtoV1 {
   readonly id: UuidV7;
   readonly revisionBefore: Revision;
   readonly revisionAfter: Revision;
-  readonly commandType: string;
-  readonly command: JsonValue;
-  readonly inverse: JsonValue;
-  readonly actor: ActorRef;
   readonly source: CommandSource;
-  readonly summary: string;
+  /** Null means the stored summary exceeds the 4096-byte display limit. */
+  readonly summary: string | null;
   readonly createdAt: string;
   readonly historySequence: number;
   readonly branchGeneration: number;
   readonly applied: boolean;
+}
+export interface HistoryPageDtoV1 {
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly entries: readonly HistoryEntrySummaryDtoV1[];
+  readonly continuation: HistoryPageContinuationV1 | null;
+  readonly undoAvailable: boolean;
+  readonly redoAvailable: boolean;
 }
 
 
@@ -2794,22 +2812,43 @@ const isCommandResult = shape<CommandResultDto>({
   validationDelta: isValidationDelta,
   inverse: nullable(isScenarioCommand),
 });
-const isActor = shape<ActorRef>({ actorId: nullable(isText), displayName: isText });
-const isHistoryEntry = shape<HistoryEntryDto>({
+const HISTORY_PAGE_LIMITS = {
+  entries: 100, summaryBytes: 4096, requestBytes: 4096, responseBytes: 4 * 1_048_576,
+} as const;
+const isHistorySequence = (value: unknown): value is number => isRevision(value) && value > 0;
+const isHistoryContinuation = shape<HistoryPageContinuationV1>({
+  scenarioId: isUuid, revision: isRevision, beforeSequence: isHistorySequence,
+});
+const historyRequestShape = shape<HistoryPageRequestV1>({
+  schemaVersion: literal(1), scenarioId: isUuid, expectedRevision: isRevision,
+  limit: (value): value is number => isRevision(value) && value > 0 && value <= HISTORY_PAGE_LIMITS.entries,
+  continuation: nullable(isHistoryContinuation),
+});
+const isHistoryRequest: Guard<HistoryPageRequestV1> = (value): value is HistoryPageRequestV1 =>
+  historyRequestShape(value) && (value.continuation === null ||
+    (value.continuation.scenarioId === value.scenarioId &&
+      value.continuation.revision === value.expectedRevision));
+const isHistoryEntrySummary = shape<HistoryEntrySummaryDtoV1>({
   id: isUuid,
   revisionBefore: isRevision,
   revisionAfter: isRevision,
-  commandType: isText,
-  command: isJson,
-  inverse: isJson,
-  actor: isActor,
   source: choices("desktop", "cli", "import", "system", "undo", "redo"),
-  summary: isText,
+  summary: nullable((value): value is string => isCsvText(value, HISTORY_PAGE_LIMITS.summaryBytes)),
   createdAt: isTimestamp,
-  historySequence: isRevision,
+  historySequence: isHistorySequence,
   branchGeneration: isRevision,
   applied: isBoolean,
 });
+const historyPageShape = shape<HistoryPageDtoV1>({
+  schemaVersion: literal(1), scenarioId: isUuid, revision: isRevision,
+  entries: arrayOf(isHistoryEntrySummary, HISTORY_PAGE_LIMITS.entries),
+  continuation: nullable(isHistoryContinuation),
+  undoAvailable: isBoolean, redoAvailable: isBoolean,
+});
+const isHistoryPage: Guard<HistoryPageDtoV1> = (value): value is HistoryPageDtoV1 =>
+  historyPageShape(value) && (value.continuation === null ||
+    (value.continuation.scenarioId === value.scenarioId &&
+      value.continuation.revision === value.revision));
 const isEventContext = shape<EventContextDto>({
   eventVersion: literal(1),
   timestamp: isTimestamp,
@@ -5271,13 +5310,20 @@ export function redoScenario(
   );
 }
 
-export function getScenarioHistory(
-  scenarioId: UuidV7,
-): Promise<ApiResponseDto<{ readonly entries: readonly HistoryEntryDto[] }>> {
+export function getScenarioHistoryPage(
+  request: HistoryPageRequestV1,
+): Promise<ApiResponseDto<HistoryPageDtoV1>> {
+  if (!isHistoryRequest(request)) throw new RangeError("The history page request is invalid");
   return call(
-    "scenario_get_history",
-    { requestId: newRequestId(), scenarioId },
-    shape({ entries: arrayOf(isHistoryEntry) }),
+    "scenario_get_history_page",
+    { requestId: newRequestId(), ...request },
+    (value): value is HistoryPageDtoV1 => isHistoryPage(value) &&
+      value.revision === request.expectedRevision && value.entries.length <= request.limit,
+    {
+      requestMaximumBytes: HISTORY_PAGE_LIMITS.requestBytes,
+      maximumBytes: HISTORY_PAGE_LIMITS.responseBytes,
+      revisionKey: "revision",
+    },
   );
 }
 

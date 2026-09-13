@@ -21,6 +21,7 @@ import {
   type ProjectSummary,
 } from "../project-home";
 import { formatDateTime, formatNumber, messages } from "../messages";
+import ValidationSummary from "./explanations/ValidationSummary.vue";
 
 const props = defineProps<{
   home: ProjectHomeController;
@@ -288,32 +289,20 @@ async function refresh(): Promise<void> {
             </div>
           </dl>
         </section>
-        <section class="state-panel" aria-labelledby="setup-validation">
+        <section
+          class="page-stack rounded-sm border border-line p-4"
+          aria-labelledby="setup-validation"
+        >
           <h3 id="setup-validation" tabindex="-1">{{ messages.setup.validation }}</h3>
-          <h4>{{ messages.setup.fast }}</h4>
-          <dl class="metadata-list">
-            <div>
-              <dt>{{ messages.setup.errors }}</dt>
-              <dd>{{ formatNumber(snapshot.summary.fast.counts.errors, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ messages.setup.warnings }}</dt>
-              <dd>{{ formatNumber(snapshot.summary.fast.counts.warnings, locale) }}</dd>
-            </div>
-            <div>
-              <dt>{{ messages.setup.information }}</dt>
-              <dd>{{ formatNumber(snapshot.summary.fast.counts.information, locale) }}</dd>
-            </div>
-          </dl>
-          <ul v-if="snapshot.summary.fast.issues.length">
-            <li v-for="(issue, index) in snapshot.summary.fast.issues" :key="index">
-              <strong>{{ issue.severity }}:</strong> {{ issue.message }}
-              <code v-if="issue.fieldPath">{{ issue.fieldPath }}</code>
-            </li>
-          </ul>
-          <p v-if="snapshot.summary.fast.omitted">
-            {{ messages.setup.omitted(formatNumber(snapshot.summary.fast.omitted, locale)) }}
-          </p>
+          <ValidationSummary
+            :findings="snapshot.summary.fast"
+            state="ready"
+            interaction="static"
+            presentation="embedded"
+            :heading="messages.setup.fast"
+            :heading-level="4"
+            :locale="locale"
+          />
           <h4>{{ messages.setup.full }}</h4>
           <p>{{ messages.setup.validationStates[snapshot.summary.full.state] }}</p>
           <template v-if="snapshot.summary.full.state !== 'notRun'">

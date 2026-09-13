@@ -122,8 +122,9 @@ This remains a bounded development planner: the complete Workforce desktop flow,
 Seating, repair/comparison product flows, AI, and signed releases remain roadmap work.
 
 Phase 06 now provides first launch, Workforce project creation, a searchable
-active/archived library, a revision-bound setup overview, and reviewed portable
-inspection/import/export and backup/restore/recovery screens. Application Settings
+active/archived library, a revision-bound setup overview, a bounded change-history
+view with one-step undo/redo, and reviewed portable inspection/import/export and
+backup/restore/recovery screens. Application Settings
 provides separate revision-checked drafts, reviewed nonsecret import/export, and
 persisted appearance preferences. About renders the bounded offline workspace
 license inventory and redacted configured-location status—not exact installer

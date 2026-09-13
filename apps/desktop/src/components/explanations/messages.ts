@@ -73,7 +73,10 @@ export const explanationMessages = {
   "status.unbounded": "Unbounded model proven",
   "validation.empty": "No validation issues need attention.",
   "validation.heading": "Validation summary",
-  "validation.issueCount": "{count} validation issues",
+  "validation.findingsCount": "{total} validation issues: {displayed} shown, {omitted} omitted.",
+  "validation.errors": "Errors",
+  "validation.warnings": "Warnings",
+  "validation.information": "Information",
   "validation.loading": "Checking the scenario…",
 } as const;
 

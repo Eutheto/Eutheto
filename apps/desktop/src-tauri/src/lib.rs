@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-    BackendSupportColumn, BackupAssetSelection, DeferredCapability, EuthetoApp, ProjectScope,
-    SolutionCancelCounterfactualRequestV1, SolutionCompareRequestV1, SolutionExplainRequestV1,
-    SolutionListRequestV1, SolutionSelectRequestV1, SolutionStartCounterfactualRequestV1,
-    SolutionSummaryRequestV1, SolutionVerifyRequestV1, SolutionViewRequestV1,
-    SolverSupportMatrixMetadata, SupportCell, SupportFeature, SupportFeatureId, bounded_json_size,
+    BackendSupportColumn, BackupAssetSelection, DeferredCapability, EuthetoApp,
+    HISTORY_PAGE_MAX_REQUEST_BYTES, HISTORY_PAGE_MAX_RESPONSE_BYTES, HistoryPageRequestV1,
+    ProjectScope, SolutionCancelCounterfactualRequestV1, SolutionCompareRequestV1,
+    SolutionExplainRequestV1, SolutionListRequestV1, SolutionSelectRequestV1,
+    SolutionStartCounterfactualRequestV1, SolutionSummaryRequestV1, SolutionVerifyRequestV1,
+    SolutionViewRequestV1, SolverSupportMatrixMetadata, SupportCell, SupportFeature,
+    SupportFeatureId, bounded_json_size,
 };
 use eutheto_export::{
     ApplicationMetadata, BackupSelectionScope, BundleKind, FixedExclusion, OmittedAssetReason,
@@ -23,9 +25,9 @@ use eutheto_types::{
     CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
     DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, GapPolicy, Horizon, IanaTimeZone,
     OverlapPolicy, PackId, ProjectListItemV1, ProjectMetadataDto, RequestId, ResourceRef, Revision,
-    Rfc3339Timestamp, SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings,
-    SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem,
-    ValidationIssue, ValidationReport, resolve_local_midnight,
+    SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings, SupplementalIdentity,
+    SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, ValidationIssue,
+    ValidationReport, resolve_local_midnight,
 };
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -745,30 +747,6 @@ struct PortableArtifactDto {
 #[serde(rename_all = "camelCase")]
 struct ScenarioCommandCatalogDto {
     command_types: &'static [&'static str],
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryEntryDto {
-    id: CommandId,
-    revision_before: Revision,
-    revision_after: Revision,
-    command_type: String,
-    command: Value,
-    inverse: Option<Value>,
-    actor: ActorRef,
-    source: CommandSource,
-    summary: String,
-    created_at: Rfc3339Timestamp,
-    history_sequence: u64,
-    branch_generation: u64,
-    applied: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryDto {
-    entries: Vec<HistoryEntryDto>,
 }
 
 fn response<T>(
@@ -1555,7 +1533,7 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "scenario_validate",
         "scenario_undo",
         "scenario_redo",
-        "scenario_get_history",
+        "scenario_get_history_page",
         "solution_list",
         "solution_get_summary",
         "solution_get_view",
@@ -2141,49 +2119,67 @@ async fn scenario_redo(
     move_history(&state, request, false).await
 }
 
+fn decode_history_request(
+    request: Option<Value>,
+) -> Result<CorrelatedRequest<HistoryPageRequestV1>, ApiError> {
+    if request
+        .as_ref()
+        .is_some_and(|value| bounded_json_size(value, HISTORY_PAGE_MAX_REQUEST_BYTES).is_err())
+    {
+        return Err(boundary_error(
+            "history.request_too_large",
+            "The history request exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
+    let request: CorrelatedRequest<HistoryPageRequestV1> = request
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| {
+            Box::new(boundary_error(
+                "history.request_invalid",
+                "The history request is missing or malformed.",
+                None,
+            ))
+        })?;
+    request.operation.validate().map_err(map_app_error)?;
+    Ok(request)
+}
+
 #[tauri::command]
-async fn scenario_get_history(
+async fn scenario_get_history_page(
     state: State<'_, DesktopState>,
-    request: ScenarioRequest,
-) -> ApiResult<HistoryDto> {
-    match state
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request = decode_history_request(request)?;
+    let AppQueryResult::HistoryPage(page) = state
         .app
-        .query(AppQuery::History(request.scenario_id))
+        .query(AppQuery::HistoryPage(request.operation))
         .await
         .map_err(map_app_error)?
-    {
-        AppQueryResult::History(entries) => Ok(response(
-            request.request_id,
-            None,
-            Vec::new(),
-            HistoryDto {
-                entries: entries
-                    .into_iter()
-                    .map(|entry| HistoryEntryDto {
-                        id: entry.id,
-                        revision_before: entry.revision_before,
-                        revision_after: entry.revision_after,
-                        command_type: entry.command_type,
-                        command: entry.command,
-                        inverse: entry.inverse,
-                        actor: entry.actor,
-                        source: entry.source,
-                        summary: entry.summary,
-                        created_at: entry.created_at,
-                        history_sequence: entry.history_sequence,
-                        branch_generation: entry.branch_generation,
-                        applied: entry.applied,
-                    })
-                    .collect(),
-            },
-        )),
-        _ => Err(boundary_error(
+    else {
+        return Err(boundary_error(
             "protocol.result_mismatch",
             "The application returned an unexpected history result.",
             None,
         )
-        .into()),
-    }
+        .into());
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        setup_boundary::encode(
+            &response(request.request_id, Some(page.revision), Vec::new(), page),
+            HISTORY_PAGE_MAX_RESPONSE_BYTES,
+            None,
+        )
+    })
+    .await
+    .map_err(|_| {
+        Box::new(boundary_error(
+            "history.response_failed",
+            "The history response could not be prepared safely.",
+            None,
+        ))
+    })?
 }
 
 #[tauri::command]
@@ -2653,6 +2649,8 @@ pub fn run() -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod history_boundary_tests;
 #[cfg(test)]
 mod tests {
     use std::error::Error;

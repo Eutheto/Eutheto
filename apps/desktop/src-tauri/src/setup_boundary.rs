@@ -636,7 +636,7 @@ impl Write for ResponseWriter {
         Ok(())
     }
 }
-fn encode<T: Serialize>(
+pub(super) fn encode<T: Serialize>(
     value: &T,
     limit: usize,
     cancellation: Option<CancellationToken>,

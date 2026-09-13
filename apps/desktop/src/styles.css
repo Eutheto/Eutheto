@@ -157,6 +157,14 @@ select {
   background: var(--raised);
   border: 1px solid var(--line-strong);
 }
+input[type="checkbox"],
+input[type="radio"] {
+  width: var(--s5);
+  min-height: var(--s5);
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
 textarea {
   resize: vertical;
 }

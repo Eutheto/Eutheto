@@ -5,7 +5,7 @@ import axe from "axe-core";
 import { createPinia } from "pinia";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
-import { defineComponent, h, ref } from "vue";
+import { defineComponent, h, nextTick, ref } from "vue";
 import { createMemoryHistory, createRouter, RouterLink, RouterView, useRoute } from "vue-router";
 
 import {
@@ -33,6 +33,7 @@ import {
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
 import { messages } from "../messages";
 import "../styles.css";
+import { plannerMessage } from "./planner/messages";
 
 vi.mock("../api/generated", { spy: true });
 
@@ -908,5 +909,161 @@ describe("Route draft guard in the browser", () => {
     );
     await expect.element(await screen.findByRole("heading", { name: "Other view" })).toBeVisible();
     expect(draft.value).toBe("");
+  });
+});
+
+function historyMetadata(
+  revision: number,
+  summary: string,
+  applied = true,
+): generatedApi.HistoryPageDtoV1 {
+  return {
+    schemaVersion: 1,
+    scenarioId: workforceProject.scenarioId,
+    revision,
+    entries: [
+      {
+        id: "01900000-0000-7000-8000-000000000081",
+        revisionBefore: 2,
+        revisionAfter: 3,
+        source: "desktop",
+        summary,
+        createdAt: "2026-09-12T12:00:00Z",
+        historySequence: 1,
+        branchGeneration: 0,
+        applied,
+      },
+    ],
+    continuation: null,
+    undoAvailable: applied,
+    redoAvailable: !applied,
+  };
+}
+function historyMutation(revision: number): ApiResponseDto<generatedApi.CommandResultDto> {
+  return response(
+    {
+      newRevision: revision,
+      changeSet: { changes: [] },
+      validationDelta: { added: [], resolved: [] },
+      inverse: null,
+    },
+    [],
+    revision,
+  );
+}
+
+describe("Routed history publication fences", () => {
+  it("rejects a pending older page during root undo, then exposes only the authoritative undo/redo publication", async () => {
+    const library = configureNative();
+    const stale = Promise.withResolvers<ApiResponseDto<generatedApi.HistoryPageDtoV1>>();
+    const undo = Promise.withResolvers<ApiResponseDto<generatedApi.CommandResultDto>>();
+    const first = {
+      ...historyMetadata(3, "Current journal"),
+      continuation: {
+        scenarioId: workforceProject.scenarioId,
+        revision: 3,
+        beforeSequence: 2,
+      },
+    };
+    vi.mocked(generatedApi.getScenarioHistoryPage)
+      .mockResolvedValueOnce(response(first))
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(response(historyMetadata(4, "After undo", false)))
+      .mockResolvedValueOnce(response(historyMetadata(5, "After redo")));
+    vi.mocked(generatedApi.undoScenario).mockReturnValueOnce(undo.promise);
+    vi.mocked(generatedApi.redoScenario).mockImplementationOnce(() => {
+      library[0] = { ...workforceProject, revision: 5 };
+      return Promise.resolve(historyMutation(5));
+    });
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/history`);
+    const history = await screen.findByRole("region", { name: plannerMessage("history.title") });
+    await within(history).findByText("Current journal");
+    await userEvent.click(
+      within(history).getByRole("button", { name: plannerMessage("history.older") }),
+    );
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await expect
+      .element(within(history).getByRole("status"))
+      .toHaveTextContent(plannerMessage("history.busy"));
+    stale.resolve(response(historyMetadata(3, "Stale older journal")));
+    await stale.promise;
+    await nextTick();
+    expect(within(history).queryByText("Stale older journal")).toBeNull();
+    expect(within(history).queryByRole("button", { name: messages.shell.redo })).toBeNull();
+    library[0] = { ...workforceProject, revision: 4 };
+    undo.resolve(historyMutation(4));
+    await within(history).findByText("After undo");
+    await expect
+      .element(within(history).getByRole("status"))
+      .toHaveTextContent(plannerMessage("history.revision", { revision: 4 }));
+    await expect
+      .element(within(history).getByRole("button", { name: messages.shell.undo }))
+      .toBeDisabled();
+    await userEvent.click(within(history).getByRole("button", { name: messages.shell.redo }));
+    await within(history).findByText("After redo");
+    await expect
+      .element(within(history).getByRole("status"))
+      .toHaveTextContent(plannerMessage("history.revision", { revision: 5 }));
+    await expect.element(within(history).getByRole("status")).toHaveFocus();
+    await expect
+      .element(within(history).getByRole("button", { name: messages.shell.redo }))
+      .toBeDisabled();
+  });
+
+  it("rejects an old journal page after library replacement even when scenario ID and revision are unchanged", async () => {
+    const library = configureNative();
+    const stale = Promise.withResolvers<ApiResponseDto<generatedApi.HistoryPageDtoV1>>();
+    const first = {
+      ...historyMetadata(3, "Original journal"),
+      continuation: {
+        scenarioId: workforceProject.scenarioId,
+        revision: 3,
+        beforeSequence: 2,
+      },
+    };
+    vi.mocked(generatedApi.getScenarioHistoryPage)
+      .mockResolvedValueOnce(response(first))
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(response(historyMetadata(3, "Restored journal")));
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/history`);
+    const history = await screen.findByRole("region", { name: plannerMessage("history.title") });
+    await within(history).findByText("Original journal");
+    await userEvent.click(
+      within(history).getByRole("button", { name: plannerMessage("history.older") }),
+    );
+    library[0] = { ...workforceProject, title: "Restored roster" };
+    const notify = vi.mocked(generatedApi.onLibraryRefreshRequired).mock.calls[0]?.[0];
+    if (!notify) throw new Error("The application did not register native library notifications");
+    notify({ reason: "event-subscription-lagged" });
+    await within(history).findByText("Restored journal");
+    stale.resolve(response(historyMetadata(3, "Replaced journal")));
+    await stale.promise;
+    await nextTick();
+    expect(within(history).queryByText("Replaced journal")).toBeNull();
+    await expect.element(within(history).getByText("Restored journal")).toBeVisible();
+  });
+
+  it("stops repeated conflict refreshes and permits an explicit retry", async () => {
+    configureNative();
+    const conflict = Object.assign(new Error("Stale history revision"), {
+      category: "conflict",
+      code: "revision.conflict",
+    });
+    vi.mocked(generatedApi.getScenarioHistoryPage)
+      .mockRejectedValueOnce(conflict)
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce(response(historyMetadata(3, "Fresh journal")));
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/history`);
+    const history = await screen.findByRole("region", { name: plannerMessage("history.title") });
+    const refresh = within(history).getByRole("button", {
+      name: plannerMessage("history.refresh"),
+    });
+    await expect.element(refresh).toBeEnabled();
+    await expect
+      .element(within(history).getByRole("status"))
+      .toHaveTextContent(plannerMessage("history.stale"));
+    expect(vi.mocked(generatedApi.getScenarioHistoryPage).mock.calls).toHaveLength(2);
+    await userEvent.click(refresh);
+    await within(history).findByText("Fresh journal");
   });
 });

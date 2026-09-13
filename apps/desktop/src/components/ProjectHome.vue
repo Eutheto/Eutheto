@@ -6,6 +6,7 @@ import { type ProjectHomeController, type ProjectSummary } from "../project-home
 import { useWorkspaceStore } from "../stores/workspace";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+import EmptyState from "./planner/EmptyState.vue";
 
 const props = defineProps<{ home: ProjectHomeController; locale?: string }>();
 const router = useRouter();
@@ -232,11 +233,15 @@ async function restoreFocus(event: Event): Promise<void> {
         <p id="project-search-help" class="field-help">{{ messages.library.searchHelp }}</p>
       </div>
       <p role="status">{{ messages.projects.count(filtered.length, locale) }}</p>
-      <div v-if="home.state.projects.length === 0" class="state-panel">
-        <h2>{{ messages.projects.emptyHeading }}</h2>
-        <p>{{ messages.welcome.localOnly }}</p>
-        <RouterLink :to="{ name: 'project-create' }">{{ messages.welcome.startWork }}</RouterLink>
-      </div>
+      <EmptyState
+        v-if="home.state.projects.length === 0"
+        :heading="messages.projects.emptyHeading"
+        :description="messages.welcome.localOnly"
+      >
+        <template #actions>
+          <RouterLink :to="{ name: 'project-create' }">{{ messages.welcome.startWork }}</RouterLink>
+        </template>
+      </EmptyState>
       <p v-else-if="filtered.length === 0">{{ messages.library.noMatches }}</p>
       <div class="library-layout">
         <div class="page-stack">
