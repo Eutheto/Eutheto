@@ -4,7 +4,7 @@
 
 The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
-> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope; its editors are not yet implemented. Remaining Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope. Development screens now support People/supporting records, people CSV import, and Work/shift setup; the complete setup experience and its manual checkpoint remain open. Remaining Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
 
 ## Product direction
 
@@ -137,13 +137,21 @@ unrelated current values and inactive raw input until an explicit choice replace
 Current-page bulk actions select up to 50 people for active-date changes, team
 addition/removal or confirmed deletion, reviewed and applied as one undoable batch.
 
+The Work route edits planning dates, IANA time zone and explicit daylight-saving
+policies, workload buckets, locations, calendars, recurring templates, shift
+instances and coverage. Rust prepares local endpoints and reviews complete command
+and generation effects before revision/hash-bound apply. Native tables distinguish
+wall-clock and elapsed durations; detached edits survive regeneration until an
+explicit reviewed resolution. The editable Clinic + on-call starter is synthetic,
+not a staffing recommendation, and adds no people or rules.
+
 The generated setup API owns native operation lifetime, progress and cancellation.
 The People CSV screen selects a Rust-owned immutable snapshot, requires explicit
 delimiter/header/column mapping and identity decisions, and displays native proposed
 people and draft validation before one atomic apply. Rejected-row reports can be
 saved separately, including after apply; an exact no-change import creates no history
-entry. Names are never used to guess identity. Remaining Workforce editors are
-still roadmap work. See
+entry. Names are never used to guess identity. Eligibility/availability and guided
+rule/validation editors remain roadmap work. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
 native editing-accelerator, accessibility and packaged-platform gates.
 Use the headless Workforce workflow below for the available end-to-end

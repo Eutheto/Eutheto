@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
+import type { DomainEntityRef } from "../api/generated";
 import { messages } from "../messages";
 import type { ProjectSummary } from "../project-home";
 import { supportingRecordValue, type SupportingRecordDraft } from "../supporting-record-fields";
@@ -10,6 +11,7 @@ const props = defineProps<{
   readonly modelValue: SupportingRecordDraft;
   readonly project: ProjectSummary;
   readonly libraryEpoch: number;
+  readonly draftReferences?: readonly DomainEntityRef[];
   readonly locale?: string;
   readonly disabled?: boolean;
   readonly readOnly?: boolean;
@@ -33,6 +35,7 @@ const pickerContext = computed(() => ({
   ...fieldContext.value,
   project: props.project,
   libraryEpoch: props.libraryEpoch,
+  ...(props.draftReferences === undefined ? {} : { draftReferences: props.draftReferences }),
 }));
 type AssignmentDraft = Extract<SupportingRecordDraft, { kind: "assignmentType" }>;
 

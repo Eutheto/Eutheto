@@ -24,6 +24,7 @@ const props = defineProps<
     readonly multiple?: boolean;
     readonly project: ProjectSummary;
     readonly libraryEpoch: number;
+    readonly draftReferences?: readonly DomainEntityRef[];
   }
 >();
 const emit = defineEmits<{ "update:modelValue": [value: readonly string[]] }>();
@@ -109,7 +110,10 @@ async function fetchPage(
     };
     const selected =
       !props.multiple && props.modelValue.length === 1 ? props.modelValue[0] : undefined;
-    if (selected && !labels.value.has(selected)) {
+    const selectedIsDraft = props.draftReferences?.some(
+      (reference) => reference.kind === kind && reference.id === selected,
+    );
+    if (selected && !selectedIsDraft && !labels.value.has(selected)) {
       try {
         const detail = (await getScenarioEntity(owned, { kind, entityId: selected }).result).result
           .view.data.result.data;
@@ -153,7 +157,7 @@ function select(values: readonly DomainEntityRef[]): void {
   emit("update:modelValue", ids);
 }
 function activate(): void {
-  if (page.value.status === "idle" && !props.disabled) load(null);
+  if (page.value.status === "idle" && !props.disabled && !props.readOnly) load(null);
 }
 watch(
   () => props.modelValue,

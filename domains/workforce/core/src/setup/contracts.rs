@@ -686,6 +686,14 @@ pub struct LocalTimeResolutionParametersV1 {
     pub local: String,
 }
 
+/// Schema-bounded text parsed by the handler so malformed dates keep their exact field.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingsPlanningDatesV1 {
+    pub start_date: String,
+    pub end_date_exclusive: String,
+}
+
 // Stored-only, no continuation. Rust resolves local midnight boundaries and checks the
 // existing Workforce planning_dates contract; Vue only wraps the result in SetScenarioSettings.
 // dates is the desired entire horizon, NOT a presentation window: no366-day view cap.
@@ -695,7 +703,7 @@ pub struct LocalTimeResolutionParametersV1 {
 pub struct SettingsPreparationParametersV1 {
     // Schema-bounded before decoding; parse in the handler to retain the exact field.
     pub time_zone: String,
-    pub dates: DateRange,
+    pub dates: SettingsPlanningDatesV1,
     pub locale: eutheto_types::LocaleTag,
     pub units: eutheto_types::UnitSystem,
     pub gap_policy: eutheto_types::GapPolicy,

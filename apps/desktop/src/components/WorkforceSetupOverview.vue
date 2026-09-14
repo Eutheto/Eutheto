@@ -265,6 +265,12 @@ async function refresh(): Promise<void> {
           >
             {{ messages.people.heading }}
           </RouterLink>
+          <RouterLink
+            v-if="group.id === 'work'"
+            :to="{ name: 'project-work', params: { scenarioId: project.scenarioId } }"
+          >
+            {{ messages.work.heading }}
+          </RouterLink>
         </section>
         <section class="state-panel" aria-labelledby="setup-rules">
           <h3 id="setup-rules" tabindex="-1">{{ messages.setup.rules }}</h3>

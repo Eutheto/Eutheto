@@ -20,14 +20,31 @@ pub(super) fn settings_preparation(
             "settings preparation does not accept continuation",
         ));
     }
-    if parameters.dates.start_date >= parameters.dates.end_date_exclusive {
+    budget.visit()?;
+    let parse_date = |raw: &str, path| {
+        raw.parse::<jiff::civil::Date>().map_err(|_| {
+            validation_error(
+                "workforce.settings.invalid_date",
+                path,
+                "Enter a valid local date in YYYY-MM-DD form.",
+            )
+        })
+    };
+    let start_date = parse_date(
+        &parameters.dates.start_date,
+        "/query/parameters/dates/startDate",
+    )?;
+    let end_date = parse_date(
+        &parameters.dates.end_date_exclusive,
+        "/query/parameters/dates/endDateExclusive",
+    )?;
+    if start_date >= end_date {
         return Err(validation_error(
             "workforce.settings.invalid_dates",
             "/query/parameters/dates",
             "Planning dates must be nonempty and increasing.",
         ));
     }
-    budget.visit()?;
     let time_zone = parameters
         .time_zone
         .parse::<eutheto_types::IanaTimeZone>()
@@ -59,14 +76,8 @@ pub(super) fn settings_preparation(
             )
         })
     };
-    let start = endpoint(
-        parameters.dates.start_date,
-        "/query/parameters/dates/startDate",
-    )?;
-    let end = endpoint(
-        parameters.dates.end_date_exclusive,
-        "/query/parameters/dates/endDateExclusive",
-    )?;
+    let start = endpoint(start_date, "/query/parameters/dates/startDate")?;
+    let end = endpoint(end_date, "/query/parameters/dates/endDateExclusive")?;
     let horizon = Horizon::new(start, end).map_err(|_| {
         validation_error(
             "workforce.settings.invalid_dates",

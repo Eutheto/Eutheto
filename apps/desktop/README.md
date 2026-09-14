@@ -18,7 +18,7 @@ sends typed requests back to it; browser state is not a second persistence
 layer.
 
 Hash routing exposes first launch, Workforce creation, the active/archived
-project library, selected-project setup, People/supporting records, history and
+project library, selected-project setup, People/supporting records, Work, history and
 editable export, portable import, Settings, Backup and restore, offline About/licenses,
 and unknown-route recovery.
 Pinia retains transient selection and deletion-review context; Colada caches
@@ -144,7 +144,32 @@ prepares one raw local endpoint against the captured scenario settings, includin
 outside the visible horizon; offset and timezone annotations are not accepted as
 local input. Settings preparation and temporal failures return safe exact-field
 findings, and overnight generation diagnostics retain both occurrence and endpoint
-dates. These are native prerequisites, not a claim that the Work editor is complete.
+dates.
+
+Open a Workforce project and choose **Work** to edit planning dates/time policy,
+assignment types, workload buckets, locations, calendars, recurring shift templates,
+stored shift instances and exact/minimum coverage with optional preferred/maximum
+counts and qualification minima. The stored-record browser also reaches templates
+without active occurrences and manual/detached instances outside the planning horizon.
+Calendar and coverage collections retain the complete raw draft while mounting
+only a bounded page of controls; native errors reveal and focus the affected page.
+
+**Review changes** shows native command changes and generation additions, changes
+and removals. Source inspection reads the complete saved or proposed record;
+occurrence ledgers are not editable fields. The local-date display window and
+review filters never narrow the command's effect. Apply is bound to the reviewed
+source, revision and prospective hash. Changed local endpoints require fresh native
+preparation; a concurrent time-policy change requires an explicit choice before
+reinterpreting retained raw input. Native tables show original local intent, UTC
+offset, instant, reporting date, and both wall-clock and elapsed durations.
+
+Detachment, manual endpoint edits, regeneration and explicit reattachment use the
+same reviewed command/history flow. Regeneration does not overwrite detached edits.
+The editable **Clinic + on-call starter** proposes ordinary typed records in one
+atomic batch; it is synthetic, adds no people or rules, and is not a clinical,
+staffing, fairness or payroll recommendation. Eligibility/availability and guided
+rule/validation editors remain separate work; these screens do not optimize or
+display accepted results.
 
 `/settings` exposes separate appearance, locale, and units drafts backed by
 native get/update/reset commands. Each write requires the captured library

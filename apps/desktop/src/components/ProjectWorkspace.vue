@@ -114,6 +114,12 @@ function discardFeedback(): void {
           >
             {{ messages.people.heading }}
           </RouterLink>
+          <RouterLink
+            v-if="project.domainPackId === 'official.workforce'"
+            :to="{ name: 'project-work', params: { scenarioId } }"
+          >
+            {{ messages.work.heading }}
+          </RouterLink>
           <RouterLink :to="{ name: 'project-history', params: { scenarioId } }">
             {{ plannerMessage("history.title") }}
           </RouterLink>

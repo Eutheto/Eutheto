@@ -487,6 +487,26 @@ async fn native_local_time_findings_keep_exact_fields_without_echoing_untrusted_
             "workforce.time.invalid_zone",
             "/query/parameters/timeZone",
         ),
+        (
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"America/New_York", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":"private-parser-sentinel", "endDateExclusive":"2026-11-02"},
+                "gapPolicy":"reject", "overlapPolicy":"reject"
+            }),
+            "workforce.settings.invalid_date",
+            "/query/parameters/dates/startDate",
+        ),
+        (
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"America/New_York", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":"2026-11-01", "endDateExclusive":"2026-"},
+                "gapPolicy":"reject", "overlapPolicy":"reject"
+            }),
+            "workforce.settings.invalid_date",
+            "/query/parameters/dates/endDateExclusive",
+        ),
     ] {
         let operation_id = prepare(
             &fixture,
