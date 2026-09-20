@@ -302,10 +302,16 @@ async function repair(issue: FieldErrorDto): Promise<void> {
   }
 }
 async function save(truncateRedo = false): Promise<void> {
+  const focused = document.activeElement;
+  const scenarioId = props.project.scenarioId;
   if (await vm.apply(truncateRedo)) {
-    showCurrent.value = false;
-    await nextTick();
-    workHeading.value?.focus();
+    await nextTick(() => {
+      if (props.project.scenarioId !== scenarioId || state.editor !== null) return;
+      showCurrent.value = false;
+      if (document.activeElement === focused || document.activeElement === document.body) {
+        workHeading.value?.focus();
+      }
+    });
   }
 }
 function fieldSummary(value: EntityRecord, field: string): string {

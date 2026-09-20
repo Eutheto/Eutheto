@@ -1426,8 +1426,9 @@ export function useWorkSetup(home: ProjectHomeController, project: () => Project
     const editor = state.editor;
     if (editor?.kind === "record" && !editor.editing)
       await loadRecord(editor.id, editor.raw.kind, true);
-    await loadRecords();
+    // Start the foreground read before a delayed record page can admit a new draft.
     await loadWork();
+    await loadRecords();
   }
   watch(
     [() => project().scenarioId, () => project().revision, () => home.state.libraryEpoch],

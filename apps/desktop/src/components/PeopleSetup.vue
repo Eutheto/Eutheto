@@ -427,6 +427,7 @@ async function save(truncateRedo = false): Promise<void> {
   const value = editor.value;
   const captured = draftGeneration;
   const scenarioId = props.project.scenarioId;
+  const focused = document.activeElement;
   const result = await review.apply(truncateRedo);
   if (
     result !== null &&
@@ -437,8 +438,16 @@ async function save(truncateRedo = false): Promise<void> {
   ) {
     discard();
     await loadPage();
-    await nextTick();
-    listHeading.value?.focus();
+    await nextTick(() => {
+      if (
+        alive &&
+        props.project.scenarioId === scenarioId &&
+        editor.value === null &&
+        (document.activeElement === focused || document.activeElement === document.body)
+      ) {
+        listHeading.value?.focus();
+      }
+    });
   }
 }
 async function refresh(): Promise<void> {
