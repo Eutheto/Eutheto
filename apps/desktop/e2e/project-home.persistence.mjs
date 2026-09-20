@@ -1145,6 +1145,12 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
     "Local person name",
     "A revision event must retain the unsaved raw draft",
   );
+  // Referenced target metadata refreshes independently from the person after each revision.
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0])?.validity.valid === true;",
+    [`${editorRoot} input[id$="-target"]`],
+  );
   await activateButton(sessionId, "Review current changes", editorRoot);
   await waitFor(
     sessionId,
@@ -1199,6 +1205,11 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
     ),
     [true, true],
     "Retained manual choices must stay disabled until the new revision is explicitly rebased",
+  );
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0])?.validity.valid === true;",
+    [`${editorRoot} input[id$="-target"]`],
   );
   await activateButton(sessionId, "Review current changes", editorRoot);
   await waitFor(
