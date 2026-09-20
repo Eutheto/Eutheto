@@ -35,6 +35,68 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  windows-private-path-diagnostic:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-11-arm
+    timeout-minutes: 5
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Measure private-path subprocess phases
+        shell: python {0}
+        run: |
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import tempfile
+          import time
+
+          source = Path("crates/eutheto-store/src/lib.rs").read_text(encoding="utf-8")
+
+          def native_script(function):
+              match = re.search(r'(?s)fn ' + function + r'\(.*?let script = r#"(.*?)"#;', source)
+              if match is None:
+                  raise SystemExit("Diagnostic source extraction failed")
+              return match.group(1)
+
+          failed = False
+          with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
+              root = Path(directory)
+              fixture = root / "fixture"
+              fixture.write_text("synthetic diagnostic fixture", encoding="utf-8")
+              cases = [
+                  ("startup-inherited", "$null = 1", root, "", True),
+                  ("get-acl-inherited", "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", True),
+                  ("startup", "$null = 1", root, "", False),
+                  ("identity", "$null = [System.Security.Principal.WindowsIdentity]::GetCurrent().User", root, "", False),
+                  ("get-acl", "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
+                  ("ancestor", native_script("ensure_safe_ancestor_directory"), root, "", False),
+                  ("create", native_script("create_private_directory"), root / "created", "", False),
+                  ("directory-acl", native_script("restrict_windows_acl"), root, "directory", False),
+                  ("hard-links", native_script("ensure_path_has_no_windows_hard_links"), fixture, "", False),
+                  ("file-acl", native_script("restrict_windows_acl"), fixture, "file", False),
+                  ("startup-repeat", "$null = 1", root, "", False),
+              ]
+              for label, script, path, kind, inherit in cases:
+                  environment = {
+                      key: value for key, value in os.environ.items()
+                      if inherit or key.upper() != "PSMODULEPATH"
+                  }
+                  environment["EUTHETO_PRIVATE_PATH"] = str(path)
+                  environment["EUTHETO_PRIVATE_KIND"] = kind
+                  started = time.perf_counter()
+                  result = subprocess.run(
+                      ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+                      env=environment, stdin=subprocess.DEVNULL,
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                  )
+                  elapsed = (time.perf_counter() - started) * 1000
+                  print(f"{label}: {elapsed:.0f} ms; exit {result.returncode}", flush=True)
+                  failed |= result.returncode != 0
+          if failed:
+              raise SystemExit("Private-path diagnostic failed; subprocess output withheld")
+
   select-targets:
     name: Select portable target matrix
     runs-on: ubuntu-24.04
