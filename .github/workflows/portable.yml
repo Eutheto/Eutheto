@@ -37,12 +37,16 @@ env:
 jobs:
   windows-private-path-diagnostic:
     if: github.event_name == 'pull_request'
-    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Measure private-path subprocess phases
+      - name: Exercise private-path imports and fail-closed controls
         shell: python {0}
         run: |
           import os
@@ -53,40 +57,53 @@ jobs:
           import time
 
           source = Path("crates/eutheto-store/src/lib.rs").read_text(encoding="utf-8")
+          export = Path("crates/eutheto-export/src/lib.rs").read_text(encoding="utf-8")
 
-          def native_script(function):
-              match = re.search(r'(?s)fn ' + function + r'\(.*?let script = r#"(.*?)"#;', source)
+          def native_script(function, text=source):
+              match = re.search(
+                  r'(?s)fn ' + function + r'\(.*?let script = r(?P<hash>#?)"(?P<body>.*?)"(?P=hash);',
+                  text,
+              )
               if match is None:
                   raise SystemExit("Diagnostic source extraction failed")
-              return match.group(1)
+              return match.group("body")
 
-          security = r'Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1" -ErrorAction Stop; '
-          management = r'Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1" -ErrorAction Stop; '
-
-          failed = False
           with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
               root = Path(directory)
               fixture = root / "fixture"
               fixture.write_text("synthetic diagnostic fixture", encoding="utf-8")
-              cases = [
-                  ("startup", "$null = 1", root, "", False),
-                  ("get-acl-autoload", "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
-                  ("get-acl-dotnet", "$null = [System.IO.Directory]::GetAccessControl($env:EUTHETO_PRIVATE_PATH)", root, "", False),
-                  ("get-acl-explicit", security + "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
-                  ("get-item-explicit", management + "$null = Get-Item -Force -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
-                  ("directory-acl-explicit", security + management + native_script("restrict_windows_acl"), root, "directory", False),
-                  ("ancestor-explicit", security + native_script("ensure_safe_ancestor_directory"), root, "", False),
-                  ("hard-links-explicit", management + native_script("ensure_path_has_no_windows_hard_links"), fixture, "", False),
-                  ("file-acl-explicit", security + management + native_script("restrict_windows_acl"), fixture, "file", False),
-                  ("startup-repeat", "$null = 1", root, "", False),
-              ]
-              for label, script, path, kind, inherit in cases:
+              marker = root / "unexpected-module-execution"
+              modules = root / "hostile-modules"
+              for module, commands in [
+                  ("Security", ["Get-Acl", "Set-Acl"]),
+                  ("Management", ["Get-Item", "Test-Path"]),
+              ]:
+                  name = "Microsoft.PowerShell." + module
+                  path = modules / name
+                  path.mkdir(parents=True)
+                  (path / (name + ".psd1")).write_text(
+                      "@{RootModule='" + name + ".psm1';ModuleVersion='99.0.0';FunctionsToExport=@("
+                      + ",".join("'" + command + "'" for command in commands) + ")}",
+                      encoding="utf-8",
+                  )
+                  (path / (name + ".psm1")).write_text(
+                      "[System.IO.File]::WriteAllText($env:EUTHETO_DIAGNOSTIC_MARKER, 'executed')\n"
+                      + "\n".join("function " + command + " { throw 'untrusted module executed' }" for command in commands),
+                      encoding="utf-8",
+                  )
+
+              def run_case(label, script, path, kind="", create=False, expected=True, module=None):
                   environment = {
                       key: value for key, value in os.environ.items()
-                      if inherit or key.upper() != "PSMODULEPATH"
+                      if key.upper() != "PSMODULEPATH"
                   }
+                  # Stronger control than production: intentionally retain the hostile path.
+                  environment["PSModulePath"] = str(modules)
                   environment["EUTHETO_PRIVATE_PATH"] = str(path)
                   environment["EUTHETO_PRIVATE_KIND"] = kind
+                  environment["EUTHETO_PRIVATE_CREATE"] = str(create).lower()
+                  environment["EUTHETO_DIAGNOSTIC_MARKER"] = str(marker)
+                  environment["EUTHETO_DIAGNOSTIC_MODULE"] = str(module or "")
                   started = time.perf_counter()
                   result = subprocess.run(
                       ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -95,9 +112,39 @@ jobs:
                   )
                   elapsed = (time.perf_counter() - started) * 1000
                   print(f"{label}: {elapsed:.0f} ms; exit {result.returncode}", flush=True)
-                  failed |= result.returncode != 0
-          if failed:
-              raise SystemExit("Private-path diagnostic failed; subprocess output withheld")
+                  if (result.returncode == 0) != expected or marker.exists():
+                      raise SystemExit(label + ": unexpected security outcome; output withheld")
+                  if create and path.exists() != expected:
+                      raise SystemExit(label + ": unexpected publication state")
+
+              private = root / "private"
+              run_case("store-create", native_script("create_private_directory"), private, create=True)
+              run_case("store-ancestor", native_script("ensure_safe_ancestor_directory"), private)
+              run_case("store-directory-acl", native_script("restrict_windows_acl"), private, kind="directory")
+              run_case("store-file-acl", native_script("restrict_windows_acl"), fixture, kind="file")
+              run_case("store-hard-links", native_script("ensure_path_has_no_windows_hard_links"), fixture)
+              publication = native_script("windows_private_publication_directory", export)
+              staging = root / "staging"
+              run_case("export-create", publication, staging, create=True)
+              run_case("export-verify", publication, staging)
+              for module in ["Security", "Management"]:
+                  expression = rf"($PSHOME + '\Modules\Microsoft.PowerShell.{module}\Microsoft.PowerShell.{module}.psd1')"
+                  if publication.count(expression) != 1:
+                      raise SystemExit("Diagnostic import injection point was not unique")
+                  broken = publication.replace(expression, "$env:EUTHETO_DIAGNOSTIC_MODULE")
+                  destination = root / ("missing-" + module)
+                  run_case(
+                      "missing-" + module, broken, destination, create=True, expected=False,
+                      module=root / "missing.psd1",
+                  )
+                  malformed = root / "malformed.psd1"
+                  malformed.write_text("@{ ModuleVersion =", encoding="utf-8")
+                  destination = root / ("unloadable-" + module)
+                  run_case(
+                      "unloadable-" + module, broken, destination, create=True, expected=False,
+                      module=malformed,
+                  )
+              print("PASS: trusted built-ins, existing checks, and fail-closed imports", flush=True)
 
   select-targets:
     name: Select portable target matrix
@@ -364,6 +411,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          cargo test --locked --package eutheto-store --test store windows_
           cargo test --locked --all-targets --package eutheto-export
           cargo test --locked --all-targets --package eutheto-desktop
           cargo test --locked --package eutheto-desktop --lib native_file::tests::windows_final_file_reparse_point_is_rejected -- --ignored --exact
