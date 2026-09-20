@@ -60,22 +60,24 @@ jobs:
                   raise SystemExit("Diagnostic source extraction failed")
               return match.group(1)
 
+          security = r'Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1" -ErrorAction Stop; '
+          management = r'Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1" -ErrorAction Stop; '
+
           failed = False
           with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
               root = Path(directory)
               fixture = root / "fixture"
               fixture.write_text("synthetic diagnostic fixture", encoding="utf-8")
               cases = [
-                  ("startup-inherited", "$null = 1", root, "", True),
-                  ("get-acl-inherited", "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", True),
                   ("startup", "$null = 1", root, "", False),
-                  ("identity", "$null = [System.Security.Principal.WindowsIdentity]::GetCurrent().User", root, "", False),
-                  ("get-acl", "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
-                  ("ancestor", native_script("ensure_safe_ancestor_directory"), root, "", False),
-                  ("create", native_script("create_private_directory"), root / "created", "", False),
-                  ("directory-acl", native_script("restrict_windows_acl"), root, "directory", False),
-                  ("hard-links", native_script("ensure_path_has_no_windows_hard_links"), fixture, "", False),
-                  ("file-acl", native_script("restrict_windows_acl"), fixture, "file", False),
+                  ("get-acl-autoload", "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
+                  ("get-acl-dotnet", "$null = [System.IO.Directory]::GetAccessControl($env:EUTHETO_PRIVATE_PATH)", root, "", False),
+                  ("get-acl-explicit", security + "$null = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
+                  ("get-item-explicit", management + "$null = Get-Item -Force -LiteralPath $env:EUTHETO_PRIVATE_PATH", root, "", False),
+                  ("directory-acl-explicit", security + management + native_script("restrict_windows_acl"), root, "directory", False),
+                  ("ancestor-explicit", security + native_script("ensure_safe_ancestor_directory"), root, "", False),
+                  ("hard-links-explicit", management + native_script("ensure_path_has_no_windows_hard_links"), fixture, "", False),
+                  ("file-acl-explicit", security + management + native_script("restrict_windows_acl"), fixture, "file", False),
                   ("startup-repeat", "$null = 1", root, "", False),
               ]
               for label, script, path, kind, inherit in cases:
