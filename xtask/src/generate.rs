@@ -50,6 +50,7 @@ const COMMAND_CATALOG: &[&str] = &[
     "people_csv_source_open",
     "people_csv_source_close",
     "people_csv_detect",
+    "people_csv_record_sample",
     "people_csv_preview",
     "people_csv_apply",
     "people_csv_preview_discard",
@@ -910,6 +911,7 @@ export type OperationPurposeV1 =
   | { readonly kind: "applyReviewedGeneration" }
   | { readonly kind: "csvSourceOpen" }
   | { readonly kind: "csvDetect" }
+  | { readonly kind: "csvSample" }
   | { readonly kind: "csvPreview" }
   | { readonly kind: "csvApply" }
   | { readonly kind: "csvReportSave" }
@@ -1122,6 +1124,13 @@ export interface PeopleCsvDetectionV1 {
         readonly samples: readonly { readonly record: number; readonly cells: readonly { readonly text: string; readonly truncated: boolean }[] }[] }
     | { readonly status: "rejected"; readonly dialect: PeopleCsvDialect; readonly error: { readonly code: PeopleCsvErrorCode; readonly record?: number } }
   )[];
+}
+export interface PeopleCsvSampleV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly dialect: PeopleCsvDialect;
+  readonly record: number;
+  readonly cells: readonly { readonly text: string; readonly truncated: boolean }[] | null;
 }
 export type PeopleCsvDisposition = "reviewable" | "blocked" | "noChanges";
 export type PeopleCsvRejectionCode = "columnCount" | "invalidCell" | "invalidReference" | "missingName" | "invalidPerson";
@@ -3878,6 +3887,15 @@ const csvDetectionShape = shape<PeopleCsvDetectionV1>({
 const isCsvDetection = (value: unknown): value is PeopleCsvDetectionV1 =>
   boundedJson(value, 65_536) && csvDetectionShape(value) &&
   value.dialects.length === 3 && new Set(value.dialects.map((item) => item.dialect)).size === 3;
+const csvSampleShape = shape<PeopleCsvSampleV1>({
+  schemaVersion: literal(1), sourceId: isUuid, dialect: isCsvDialect, record: isCsvRecord,
+  cells: nullable(arrayOf(shape({
+    text: (value: unknown): value is string => isCsvText(value, 256), truncated: isBoolean,
+  }), 64)),
+});
+const isCsvSample = (value: unknown): value is PeopleCsvSampleV1 =>
+  boundedJson(value, 131_072) && csvSampleShape(value) &&
+  (value.cells === null || value.cells.length >= 1);
 const isCsvRejectedRow = shape<PeopleCsvRejectedRow>({ record: isCsvRecord, code: isCsvRejection });
 const isCsvRejectedRows = (value: unknown): value is readonly PeopleCsvRejectedRow[] =>
   boundedJson(value, 65_536) && arrayOf(isCsvRejectedRow, 200)(value);
@@ -3944,7 +3962,7 @@ const isCsvApply = shape<PeopleCsvApplyV1>({
 const isCsvSaved = shape<PeopleCsvReportSavedV1>({ schemaVersion: literal(1), previewId: isUuid });
 const isCsvClosed = shape<{ readonly schemaVersion: 1 }>({ schemaVersion: literal(1) });
 
-function newRequestId(): UuidV7 {
+export function newUuidV7(): UuidV7 {
   const bytes = window.crypto.getRandomValues(new Uint8Array(16));
   const timestamp = BigInt(Date.now());
   bytes[0] = Number((timestamp >> 40n) & 0xffn);
@@ -4072,6 +4090,7 @@ type SetupOperationCommand =
   | "workforce_apply_reviewed_generation"
   | "people_csv_source_open"
   | "people_csv_detect"
+  | "people_csv_record_sample"
   | "people_csv_preview"
   | "people_csv_apply"
   | "people_csv_rejected_rows_save";
@@ -4188,12 +4207,12 @@ class OperationScope<C extends OperationContextV1> {
     // Capture before the prepare await: later edits to a Vue draft cannot rebind this request.
     const snapshot: unknown = JSON.parse(JSON.stringify(payload));
     if (!isObject(snapshot)) throw new RangeError("The operation request must be a JSON object");
-    const requestId = newRequestId();
+    const requestId = newUuidV7();
     const context = this.context;
     const prepared = call(
       "operation_prepare",
       {
-        requestId: newRequestId(),
+        requestId: newUuidV7(),
         schemaVersion: 1,
         purpose,
         context,
@@ -4220,7 +4239,7 @@ class OperationScope<C extends OperationContextV1> {
         call(
           "operation_cancel",
           {
-            requestId: newRequestId(),
+            requestId: newUuidV7(),
             schemaVersion: 1,
             operationId: result.operationId,
           },
@@ -4234,7 +4253,7 @@ class OperationScope<C extends OperationContextV1> {
         call(
           "operation_release",
           {
-            requestId: newRequestId(),
+            requestId: newUuidV7(),
             schemaVersion: 1,
             operationId: result.operationId,
           },
@@ -4464,7 +4483,7 @@ export function discardSettingsPreview(target: SettingsPreviewTarget): Promise<A
   );
   if (!guard(target)) throw new RangeError("A canonical settings preview target is required");
   return call("settings_import_nonsecret", {
-    action: "discard", schemaVersion: 1, requestId: newRequestId(), target: { ...target },
+    action: "discard", schemaVersion: 1, requestId: newUuidV7(), target: { ...target },
   }, isSettingsDiscarded, { maximumBytes: SETTINGS_WIRE_BYTES, revisionKey: null });
 }
 
@@ -4476,7 +4495,7 @@ export function exportNonsecretSettings(
 }
 
 export function getLicenseInventory(): Promise<ApiResponseDto<LicenseInventoryV2>> {
-  return call("app_get_license_inventory", { requestId: newRequestId() }, isLicenseInventory,
+  return call("app_get_license_inventory", { requestId: newUuidV7() }, isLicenseInventory,
     { maximumBytes: INVENTORY_WIRE_BYTES, revisionKey: null });
 }
 
@@ -4525,7 +4544,7 @@ export class PeopleCsvFlow {
       return;
     }
     await call(resource.kind === "source" ? "people_csv_source_close" : "people_csv_preview_discard", {
-      schemaVersion: 1, requestId: newRequestId(), scenarioId: this.#scenarioId,
+      schemaVersion: 1, requestId: newUuidV7(), scenarioId: this.#scenarioId,
       target: { kind: "creator", operationId, requestId: resource.operation.requestId },
     }, isCsvClosed, { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
     this.#resources.delete(resource);
@@ -4581,6 +4600,20 @@ export class PeopleCsvFlow {
       { schemaVersion: 1, sourceId }, isCsvDetection, CSV_SMALL_WIRE_BYTES, null, onProgress));
   }
 
+  sample(scope: SetupOperationScope, sourceId: UuidV7,
+    input: { readonly dialect: PeopleCsvDialect; readonly record: number },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PeopleCsvSampleV1> {
+    this.#scope(scope);
+    const { dialect, record } = input;
+    if (!isUuid(sourceId) || !isCsvDialect(dialect) || !isCsvRecord(record))
+      throw new RangeError("CSV inspection requires a valid source, dialect, and logical record");
+    const guard = (value: unknown): value is PeopleCsvSampleV1 =>
+      isCsvSample(value) && value.sourceId === sourceId && value.dialect === dialect && value.record === record;
+    return this.#track(scope.run("people_csv_record_sample", { kind: "csvSample" },
+      { schemaVersion: 1, sourceId, dialect, record }, guard, CSV_SMALL_WIRE_BYTES, null, onProgress));
+  }
+
   preview(scope: SetupOperationScope, sourceId: UuidV7,
     input: { readonly mapping: PeopleCsvMapping; readonly decisions: readonly PeopleCsvDecision[] },
     onProgress?: (event: OperationProgressV1) => void,
@@ -4620,7 +4653,7 @@ export class PeopleCsvFlow {
   }
 
   async closeSource(sourceId: UuidV7): Promise<void> {
-    await call("people_csv_source_close", { schemaVersion: 1, requestId: newRequestId(),
+    await call("people_csv_source_close", { schemaVersion: 1, requestId: newUuidV7(),
       scenarioId: this.#scenarioId, target: { kind: "source", sourceId } },
       isCsvClosed, { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
     for (const resource of this.#resources)
@@ -4628,7 +4661,7 @@ export class PeopleCsvFlow {
   }
 
   async discardPreview(previewId: UuidV7): Promise<void> {
-    await call("people_csv_preview_discard", { schemaVersion: 1, requestId: newRequestId(),
+    await call("people_csv_preview_discard", { schemaVersion: 1, requestId: newUuidV7(),
       scenarioId: this.#scenarioId, target: { kind: "preview", previewId } },
       isCsvClosed, { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
     for (const resource of this.#resources)
@@ -4637,7 +4670,7 @@ export class PeopleCsvFlow {
 
   rejectedRows(previewId: UuidV7): Promise<ApiResponseDto<PeopleCsvRejectedRowsV1>> {
     if (this.#disposed) throw inactiveOperation();
-    return call("people_csv_rejected_rows", { schemaVersion: 1, requestId: newRequestId(),
+    return call("people_csv_rejected_rows", { schemaVersion: 1, requestId: newUuidV7(),
       scenarioId: this.#scenarioId, previewId },
       (value: unknown): value is PeopleCsvRejectedRowsV1 => isCsvReport(value) && value.previewId === previewId,
       { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null });
@@ -4666,57 +4699,57 @@ export class PeopleCsvFlow {
 }
 
 export function getAppInfo(): Promise<ApiResponseDto<AppInfoDto>> {
-  return call("app_get_info", { requestId: newRequestId() }, isAppInfo);
+  return call("app_get_info", { requestId: newUuidV7() }, isAppInfo);
 }
 
 export function getAppCapabilities(): Promise<ApiResponseDto<AppCapabilitiesDto>> {
-  return call("app_get_capabilities", { requestId: newRequestId() }, isCapabilities);
+  return call("app_get_capabilities", { requestId: newUuidV7() }, isCapabilities);
 }
 
 export function getAppPathsSummary(): Promise<ApiResponseDto<AppPathsSummaryDto>> {
-  return call("app_get_paths_summary", { requestId: newRequestId() }, isPaths,
+  return call("app_get_paths_summary", { requestId: newUuidV7() }, isPaths,
     { maximumBytes: 136 * 1024, revisionKey: null });
 }
 
 export function previewSupportBundle(): Promise<ApiResponseDto<SupportPreviewDto>> {
-  return call("app_create_support_bundle_preview", { requestId: newRequestId() }, isSupportPreview);
+  return call("app_create_support_bundle_preview", { requestId: newUuidV7() }, isSupportPreview);
 }
 export function listDomainPacks(): Promise<ApiResponseDto<readonly DomainPackDescriptorDto[]>> {
-  return call("pack_list", { requestId: newRequestId() }, arrayOf(isDomainDescriptor));
+  return call("pack_list", { requestId: newUuidV7() }, arrayOf(isDomainDescriptor));
 }
 
 export function describeDomainPack(packId: string): Promise<ApiResponseDto<DomainPackMetadataDto>> {
-  return call("pack_describe", { requestId: newRequestId(), packId }, isDomainMetadata);
+  return call("pack_describe", { requestId: newUuidV7(), packId }, isDomainMetadata);
 }
 
 export function listSolvers(): Promise<ApiResponseDto<readonly SolverDescriptorDto[]>> {
-  return call("solver_list", { requestId: newRequestId() }, arrayOf(isSolverDescriptor));
+  return call("solver_list", { requestId: newUuidV7() }, arrayOf(isSolverDescriptor));
 }
 
 export function describeSolver(backendId: string): Promise<ApiResponseDto<SolverDescriptorDto>> {
-  return call("solver_describe", { requestId: newRequestId(), backendId }, isSolverDescriptor);
+  return call("solver_describe", { requestId: newUuidV7(), backendId }, isSolverDescriptor);
 }
 
 export function getSolverSupportMatrix(): Promise<ApiResponseDto<SolverSupportMatrixDto>> {
-  return call("solver_get_support_matrix", { requestId: newRequestId() }, isSolverSupportMatrix);
+  return call("solver_get_support_matrix", { requestId: newUuidV7() }, isSolverSupportMatrix);
 }
 
 export function getDeferredSolverGates(): Promise<
   ApiResponseDto<readonly DeferredSolverGateDto[]>
 > {
-  return call("solver_get_deferred_gates", { requestId: newRequestId() }, arrayOf(isDeferredGate));
+  return call("solver_get_deferred_gates", { requestId: newUuidV7() }, arrayOf(isDeferredGate));
 }
 
 export function listProjects(
   scope: ProjectScope = "active",
 ): Promise<ApiResponseDto<readonly ProjectListItemV1[]>> {
-  return call("project_list", { requestId: newRequestId(), schemaVersion: 1, scope }, arrayOf(isProjectListItem));
+  return call("project_list", { requestId: newUuidV7(), schemaVersion: 1, scope }, arrayOf(isProjectListItem));
 }
 
 export function openProject(scenarioId: UuidV7): Promise<ApiResponseDto<ProjectListItemV1>> {
   const guard = (value: unknown): value is ProjectListItemV1 =>
     isProjectListItem(value) && value.scenarioId === scenarioId && value.lastOpenedAt !== null;
-  return call("project_open", { requestId: newRequestId(), schemaVersion: 1, scenarioId }, guard, {
+  return call("project_open", { requestId: newUuidV7(), schemaVersion: 1, scenarioId }, guard, {
     maximumBytes: 136 * 1024, revisionKey: "revision",
   });
 }
@@ -4726,7 +4759,7 @@ export function getProjectMetadata(
 ): Promise<ApiResponseDto<ProjectMetadataDto>> {
   return call(
     "project_get_metadata",
-    { requestId: newRequestId(), scenarioId },
+    { requestId: newUuidV7(), scenarioId },
     isProjectMetadata,
     { revisionKey: "revision" },
   );
@@ -4738,7 +4771,7 @@ export function createProject(input: {
   readonly domainPack: DomainPackRef;
   readonly settings: CalendarSettingsV1;
 }): Promise<ApiResponseDto<ProjectMetadataDto>> {
-  return call("project_create", { requestId: newRequestId(), schemaVersion: 1, ...input }, isProjectMetadata, {
+  return call("project_create", { requestId: newUuidV7(), schemaVersion: 1, ...input }, isProjectMetadata, {
     maximumBytes: 136 * 1024, revisionKey: "revision",
   });
 }
@@ -4748,7 +4781,7 @@ export function duplicateProject(input: {
   readonly expectedRevision: Revision;
   readonly title: string;
 }): Promise<ApiResponseDto<ProjectMetadataDto>> {
-  return call("project_duplicate", { requestId: newRequestId(), ...input }, isProjectMetadata, {
+  return call("project_duplicate", { requestId: newUuidV7(), ...input }, isProjectMetadata, {
     revisionKey: "revision",
   });
 }
@@ -4762,7 +4795,7 @@ export function setProjectArchived(input: {
   return call(
     command,
     {
-      requestId: newRequestId(),
+      requestId: newUuidV7(),
       scenarioId: input.scenarioId,
       expectedRevision: input.expectedRevision,
     },
@@ -4776,7 +4809,7 @@ export function deleteProject(
 ): Promise<ApiResponseDto<EmptyDto>> {
   return call(
     "project_delete",
-    { requestId: newRequestId(), scenarioId, expectedRevision },
+    { requestId: newUuidV7(), scenarioId, expectedRevision },
     isEmpty,
   );
 }
@@ -4844,7 +4877,7 @@ export class PortableReviewFlow {
       return;
     }
     await call("project_operation_cancel", {
-      schemaVersion: 1, requestId: newRequestId(),
+      schemaVersion: 1, requestId: newUuidV7(),
       target: { kind: "creator", operationId, requestId: review.operation.requestId },
     }, isPortableDiscarded, { maximumBytes: PORTABLE_WIRE_BYTES, revisionKey: null });
     // An acknowledgement is not settlement; retain the creator to repeat cleanup after a late reply.
@@ -5267,7 +5300,7 @@ export function applyScenarioCommand(input: {
   readonly command: ScenarioCommand;
   readonly truncateRedo: boolean;
 }): Promise<ApiResponseDto<CommandResultDto>> {
-  return call("scenario_apply_command", { requestId: newRequestId(), ...input }, isCommandResult, {
+  return call("scenario_apply_command", { requestId: newUuidV7(), ...input }, isCommandResult, {
     revisionKey: "newRevision",
   });
 }
@@ -5281,7 +5314,7 @@ export function applyScenarioBatch(input: {
   readonly commands: readonly ScenarioCommand[];
   readonly truncateRedo: boolean;
 }): Promise<ApiResponseDto<CommandResultDto>> {
-  return call("scenario_apply_batch", { requestId: newRequestId(), ...input }, isCommandResult, {
+  return call("scenario_apply_batch", { requestId: newUuidV7(), ...input }, isCommandResult, {
     revisionKey: "newRevision",
   });
 }
@@ -5292,7 +5325,7 @@ export function undoScenario(
 ): Promise<ApiResponseDto<CommandResultDto>> {
   return call(
     "scenario_undo",
-    { requestId: newRequestId(), scenarioId, expectedRevision },
+    { requestId: newUuidV7(), scenarioId, expectedRevision },
     isCommandResult,
     { revisionKey: "newRevision" },
   );
@@ -5304,7 +5337,7 @@ export function redoScenario(
 ): Promise<ApiResponseDto<CommandResultDto>> {
   return call(
     "scenario_redo",
-    { requestId: newRequestId(), scenarioId, expectedRevision },
+    { requestId: newUuidV7(), scenarioId, expectedRevision },
     isCommandResult,
     { revisionKey: "newRevision" },
   );
@@ -5316,7 +5349,7 @@ export function getScenarioHistoryPage(
   if (!isHistoryRequest(request)) throw new RangeError("The history page request is invalid");
   return call(
     "scenario_get_history_page",
-    { requestId: newRequestId(), ...request },
+    { requestId: newUuidV7(), ...request },
     (value): value is HistoryPageDtoV1 => isHistoryPage(value) &&
       value.revision === request.expectedRevision && value.entries.length <= request.limit,
     {
@@ -5329,7 +5362,7 @@ export function getScenarioHistoryPage(
 
 export function listSolutions(scenarioId: UuidV7): Promise<ApiResponseDto<SolutionListDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     scenarioId,
   } satisfies SolutionListRequestV1;
@@ -5341,7 +5374,7 @@ export function getSolutionSummary(
   solutionId: SolutionId,
 ): Promise<ApiResponseDto<SolutionDetailDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     scenarioId,
     solutionId,
@@ -5357,7 +5390,7 @@ export function getSolutionView(input: {
   readonly viewId: string;
 }): Promise<ApiResponseDto<SolutionViewDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionViewRequestV1;
@@ -5370,7 +5403,7 @@ export function selectSolution(input: {
   readonly solutionId: SolutionId;
 }): Promise<ApiResponseDto<SolutionSummaryDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionSelectRequestV1;
@@ -5382,7 +5415,7 @@ export function verifySolution(
   solutionId: SolutionId,
 ): Promise<ApiResponseDto<SolutionVerificationDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     scenarioId,
     solutionId,
@@ -5398,7 +5431,7 @@ export function compareSolutions(input: {
   readonly candidateSolutionId: SolutionId;
 }): Promise<ApiResponseDto<SolutionComparisonDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionCompareRequestV1;
@@ -5412,7 +5445,7 @@ export function explainSolution(input: {
   readonly request: ExplanationRequestV1;
 }): Promise<ApiResponseDto<SolutionExplanationDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionExplainRequestV1;
@@ -5428,7 +5461,7 @@ export function startCounterfactual(input: {
 }): Promise<ApiResponseDto<SolutionStartCounterfactualDtoV1>> {
   assertAssignmentValue(input.condition.value);
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionStartCounterfactualRequestV1;
@@ -5443,7 +5476,7 @@ export function cancelCounterfactual(input: {
   readonly jobId: CounterfactualJobId;
 }): Promise<ApiResponseDto<SolutionCancelCounterfactualDtoV1>> {
   const request = {
-    cancelRequestId: newRequestId(),
+    cancelRequestId: newUuidV7(),
     schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionCancelCounterfactualRequestV1;
@@ -5453,7 +5486,7 @@ export function cancelCounterfactual(input: {
 }
 
 export function getApplicationSettings(): Promise<ApiResponseDto<ApplicationSettingsSnapshotV1>> {
-  return call("settings_get", { requestId: newRequestId(), schemaVersion: 1 }, isSettingsSnapshot, {
+  return call("settings_get", { requestId: newUuidV7(), schemaVersion: 1 }, isSettingsSnapshot, {
     maximumBytes: SETTINGS_WIRE_BYTES, revisionKey: "libraryRevision",
   });
 }
@@ -5466,7 +5499,7 @@ export function updateSetting<K extends ApplicationSettingKey>(
   if (!isRevision(expectedLibraryRevision) || !applicationSettingGuards[key](value))
     throw new RangeError("A valid setting and captured library revision are required");
   return call("settings_update", {
-    requestId: newRequestId(), schemaVersion: 1, key, value, expectedLibraryRevision,
+    requestId: newUuidV7(), schemaVersion: 1, key, value, expectedLibraryRevision,
   }, settingsWriteGuard(expectedLibraryRevision), {
     maximumBytes: SETTINGS_WIRE_BYTES, revisionKey: "libraryRevision",
   });
@@ -5479,7 +5512,7 @@ export function resetSettingsSection(
   if (!isRevision(expectedLibraryRevision))
     throw new RangeError("A captured library revision is required");
   return call("settings_reset_section", {
-    requestId: newRequestId(), schemaVersion: 1, key, expectedLibraryRevision,
+    requestId: newUuidV7(), schemaVersion: 1, key, expectedLibraryRevision,
   }, settingsWriteGuard(expectedLibraryRevision), {
     maximumBytes: SETTINGS_WIRE_BYTES, revisionKey: "libraryRevision",
   });

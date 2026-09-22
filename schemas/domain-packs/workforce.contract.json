@@ -383,6 +383,18 @@
       "minLength": 1,
       "maxLength": 64
     },
+    "SetupLocalTimeResolutionParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local"],
+      "properties": {
+        "local": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
     "SetupSettingsPreparationParameters": {
       "type": "object",
       "additionalProperties": false,
@@ -763,7 +775,9 @@
         "activeRequiredRules",
         "configuredTypeMemberships",
         "entities",
+        "initialWorkWindow",
         "lockedAssignments",
+        "planningDates",
         "preferences",
         "requiredRules",
         "settings"
@@ -771,6 +785,12 @@
       "properties": {
         "settings": {
           "$ref": "#/$defs/SetupScenarioSettings"
+        },
+        "planningDates": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "initialWorkWindow": {
+          "$ref": "#/$defs/DateRange"
         },
         "entities": {
           "type": "array",
@@ -1717,10 +1737,28 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "fieldPath",
         "issue",
+        "message",
         "origin"
       ],
       "properties": {
+        "fieldPath": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "scenario-change-path",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            { "type": "null" }
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
         "origin": {
           "$ref": "#/$defs/SetupShiftOrigin"
         },
@@ -2615,6 +2653,23 @@
             "data": {
               "$ref": "#/$defs/SetupScopeInspection"
             }
+          }
+        }
+      }
+    },
+    "SetupLocalTimeResolutionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "localTimeResolution" },
+            "data": { "$ref": "#/$defs/ResolvedLocalTime" }
           }
         }
       }
@@ -6575,6 +6630,34 @@
       ]
     },
     {
+      "id": "official.workforce.setup.local_time_resolution",
+      "sources": ["stored"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.local_time_resolution.title",
+        "defaultText": "Resolve a local time"
+      },
+      "description": {
+        "key": "official.workforce.setup.local_time_resolution.description",
+        "defaultText": "Read-only resolution of one bounded local wall-time input against captured native scenario timezone and gap/overlap policy. Returns the exact instant, original local intent and selected offset. No mutation, continuation, caller-supplied settings or presentation-window restriction is accepted."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupLocalTimeResolutionParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupLocalTimeResolutionResult" },
+      "validExamples": [
+        { "local": "2026-03-08T02:30:00" },
+        { "local": "2026-11-01T01:30:00" }
+      ],
+      "invalidExamples": [
+        {},
+        { "local": "" },
+        { "local": 12 },
+        { "local": "12345678901234567890123456789012345678901234567890123456789012345" },
+        { "local": "2026-11-01T01:30:00", "timeZone": "Etc/UTC" },
+        { "local": "2026-11-01T01:30:00", "offsetSeconds": 0 },
+        { "local": "2026-11-01T01:30:00", "limit": 1 }
+      ]
+    },
+    {
       "id": "official.workforce.setup.overview",
       "sources": ["stored", "commandPreview"],
       "supportsContinuation": false,
@@ -6584,7 +6667,7 @@
       },
       "description": {
         "key": "official.workforce.setup.overview.description",
-        "defaultText": "Read captured scenario settings and exact stored structural counts, including all 13 entity kinds and stored active flags. No completeness, applicability or feasibility judgment is inferred."
+        "defaultText": "Read captured scenario settings, native half-open planning dates, an initial work window of up to seven civil dates, and exact stored structural counts, including all 13 entity kinds and stored active flags. No completeness, applicability or feasibility judgment is inferred."
       },
       "parameterSchema": {
         "$ref": "#/$defs/SetupEmptyParameters"

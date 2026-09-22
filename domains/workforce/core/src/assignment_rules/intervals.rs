@@ -180,5 +180,7 @@ fn overflow(owner: EntityId, date: Option<Date>) -> AssignmentRuleError {
         kind: TemporalIssueKind::DateOverflow,
         entity_id: Some(owner),
         local_date: date,
+        endpoint: None,
+        occurrence_date: None,
     })
 }

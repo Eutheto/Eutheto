@@ -36,6 +36,7 @@ pub(super) enum OperationPurposeV1 {
     ApplyReviewedGeneration,
     CsvSourceOpen,
     CsvDetect,
+    CsvSample,
     CsvPreview,
     CsvApply,
     CsvReportSave,

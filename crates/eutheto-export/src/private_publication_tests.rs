@@ -32,6 +32,7 @@ fn staged_report_does_not_inherit_shared_destination_permissions() -> TestResult
     powershell(
         r"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $users = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
 $inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
@@ -65,6 +66,7 @@ if (@($rules | Where-Object { $_.IdentityReference -eq $users }).Count -ne 1) {
     powershell(
         r"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $acl = Get-Acl -LiteralPath $env:EUTHETO_TEST_PATH
 $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))

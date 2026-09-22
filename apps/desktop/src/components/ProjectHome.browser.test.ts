@@ -685,6 +685,8 @@ describe("Real shell commands and route updates", () => {
                   lockedAssignments: 0,
                   preferences: 0,
                   requiredRules: 0,
+                  planningDates: { startDate: "2030-01-01", endDateExclusive: "2030-02-01" },
+                  initialWorkWindow: { startDate: "2030-01-01", endDateExclusive: "2030-01-08" },
                   settings: {
                     timeZone: "UTC",
                     locale: "en-US",

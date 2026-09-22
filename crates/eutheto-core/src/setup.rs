@@ -16,7 +16,7 @@ pub use eutheto_domain_api::{DomainSetupQueryV1, SetupContinuationV1, SetupQuery
 use eutheto_store::StoredProject;
 use eutheto_types::{
     AppError, CancellationToken, OperationControl, Revision, ScenarioCommand, ScenarioDocument,
-    ScenarioId,
+    ScenarioId, ValidationReport,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -88,7 +88,7 @@ impl EuthetoApp {
     ) -> Result<(), AppError> {
         self.setup_query_descriptor(view_id)?
             .validate_subject(source, false)
-            .map_err(|error| setup_domain_error(&error))
+            .map_err(setup_domain_error)
     }
 
     fn setup_query_descriptor(&self, view_id: &str) -> Result<&SetupQueryDescriptor, AppError> {
@@ -128,7 +128,7 @@ impl EuthetoApp {
                 },
                 query.continuation.is_some(),
             )
-            .map_err(|error| setup_domain_error(&error))?;
+            .map_err(setup_domain_error)?;
         descriptor
             .validate_parameters(
                 &query.parameters,
@@ -137,7 +137,7 @@ impl EuthetoApp {
                     ..ContractJsonLimits::DEFAULT
                 },
             )
-            .map_err(|error| setup_domain_error(&error))?;
+            .map_err(setup_domain_error)?;
         if let Some(cursor) = &query.continuation {
             if cursor.schema_version != 1 {
                 return Err(setup_invalid("/query/continuation/schemaVersion"));
@@ -151,9 +151,9 @@ impl EuthetoApp {
                     ..ContractJsonLimits::DEFAULT
                 },
             )
-            .map_err(|error| setup_domain_error(&error))?;
+            .map_err(setup_domain_error)?;
         }
-        bounded_json_size(query, QUERY_BYTES).map_err(|error| setup_domain_error(&error))?;
+        bounded_json_size(query, QUERY_BYTES).map_err(setup_domain_error)?;
         if let SetupSourceV2::CommandPreview { command } = source {
             preflight_setup_command(command, "/source/command", cancellation)
                 .map_err(|error| store_error(command_store_error(&error)))?;
@@ -229,7 +229,7 @@ fn build_setup_view(
     let document = &project.document;
     let pack = registry
         .require(&document.domain_pack.id)
-        .map_err(|error| setup_domain_error(&error))?;
+        .map_err(setup_domain_error)?;
     let context = SetupViewContext {
         revision: project.summary.revision,
         query_fingerprint: query_fingerprint(document, project.summary.revision, source, query)?,
@@ -245,7 +245,7 @@ fn build_setup_view(
                     },
                     &control,
                 )
-                .map_err(|error| setup_domain_error(&error))?;
+                .map_err(setup_domain_error)?;
             if let Some(reconciliation) = output.reconciliation {
                 apply_reconciled_command_with_registry(
                     document,
@@ -288,8 +288,7 @@ fn build_setup_view(
         }
     };
     control.check().map_err(operation_interrupted)?;
-    let data_bytes = bounded_json_size(&view.data, MAX_VIEW_BYTES)
-        .map_err(|error| setup_domain_error(&error))?;
+    let data_bytes = bounded_json_size(&view.data, MAX_VIEW_BYTES).map_err(setup_domain_error)?;
     let result = ScenarioSetupViewResultV2 {
         schema_version: 2,
         scenario_id: document.scenario_id,
@@ -302,7 +301,7 @@ fn build_setup_view(
             .checked_add(FRAME_BYTES)
             .ok_or_else(resource_limit_error)?,
     )
-    .map_err(|error| setup_domain_error(&error))?;
+    .map_err(setup_domain_error)?;
     control.check().map_err(operation_interrupted)?;
     Ok(result)
 }
@@ -342,12 +341,17 @@ fn check_cancelled(cancellation: &CancellationToken) -> Result<(), AppError> {
 fn reconciliation_error(error: ReconciledCommandError) -> AppError {
     match error {
         ReconciledCommandError::Command(error) => store_error(command_store_error(&error)),
-        ReconciledCommandError::Reconciliation(error) => setup_domain_error(&error),
+        ReconciledCommandError::Reconciliation(error) => setup_domain_error(error),
     }
 }
 
-fn setup_domain_error(error: &DomainPackError) -> AppError {
-    domain_interruption(error).unwrap_or_else(|| setup_invalid("/query"))
+fn setup_domain_error(error: DomainPackError) -> AppError {
+    match error {
+        DomainPackError::SetupValidation(issue) => AppError::Validation(ValidationReport {
+            issues: vec![*issue],
+        }),
+        other => domain_interruption(&other).unwrap_or_else(|| setup_invalid("/query")),
+    }
 }
 
 fn setup_invalid(path: &str) -> AppError {

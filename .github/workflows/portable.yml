@@ -300,6 +300,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          cargo test --locked --package eutheto-store --test store windows_
           cargo test --locked --all-targets --package eutheto-export
           cargo test --locked --all-targets --package eutheto-desktop
           cargo test --locked --package eutheto-desktop --lib native_file::tests::windows_final_file_reparse_point_is_rejected -- --ignored --exact

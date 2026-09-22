@@ -5200,8 +5200,10 @@ fn ensure_safe_ancestor_directory(
     _metadata: &std::fs::Metadata,
 ) -> Result<(), StoreError> {
     use std::process::{Command, Stdio};
+    // Autoload discovery can dominate each path check; use interpreter-owned manifests.
     let script = r#"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $allowed = [System.Collections.Generic.HashSet[string]]::new()
 $allowed.Add($identity.User.Value) | Out-Null
@@ -5436,6 +5438,7 @@ fn ensure_path_has_no_windows_hard_links(path: &Path) -> Result<(), StoreError> 
     use std::process::{Command, Stdio};
     let script = r#"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
 $item = Get-Item -Force -LiteralPath $env:EUTHETO_PRIVATE_PATH
 if ($item.LinkType -eq 'HardLink') {
   throw 'private storage files may not have additional hard links'
@@ -5531,6 +5534,8 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> Result<(), StoreError> 
     use std::process::{Command, Stdio};
     let script = r#"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
 $path = $env:EUTHETO_PRIVATE_PATH
 $isDirectory = $env:EUTHETO_PRIVATE_KIND -eq 'directory'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User

@@ -53,8 +53,8 @@ use setup_boundary::{
 mod people_csv;
 use people_csv::{
     CsvCustody, people_csv_apply, people_csv_detect, people_csv_preview,
-    people_csv_preview_discard, people_csv_rejected_rows, people_csv_rejected_rows_save,
-    people_csv_source_close, people_csv_source_open,
+    people_csv_preview_discard, people_csv_record_sample, people_csv_rejected_rows,
+    people_csv_rejected_rows_save, people_csv_source_close, people_csv_source_open,
 };
 #[macro_use]
 mod settings;
@@ -1516,6 +1516,7 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "people_csv_source_open",
         "people_csv_source_close",
         "people_csv_detect",
+        "people_csv_record_sample",
         "people_csv_preview",
         "people_csv_apply",
         "people_csv_preview_discard",

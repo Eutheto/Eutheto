@@ -353,13 +353,13 @@ impl EuthetoApp {
                 check_cancelled(&cancellation)?;
                 let pack = registry
                     .require(&project.document.domain_pack.id)
-                    .map_err(|error| setup_domain_error(&error))?;
+                    .map_err(setup_domain_error)?;
                 let validated = pack
                     .validate_full(
                         &project.document,
                         &OperationControl::Cancellation(cancellation.clone()),
                     )
-                    .map_err(|error| setup_domain_error(&error))?;
+                    .map_err(setup_domain_error)?;
                 if validated.issues.len() > MAX_FULL_ISSUES {
                     return Err(resource_limit_error());
                 }

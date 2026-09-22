@@ -115,7 +115,7 @@ pub(crate) fn preview_generation_checked(
             Err(TemporalError::Issue(issue)) => PriorShift::Unresolved {
                 id,
                 origin: spec.origin(),
-                issue: issue.kind,
+                issue,
             },
             Err(error) => return Err(error),
         };

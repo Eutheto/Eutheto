@@ -36,6 +36,7 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 - Rust owns authoritative scenario state, validation, persistence, routing, solving, verification, scoring, explanations, and import/export.
 - Tauri is a client boundary, not the optimizer. Only the desktop API layer may invoke Tauri commands or subscribe to Tauri events.
 - Use the generated desktop API and its operation lifecycle rather than adding a parallel invoke/event wrapper. Bind work to the actual native window and immutable scenario/revision context; keep resource cleanup distinct from cancellation and durable mutation outcomes.
+- Work editors retain raw intent; Rust resolves local endpoints, recurrence and reconciliation. Bind approval to the immutable source, revision and prospective hash. Display windows do not limit command scope, and occurrence ledgers are never editable presentation fields.
 - Domain packs depend on the domain API and solver-neutral planning IR. They never construct backend objects or depend on Tauri, SQLite, credentials, network providers, OR-Tools, or Pumpkin.
 - Solver adapters depend on planning IR and solver APIs, never official domain packs.
 - AI may read bounded context and propose typed application commands. It cannot bypass validation, mutate persistence directly, access arbitrary files, execute shell/code, or act as solver/verifier authority.
@@ -70,6 +71,7 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 
 - Use human domain language before solver terminology: `Required`, `Preference`, `Optimize`, and `Repair plan`.
 - Rust remains authoritative; Pinia and query state are presentation caches only.
+- Full-record editor rebases preserve independent current fields and inactive raw input. Replace a raw field only when adopting different native meaning; resolve collections and nested objects as whole fields, not hidden element merges.
 - Every primary flow is keyboard-complete, has correct focus behavior and screen-reader names/announcements, and does not rely on color alone.
 - Canvas and charts require an equivalent accessible list/table representation.
 - Implement normal, empty, loading, stale, error, cancellation, and offline-capable states as applicable.

@@ -2253,8 +2253,11 @@ fn windows_private_publication_directory(path: &Path, create: bool) -> std::io::
     use std::process::{Command, Stdio};
     // Match the store's approved PowerShell/.NET creation boundary: the protected DACL
     // is supplied to CreateDirectory, not repaired after an inherited-ACL creation.
+    // Load interpreter-owned cmdlets without scanning unrelated installed modules.
     let script = r"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
 $path = $env:EUTHETO_PRIVATE_PATH
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'

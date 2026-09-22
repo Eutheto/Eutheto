@@ -4260,6 +4260,66 @@ async fn windows_authoritative_paths_apply_private_acls_and_refuse_links()
     Ok(())
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_authoritative_paths_reject_ambient_delete_ancestor() -> Result<(), Box<dyn Error>>
+{
+    use std::process::{Command, Stdio};
+
+    let directory = tempdir()?;
+    let shared = directory.path().join("shared");
+    let database = shared.join("private").join("library.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&database).await?;
+    drop(store);
+    let original = std::fs::read(&database)?;
+    let script = r"
+$ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+$users = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+$rights = [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
+$acl = Get-Acl -LiteralPath $env:EUTHETO_TEST_PATH
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+  $users, $rights, [System.Security.AccessControl.InheritanceFlags]::None,
+  [System.Security.AccessControl.PropagationFlags]::None,
+  [System.Security.AccessControl.AccessControlType]::Allow))
+Set-Acl -LiteralPath $env:EUTHETO_TEST_PATH -AclObject $acl
+$verified = Get-Acl -LiteralPath $env:EUTHETO_TEST_PATH
+$rules = @($verified.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
+if (@($rules | Where-Object {
+  $_.IdentityReference -eq $users -and
+  $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+  ($_.FileSystemRights -band $rights) -ne 0
+}).Count -ne 1) { throw 'ambient-delete fixture was not established' }
+";
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .env_remove("PSModulePath")
+        .env("EUTHETO_TEST_PATH", &shared)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    assert!(status.success(), "ambient-delete fixture setup failed");
+    assert!(matches!(
+        SqliteScenarioStore::open(&database).await,
+        Err(StoreError::PrivatePath(_))
+    ));
+    assert_eq!(std::fs::read(&database)?, original);
+    let unopened = shared.join("private").join("unopened.sqlite3");
+    assert!(matches!(
+        SqliteScenarioStore::open(&unopened).await,
+        Err(StoreError::PrivatePath(_))
+    ));
+    assert!(!unopened.exists());
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 async fn seed_and_advance_retained_revision(
     store: &SqliteScenarioStore,

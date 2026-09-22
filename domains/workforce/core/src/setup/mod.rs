@@ -8,6 +8,7 @@ mod overview;
 mod paging;
 mod people;
 mod rules;
+mod time;
 mod work;
 
 use contracts::{
@@ -162,6 +163,9 @@ fn project(
 ) -> Result<(WorkforceSetupViewDataV1, Option<DomainBatchCommand>)> {
     let result = match query {
         WorkforceSetupQueryV1::Overview(_) => overview::facts(document, position, budget),
+        WorkforceSetupQueryV1::LocalTimeResolution(parameters) => {
+            time::local_time_resolution(document, &parameters, position, budget)
+        }
         WorkforceSetupQueryV1::SettingsPreparation(parameters) => {
             commands::settings_preparation(parameters, position, budget)
         }

@@ -427,7 +427,9 @@ fn settings_preparation_respects_midnight_boundaries_without_a_display_window_ca
             },
             &control
         ),
-        Err(DomainPackError::InvalidPayload { .. })
+        Err(DomainPackError::SetupValidation(issue))
+            if issue.code == "workforce.time.gap"
+                && issue.field_path.as_deref() == Some("/query/parameters/dates/startDate")
     ));
     request.parameters["gapPolicy"] = json!("moveForward");
     assert!(view(&document, &request, context()).is_err());
@@ -476,7 +478,8 @@ fn settings_preparation_rejects_skipped_date_at_either_boundary() -> Result<(), 
                 },
                 &control
             ),
-            Err(DomainPackError::InvalidPayload { path, .. }) if path == expected_path
+            Err(DomainPackError::SetupValidation(issue))
+                if issue.field_path.as_deref() == Some(expected_path)
         ));
     }
     Ok(())

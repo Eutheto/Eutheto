@@ -220,6 +220,173 @@ describe("root project controller", () => {
     expect(home.state.operation).toBeNull();
   });
 
+  it("retains an unknown mutation without replay and reconciles only its recorded command", async () => {
+    const api = fakeApi([project]);
+    const home = createHome(api);
+    await home.load();
+    const commandId = "01900000-0000-7000-8000-000000000090";
+    const execute = vi.fn(() =>
+      Promise.reject(
+        Object.assign(new Error("The reply could not be accepted."), {
+          category: "protocol",
+          code: "ipc.invalid_response",
+        }),
+      ),
+    );
+    const operation = {
+      action: "people:apply",
+      label: "Import people",
+      execute,
+      success: () => "Saved",
+      mutation: {
+        scenarioId: project.scenarioId,
+        expectedRevision: project.revision,
+        commandId,
+        receipt: () => ({ kind: "applied" as const, revision: 8 }),
+      },
+    };
+    await expect(home.runOperation(operation)).rejects.toMatchObject({
+      code: "ipc.invalid_response",
+    });
+    expect(home.state.mutation?.outcome).toBe("outcomeUnknown");
+    await expect(home.runOperation(operation)).rejects.toBeInstanceOf(Error);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    api.listProjects.mockResolvedValue(response([{ ...project, revision: 8 }]));
+    const emptyPage = {
+      schemaVersion: 1 as const,
+      scenarioId: project.scenarioId,
+      revision: 8,
+      entries: [],
+      continuation: null,
+      undoAvailable: true,
+      redoAvailable: false,
+    };
+    api.getScenarioHistoryPage.mockResolvedValueOnce(response(emptyPage));
+    await home.reconcileMutation();
+    expect(home.state.mutation?.outcome).toBe("outcomeUnknown");
+    expect(home.state.mutation?.history.kind).toBe("notFound");
+
+    api.getScenarioHistoryPage.mockResolvedValueOnce(
+      response({
+        ...emptyPage,
+        entries: [
+          {
+            id: commandId,
+            revisionBefore: project.revision,
+            revisionAfter: 8,
+            source: "import",
+            summary: "Import people",
+            createdAt: project.updatedAt,
+            historySequence: 1,
+            branchGeneration: 0,
+            applied: true,
+          },
+        ],
+      }),
+    );
+    await home.reconcileMutation();
+    expect(home.state.mutation?.outcome).toBe("applied");
+    expect(home.state.mutation?.history).toMatchObject({ kind: "found", applied: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+    home.acknowledgeMutation();
+    expect(home.state.mutation).toBeNull();
+  });
+
+  it("settles an identified no-change receipt before library refresh without inventing history", async () => {
+    const api = fakeApi([project]);
+    const home = createHome(api);
+    await home.load();
+    api.listProjects.mockRejectedValueOnce(new Error("Refresh unavailable"));
+    const receipt = response({ revision: project.revision });
+    const result = await home.runOperation({
+      action: "people:apply",
+      label: "Import people",
+      execute: () => Promise.resolve(receipt),
+      success: () => "No changes",
+      mutation: {
+        scenarioId: project.scenarioId,
+        expectedRevision: project.revision,
+        commandId: "01900000-0000-7000-8000-000000000091",
+        receipt: (value) => ({ kind: "noChanges", revision: value.revision }),
+      },
+    });
+    expect(result).toBe(receipt);
+    expect(home.state.mutation?.outcome).toBe("noChanges");
+    expect(home.state.phase).toBe("error");
+    await home.reconcileMutation();
+    expect(api.getScenarioHistoryPage).not.toHaveBeenCalled();
+  });
+
+  it("clears an exact pre-dispatch disposal rejection without inventing an uncertain write", async () => {
+    const home = createHome(fakeApi([project]));
+    const execute = vi.fn<() => Promise<ApiResponseDto<{ revision: number }>>>();
+    const operation = {
+      action: "people:apply",
+      label: "Import people",
+      execute,
+      success: () => "Saved",
+      refreshLibrary: false,
+      mutation: {
+        scenarioId: project.scenarioId,
+        expectedRevision: project.revision,
+        commandId: "01900000-0000-7000-8000-000000000092",
+        receipt: (value: { revision: number }) => ({
+          kind: "applied" as const,
+          revision: value.revision,
+        }),
+      },
+    };
+    const closed = {
+      category: "protocol",
+      code: "operation.context_disposed",
+      message: "Context closed",
+    };
+    execute.mockRejectedValueOnce(closed);
+    await expect(home.runOperation(operation)).rejects.toBe(closed);
+    expect(home.state.mutation).toBeNull();
+    execute.mockResolvedValueOnce(response({ revision: project.revision + 1 }));
+    await home.runOperation(operation);
+    expect(home.state.mutation?.outcome).toBe("applied");
+    const unrelated = { ...closed, category: "storage" };
+    execute.mockRejectedValueOnce(unrelated);
+    await expect(home.runOperation(operation)).rejects.toBe(unrelated);
+    expect(home.state.mutation?.outcome).toBe("outcomeUnknown");
+  });
+
+  it("ends an owned read teardown without leaving an error on the destination route", async () => {
+    const home = createHome(fakeApi([project]));
+    const pending = deferred<ApiResponseDto<unknown>>();
+    const operation = {
+      action: "people:preview",
+      label: "Review people",
+      execute: () => pending.promise,
+      success: () => "Review ready",
+      refreshLibrary: false,
+    };
+    const result = home.runOperation(operation);
+    const closed = Object.assign(new Error("Context closed"), {
+      category: "protocol",
+      code: "operation.context_disposed",
+    });
+    pending.reject(closed);
+    await expect(result).rejects.toBe(closed);
+    expect(home.state.errorMessage).toBeNull();
+    expect(home.state.operation).toBeNull();
+    expect(home.state.busyAction).toBeNull();
+    const realFailure = Object.assign(new Error("Storage failed"), {
+      category: "storage",
+      code: "operation.context_disposed",
+    });
+    await expect(
+      home.runOperation({
+        ...operation,
+        execute: () => Promise.reject(realFailure),
+      }),
+    ).rejects.toBe(realFailure);
+    expect(home.state.errorMessage).not.toBeNull();
+  });
+
   it("releases partial and late listener acquisitions even when another release throws", async () => {
     const api = fakeApi();
     const late = deferred<() => void>();

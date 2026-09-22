@@ -358,7 +358,8 @@ pub(super) fn validate_value_with_schema(
     limits: ContractJsonLimits,
 ) -> Result<(), DomainPackError> {
     bounded_json_size(value, limits.max_serialized_bytes)?;
-    let safety_value = scrub_json_pointers(schema, value);
+    let mut safety_value = value.clone();
+    scrub_json_pointers(schema, value, &mut safety_value, limits);
     validate_nonsecret_portable_json(
         &safety_value,
         &PortableJsonLimits {
@@ -371,55 +372,66 @@ pub(super) fn validate_value_with_schema(
     validate_value_at(schema, value, "$", 0, limits)
 }
 
-fn scrub_json_pointers(schema: &Value, value: &Value) -> Value {
+fn scrub_json_pointers(
+    schema: &Value,
+    original: &Value,
+    safe: &mut Value,
+    limits: ContractJsonLimits,
+) {
     if schema.get("format").and_then(Value::as_str) == Some("scenario-change-path")
-        && value.as_str().is_some_and(is_scenario_change_path)
+        && original.as_str().is_some_and(is_scenario_change_path)
     {
-        return Value::String("scenario-field-reference".to_owned());
+        *safe = Value::String("scenario-field-reference".to_owned());
+        return;
     }
     if schema
         .get("pattern")
         .and_then(Value::as_str)
         .is_some_and(|pattern| pattern.starts_with("^/domain/"))
-        && value.is_string()
+        && original.is_string()
     {
-        return Value::String("domain-field-reference".to_owned());
+        *safe = Value::String("domain-field-reference".to_owned());
+        return;
     }
-    if let (Some(properties), Some(values)) = (
+    // Select against the untouched value: an inactive union branch must never
+    // authorize a path, and sibling schemas must still see the original input.
+    if let Some(options) = schema.get("oneOf").and_then(Value::as_array)
+        && let Some(branch) = options
+            .iter()
+            .find(|branch| validate_value_at(branch, original, "$", 0, limits).is_ok())
+    {
+        scrub_json_pointers(branch, original, safe, limits);
+    }
+    if let (Some(properties), Some(values), Some(safe_values)) = (
         schema.get("properties").and_then(Value::as_object),
-        value.as_object(),
+        original.as_object(),
+        safe.as_object_mut(),
     ) {
-        return Value::Object(
-            values
-                .iter()
-                .map(|(key, item)| {
-                    let child_schema = properties
-                        .get(key)
-                        .or_else(|| schema.get("additionalProperties"));
-                    (
-                        key.clone(),
-                        child_schema
-                            .map_or_else(|| item.clone(), |child| scrub_json_pointers(child, item)),
-                    )
-                })
-                .collect(),
-        );
+        for (key, item) in values {
+            if let Some(child_schema) = properties
+                .get(key)
+                .or_else(|| schema.get("additionalProperties"))
+                && let Some(safe_item) = safe_values.get_mut(key)
+            {
+                scrub_json_pointers(child_schema, item, safe_item, limits);
+            }
+        }
     }
-    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array()) {
-        return Value::Array(
-            values
-                .iter()
-                .map(|item| scrub_json_pointers(items, item))
-                .collect(),
-        );
+    if let (Some(items), Some(values), Some(safe_values)) = (
+        schema.get("items"),
+        original.as_array(),
+        safe.as_array_mut(),
+    ) {
+        for (item, safe_item) in values.iter().zip(safe_values) {
+            scrub_json_pointers(items, item, safe_item, limits);
+        }
     }
-    value.clone()
 }
 
-/// These are the field-reference roots emitted by the current typed scenario commands,
-/// not filesystem paths. Only a schema-declared change-path field receives this treatment.
+/// Scenario field-reference roots used by typed changes and setup diagnostics,
+/// not filesystem paths. Only a schema-declared path field receives this treatment.
 fn is_scenario_change_path(value: &str) -> bool {
-    value == "/settings" || value.starts_with("/domain/")
+    value == "/settings" || value.starts_with("/settings/") || value.starts_with("/domain/")
 }
 
 fn validate_value_at(

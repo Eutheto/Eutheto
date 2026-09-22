@@ -544,6 +544,8 @@ For the remainder of this phase, follow the user-authorized [temporary integrati
 9. **Solve/status handoff:** shared mode/progress/status/error shell driven by versioned events, 300–500 ms perceptual threshold, coarse truthful phase mapping, bounded announcements, cancellation, stale revision behavior, then handoff to Phase 07.
 10. **Accessibility/performance hardening:** keyboard/screen-reader/reduced-motion/contrast scripts, small/typical/100-person profiling, webview long-task/input/render evidence, designed state matrix, localization-key review.
 
+**Remaining implementation-branch grouping:** Deliver packages **5–6** together, **7–8** together, then **9** and **10** separately under the user-approved [temporary Phase06 integration workflow](../contributors/git-workflow.md#temporary-phase06-integration). Preserve the ordered implementation dependencies and every package's acceptance criteria; a shared branch does not authorize skipping a prerequisite. Full integrated-phase checkpoints remain after packages **6, 9 and 10** (the package-3 checkpoint is already complete), followed by the existing manual-testing gate. This consolidation grants no additional remote publication or final-main authority.
+
 ## Tests and acceptance
 
 ### API/state tests

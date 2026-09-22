@@ -3,7 +3,8 @@ use crate::operations::{OperationProgressV1, OperationRegistry};
 use crate::tests::{invoke_ipc_args, invoke_ok};
 use eutheto_core::{AppDependencies, AppPaths, AppQuery, AppQueryResult, EuthetoApp};
 use eutheto_types::{
-    ApiResponseDto, FixedClock, FixedMonotonicClock, ScenarioDocument, SystemIdGenerator,
+    ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, FixedClock, FixedMonotonicClock,
+    ScenarioDocument, SystemIdGenerator,
 };
 use serde_json::json;
 use std::{error::Error, sync::Mutex};
@@ -24,6 +25,15 @@ fn boxed(error: impl std::fmt::Debug) -> Box<dyn Error> {
     std::io::Error::other(format!("{error:?}")).into()
 }
 async fn fixture() -> TestResult<Fixture> {
+    fixture_with_settings(json!({
+        "timeZone":"UTC", "locale":"en-US", "units":"metric",
+        "firstDate":"2026-09-01", "lastDate":"2026-09-01",
+        "gapPolicy":"reject", "overlapPolicy":"earlier"
+    }))
+    .await
+}
+
+async fn fixture_with_settings(settings: Value) -> TestResult<Fixture> {
     let directory = tempfile::tempdir()?;
     let clock = Arc::new(FixedClock::new("2026-09-10T12:00:00Z".parse()?));
     let monotonic = Arc::new(FixedMonotonicClock::default());
@@ -94,7 +104,7 @@ async fn fixture() -> TestResult<Fixture> {
             "schemaVersion": 1,
             "requestId": RequestId::new(&SystemIdGenerator)?, "title": "Native Workforce setup", "description": "",
             "domainPack": {"id":"official.workforce", "schemaVersion":1},
-            "settings": {"timeZone":"UTC", "locale":"en-US", "units":"metric", "firstDate":"2026-09-01", "lastDate":"2026-09-01", "gapPolicy":"reject", "overlapPolicy":"earlier"}
+            "settings": settings
         }),
     )?;
     let scenario_id = project.result["scenarioId"]
@@ -434,5 +444,101 @@ async fn invalid_native_query_retires_before_heavy_admission() -> TestResult {
     second.1.send(()).map_err(boxed)?;
     first.0.await?.map_err(boxed)?;
     second.0.await?.map_err(boxed)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_local_time_findings_keep_exact_fields_without_echoing_untrusted_input() -> TestResult
+{
+    let fixture = fixture_with_settings(json!({
+        "timeZone":"America/New_York", "locale":"en-US", "units":"metric",
+        "firstDate":"2026-11-01", "lastDate":"2026-11-01",
+        "gapPolicy":"reject", "overlapPolicy":"reject"
+    }))
+    .await?;
+    let before = document(&fixture).await?;
+    let local_view = "official.workforce.setup.local_time_resolution";
+    for (view_id, parameters, code, expected_field) in [
+        (
+            local_view,
+            json!({"local":"2026-03-08T02:30:00"}),
+            "workforce.time.gap",
+            "/query/parameters/local",
+        ),
+        (
+            local_view,
+            json!({"local":"2026-11-01T01:30:00"}),
+            "workforce.time.overlap",
+            "/query/parameters/local",
+        ),
+        (
+            local_view,
+            json!({"local":"private-parser-sentinel"}),
+            "workforce.time.invalid_local",
+            "/query/parameters/local",
+        ),
+        (
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"Mars/Olympus", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":"2026-11-01", "endDateExclusive":"2026-11-02"},
+                "gapPolicy":"reject", "overlapPolicy":"reject"
+            }),
+            "workforce.time.invalid_zone",
+            "/query/parameters/timeZone",
+        ),
+        (
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"America/New_York", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":"private-parser-sentinel", "endDateExclusive":"2026-11-02"},
+                "gapPolicy":"reject", "overlapPolicy":"reject"
+            }),
+            "workforce.settings.invalid_date",
+            "/query/parameters/dates/startDate",
+        ),
+        (
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"America/New_York", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":"2026-11-01", "endDateExclusive":"2026-"},
+                "gapPolicy":"reject", "overlapPolicy":"reject"
+            }),
+            "workforce.settings.invalid_date",
+            "/query/parameters/dates/endDateExclusive",
+        ),
+    ] {
+        let operation_id = prepare(
+            &fixture,
+            &json!({"kind":"setupView", "viewId":view_id}),
+            Some(Revision::INITIAL),
+        )?;
+        let wire = invoke_ipc_args(
+            &fixture.window,
+            "scenario_get_view",
+            json!({
+                "request":{
+                    "requestId":RequestId::new(&SystemIdGenerator)?, "schemaVersion":2,
+                    "scenarioId":fixture.scenario_id, "expectedRevision":0,
+                    "operationId":operation_id, "source":{"kind":"stored"},
+                    "query":{"schemaVersion":1, "viewId":view_id,
+                        "parameters":parameters, "continuation":null}
+                },
+                "onProgress":"__CHANNEL__:42"
+            }),
+        )?
+        .err()
+        .ok_or("invalid temporal request unexpectedly succeeded")?;
+        assert!(!wire.to_string().contains("private-parser-sentinel"));
+        assert!(!wire.to_string().contains("Mars/Olympus"));
+        let error: ApiErrorDto = serde_json::from_value(wire)?;
+        assert_eq!(error.category, ApiErrorCategoryDto::Validation);
+        assert_eq!(error.code, code);
+        let field = error.field_errors.first().ok_or("missing exact field")?;
+        assert_eq!(field.field, expected_field);
+        assert_eq!(field.code, code);
+        assert!(error.details.is_none());
+    }
+    assert_eq!(document(&fixture).await?, before);
     Ok(())
 }

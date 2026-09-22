@@ -97,6 +97,9 @@ export function fakeApi(projects: ProjectSummary[] = []): ProjectHomeApiMocks {
   });
   return {
     listProjects: vi.fn(() => Promise.resolve(response([...projects]))),
+    getScenarioHistoryPage: vi.fn(() =>
+      Promise.reject(new Error("History response not configured")),
+    ),
     openProject: vi.fn<ProjectHomeApi["openProject"]>((scenarioId) =>
       Promise.resolve(
         response({
