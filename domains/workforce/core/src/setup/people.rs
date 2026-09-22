@@ -1,9 +1,10 @@
 use super::{
     contracts::{
-        AvailabilityOccurrenceV1, AvailabilityWindowParametersV1, EligibilityMatrixParametersV1,
-        EligibilityMatrixV1, InstantIntervalV1, MAX_MATRIX_CELLS, MAX_MATRIX_PEOPLE,
-        MAX_MATRIX_TYPES, ORDINARY_DATA_BYTES, WorkforceEntityKindV1, WorkforcePositionV1,
-        WorkforceSetupViewDataV1,
+        AvailabilityOccurrenceV1, AvailabilityRecordSummaryV1, AvailabilityRecordsParametersV1,
+        AvailabilityWindowParametersV1, EligibilityMatrixParametersV1, EligibilityMatrixV1,
+        InstantIntervalV1, MAX_MATRIX_CELLS, MAX_MATRIX_PEOPLE, MAX_MATRIX_TYPES,
+        ORDINARY_DATA_BYTES, PeoplePageParametersV1, PersonSummaryV1, QUERY_STRING_BYTES,
+        WorkforceEntityKindV1, WorkforcePositionV1, WorkforceSetupViewDataV1,
     },
     entities::header,
     paging::{PageBuilder, ProjectionBudget, Result, invalid},
@@ -15,8 +16,8 @@ use crate::{
         intervals::{availability_intervals, date_range},
         operation_error,
     },
-    ids::AssignmentTypeId,
-    model::WorkforceEntity,
+    ids::{AssignmentTypeId, AvailabilityId, QualificationId},
+    model::{AvailabilityKind, DateRange, WorkforceEntity},
     validation::WorkforceSchemas,
 };
 use eutheto_domain_api::{ContractJsonLimits, DomainPackError, SetupViewContext};
@@ -129,6 +130,174 @@ fn axis_record<'a>(
         return Err(invalid(path, "axis entity has the wrong kind"));
     }
     Ok(record)
+}
+
+pub(super) fn people_page(
+    document: &ScenarioDocument,
+    parameters: &PeoplePageParametersV1,
+    position: Option<WorkforcePositionV1>,
+    context: SetupViewContext,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<WorkforceSetupViewDataV1> {
+    if parameters.search.len() > QUERY_STRING_BYTES {
+        return Err(invalid(
+            "/query/parameters/search",
+            "search exceeds its bound",
+        ));
+    }
+    let previous = match position {
+        None => None,
+        Some(WorkforcePositionV1::Person { person_id }) => Some(person_id),
+        Some(_) => {
+            return Err(invalid(
+                "/query/continuation/position",
+                "person position required",
+            ));
+        }
+    };
+    if let Some(id) = parameters.qualification_id {
+        budget.visit()?;
+        axis_record(
+            document,
+            id.as_entity_id(),
+            WorkforceEntityKindV1::Qualification,
+            "/query/parameters/qualificationId",
+        )?;
+    }
+    let search = parameters.search.to_lowercase();
+    let mut page = PageBuilder::new(parameters.limit, ORDINARY_DATA_BYTES)?;
+    let mut cursor_seen = previous.is_none();
+    for (&id, record) in &document.domain.entities {
+        budget.visit()?;
+        let (kind, name) = header(id, record)?;
+        if kind != WorkforceEntityKindV1::Person {
+            continue;
+        }
+        let name = name.ok_or_else(|| invalid("/domain/entities", "person name is absent"))?;
+        if !search.is_empty() && !name.to_lowercase().contains(&search) {
+            continue;
+        }
+        if let Some(qualification) = parameters.qualification_id {
+            let grants = record
+                .get("qualificationGrants")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid("/domain/entities", "person grants are invalid"))?;
+            let mut recorded = false;
+            for grant in grants {
+                budget.visit()?;
+                let granted =
+                    QualificationId::deserialize(grant.get("qualificationId").ok_or_else(
+                        || invalid("/domain/entities", "grant qualification is absent"),
+                    )?)
+                    .map_err(|_| invalid("/domain/entities", "grant qualification is invalid"))?;
+                recorded |= granted == qualification;
+            }
+            if !recorded {
+                continue;
+            }
+        }
+        let person_id = PersonId::from_uuid(id.as_uuid());
+        cursor_seen |= previous == Some(person_id);
+        page.observe(previous.is_none_or(|previous| person_id > previous), || {
+            Ok((
+                PersonSummaryV1 {
+                    person_id,
+                    name: name.to_owned(),
+                },
+                WorkforcePositionV1::Person { person_id },
+            ))
+        })?;
+    }
+    if !cursor_seen {
+        return Err(invalid(
+            "/query/continuation/position",
+            "continued person does not match the query",
+        ));
+    }
+    page.finish(
+        document.scenario_id,
+        context,
+        WorkforceSetupViewDataV1::PeoplePage,
+    )
+}
+
+pub(super) fn availability_records(
+    document: &ScenarioDocument,
+    parameters: &AvailabilityRecordsParametersV1,
+    position: Option<WorkforcePositionV1>,
+    context: SetupViewContext,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<WorkforceSetupViewDataV1> {
+    let previous = match position {
+        None => None,
+        Some(WorkforcePositionV1::Entity { entity_id }) => Some(entity_id),
+        Some(_) => {
+            return Err(invalid(
+                "/query/continuation/position",
+                "entity position required",
+            ));
+        }
+    };
+    budget.visit()?;
+    axis_record(
+        document,
+        EntityId::from_uuid(parameters.person_id.as_uuid()),
+        WorkforceEntityKindV1::Person,
+        "/query/parameters/personId",
+    )?;
+    let mut page = PageBuilder::new(parameters.limit, ORDINARY_DATA_BYTES)?;
+    let mut cursor_seen = previous.is_none();
+    for (&id, record) in &document.domain.entities {
+        budget.visit()?;
+        if header(id, record)?.0 != WorkforceEntityKindV1::Availability {
+            continue;
+        }
+        let owner = PersonId::deserialize(
+            record
+                .get("personId")
+                .ok_or_else(|| invalid("/domain/entities", "availability person is absent"))?,
+        )
+        .map_err(|_| invalid("/domain/entities", "availability person is invalid"))?;
+        if owner != parameters.person_id {
+            continue;
+        }
+        cursor_seen |= previous == Some(id);
+        page.observe(previous.is_none_or(|previous| id > previous), || {
+            let availability_kind = AvailabilityKind::deserialize(
+                record
+                    .get("availabilityKind")
+                    .ok_or_else(|| invalid("/domain/entities", "availability kind is absent"))?,
+            )
+            .map_err(|_| invalid("/domain/entities", "availability kind is invalid"))?;
+            let effective_range = DateRange::deserialize(
+                record
+                    .get("effectiveRange")
+                    .ok_or_else(|| invalid("/domain/entities", "availability range is absent"))?,
+            )
+            .map_err(|_| invalid("/domain/entities", "availability range is invalid"))?;
+            Ok((
+                AvailabilityRecordSummaryV1 {
+                    availability_id: AvailabilityId::try_from(id).map_err(|_| {
+                        invalid("/domain/entities", "availability identity is invalid")
+                    })?,
+                    availability_kind,
+                    effective_range,
+                },
+                WorkforcePositionV1::Entity { entity_id: id },
+            ))
+        })?;
+    }
+    if !cursor_seen {
+        return Err(invalid(
+            "/query/continuation/position",
+            "continued availability does not match the person",
+        ));
+    }
+    page.finish(
+        document.scenario_id,
+        context,
+        WorkforceSetupViewDataV1::AvailabilityRecords,
+    )
 }
 
 pub(super) fn availability_window(
@@ -399,6 +568,37 @@ mod tests {
                 &document,
                 &parameters,
                 None,
+                &mut ProjectionBudget::new(&control)
+            ),
+            Err(DomainPackError::ResourceLimitExceeded)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn qualification_filter_charges_grants_even_when_none_match() -> TestResult {
+        let mut document = support::fixture()?;
+        document
+            .domain
+            .entities
+            .get_mut(&support::id(1).parse()?)
+            .ok_or("person")?["qualificationGrants"] = Value::Array(vec![
+            json!({"qualificationId":support::id(99)});
+            super::super::contracts::MAX_PROJECTION_VISITS
+                as usize
+        ]);
+        let parameters = PeoplePageParametersV1 {
+            search: String::new(),
+            qualification_id: Some(support::id(11).parse()?),
+            limit: 1,
+        };
+        let control = OperationControl::Cancellation(CancellationToken::new());
+        assert!(matches!(
+            people_page(
+                &document,
+                &parameters,
+                None,
+                context(),
                 &mut ProjectionBudget::new(&control)
             ),
             Err(DomainPackError::ResourceLimitExceeded)

@@ -3402,6 +3402,211 @@
         }
       ]
     },
+    "official.workforce.setup.availability_records": {
+      "invalidExamples": [
+        {},
+        {
+          "personId": "invalid"
+        },
+        {
+          "limit": 201,
+          "personId": "018f7b40-a000-7000-8000-000000000014"
+        },
+        {
+          "dates": null,
+          "personId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ],
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "personId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "personId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "additionalProperties": false,
+                "properties": {
+                  "continuation": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "position": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entityId": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "entity"
+                              }
+                            },
+                            "required": [
+                              "entityId",
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          "queryFingerprint": {
+                            "items": {
+                              "maximum": 255,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "maxItems": 32,
+                            "minItems": 32,
+                            "type": "array"
+                          },
+                          "revision": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "scenarioId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "schemaVersion": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "position",
+                          "queryFingerprint",
+                          "revision",
+                          "scenarioId",
+                          "schemaVersion"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "items": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "availabilityId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "availabilityKind": {
+                          "oneOf": [
+                            {
+                              "const": "unavailable"
+                            },
+                            {
+                              "const": "availableOnly"
+                            },
+                            {
+                              "const": "approvedTimeOff"
+                            },
+                            {
+                              "const": "requestedTimeOff"
+                            }
+                          ]
+                        },
+                        "effectiveRange": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "endDateExclusive": {
+                              "maxLength": 16384,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "startDate": {
+                              "maxLength": 16384,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "endDateExclusive",
+                            "startDate"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "availabilityId",
+                        "availabilityKind",
+                        "effectiveRange"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 200,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "totalItems": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "totalItems",
+                  "items",
+                  "continuation"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "availabilityRecords"
+              }
+            },
+            "required": [
+              "data",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "result",
+          "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "sources": [
+        "stored",
+        "commandPreview"
+      ],
+      "supportsContinuation": true,
+      "validExamples": [
+        {
+          "personId": "018f7b40-a000-7000-8000-000000000014"
+        },
+        {
+          "limit": 200,
+          "personId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ]
+    },
     "official.workforce.setup.availability_window": {
       "invalidExamples": [
         {
@@ -5416,6 +5621,186 @@
       "supportsContinuation": false,
       "validExamples": [
         {}
+      ]
+    },
+    "official.workforce.setup.people_page": {
+      "invalidExamples": [
+        {},
+        {
+          "qualificationId": "invalid",
+          "search": ""
+        },
+        {
+          "qualificationId": null,
+          "search": ""
+        },
+        {
+          "limit": 0,
+          "search": ""
+        }
+      ],
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "qualificationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "search": {
+            "maxLength": 256,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "required": [
+          "search"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "additionalProperties": false,
+                "properties": {
+                  "continuation": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "position": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "person"
+                              },
+                              "personId": {
+                                "format": "uuid",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personId"
+                            ],
+                            "type": "object"
+                          },
+                          "queryFingerprint": {
+                            "items": {
+                              "maximum": 255,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "maxItems": 32,
+                            "minItems": 32,
+                            "type": "array"
+                          },
+                          "revision": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "scenarioId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "schemaVersion": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "position",
+                          "queryFingerprint",
+                          "revision",
+                          "scenarioId",
+                          "schemaVersion"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "items": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "personId": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "personId"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 200,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "totalItems": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "continuation",
+                  "items",
+                  "totalItems"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "peoplePage"
+              }
+            },
+            "required": [
+              "data",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "result",
+          "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "sources": [
+        "stored",
+        "commandPreview"
+      ],
+      "supportsContinuation": true,
+      "validExamples": [
+        {
+          "search": ""
+        },
+        {
+          "limit": 200,
+          "qualificationId": "018f7b40-a000-7000-8000-000000000014",
+          "search": "Alice"
+        }
       ]
     },
     "official.workforce.setup.rule_detail": {
@@ -11663,6 +12048,188 @@
           "axis": "shifts",
           "limit": 200,
           "part": "main",
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          }
+        }
+      ]
+    },
+    "official.workforce.setup.rule_scope_summary": {
+      "invalidExamples": [
+        {},
+        {
+          "rule": {
+            "class": "required",
+            "ruleId": "invalid"
+          }
+        },
+        {
+          "part": "main",
+          "rule": {
+            "class": "required",
+            "ruleId": "018f7b40-a000-7000-8000-000000000020"
+          }
+        }
+      ],
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "rule": {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "oneOf": [
+                  {
+                    "const": "required"
+                  },
+                  {
+                    "const": "preference"
+                  }
+                ]
+              },
+              "ruleId": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "class",
+              "ruleId"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "rule"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "additionalProperties": false,
+                "properties": {
+                  "population": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "ordinary"
+                          },
+                          "peopleCount": {
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "shiftCount": {
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "peopleCount",
+                          "shiftCount"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "afterShiftCount": {
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "beforeShiftCount": {
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "minimumRest"
+                          },
+                          "peopleCount": {
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "peopleCount",
+                          "beforeShiftCount",
+                          "afterShiftCount"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "rule": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "class": {
+                        "oneOf": [
+                          {
+                            "const": "required"
+                          },
+                          {
+                            "const": "preference"
+                          }
+                        ]
+                      },
+                      "ruleId": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "class",
+                      "ruleId"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "rule",
+                  "population"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "ruleScopeSummary"
+              }
+            },
+            "required": [
+              "data",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "result",
+          "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "sources": [
+        "stored",
+        "commandPreview"
+      ],
+      "supportsContinuation": false,
+      "validExamples": [
+        {
           "rule": {
             "class": "required",
             "ruleId": "018f7b40-a000-7000-8000-000000000020"

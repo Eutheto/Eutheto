@@ -1,9 +1,10 @@
 use super::{
     contracts::{
-        AssignmentInspectionParametersV1, AssignmentInspectionV1, InstantIntervalV1,
-        ORDINARY_DATA_BYTES, PairRejectionV1, PersonSummaryV1, RejectionCauseV1, RuleClassV1,
-        RuleScopeParametersV1, ScopeAxisV1, ScopeInspectionV1, ScopePartV1, ScopePopulationV1,
-        WorkforcePositionV1, WorkforceSetupViewDataV1,
+        AssignmentInspectionParametersV1, AssignmentInspectionV1, EffectiveScopePopulationV1,
+        InstantIntervalV1, ORDINARY_DATA_BYTES, PairRejectionV1, PersonSummaryV1, RejectionCauseV1,
+        RuleClassV1, RuleDetailParametersV1, RuleScopeParametersV1, RuleScopeSummaryV1,
+        ScopeAxisV1, ScopeInspectionV1, ScopePartV1, ScopePopulationV1, WorkforcePositionV1,
+        WorkforceSetupViewDataV1,
     },
     paging::{PageBuilder, ProjectionBudget, Result, invalid},
     work::shift_row,
@@ -14,12 +15,13 @@ use crate::{
         analysis::{
             analyze_with_budget,
             support::{person_scope, shift_scope},
+            supported_rule,
         },
         budget::OperationBudget,
         input::AssignmentInput,
         operation_error,
     },
-    model::{AssignmentPair, Scope, WorkforceDomainV1, WorkforceRule},
+    model::{AssignmentPair, MinimumRestRule, Scope, WorkforceDomainV1, WorkforceRule},
 };
 use eutheto_domain_api::{DomainPackError, SetupViewContext};
 use eutheto_planning_ir::PlanningIrLimitsV1;
@@ -235,6 +237,131 @@ fn scoped_shifts<'a>(
         .map_err(|error| operation_error(&error))?;
     shifts.sort_unstable_by_key(|shift| shift.id);
     Ok((count, shifts))
+}
+
+pub(super) fn rule_scope_summary(
+    document: &ScenarioDocument,
+    parameters: &RuleDetailParametersV1,
+    position: Option<WorkforcePositionV1>,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<WorkforceSetupViewDataV1> {
+    if position.is_some() {
+        return Err(invalid(
+            "/query/continuation",
+            "scope summary does not accept continuation",
+        ));
+    }
+    if parameters.rule.class != RuleClassV1::Required {
+        return Err(invalid(
+            "/query/parameters/rule/class",
+            "scope summary requires an implemented Required rule",
+        ));
+    }
+    budget.visit()?;
+    let mut authority =
+        OperationBudget::analysis(Some(budget.control()), PlanningIrLimitsV1::DEFAULT);
+    let input =
+        AssignmentInput::new(document, &mut authority).map_err(|error| operation_error(&error))?;
+    let rule = input
+        .domain
+        .rules
+        .get(&parameters.rule.rule_id)
+        .ok_or_else(|| invalid("/query/parameters/rule", "Required rule is absent"))?;
+    if !supported_rule(rule) {
+        return Err(invalid(
+            "/query/parameters/rule",
+            "rule semantics are not implemented",
+        ));
+    }
+    let main = rule.header().2;
+    let rest = match rule {
+        WorkforceRule::MinimumRest(rest) => Some(rest.as_ref()),
+        _ => None,
+    };
+    let people_count = effective_people_count(&input, main, rest, &mut authority, budget)?;
+    let mut shift_count = 0_u32;
+    let mut before_shift_count = 0_u32;
+    let mut after_shift_count = 0_u32;
+    for shift in &input.shifts {
+        budget.visit()?;
+        let metadata = input
+            .metadata(shift)
+            .map_err(|error| operation_error(&error))?;
+        if !shift_scope(main, shift, &metadata, &mut authority)
+            .map_err(|error| operation_error(&error))?
+        {
+            continue;
+        }
+        if let Some(rest) = rest {
+            if shift_scope(&rest.before_scope, shift, &metadata, &mut authority)
+                .map_err(|error| operation_error(&error))?
+            {
+                before_shift_count = before_shift_count
+                    .checked_add(1)
+                    .ok_or(DomainPackError::ResourceLimitExceeded)?;
+            }
+            if shift_scope(&rest.after_scope, shift, &metadata, &mut authority)
+                .map_err(|error| operation_error(&error))?
+            {
+                after_shift_count = after_shift_count
+                    .checked_add(1)
+                    .ok_or(DomainPackError::ResourceLimitExceeded)?;
+            }
+        } else {
+            shift_count = shift_count
+                .checked_add(1)
+                .ok_or(DomainPackError::ResourceLimitExceeded)?;
+        }
+    }
+    let population = if rest.is_some() {
+        EffectiveScopePopulationV1::MinimumRest {
+            people_count,
+            before_shift_count,
+            after_shift_count,
+        }
+    } else {
+        EffectiveScopePopulationV1::Ordinary {
+            people_count,
+            shift_count,
+        }
+    };
+    Ok(WorkforceSetupViewDataV1::RuleScopeSummary(
+        RuleScopeSummaryV1 {
+            rule: parameters.rule,
+            population,
+        },
+    ))
+}
+
+fn effective_people_count(
+    input: &AssignmentInput,
+    main: &Scope,
+    rest: Option<&MinimumRestRule>,
+    authority: &mut OperationBudget<'_>,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<u32> {
+    let mut count = 0_u32;
+    for id in &input.people {
+        budget.visit()?;
+        let person = input
+            .person(*id)
+            .ok_or_else(|| invalid("/document", "resolved person is missing"))?;
+        if !person_scope(main, person, authority).map_err(|error| operation_error(&error))? {
+            continue;
+        }
+        if let Some(rest) = rest
+            && (!person_scope(&rest.before_scope, person, authority)
+                .map_err(|error| operation_error(&error))?
+                || !person_scope(&rest.after_scope, person, authority)
+                    .map_err(|error| operation_error(&error))?)
+        {
+            continue;
+        }
+        count = count
+            .checked_add(1)
+            .ok_or(DomainPackError::ResourceLimitExceeded)?;
+    }
+    Ok(count)
 }
 
 pub(super) fn assignment_inspection(

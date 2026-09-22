@@ -437,7 +437,7 @@ fn reject(
     Ok(())
 }
 
-pub(super) fn supported_rule(rule: &WorkforceRule) -> bool {
+pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
     matches!(
         rule,
         WorkforceRule::Eligibility { .. }

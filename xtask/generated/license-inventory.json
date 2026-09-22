@@ -7985,6 +7985,30 @@
     },
     {
       "ecosystem": "npm",
+      "name": "@tanstack/store",
+      "version": "0.11.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "https://registry.npmjs.org/@tanstack/store/-/store-0.11.1.tgz",
+      "checksum": {
+        "algorithm": "SHA512",
+        "value": "9b34ce061ca93ae0c9032fc3f27d8c7d46751c59179e64844ef891ca1a840bc2d413bfc8650131393c4c00d8f72a34e87d84e414da4163aeea695ad3e3561c70"
+      }
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@tanstack/table-core",
+      "version": "9.2.4",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "https://registry.npmjs.org/@tanstack/table-core/-/table-core-9.2.4.tgz",
+      "checksum": {
+        "algorithm": "SHA512",
+        "value": "1b0743c861abe945c0b6e6c5d78c80c1c5ef75aa20a9fb1080893cf52b9e6e3c686ff463ab6c6f7e65ec8c3175ad098a9a11ec266f53398ee6cb1bf78ba81e27"
+      }
+    },
+    {
+      "ecosystem": "npm",
       "name": "@tanstack/virtual-core",
       "version": "3.17.8",
       "kind": "dependency",
@@ -7993,6 +8017,18 @@
       "checksum": {
         "algorithm": "SHA512",
         "value": "05f12f7a1369393ef9af92ac739c56e8d66e5ee8d37dbee795213256ee171c6de0771360d4aa97aee59b0dec17394694608a38a116d27e48c86a3cf83004fcb4"
+      }
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@tanstack/vue-table",
+      "version": "9.2.4",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "https://registry.npmjs.org/@tanstack/vue-table/-/vue-table-9.2.4.tgz",
+      "checksum": {
+        "algorithm": "SHA512",
+        "value": "1920fa664790bc00eceaef4a532854ba20fea98800f8bb7a85304348469d08121b0bcab649aa07cec78bc200ca5549d10a54c8323f7e37008417e1a9dcfec285"
       }
     },
     {
