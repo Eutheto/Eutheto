@@ -24,6 +24,8 @@ import WorkGenerationTable from "./WorkGenerationTable.vue";
 import WorkSettingsFacts from "./WorkSettingsFacts.vue";
 import WorkResolvedEndpoints from "./WorkResolvedEndpoints.vue";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
+import { getScenarioView, SetupOperationScope } from "../api/generated";
+import { useValidationRoute } from "../validation-route";
 
 const props = defineProps<{
   readonly home: ProjectHomeController;
@@ -47,6 +49,7 @@ const {
 } = vm;
 const copy = messages.work;
 const recordsCopy = messages.people;
+const view = ref<"records" | "shifts">("records");
 const editorHeading = ref<HTMLElement>();
 const listHeading = ref<HTMLElement>();
 const workHeading = ref<HTMLElement>();
@@ -56,6 +59,7 @@ const reviewInspectionHeading = ref<HTMLElement>();
 const currentHeading = ref<HTMLElement>();
 const editorHost = ref<HTMLElement>();
 const form = ref<HTMLFormElement>();
+const recordFields = ref<InstanceType<typeof WorkRecordFields>>();
 const showErrors = ref(false);
 const showCurrent = ref(false);
 const warningsPage = ref(0);
@@ -88,11 +92,12 @@ const inspectedRecord = computed(() => {
     review.state.review === null
   )
     return null;
+  const entity = inspected.entity;
   return {
-    raw: createWorkRecordDraft(inspected.entity),
-    id: inspected.entity.id,
-    origin: inspected.entity.kind === "shiftInstance" ? inspected.entity.origin : null,
-    instance: inspected.entity.kind === "shiftInstance" ? inspected.entity : null,
+    raw: createWorkRecordDraft(entity),
+    id: entity.id,
+    origin: entity.kind === "shiftInstance" ? entity.origin : null,
+    instance: entity.kind === "shiftInstance" ? entity : null,
     side: inspected.side,
     timeZone:
       inspected.side === "before"
@@ -126,6 +131,9 @@ const fieldLabels: Readonly<Record<string, string>> = {
   overlapPolicy: copy.overlapPolicy,
   startDate: copy.fields.startDate,
   endDateExclusive: copy.fields.endDateExclusive,
+  active: copy.fields.active,
+  scope: copy.fields.scope,
+  "scope.kind": copy.fields.scopeMode,
 };
 function text(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
@@ -179,7 +187,8 @@ function setKind(event: Event): void {
     value === "assignmentType" ||
     value === "calendar" ||
     value === "shiftTemplate" ||
-    value === "shiftInstance"
+    value === "shiftInstance" ||
+    value === "coverageRequirement"
   )
     vm.setRecordKind(value);
 }
@@ -220,6 +229,7 @@ async function createPreset(): Promise<void> {
 async function closeEditor(): Promise<void> {
   vm.discard();
   showCurrent.value = false;
+  view.value = "records";
   await nextTick();
   listHeading.value?.focus();
 }
@@ -305,6 +315,7 @@ async function save(truncateRedo = false): Promise<void> {
   const focused = document.activeElement;
   const scenarioId = props.project.scenarioId;
   if (await vm.apply(truncateRedo)) {
+    view.value = "shifts";
     await nextTick(() => {
       if (props.project.scenarioId !== scenarioId || state.editor !== null) return;
       showCurrent.value = false;
@@ -344,41 +355,148 @@ watch(
 watch(diagnostics, () => {
   diagnosticsPage.value = 0;
 });
+const navigationError = useValidationRoute(
+  props.home,
+  () => props.project,
+  () => facts.value !== null && !state.workLoading,
+  async (target, isCurrent) => {
+    const clean = () => isCurrent() && !dirty.value && !busy.value;
+    const replaceable = () => clean() && canReplace.value;
+    if (!replaceable() || state.detailLoading || review.state.review !== null) return false;
+    if (target.collection === "settings") {
+      const fields: Readonly<Record<string, string>> = {
+        timeZone: "work-settings-zone",
+        horizon: "work-settings-horizon",
+        "horizon.start": "work-settings-start",
+        "horizon.end": "work-settings-end",
+      };
+      const key = target.fieldPath.join(".");
+      if (key !== "" && !Object.hasOwn(fields, key)) return false;
+      vm.editSettings();
+      const opened = state.editor;
+      if (opened?.kind !== "settings") return false;
+      const ownsSettings = () => clean() && state.editor === opened;
+      await nextTick();
+      if (!ownsSettings()) return false;
+      const element = key === "" ? editorHeading.value : document.getElementById(fields[key] ?? "");
+      if (element == null || !editorHost.value?.contains(element)) return false;
+      element.focus();
+      return document.activeElement === element;
+    }
+    if (target.collection !== "entities") return false;
+    const before = state.draftGeneration;
+    const owned = new SetupOperationScope(target.scenarioId, target.revision);
+    try {
+      const { result } = await getScenarioView(owned, {
+        source: { kind: "stored" },
+        query: {
+          schemaVersion: 1,
+          viewId: "official.workforce.setup.entity_summary",
+          parameters: { entityId: target.id },
+        },
+      }).result;
+      if (!replaceable() || before !== state.draftGeneration) return false;
+      const summary = result.view.data.result.data;
+      if (
+        summary.entityId !== target.id ||
+        (summary.kind !== "location" &&
+          summary.kind !== "workloadBucket" &&
+          summary.kind !== "assignmentType" &&
+          summary.kind !== "calendar" &&
+          summary.kind !== "shiftTemplate" &&
+          summary.kind !== "shiftInstance" &&
+          summary.kind !== "coverageRequirement")
+      )
+        return false;
+      const loading = vm.loadRecord(target.id, summary.kind);
+      const openingGeneration = state.draftGeneration;
+      if (!(await loading) || !clean() || openingGeneration !== state.draftGeneration) return false;
+      if (state.editor?.kind !== "record" || state.editor.id !== target.id) return false;
+      vm.editRecord();
+      const opened = state.editor;
+      const valid = () => isCurrent() && state.editor === opened && !dirty.value && !busy.value;
+      await nextTick();
+      if (!valid()) return false;
+      if (target.fieldPath.length === 0) {
+        editorHeading.value?.focus();
+        return document.activeElement === editorHeading.value;
+      }
+      return recordFields.value?.focusField(target.fieldPath, valid) ?? false;
+    } finally {
+      owned.dispose();
+    }
+  },
+);
 </script>
 
 <template>
   <section class="page-stack" aria-labelledby="work-heading">
-    <h2 id="work-heading">{{ copy.heading }}</h2>
+    <h2 id="work-heading" data-route-heading tabindex="-1">{{ copy.heading }}</h2>
+    <p v-if="navigationError" class="text-danger" role="alert">{{ navigationError }}</p>
     <p v-if="project.domainPackId !== 'official.workforce'">{{ messages.setup.unsupported }}</p>
     <template v-else>
       <p>{{ copy.description }}</p>
-      <div class="action-row">
+      <button type="button" class="w-fit" :disabled="!canReplace || !facts" @click="editSettings">
+        {{ copy.editSettings }}
+      </button>
+      <details class="setup-more">
+        <summary>{{ copy.moreActions }}</summary>
+        <div class="action-row">
+          <button type="button" :disabled="busy || state.factsLoading" @click="vm.refresh">
+            {{ copy.refresh }}
+          </button>
+          <button type="button" :disabled="!canReplace || !facts" @click="createPreset">
+            {{ copy.presets.create }}
+          </button>
+          <button
+            type="button"
+            :disabled="!canReplace || !facts"
+            @click="reviewAction(vm.regenerate)"
+          >
+            {{ copy.regenerate }}
+          </button>
+        </div>
+      </details>
+      <p v-if="state.factsLoading" role="status">{{ recordsCopy.loading }}</p>
+      <div v-if="state.factsError" class="state-panel" role="alert">
+        <p>{{ state.factsError }}</p>
         <button type="button" :disabled="busy || state.factsLoading" @click="vm.refresh">
           {{ copy.refresh }}
         </button>
-        <button type="button" :disabled="!canReplace || !facts" @click="editSettings">
-          {{ copy.editSettings }}
-        </button>
-        <button type="button" :disabled="!canReplace || !facts" @click="createPreset">
-          {{ copy.presets.create }}
-        </button>
-        <button
-          type="button"
-          :disabled="!canReplace || !facts"
-          @click="reviewAction(vm.regenerate)"
-        >
-          {{ copy.regenerate }}
-        </button>
       </div>
-      <p v-if="state.factsLoading" role="status">{{ recordsCopy.loading }}</p>
-      <p v-if="state.factsError" class="state-panel" role="alert">{{ state.factsError }}</p>
-      <details v-if="facts" class="state-panel">
+      <details v-if="facts" class="state-panel setup-more">
         <summary>{{ copy.currentSettings }}</summary>
         <p>{{ copy.settingsHelp }}</p>
         <WorkSettingsFacts :facts="facts" />
       </details>
-
-      <section class="state-panel field-stack" aria-labelledby="work-records-heading">
+      <div
+        v-show="state.editor === null && review.state.review === null"
+        class="action-row"
+        role="group"
+        :aria-label="copy.viewChoice"
+      >
+        <button
+          type="button"
+          :class="view === 'records' ? '' : 'button-secondary'"
+          :aria-pressed="view === 'records'"
+          @click="view = 'records'"
+        >
+          {{ copy.records }}
+        </button>
+        <button
+          type="button"
+          :class="view === 'shifts' ? '' : 'button-secondary'"
+          :aria-pressed="view === 'shifts'"
+          @click="view = 'shifts'"
+        >
+          {{ copy.instances }}
+        </button>
+      </div>
+      <section
+        v-show="view === 'records' && state.editor === null && review.state.review === null"
+        class="state-panel field-stack"
+        aria-labelledby="work-records-heading"
+      >
         <h3 id="work-records-heading" ref="listHeading" tabindex="-1">{{ copy.records }}</h3>
         <p id="work-record-search-help">{{ copy.searchHelp }}</p>
         <label for="work-record-kind">{{ copy.recordKind }}</label>
@@ -401,7 +519,7 @@ watch(diagnostics, () => {
         <p v-if="state.recordsLoading" role="status">{{ recordsCopy.loading }}</p>
         <p v-if="state.recordsError" role="alert">{{ state.recordsError }}</p>
         <template v-if="state.records">
-          <p>{{ recordsCopy.matching }} {{ formatNumber(state.records.totalItems, locale) }}</p>
+          <p>{{ copy.matchingRecords(formatNumber(state.records.totalItems, locale)) }}</p>
           <p v-if="state.records.items.length === 0">{{ recordsCopy.empty }}</p>
           <ul class="field-stack">
             <li v-for="item in state.records.items" :key="item.entityId">
@@ -430,7 +548,11 @@ watch(diagnostics, () => {
         </template>
       </section>
 
-      <section class="state-panel field-stack" aria-labelledby="work-window-heading">
+      <section
+        v-show="view === 'shifts' && state.editor === null && review.state.review === null"
+        class="state-panel field-stack"
+        aria-labelledby="work-window-heading"
+      >
         <h3 id="work-window-heading" ref="workHeading" tabindex="-1">{{ copy.instances }}</h3>
         <p id="work-window-help">{{ copy.windowHelp }}</p>
         <form v-if="state.dates" class="field-stack" @submit.prevent="pageWork()">
@@ -471,7 +593,7 @@ watch(diagnostics, () => {
             :disabled="busy || state.detailLoading"
             @inspect="inspectShift"
           />
-          <p>{{ recordsCopy.matching }} {{ formatNumber(state.work.totalItems, locale) }}</p>
+          <p>{{ copy.matchingShifts(formatNumber(state.work.totalItems, locale)) }}</p>
           <nav class="action-row" :aria-label="copy.shiftPages">
             <button type="button" :disabled="busy" @click="pageWork()">
               {{ recordsCopy.first }}
@@ -501,6 +623,7 @@ watch(diagnostics, () => {
       </div>
       <section
         v-if="state.selectedWork && facts"
+        v-show="view === 'shifts' && state.editor === null && review.state.review === null"
         class="state-panel field-stack"
         :aria-label="copy.inspection"
       >
@@ -594,36 +717,44 @@ watch(diagnostics, () => {
               @input="setSetting('timeZone', $event)"
             />
             <p id="work-settings-zone-error" class="field-help">{{ settingsError("timeZone") }}</p>
-            <label for="work-settings-start">{{ copy.fields.startDate }}</label>
-            <input
-              id="work-settings-start"
-              type="text"
-              maxlength="64"
-              spellcheck="false"
-              required
-              :value="state.editor.raw.startDate"
-              :aria-invalid="Boolean(settingsError('startDate')) || undefined"
-              aria-describedby="work-settings-start-error"
-              @input="setSetting('startDate', $event)"
-            />
-            <p id="work-settings-start-error" class="field-help">
-              {{ settingsError("startDate") }}
-            </p>
-            <label for="work-settings-end">{{ copy.fields.endDateExclusive }}</label>
-            <input
-              id="work-settings-end"
-              type="text"
-              maxlength="64"
-              spellcheck="false"
-              required
-              :value="state.editor.raw.endDateExclusive"
-              :aria-invalid="Boolean(settingsError('endDateExclusive')) || undefined"
-              aria-describedby="work-settings-end-error"
-              @input="setSetting('endDateExclusive', $event)"
-            />
-            <p id="work-settings-end-error" class="field-help">
-              {{ settingsError("endDateExclusive") }}
-            </p>
+            <div
+              id="work-settings-horizon"
+              class="field-stack"
+              role="group"
+              :aria-label="copy.planningDateGroup"
+              tabindex="-1"
+            >
+              <label for="work-settings-start">{{ copy.fields.startDate }}</label>
+              <input
+                id="work-settings-start"
+                type="text"
+                maxlength="64"
+                spellcheck="false"
+                required
+                :value="state.editor.raw.startDate"
+                :aria-invalid="Boolean(settingsError('startDate')) || undefined"
+                aria-describedby="work-settings-start-error"
+                @input="setSetting('startDate', $event)"
+              />
+              <p id="work-settings-start-error" class="field-help">
+                {{ settingsError("startDate") }}
+              </p>
+              <label for="work-settings-end">{{ copy.fields.endDateExclusive }}</label>
+              <input
+                id="work-settings-end"
+                type="text"
+                maxlength="64"
+                spellcheck="false"
+                required
+                :value="state.editor.raw.endDateExclusive"
+                :aria-invalid="Boolean(settingsError('endDateExclusive')) || undefined"
+                aria-describedby="work-settings-end-error"
+                @input="setSetting('endDateExclusive', $event)"
+              />
+              <p id="work-settings-end-error" class="field-help">
+                {{ settingsError("endDateExclusive") }}
+              </p>
+            </div>
             <label for="work-settings-gap">{{ copy.gapPolicy }}</label>
             <select
               id="work-settings-gap"
@@ -655,6 +786,7 @@ watch(diagnostics, () => {
           </fieldset>
           <WorkRecordFields
             v-else-if="activeRaw && facts"
+            ref="recordFields"
             v-bind="editableFieldContext"
             :key="state.editor.kind === 'record' ? state.editor.id : state.editor.selectedId"
             :model-value="activeRaw"
@@ -665,6 +797,7 @@ watch(diagnostics, () => {
             :read-only="state.editor.kind === 'record' && !state.editor.editing"
             :show-errors="showErrors"
             :errors="state.errors"
+            :dates="state.dates ?? facts.initialWorkWindow"
             @update:model-value="update"
           />
           <template
@@ -1057,7 +1190,7 @@ watch(diagnostics, () => {
           :aria-label="copy.inspection"
         >
           <h4 ref="reviewInspectionHeading" tabindex="-1">
-            {{ copy.inspection }} · {{ copy.generation[review.state.review.inspection.side] }}
+            {{ copy.inspectionSide(review.state.review.inspection.side) }}
           </h4>
           <WorkSettingsFacts
             v-if="review.state.review.inspection.kind === 'settings'"

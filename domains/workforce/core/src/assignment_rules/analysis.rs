@@ -31,9 +31,9 @@ use eutheto_types::{
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use support::{
-    MinimumKey, active_interval, availability_scope, bounds, canonical_minima, expression,
-    incompatible, interval, invalid, outside, person_scope, qualification_match, requirement_scope,
-    shift_scope, uncovered,
+    MinimumKey, active_interval, authored_source_rows, availability_scope, bounds,
+    canonical_minima, expression, incompatible, interval, invalid, outside, person_scope,
+    qualification_match, requirement_scope, shift_scope, uncovered,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -45,6 +45,9 @@ pub(super) struct Owner {
 pub(super) struct Definition {
     pub owner: Owner,
     pub minima: Vec<MinimumKey>,
+    /// Evidence-only mapping from canonical minimum index to the first authored
+    /// `qualificationMinimums` row index. Never affects `MinimumKey` identity.
+    pub source_rows: Vec<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -622,8 +625,13 @@ impl CoveragePlanner<'_> {
             Entry::Vacant(entry) => {
                 let index = self.plan.definitions.len();
                 let minima = canonical_minima(coverage, budget)?;
+                let source_rows = authored_source_rows(coverage, &minima, budget)?;
                 budget.reserve(2, 2, 64)?;
-                self.plan.definitions.push(Definition { owner, minima });
+                self.plan.definitions.push(Definition {
+                    owner,
+                    minima,
+                    source_rows,
+                });
                 entry.insert(index);
                 index
             }
@@ -646,12 +654,17 @@ impl CoveragePlanner<'_> {
         let n = count(population.len())?;
         let upper = authored_upper.unwrap_or(n).min(n);
         if lower > n {
+            let count_field = match coverage {
+                Coverage::Exact { .. } => "count",
+                Coverage::AtLeast { .. } => "minimum",
+            };
             finding(
                 &mut self.result.validation,
                 "candidate_shortage",
                 rule,
                 owner,
                 shift.id,
+                &format!("domain.entities.{}.coverage.{count_field}", owner.id),
                 budget,
             )?;
         }
@@ -662,6 +675,7 @@ impl CoveragePlanner<'_> {
                 rule,
                 owner,
                 shift.id,
+                &format!("domain.entities.{}.coverage", owner.id),
                 budget,
             )?;
         }
@@ -710,6 +724,7 @@ impl CoveragePlanner<'_> {
                 }
             }
             let qualified_count = count(qualified.len())?;
+            let source_row = self.plan.definitions[definition].source_rows[minimum];
             if u64::from(key.minimum) > qualified_count {
                 finding(
                     &mut self.result.validation,
@@ -717,6 +732,10 @@ impl CoveragePlanner<'_> {
                     rule,
                     owner,
                     shift.id,
+                    &format!(
+                        "domain.entities.{}.coverage.qualificationMinimums.{source_row}.minimum",
+                        owner.id
+                    ),
                     budget,
                 )?;
             }
@@ -727,6 +746,10 @@ impl CoveragePlanner<'_> {
                     rule,
                     owner,
                     shift.id,
+                    &format!(
+                        "domain.entities.{}.coverage.qualificationMinimums.{source_row}.minimum",
+                        owner.id
+                    ),
                     budget,
                 )?;
             }
@@ -1022,19 +1045,23 @@ fn coverage_bound_findings(
     }
     for (shift, predicates) in by_shift {
         for lower in &predicates {
-            let (definition, minimum, code) = match lower.predicate {
+            let (definition, minimum, code, source_row) = match lower.predicate {
                 Predicate::Headcount {
                     definition, lower, ..
-                } => (definition, lower, "contradictory_coverage_bounds"),
+                } => (definition, lower, "contradictory_coverage_bounds", None),
                 Predicate::Qualification {
                     definition,
                     minimum,
                     ..
-                } => (
-                    definition,
-                    u64::from(plan.definitions[definition].minima[minimum].minimum),
-                    "qualification_above_headcount",
-                ),
+                } => {
+                    let sr = plan.definitions[definition].source_rows[minimum];
+                    (
+                        definition,
+                        u64::from(plan.definitions[definition].minima[minimum].minimum),
+                        "qualification_above_headcount",
+                        Some(sr),
+                    )
+                }
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MinimumRest { .. } => continue,
@@ -1071,11 +1098,18 @@ fn coverage_bound_findings(
                 if subset {
                     let owner = plan.definitions[definition].owner;
                     let other = plan.definitions[upper_definition].owner;
+                    let field_path = match source_row {
+                        Some(row) => format!(
+                            "domain.entities.{}.coverage.qualificationMinimums.{row}.minimum",
+                            owner.id
+                        ),
+                        None => format!("domain.entities.{}.coverage", owner.id),
+                    };
                     budget.reserve(1, 7, 1024)?;
                     report.issues.push(ValidationIssue {
                         code: format!("official.workforce.{code}"), severity: ValidationSeverity::Error,
                         message: format!("Rule {} owner {} {} requires at least {minimum}, exceeding {maximum} allowed by rule {} owner {} {} for shift {shift}. This is not a solver feasibility result.", lower.rule, owner.kind, owner.id, upper.rule, other.kind, other.id),
-                        field_path: Some(format!("domain.entities.{}.coverage", owner.id)), resource: Some(ResourceRef::Rule(lower.rule)),
+                        field_path: Some(field_path), resource: Some(ResourceRef::Rule(lower.rule)),
                     });
                 }
             }
@@ -1090,6 +1124,7 @@ fn finding(
     rule: RuleId,
     owner: Owner,
     shift: ShiftId,
+    field_path: &str,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
     budget.step()?;
@@ -1097,7 +1132,7 @@ fn finding(
     report.issues.push(ValidationIssue {
         code: format!("official.workforce.{code}"), severity: ValidationSeverity::Error,
         message: format!("Required coverage has an obvious contradiction (owner {} {}, shift {shift}). This is not a solver feasibility result.", owner.kind, owner.id),
-        field_path: Some(format!("domain.entities.{}.coverage", owner.id)), resource: Some(ResourceRef::Rule(rule)),
+        field_path: Some(field_path.to_owned()), resource: Some(ResourceRef::Rule(rule)),
     });
     Ok(())
 }
@@ -1297,12 +1332,14 @@ fn locked_coverage_findings(
             }
         }
         if selected > upper {
+            let owner = plan.definitions[definition].owner;
             finding(
                 report,
                 "hard_locked_coverage_excess",
                 constraint.rule,
-                plan.definitions[definition].owner,
+                owner,
                 shift,
+                &format!("domain.entities.{}.coverage", owner.id),
                 budget,
             )?;
         }
@@ -1316,7 +1353,10 @@ mod tests {
         AssignmentAnalysis, AssignmentInput, AssignmentModelEstimate, AssignmentPair,
         AssignmentRuleError, DomainValidationReport, OperationBudget, PairContext, obligations,
     };
-    use crate::test_support::{fixture, id};
+    use crate::{
+        assignment_rules::analysis::prepare,
+        test_support::{fixture, id},
+    };
     use eutheto_planning_ir::PlanningIrLimitsV1;
     use eutheto_types::{CancellationToken, ScenarioDocument};
     use serde_json::json;
@@ -1421,6 +1461,233 @@ mod tests {
             );
             assert!(token.is_cancelled());
         }
+        Ok(())
+    }
+
+    // ── Coverage source-row mapping regression ──────────────────────────────
+
+    use super::support::{authored_source_rows, canonical_minima};
+    use crate::model::{Coverage, QualificationMatch, QualificationMinimum};
+    use std::str::FromStr;
+
+    fn qid(index: u32) -> Result<crate::ids::QualificationId, Box<dyn std::error::Error>> {
+        Ok(crate::ids::QualificationId::from_str(&id(index))?)
+    }
+
+    fn qual_min(
+        all: Vec<u32>,
+        any: Vec<u32>,
+        minimum: u16,
+    ) -> Result<QualificationMinimum, Box<dyn std::error::Error>> {
+        Ok(QualificationMinimum {
+            qualifications: QualificationMatch {
+                all_qualification_ids: all.into_iter().map(qid).collect::<Result<_, _>>()?,
+                any_qualification_ids: any.into_iter().map(qid).collect::<Result<_, _>>()?,
+            },
+            minimum,
+        })
+    }
+
+    #[test]
+    fn authored_source_rows_reversed_order() -> Result<(), Box<dyn std::error::Error>> {
+        // Authored order: [B, A]. Canonical sort reverses to [A, B].
+        // Source mapping must resolve each canonical key to its first authored row.
+        let coverage = Coverage::Exact {
+            count: 1,
+            qualification_minimums: vec![
+                qual_min(vec![20, 10], vec![], 1)?, // authored row 0: {10,20}
+                qual_min(vec![10], vec![], 1)?,     // authored row 1: {10}
+            ],
+        };
+        let mut budget = OperationBudget::analysis(None, PlanningIrLimitsV1::DEFAULT);
+        let minima = canonical_minima(&coverage, &mut budget)?;
+        // Canonical: [{10}, {10,20}] after sort+dedup (two distinct keys)
+        assert_eq!(minima.len(), 2);
+        assert_eq!(minima[0].all, vec![qid(10)?]);
+        assert_eq!(minima[1].all, vec![qid(10)?, qid(20)?]);
+
+        let source_rows = authored_source_rows(&coverage, &minima, &mut budget)?;
+        assert_eq!(source_rows.len(), 2);
+        // Canonical [{10}] matches authored row 1 (first match)
+        assert_eq!(source_rows[0], 1);
+        // Canonical [{10,20}] matches authored row 0 (first match)
+        assert_eq!(source_rows[1], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn authored_source_rows_duplicate_equivalent() -> Result<(), Box<dyn std::error::Error>> {
+        // Two identical authored rows. Canonical dedup merges them.
+        // Both canonical keys map to the first authored row (index 0).
+        let coverage = Coverage::Exact {
+            count: 2,
+            qualification_minimums: vec![
+                qual_min(vec![10], vec![], 1)?, // authored row 0
+                qual_min(vec![10], vec![], 1)?, // authored row 1 (duplicate)
+            ],
+        };
+        let mut budget = OperationBudget::analysis(None, PlanningIrLimitsV1::DEFAULT);
+        let minima = canonical_minima(&coverage, &mut budget)?;
+        assert_eq!(minima.len(), 1); // deduped
+
+        let source_rows = authored_source_rows(&coverage, &minima, &mut budget)?;
+        assert_eq!(source_rows.len(), 1);
+        assert_eq!(source_rows[0], 0); // first authored row
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_shortage_exact_targets_count_field() -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        // Exact coverage requiring 2 but only 1 person available
+        document
+            .domain
+            .entities
+            .get_mut(&id(8).parse()?)
+            .ok_or("shift fixture")?["coverage"] =
+            json!({"kind":"exact","count":2,"qualificationMinimums":[]});
+        // Add a coverage rule
+        document.domain.rules.insert(
+            id(22).parse()?,
+            json!({"id":id(22),"kind":"coverage","active":true,"strength":"required",
+                   "scope":{"people":{"kind":"all"}}}),
+        );
+        let mut budget = OperationBudget::analysis(None, PlanningIrLimitsV1::DEFAULT);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (analysis, _) = prepare(&document, &input, &mut budget, PlanningIrLimitsV1::DEFAULT)?;
+        let shortage = analysis
+            .validation
+            .issues
+            .iter()
+            .find(|i| i.code == "official.workforce.candidate_shortage")
+            .ok_or("expected candidate_shortage")?;
+        assert_eq!(
+            shortage.field_path,
+            Some(format!("domain.entities.{}.coverage.count", id(8)))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_shortage_at_least_targets_minimum_field() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        // AtLeast coverage requiring minimum 2 but only 1 person available
+        document
+            .domain
+            .entities
+            .get_mut(&id(8).parse()?)
+            .ok_or("shift fixture")?["coverage"] =
+            json!({"kind":"atLeast","minimum":2,"qualificationMinimums":[]});
+        document.domain.rules.insert(
+            id(22).parse()?,
+            json!({"id":id(22),"kind":"coverage","active":true,"strength":"required",
+                   "scope":{"people":{"kind":"all"}}}),
+        );
+        let mut budget = OperationBudget::analysis(None, PlanningIrLimitsV1::DEFAULT);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (analysis, _) = prepare(&document, &input, &mut budget, PlanningIrLimitsV1::DEFAULT)?;
+        let shortage = analysis
+            .validation
+            .issues
+            .iter()
+            .find(|i| i.code == "official.workforce.candidate_shortage")
+            .ok_or("expected candidate_shortage")?;
+        assert_eq!(
+            shortage.field_path,
+            Some(format!("domain.entities.{}.coverage.minimum", id(8)))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn qualification_shortage_targets_correct_authored_row()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        // Add a second qualification entity
+        document.domain.entities.insert(
+            id(12).parse()?,
+            json!({"kind":"qualification","id":id(12),"name":"Second","description":""}),
+        );
+        // Person has qualification 11 but not 12
+        // Two qualification minimums in authored order: [row0={id(11)}, row1={id(12)}]
+        // Person lacks id(12), so row1 should be short.
+        document
+            .domain
+            .entities
+            .get_mut(&id(8).parse()?)
+            .ok_or("shift fixture")?["coverage"] = json!({
+            "kind":"exact","count":1,
+            "qualificationMinimums":[
+                {"qualifications":{"allQualificationIds":[id(11)],"anyQualificationIds":[]},"minimum":1},
+                {"qualifications":{"allQualificationIds":[id(12)],"anyQualificationIds":[]},"minimum":1}
+            ]
+        });
+        document.domain.rules.insert(
+            id(22).parse()?,
+            json!({"id":id(22),"kind":"coverage","active":true,"strength":"required",
+                   "scope":{"people":{"kind":"all"}}}),
+        );
+        let mut budget = OperationBudget::analysis(None, PlanningIrLimitsV1::DEFAULT);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (analysis, _) = prepare(&document, &input, &mut budget, PlanningIrLimitsV1::DEFAULT)?;
+        let shortage = analysis
+            .validation
+            .issues
+            .iter()
+            .find(|i| i.code == "official.workforce.qualification_shortage")
+            .ok_or("expected qualification_shortage")?;
+        // The field path should target the specific authored row that's short.
+        // Authored row 0 has allQualificationIds=[id(11)] which person has.
+        // Authored row 1 has allQualificationIds=[id(12)] which person lacks.
+        assert_eq!(
+            shortage.field_path,
+            Some(format!(
+                "domain.entities.{}.coverage.qualificationMinimums.1.minimum",
+                id(8)
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_coverage_owner_field_path() -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        // Standalone CoverageRequirement requiring 2 but only 1 person
+        document.domain.entities.insert(
+            id(30).parse()?,
+            json!({"kind":"coverageRequirement","id":id(30),"active":true,
+                   "scope":{"kind":"all"},
+                   "coverage":{"kind":"exact","count":2,"qualificationMinimums":[]}}),
+        );
+        // Need a coverage rule for the shift template too
+        document.domain.rules.insert(
+            id(22).parse()?,
+            json!({"id":id(22),"kind":"coverage","active":true,"strength":"required",
+                   "scope":{"people":{"kind":"all"}}}),
+        );
+        let mut budget = OperationBudget::analysis(None, PlanningIrLimitsV1::DEFAULT);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (analysis, _) = prepare(&document, &input, &mut budget, PlanningIrLimitsV1::DEFAULT)?;
+        let shortage = analysis
+            .validation
+            .issues
+            .iter()
+            .find(|i| i.code == "official.workforce.candidate_shortage")
+            .ok_or("expected candidate_shortage from coverage requirement")?;
+        // Must target the standalone coverage requirement entity, not the shift template
+        assert_eq!(
+            shortage.field_path,
+            Some(format!("domain.entities.{}.coverage.count", id(30)))
+        );
         Ok(())
     }
 }

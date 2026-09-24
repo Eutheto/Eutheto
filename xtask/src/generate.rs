@@ -4113,6 +4113,9 @@ function isPortablePurpose(kind: OperationPurposeV1["kind"]): kind is PortablePu
 }
 const PORTABLE_COMPACT_BYTES = 64 * 1_048_576;
 const PORTABLE_WIRE_BYTES = 128 * 1_048_576 + 128 * 1024;
+const SETUP_FRAME_BYTES = 64 * 1024;
+const SETUP_VIEW_REQUEST_BYTES = 2 * SETUP_FRAME_BYTES;
+const SETUP_PREVIEW_REQUEST_BYTES = 16 * 1_048_576 + SETUP_VIEW_REQUEST_BYTES;
 function portableGuard<T>(guard: Guard<T>): Guard<T> {
   return (value: unknown): value is T => boundedJson(value, PORTABLE_COMPACT_BYTES) && guard(value);
 }
@@ -4201,8 +4204,20 @@ class OperationScope<C extends OperationContextV1> {
     } else if (Object.values(portableCommands).some((portableCommand) => portableCommand === command)) {
       throw new RangeError("The portable command requires its matching purpose");
     }
-    if (!boundedJson(payload, portablePurpose ? PORTABLE_COMPACT_BYTES :
-      settingsPurpose ? SETTINGS_COMPACT_BYTES : RESPONSE_MAX_BYTES))
+    const setupRequestMaximumBytes =
+      purpose.kind === "commandPreview" || purpose.kind === "applyReviewedGeneration"
+        ? SETUP_PREVIEW_REQUEST_BYTES
+        : purpose.kind === "setupView"
+          ? SETUP_VIEW_REQUEST_BYTES
+          : purpose.kind === "scenarioSummary" || purpose.kind === "setupStatus" ||
+              purpose.kind === "fullValidation"
+            ? SETUP_FRAME_BYTES
+            : undefined;
+    const nativeRequestMaximumBytes = portablePurpose
+      ? PORTABLE_COMPACT_BYTES
+      : setupRequestMaximumBytes;
+    if (!boundedJson(payload, nativeRequestMaximumBytes ??
+      (settingsPurpose ? SETTINGS_COMPACT_BYTES : RESPONSE_MAX_BYTES)))
       throw new RangeError("The operation request exceeds its JSON limits");
     // Capture before the prepare await: later edits to a Vue draft cannot rebind this request.
     const snapshot: unknown = JSON.parse(JSON.stringify(payload));
@@ -4333,7 +4348,8 @@ class OperationScope<C extends OperationContextV1> {
           } : { schemaVersion: 1, requestId, operationId },
           guard,
           { maximumBytes, onProgress: channel, revisionKey,
-            ...(portablePurpose ? { requestMaximumBytes: PORTABLE_COMPACT_BYTES } : {}) },
+            ...(nativeRequestMaximumBytes === undefined ? {} :
+              { requestMaximumBytes: nativeRequestMaximumBytes }) },
         );
         receivedSuccess = true;
         return response;

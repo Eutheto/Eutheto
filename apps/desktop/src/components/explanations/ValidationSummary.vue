@@ -17,6 +17,7 @@ const props = withDefaults(
     headingLevel?: 2 | 3 | 4;
     locale?: string | undefined;
     selectedIssue?: ValidationIssue | null;
+    issueLabels?: ReadonlyMap<ValidationIssue, string> | undefined;
   }>(),
   {
     presentation: "panel",
@@ -24,6 +25,7 @@ const props = withDefaults(
     headingLevel: 2,
     locale: undefined,
     selectedIssue: null,
+    issueLabels: undefined,
   },
 );
 
@@ -66,6 +68,24 @@ function severityVariant(issue: ValidationIssue): "danger" | "accent" | "neutral
   if (issue.severity === "error") return "danger";
   if (issue.severity === "warning") return "accent";
   return "neutral";
+}
+function severityText(issue: ValidationIssue): string {
+  if (issue.severity === "error") return explanationMessage("validation.severity.error");
+  if (issue.severity === "warning") return explanationMessage("validation.severity.warning");
+  return explanationMessage("validation.severity.info");
+}
+
+function issueName(issue: ValidationIssue): string {
+  const parameters = {
+    severity: severityText(issue),
+    message: issue.message,
+    subject: props.issueLabels?.get(issue) ?? "",
+  };
+  return explanationMessage(
+    parameters.subject ? "validation.selectIssueFor" : "validation.selectIssue",
+    parameters,
+    props.locale,
+  );
 }
 </script>
 
@@ -111,7 +131,11 @@ function severityVariant(issue: ValidationIssue): "danger" | "accent" | "neutral
       </div>
     </dl>
 
-    <ul v-if="showsIssues" class="mt-4 space-y-3" aria-label="Validation issues">
+    <ul
+      v-if="showsIssues"
+      class="mt-4 space-y-3"
+      :aria-label="explanationMessage('validation.issuesLabel')"
+    >
       <li v-for="(issue, index) in findings.issues" :key="`${issue.code}:${index}`">
         <component
           :is="interaction === 'selectable' ? 'button' : 'div'"
@@ -120,26 +144,30 @@ function severityVariant(issue: ValidationIssue): "danger" | "accent" | "neutral
           :aria-current="
             interaction === 'selectable' && selectedIssue === issue ? 'true' : undefined
           "
-          :aria-label="
-            interaction === 'selectable'
-              ? `Select ${issue.severity} validation issue: ${issue.message}`
-              : undefined
-          "
+          :aria-label="interaction === 'selectable' ? issueName(issue) : undefined"
           @click="interaction === 'selectable' && emit('selectIssue', issue)"
         >
           <span class="flex flex-wrap items-center gap-2">
-            <Badge :variant="severityVariant(issue)">{{ issue.severity }}</Badge>
+            <Badge :variant="severityVariant(issue)">{{ severityText(issue) }}</Badge>
             <span class="font-mono text-xs text-muted">{{ issue.code }}</span>
-            <Badge v-if="interaction === 'selectable' && selectedIssue === issue" variant="outline"
-              >Selected</Badge
-            >
+            <Badge v-if="interaction === 'selectable' && selectedIssue === issue" variant="outline">
+              {{ explanationMessage("validation.selected") }}
+            </Badge>
           </span>
           <span class="mt-2 block text-sm font-semibold">{{ issue.message }}</span>
+          <span v-if="issueLabels?.has(issue)" class="mt-1 block text-sm">
+            {{ issueLabels.get(issue) }}
+          </span>
           <span v-if="issue.fieldPath" class="mt-1 block text-xs text-muted">
-            Field: {{ issue.fieldPath }}
+            {{ explanationMessage("validation.field", { path: issue.fieldPath }) }}
           </span>
           <span v-if="issue.resource" class="mt-1 block text-xs text-muted">
-            Affected {{ issue.resource.type }}: {{ issue.resource.id }}
+            {{
+              explanationMessage("validation.affectedResource", {
+                kind: issue.resource.type,
+                id: issue.resource.id,
+              })
+            }}
           </span>
         </component>
       </li>

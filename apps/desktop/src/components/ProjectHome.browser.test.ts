@@ -712,7 +712,7 @@ describe("Real shell commands and route updates", () => {
     );
     await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
     await expect.element(await screen.findByRole("alert")).toHaveTextContent(messages.setup.stale);
-    expect(screen.queryByRole("heading", { name: messages.setup.calendar })).toBeNull();
+    expect(screen.queryByRole("heading", { name: messages.setup.calendarSummary })).toBeNull();
   });
 
   it("never sends scenario undo from a text editor, but enables contextual undo/redo and export outside it", async () => {
@@ -765,6 +765,8 @@ describe("Real shell commands and route updates", () => {
       name: "project-setup",
       params: { scenarioId: workforceProject.scenarioId },
     });
+    expect(screen.queryByRole("link", { name: messages.shell.export })).toBeNull();
+    await userEvent.click(screen.getByText(messages.setup.moreActions));
     await userEvent.click(await screen.findByRole("link", { name: messages.shell.export }));
     await expect
       .element(await screen.findByRole("heading", { name: messages.portable.exportTitle }))

@@ -69,6 +69,37 @@ fn people_fixture() -> Result<ScenarioDocument, Box<dyn Error>> {
 }
 
 #[test]
+fn entity_summary_resolves_kind_without_copying_detail_and_rejects_wrong_identity()
+-> Result<(), Box<dyn Error>> {
+    let mut document = support::fixture()?;
+    let entity_id: EntityId = support::id(1).parse()?;
+    let request = query(
+        "official.workforce.setup.entity_summary",
+        json!({"entityId": entity_id}),
+    );
+    let WorkforceSetupViewDataV1::EntitySummary(summary) = view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(summary.entity_id, entity_id);
+    assert_eq!(
+        summary.kind,
+        eutheto_workforce::setup::contracts::WorkforceEntityKindV1::Person,
+    );
+    assert_eq!(
+        summary.name.as_deref(),
+        document.domain.entities[&entity_id]["name"].as_str(),
+    );
+    document
+        .domain
+        .entities
+        .get_mut(&entity_id)
+        .ok_or("person")?["id"] = json!(support::id(2));
+    assert!(view(&document, &request, context()).is_err());
+    Ok(())
+}
+
+#[test]
 fn people_filter_uses_recorded_grants_and_rejects_a_nonmember_cursor() -> Result<(), Box<dyn Error>>
 {
     let mut document = people_fixture()?;

@@ -288,6 +288,37 @@ async fn native_preview_is_nonpublishing_and_progress_is_bound_to_actual_invokin
     Ok(())
 }
 
+#[tokio::test]
+async fn oversized_setup_query_is_rejected_before_claiming_its_operation() -> TestResult {
+    let fixture = fixture().await?;
+    let view_id = "eutheto.setup.rule_catalog";
+    let operation_id = prepare(
+        &fixture,
+        &json!({"kind":"setupView", "viewId":view_id}),
+        Some(Revision::INITIAL),
+    )?;
+    let request_id = RequestId::new(&SystemIdGenerator)?;
+    let request = json!({
+        "requestId":request_id, "schemaVersion":2, "scenarioId":fixture.scenario_id,
+        "expectedRevision":0, "operationId":operation_id, "source":{"kind":"stored"},
+        "query":{"schemaVersion":1, "viewId":view_id, "parameters":{}, "continuation":null}
+    });
+    let mut oversized = request.clone();
+    oversized["query"]["parameters"]["probe"] = json!("x".repeat(2 * FRAME_BYTES));
+    let denied = invoke_ipc_args(
+        &fixture.window,
+        "scenario_get_view",
+        json!({"request":oversized, "onProgress":"__CHANNEL__:42"}),
+    )?
+    .err()
+    .ok_or("oversized setup query unexpectedly passed native admission")?;
+    assert_eq!(denied["code"], "setup.request_too_large");
+    let result = heavy(&fixture.window, "scenario_get_view", &request)?;
+    assert_eq!(result.request_id, request_id);
+    assert_eq!(result.result["scenarioId"], fixture.scenario_id.to_string());
+    Ok(())
+}
+
 #[test]
 fn setup_wire_preserves_signed_offsets_and_wide_values_and_rejects_partial_frames() -> TestResult {
     let value = json!({"offsetSeconds":-18000, "minimum":i64::MIN, "maximum":u64::MAX, "safe":9_007_199_254_740_991_u64});

@@ -30,6 +30,7 @@ const props = defineProps<{
 const emit = defineEmits<{ "update:modelValue": [value: PersonFieldsDraft] }>();
 const copy = messages.personFields;
 const prefix = useId();
+const host = ref<HTMLElement>();
 const grantPage = ref(0);
 const tagPage = ref(0);
 const targetInput = ref<HTMLInputElement>();
@@ -232,6 +233,65 @@ watch(
   },
   { flush: "post" },
 );
+async function focusField(path: readonly string[], isCurrent: () => boolean): Promise<boolean> {
+  const raw = props.modelValue;
+  const ownsField = () => current && isCurrent() && props.modelValue === raw;
+  if (!ownsField()) return false;
+  const scalar: Readonly<Record<string, string>> = {
+    activeRange: "active-range",
+    "activeRange.kind": "active-range",
+    "activeRange.startDate": "startDate",
+    "activeRange.endDateExclusive": "endDateExclusive",
+    qualificationGrants: "grants-heading",
+    eligibleAssignmentTypeIds: "eligible-types",
+    teamIds: "teams",
+    homeLocationId: "home-location",
+    workloadWeight: "weight",
+    "workloadWeight.numerator": "weightNumerator",
+    "workloadWeight.denominator": "weightDenominator",
+    workloadTarget: "workload-target",
+    "workloadTarget.bucketId": "target-bucket",
+    "workloadTarget.calendarId": "target-calendar",
+    "workloadTarget.membership": "membership",
+    "workloadTarget.target": "target",
+    tags: "tags-heading",
+    display: "display",
+    "display.color": "color",
+    "display.avatarInitials": "initials",
+  };
+  const key = path.join(".");
+  let suffix = Object.hasOwn(scalar, key) ? scalar[key] : undefined;
+  if (suffix === undefined && path[0] === "qualificationGrants" && path.length <= 3) {
+    const index = Number(path[1]);
+    const row =
+      Number.isSafeInteger(index) && index >= 0 ? raw.qualificationGrants[index] : undefined;
+    if (row === undefined) return false;
+    if (path.length === 2) suffix = `grant-row-${row.key}`;
+    else if (path[2] === "qualificationId") suffix = `grant-${row.key}`;
+    else if (path[2] === "effectiveFrom" || path[2] === "expiresAt")
+      suffix = `${row.key}-${path[2]}`;
+    else return false;
+    grantPage.value = Math.floor(index / SELECTION_PAGE_SIZE);
+  }
+  if (suffix === undefined && path[0] === "tags" && path.length === 2) {
+    const index = Number(path[1]);
+    const row = Number.isSafeInteger(index) && index >= 0 ? raw.tags[index] : undefined;
+    if (row === undefined) return false;
+    suffix = `tag-${row.key}`;
+    tagPage.value = Math.floor(index / SELECTION_PAGE_SIZE);
+  }
+  if (suffix === undefined) return false;
+  await nextTick();
+  if (!ownsField()) return false;
+  const element = document.getElementById(`${prefix}-${suffix}`);
+  if (element === null || !host.value?.contains(element)) return false;
+  const detail = element.closest("details");
+  if (detail && host.value.contains(detail)) detail.open = true;
+  element.focus();
+  return document.activeElement === element;
+}
+defineExpose({ focusField });
+
 onScopeDispose(() => {
   current = false;
   bucketGeneration++;
@@ -240,381 +300,465 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <div class="field-stack">
-    <fieldset :disabled="disabled" class="field-stack">
-      <legend>{{ copy.activeDates }}</legend>
-      <label
-        ><input
-          type="checkbox"
-          :checked="modelValue.activeDatesEnabled"
-          :disabled="locked"
-          @change="set('activeDatesEnabled', checked($event))"
-        />
-        {{ copy.limitActiveDates }}</label
-      >
-      <p class="field-help">
-        {{ copy.dateHelp }}
-      </p>
-      <div v-if="modelValue.activeDatesEnabled" class="form-columns">
-        <div
-          v-for="field in [
-            { key: 'startDate', label: copy.startDate },
-            { key: 'endDateExclusive', label: copy.endDate },
-          ] as const"
-          :key="field.key"
+  <div ref="host" class="field-stack">
+    <details class="setup-more">
+      <summary>
+        {{ copy.eligibilityOptions }}
+        <span class="person-option-summary">
+          ·
+          {{
+            copy.eligibilitySummary(
+              modelValue.qualificationGrants.length,
+              modelValue.eligibleAssignmentTypeIds.length,
+              locale,
+            )
+          }}
+        </span>
+      </summary>
+      <section class="field-stack" :aria-labelledby="`${prefix}-grants-heading`">
+        <h3 :id="`${prefix}-grants-heading`" tabindex="-1">{{ copy.grants }}</h3>
+        <p class="field-help">
+          {{ copy.grantHelp }}
+        </p>
+        <p v-if="errors.qualificationGrants" class="text-danger" role="alert">
+          {{ errors.qualificationGrants }}
+        </p>
+        <fieldset
+          v-for="(row, index) in grants"
+          :id="`${prefix}-grant-row-${row.key}`"
+          :key="row.key"
+          tabindex="-1"
+          :disabled="disabled"
           class="field-stack"
         >
-          <label :for="`${prefix}-${field.key}`">{{ field.label }}</label>
-          <input
-            :id="`${prefix}-${field.key}`"
-            type="text"
-            placeholder="YYYY-MM-DD"
-            maxlength="64"
+          <legend>
+            {{ copy.grantNumber(grantPage * SELECTION_PAGE_SIZE + index + 1, locale) }}
+          </legend>
+          <WorkforceEntityPicker
+            v-bind="pickerContext"
+            :id="`${prefix}-grant-${row.key}`"
+            kind="qualification"
+            :label="copy.qualification"
             required
-            :readonly="readOnly"
-            :value="modelValue[field.key]"
-            @input="set(field.key, text($event))"
+            :model-value="row.qualificationId ? [row.qualificationId] : []"
+            @update:model-value="changeGrant(row.key, 'qualificationId', $event[0] ?? '')"
           />
+          <div class="form-columns">
+            <div
+              v-for="field in [
+                { key: 'effectiveFrom', label: copy.effectiveFrom },
+                { key: 'expiresAt', label: copy.expiresAt },
+              ] as const"
+              :key="field.key"
+              class="field-stack"
+            >
+              <label :for="`${prefix}-${row.key}-${field.key}`">{{ field.label }}</label>
+              <input
+                :id="`${prefix}-${row.key}-${field.key}`"
+                type="text"
+                maxlength="64"
+                :readonly="readOnly"
+                :value="row[field.key]"
+                @input="changeGrant(row.key, field.key, text($event))"
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="locked"
+            :aria-label="
+              copy.removeGrantNumber(grantPage * SELECTION_PAGE_SIZE + index + 1, locale)
+            "
+            @click="removeGrant(row)"
+          >
+            {{ copy.removeGrant }}
+          </button>
+        </fieldset>
+        <p role="status">
+          {{
+            copy.grantPage(
+              modelValue.qualificationGrants.length,
+              grantPage + 1,
+              Math.max(1, Math.ceil(modelValue.qualificationGrants.length / SELECTION_PAGE_SIZE)),
+              locale,
+            )
+          }}
+        </p>
+        <div class="action-row">
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="grantPage === 0"
+            @click="changePage('grants', -1)"
+          >
+            {{ copy.previousGrants }}
+          </button>
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="
+              (grantPage + 1) * SELECTION_PAGE_SIZE >= modelValue.qualificationGrants.length
+            "
+            @click="changePage('grants', 1)"
+          >
+            {{ copy.nextGrants }}
+          </button>
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="locked || modelValue.qualificationGrants.length >= 10_000"
+            @click="addGrant"
+          >
+            {{ copy.addGrant }}
+          </button>
         </div>
-      </div>
-    </fieldset>
+      </section>
 
-    <section class="field-stack" :aria-labelledby="`${prefix}-grants-heading`">
-      <h3 :id="`${prefix}-grants-heading`" tabindex="-1">{{ copy.grants }}</h3>
-      <p class="field-help">
-        {{ copy.grantHelp }}
-      </p>
-      <p v-if="errors.qualificationGrants" class="text-danger" role="alert">
-        {{ errors.qualificationGrants }}
-      </p>
+      <WorkforceEntityPicker
+        v-bind="pickerContext"
+        :id="`${prefix}-eligible-types`"
+        kind="assignmentType"
+        :label="copy.eligibleTypes"
+        :description="copy.eligibleTypesHelp"
+        multiple
+        :model-value="modelValue.eligibleAssignmentTypeIds"
+        :error="errors.eligibleAssignmentTypeIds"
+        @update:model-value="set('eligibleAssignmentTypeIds', $event)"
+      />
+    </details>
+    <details class="setup-more">
+      <summary>
+        {{ copy.placementOptions }}
+        <span class="person-option-summary">
+          ·
+          {{
+            copy.placementSummary(
+              modelValue.activeDatesEnabled,
+              modelValue.teamIds.length,
+              Boolean(modelValue.homeLocationId),
+              locale,
+            )
+          }}
+        </span>
+      </summary>
       <fieldset
-        v-for="(row, index) in grants"
-        :key="row.key"
+        :id="`${prefix}-active-range`"
+        tabindex="-1"
         :disabled="disabled"
         class="field-stack"
       >
-        <legend>{{ copy.grantNumber(grantPage * SELECTION_PAGE_SIZE + index + 1, locale) }}</legend>
-        <WorkforceEntityPicker
-          v-bind="pickerContext"
-          :id="`${prefix}-grant-${row.key}`"
-          kind="qualification"
-          :label="copy.qualification"
-          required
-          :model-value="row.qualificationId ? [row.qualificationId] : []"
-          @update:model-value="changeGrant(row.key, 'qualificationId', $event[0] ?? '')"
-        />
-        <div class="form-columns">
+        <legend>{{ copy.activeDates }}</legend>
+        <label
+          ><input
+            type="checkbox"
+            :checked="modelValue.activeDatesEnabled"
+            :disabled="locked"
+            @change="set('activeDatesEnabled', checked($event))"
+          />
+          {{ copy.limitActiveDates }}</label
+        >
+        <p class="field-help">
+          {{ copy.dateHelp }}
+        </p>
+        <div v-if="modelValue.activeDatesEnabled" class="form-columns">
           <div
             v-for="field in [
-              { key: 'effectiveFrom', label: copy.effectiveFrom },
-              { key: 'expiresAt', label: copy.expiresAt },
+              { key: 'startDate', label: copy.startDate },
+              { key: 'endDateExclusive', label: copy.endDate },
             ] as const"
             :key="field.key"
             class="field-stack"
           >
-            <label :for="`${prefix}-${row.key}-${field.key}`">{{ field.label }}</label>
+            <label :for="`${prefix}-${field.key}`">{{ field.label }}</label>
             <input
-              :id="`${prefix}-${row.key}-${field.key}`"
+              :id="`${prefix}-${field.key}`"
               type="text"
+              placeholder="YYYY-MM-DD"
               maxlength="64"
+              required
               :readonly="readOnly"
-              :value="row[field.key]"
-              @input="changeGrant(row.key, field.key, text($event))"
+              :value="modelValue[field.key]"
+              @input="set(field.key, text($event))"
             />
           </div>
         </div>
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="locked"
-          :aria-label="copy.removeGrantNumber(grantPage * SELECTION_PAGE_SIZE + index + 1, locale)"
-          @click="removeGrant(row)"
-        >
-          {{ copy.removeGrant }}
-        </button>
       </fieldset>
-      <p role="status">
-        {{
-          copy.grantPage(
-            modelValue.qualificationGrants.length,
-            grantPage + 1,
-            Math.max(1, Math.ceil(modelValue.qualificationGrants.length / SELECTION_PAGE_SIZE)),
-            locale,
-          )
-        }}
-      </p>
-      <div class="action-row">
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="grantPage === 0"
-          @click="changePage('grants', -1)"
-        >
-          {{ copy.previousGrants }}
-        </button>
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="(grantPage + 1) * SELECTION_PAGE_SIZE >= modelValue.qualificationGrants.length"
-          @click="changePage('grants', 1)"
-        >
-          {{ copy.nextGrants }}
-        </button>
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="locked || modelValue.qualificationGrants.length >= 10_000"
-          @click="addGrant"
-        >
-          {{ copy.addGrant }}
-        </button>
-      </div>
-    </section>
+      <WorkforceEntityPicker
+        v-bind="pickerContext"
+        :id="`${prefix}-teams`"
+        kind="team"
+        :label="copy.teams"
+        multiple
+        :model-value="modelValue.teamIds"
+        :error="errors.teamIds"
+        @update:model-value="set('teamIds', $event)"
+      />
+      <WorkforceEntityPicker
+        v-bind="pickerContext"
+        :id="`${prefix}-home-location`"
+        kind="location"
+        :label="copy.homeLocation"
+        :model-value="modelValue.homeLocationId ? [modelValue.homeLocationId] : []"
+        :error="errors.homeLocationId"
+        @update:model-value="set('homeLocationId', $event[0] ?? '')"
+      />
+    </details>
+    <details class="setup-more">
+      <summary>
+        {{ copy.workloadOptions }}
+        <span class="person-option-summary">
+          ·
+          {{
+            copy.workloadSummary(
+              modelValue.weightNumerator,
+              modelValue.weightDenominator,
+              modelValue.targetEnabled,
+            )
+          }}
+        </span>
+      </summary>
 
-    <WorkforceEntityPicker
-      v-bind="pickerContext"
-      kind="assignmentType"
-      :label="copy.eligibleTypes"
-      multiple
-      :model-value="modelValue.eligibleAssignmentTypeIds"
-      :error="errors.eligibleAssignmentTypeIds"
-      @update:model-value="set('eligibleAssignmentTypeIds', $event)"
-    />
-    <WorkforceEntityPicker
-      v-bind="pickerContext"
-      kind="team"
-      :label="copy.teams"
-      multiple
-      :model-value="modelValue.teamIds"
-      :error="errors.teamIds"
-      @update:model-value="set('teamIds', $event)"
-    />
-    <WorkforceEntityPicker
-      v-bind="pickerContext"
-      kind="location"
-      :label="copy.homeLocation"
-      :model-value="modelValue.homeLocationId ? [modelValue.homeLocationId] : []"
-      :error="errors.homeLocationId"
-      @update:model-value="set('homeLocationId', $event[0] ?? '')"
-    />
+      <fieldset :id="`${prefix}-weight`" tabindex="-1" :disabled="disabled" class="field-stack">
+        <legend>{{ copy.weight }}</legend>
+        <p :id="`${prefix}-weight-help`" class="field-help">
+          {{ copy.weightHelp }}
+        </p>
+        <div class="form-columns">
+          <div
+            v-for="field in [
+              { key: 'weightNumerator', label: copy.numerator },
+              { key: 'weightDenominator', label: copy.denominator },
+            ] as const"
+            :key="field.key"
+            class="field-stack"
+          >
+            <label :for="`${prefix}-${field.key}`">{{ field.label }}</label>
+            <input
+              :id="`${prefix}-${field.key}`"
+              type="text"
+              inputmode="numeric"
+              maxlength="32"
+              required
+              :readonly="readOnly"
+              :value="modelValue[field.key]"
+              :aria-invalid="Boolean(errors[field.key]) || undefined"
+              :aria-describedby="`${prefix}-weight-help ${prefix}-${field.key}-error`"
+              @input="set(field.key, text($event))"
+            />
+            <p :id="`${prefix}-${field.key}-error`" class="text-danger" role="status">
+              {{ errors[field.key] }}
+            </p>
+          </div>
+        </div>
+      </fieldset>
 
-    <fieldset :disabled="disabled" class="field-stack">
-      <legend>{{ copy.weight }}</legend>
-      <p :id="`${prefix}-weight-help`" class="field-help">
-        {{ copy.weightHelp }}
-      </p>
-      <div class="form-columns">
-        <div
-          v-for="field in [
-            { key: 'weightNumerator', label: copy.numerator },
-            { key: 'weightDenominator', label: copy.denominator },
-          ] as const"
-          :key="field.key"
-          class="field-stack"
+      <fieldset
+        :id="`${prefix}-workload-target`"
+        tabindex="-1"
+        :disabled="disabled"
+        class="field-stack"
+      >
+        <legend>{{ copy.target }}</legend>
+        <label
+          ><input
+            type="checkbox"
+            :checked="modelValue.targetEnabled"
+            :disabled="locked"
+            @change="set('targetEnabled', checked($event))"
+          />
+          {{ copy.enableTarget }}</label
         >
-          <label :for="`${prefix}-${field.key}`">{{ field.label }}</label>
+        <p class="field-help">
+          {{ copy.targetHelp }}
+        </p>
+        <template v-if="modelValue.targetEnabled">
+          <WorkforceEntityPicker
+            v-bind="pickerContext"
+            :id="`${prefix}-target-bucket`"
+            kind="workloadBucket"
+            :label="copy.bucket"
+            required
+            :model-value="modelValue.targetBucketId ? [modelValue.targetBucketId] : []"
+            @update:model-value="set('targetBucketId', $event[0] ?? '')"
+          />
+          <WorkforceEntityPicker
+            v-bind="pickerContext"
+            :id="`${prefix}-target-calendar`"
+            kind="calendar"
+            :label="copy.calendar"
+            required
+            :model-value="modelValue.targetCalendarId ? [modelValue.targetCalendarId] : []"
+            @update:model-value="set('targetCalendarId', $event[0] ?? '')"
+          />
+          <label :for="`${prefix}-membership`">{{ copy.membership }}</label>
+          <select
+            :id="`${prefix}-membership`"
+            :value="modelValue.targetMembership"
+            :disabled="locked"
+            @change="membership"
+          >
+            <option value="reportingDate">{{ copy.reportingDate }}</option>
+            <option value="startInstant">{{ copy.startInstant }}</option>
+            <option value="intersection">{{ copy.intersection }}</option>
+          </select>
+          <label :for="`${prefix}-target`">{{ copy.targetUnit(unit) }}</label>
           <input
-            :id="`${prefix}-${field.key}`"
+            :id="`${prefix}-target`"
+            ref="targetInput"
             type="text"
             inputmode="numeric"
             maxlength="32"
             required
             :readonly="readOnly"
-            :value="modelValue[field.key]"
-            :aria-invalid="Boolean(errors[field.key]) || undefined"
-            :aria-describedby="`${prefix}-weight-help ${prefix}-${field.key}-error`"
-            @input="set(field.key, text($event))"
+            :value="modelValue.target"
+            :aria-invalid="Boolean(errors.target) || undefined"
+            :aria-describedby="`${prefix}-target-error ${prefix}-bucket-status`"
+            @input="set('target', text($event))"
           />
-          <p :id="`${prefix}-${field.key}-error`" class="text-danger" role="status">
-            {{ errors[field.key] }}
+          <p :id="`${prefix}-target-error`" class="text-danger" role="status">
+            {{ errors.target }}
           </p>
-        </div>
-      </div>
-    </fieldset>
+          <p :id="`${prefix}-bucket-status`" role="status">
+            {{
+              bucketError ??
+              (bucket ? copy.unitStatus(unit, bucket.overlappingContribution) : copy.bucketPending)
+            }}
+          </p>
+          <p class="field-help">{{ calendar?.name }} {{ calendarDescription }}</p>
+          <button
+            v-if="bucketError"
+            type="button"
+            class="button-secondary"
+            :disabled="disabled"
+            @click="readBucket"
+          >
+            {{ copy.retryMetadata }}
+          </button>
+        </template>
+      </fieldset>
+    </details>
+    <details class="setup-more">
+      <summary>
+        {{ copy.displayOptions }}
+        <span class="person-option-summary">
+          ·
+          {{ copy.displaySummary(modelValue.tags.length, modelValue.displayEnabled, locale) }}
+        </span>
+      </summary>
 
-    <fieldset :disabled="disabled" class="field-stack">
-      <legend>{{ copy.target }}</legend>
-      <label
-        ><input
-          type="checkbox"
-          :checked="modelValue.targetEnabled"
-          :disabled="locked"
-          @change="set('targetEnabled', checked($event))"
-        />
-        {{ copy.enableTarget }}</label
-      >
-      <p class="field-help">
-        {{ copy.targetHelp }}
-      </p>
-      <template v-if="modelValue.targetEnabled">
-        <WorkforceEntityPicker
-          v-bind="pickerContext"
-          kind="workloadBucket"
-          :label="copy.bucket"
-          required
-          :model-value="modelValue.targetBucketId ? [modelValue.targetBucketId] : []"
-          @update:model-value="set('targetBucketId', $event[0] ?? '')"
-        />
-        <WorkforceEntityPicker
-          v-bind="pickerContext"
-          kind="calendar"
-          :label="copy.calendar"
-          required
-          :model-value="modelValue.targetCalendarId ? [modelValue.targetCalendarId] : []"
-          @update:model-value="set('targetCalendarId', $event[0] ?? '')"
-        />
-        <label :for="`${prefix}-membership`">{{ copy.membership }}</label>
-        <select
-          :id="`${prefix}-membership`"
-          :value="modelValue.targetMembership"
-          :disabled="locked"
-          @change="membership"
-        >
-          <option value="reportingDate">{{ copy.reportingDate }}</option>
-          <option value="startInstant">{{ copy.startInstant }}</option>
-          <option value="intersection">{{ copy.intersection }}</option>
-        </select>
-        <label :for="`${prefix}-target`">{{ copy.targetUnit(unit) }}</label>
-        <input
-          :id="`${prefix}-target`"
-          ref="targetInput"
-          type="text"
-          inputmode="numeric"
-          maxlength="32"
-          required
-          :readonly="readOnly"
-          :value="modelValue.target"
-          :aria-invalid="Boolean(errors.target) || undefined"
-          :aria-describedby="`${prefix}-target-error ${prefix}-bucket-status`"
-          @input="set('target', text($event))"
-        />
-        <p :id="`${prefix}-target-error`" class="text-danger" role="status">{{ errors.target }}</p>
-        <p :id="`${prefix}-bucket-status`" role="status">
+      <section class="field-stack" :aria-labelledby="`${prefix}-tags-heading`">
+        <h3 :id="`${prefix}-tags-heading`" tabindex="-1">{{ copy.tags }}</h3>
+        <p v-if="errors.tags" class="text-danger" role="alert">{{ errors.tags }}</p>
+        <div v-for="(row, index) in tags" :key="row.key" class="field-stack">
+          <label :for="`${prefix}-tag-${row.key}`">{{
+            copy.tagNumber(tagPage * SELECTION_PAGE_SIZE + index + 1, locale)
+          }}</label>
+          <input
+            :id="`${prefix}-tag-${row.key}`"
+            type="text"
+            maxlength="256"
+            required
+            :disabled="disabled"
+            :readonly="readOnly"
+            :value="row.text"
+            @input="
+              set(
+                'tags',
+                modelValue.tags.map((tag) =>
+                  tag.key === row.key ? { ...tag, text: text($event) } : tag,
+                ),
+              )
+            "
+          />
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="locked"
+            :aria-label="copy.removeTagNumber(tagPage * SELECTION_PAGE_SIZE + index + 1, locale)"
+            @click="removeTag(row.key)"
+          >
+            {{ copy.removeTag }}
+          </button>
+        </div>
+        <p role="status">
           {{
-            bucketError ??
-            (bucket ? copy.unitStatus(unit, bucket.overlappingContribution) : copy.bucketPending)
+            copy.tagPage(
+              modelValue.tags.length,
+              tagPage + 1,
+              Math.max(1, Math.ceil(modelValue.tags.length / SELECTION_PAGE_SIZE)),
+              locale,
+            )
           }}
         </p>
-        <p class="field-help">{{ calendar?.name }} {{ calendarDescription }}</p>
-        <button
-          v-if="bucketError"
-          type="button"
-          class="button-secondary"
-          :disabled="disabled"
-          @click="readBucket"
-        >
-          {{ copy.retryMetadata }}
-        </button>
-      </template>
-    </fieldset>
-
-    <section class="field-stack" :aria-labelledby="`${prefix}-tags-heading`">
-      <h3 :id="`${prefix}-tags-heading`" tabindex="-1">{{ copy.tags }}</h3>
-      <p v-if="errors.tags" class="text-danger" role="alert">{{ errors.tags }}</p>
-      <div v-for="(row, index) in tags" :key="row.key" class="field-stack">
-        <label :for="`${prefix}-tag-${row.key}`">{{
-          copy.tagNumber(tagPage * SELECTION_PAGE_SIZE + index + 1, locale)
-        }}</label>
-        <input
-          :id="`${prefix}-tag-${row.key}`"
-          type="text"
-          maxlength="256"
-          required
-          :disabled="disabled"
-          :readonly="readOnly"
-          :value="row.text"
-          @input="
-            set(
-              'tags',
-              modelValue.tags.map((tag) =>
-                tag.key === row.key ? { ...tag, text: text($event) } : tag,
-              ),
-            )
-          "
-        />
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="locked"
-          :aria-label="copy.removeTagNumber(tagPage * SELECTION_PAGE_SIZE + index + 1, locale)"
-          @click="removeTag(row.key)"
-        >
-          {{ copy.removeTag }}
-        </button>
-      </div>
-      <p role="status">
-        {{
-          copy.tagPage(
-            modelValue.tags.length,
-            tagPage + 1,
-            Math.max(1, Math.ceil(modelValue.tags.length / SELECTION_PAGE_SIZE)),
-            locale,
-          )
-        }}
-      </p>
-      <div class="action-row">
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="tagPage === 0"
-          @click="changePage('tags', -1)"
-        >
-          {{ copy.previousTags }}
-        </button>
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="(tagPage + 1) * SELECTION_PAGE_SIZE >= modelValue.tags.length"
-          @click="changePage('tags', 1)"
-        >
-          {{ copy.nextTags }}
-        </button>
-        <button
-          type="button"
-          class="button-secondary"
-          :disabled="locked || modelValue.tags.length >= 10_000"
-          @click="addTag"
-        >
-          {{ copy.addTag }}
-        </button>
-      </div>
-    </section>
-
-    <fieldset :disabled="disabled" class="field-stack">
-      <legend>{{ copy.display }}</legend>
-      <label
-        ><input
-          type="checkbox"
-          :checked="modelValue.displayEnabled"
-          :disabled="locked"
-          @change="set('displayEnabled', checked($event))"
-        />
-        {{ copy.enableDisplay }}</label
-      >
-      <div v-if="modelValue.displayEnabled" class="form-columns">
-        <div class="field-stack">
-          <label :for="`${prefix}-color`">{{ copy.color }}</label>
-          <input
-            :id="`${prefix}-color`"
-            type="text"
-            maxlength="7"
-            :readonly="readOnly"
-            :value="modelValue.color"
-            @input="set('color', text($event))"
-          />
+        <div class="action-row">
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="tagPage === 0"
+            @click="changePage('tags', -1)"
+          >
+            {{ copy.previousTags }}
+          </button>
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="(tagPage + 1) * SELECTION_PAGE_SIZE >= modelValue.tags.length"
+            @click="changePage('tags', 1)"
+          >
+            {{ copy.nextTags }}
+          </button>
+          <button
+            type="button"
+            class="button-secondary"
+            :disabled="locked || modelValue.tags.length >= 10_000"
+            @click="addTag"
+          >
+            {{ copy.addTag }}
+          </button>
         </div>
-        <div class="field-stack">
-          <label :for="`${prefix}-initials`">{{ copy.initials }}</label>
-          <input
-            :id="`${prefix}-initials`"
-            type="text"
-            maxlength="16"
-            :readonly="readOnly"
-            :value="modelValue.avatarInitials"
-            @input="set('avatarInitials', text($event))"
+      </section>
+
+      <fieldset :id="`${prefix}-display`" tabindex="-1" :disabled="disabled" class="field-stack">
+        <legend>{{ copy.display }}</legend>
+        <label
+          ><input
+            type="checkbox"
+            :checked="modelValue.displayEnabled"
+            :disabled="locked"
+            @change="set('displayEnabled', checked($event))"
           />
+          {{ copy.enableDisplay }}</label
+        >
+        <div v-if="modelValue.displayEnabled" class="form-columns">
+          <div class="field-stack">
+            <label :for="`${prefix}-color`">{{ copy.color }}</label>
+            <input
+              :id="`${prefix}-color`"
+              type="text"
+              maxlength="7"
+              :readonly="readOnly"
+              :value="modelValue.color"
+              @input="set('color', text($event))"
+            />
+          </div>
+          <div class="field-stack">
+            <label :for="`${prefix}-initials`">{{ copy.initials }}</label>
+            <input
+              :id="`${prefix}-initials`"
+              type="text"
+              maxlength="16"
+              :readonly="readOnly"
+              :value="modelValue.avatarInitials"
+              :aria-describedby="`${prefix}-initials-help`"
+              @input="set('avatarInitials', text($event))"
+            />
+            <p :id="`${prefix}-initials-help`" class="field-help">
+              {{ copy.initialsHelp }}
+            </p>
+          </div>
         </div>
-      </div>
-    </fieldset>
+      </fieldset>
+    </details>
   </div>
 </template>

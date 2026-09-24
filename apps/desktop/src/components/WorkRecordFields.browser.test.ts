@@ -156,7 +156,7 @@ describe("work collection error recovery", () => {
       const group = screen.getByRole("group", { name: collection.label });
       const inputs = () => within(group).getAllByRole("textbox", { name: collection.input });
       const pager = screen.getByRole("navigation", {
-        name: `${collection.label}: ${copy.collectionPages}`,
+        name: copy.collectionPagesFor(collection.label),
       });
       expect(inputs()).toHaveLength(50);
 

@@ -98,6 +98,15 @@ pub enum TemporalEndpoint {
     End,
 }
 
+/// Authored source context that cannot be recovered from an entity and endpoint alone.
+/// Native-only provenance; never part of stored records or canonical solver identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TemporalOrigin {
+    PersonActiveRange,
+    AvailabilityEffectiveRange,
+    AvailabilityWeeklyWindow { index: usize },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TemporalIssue {
     pub kind: TemporalIssueKind,
@@ -106,6 +115,7 @@ pub struct TemporalIssue {
     pub endpoint: Option<TemporalEndpoint>,
     /// Recurrence start date, distinct from an overnight failing endpoint's date.
     pub occurrence_date: Option<Date>,
+    pub origin: Option<TemporalOrigin>,
 }
 
 #[derive(Debug)]

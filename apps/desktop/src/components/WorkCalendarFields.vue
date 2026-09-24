@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from "vue";
-import { messages } from "../messages";
+import { formatNumber, messages } from "../messages";
 import { workRowKey, type WorkCalendarPeriodDraft } from "../work-record-draft";
 import DateTimeRangeField from "./planner/DateTimeRangeField.vue";
 import type { TemporalDraft, TemporalFeedback } from "./planner/field-contracts";
@@ -150,10 +150,45 @@ async function remove(key: string): Promise<void> {
     host.value?.querySelector<HTMLElement>(`[data-row-key="${nearby.key}"] input`)?.focus();
   else host.value?.querySelector<HTMLElement>("[data-add-interval]")?.focus();
 }
+async function focusField(path: readonly string[], isCurrent: () => boolean): Promise<boolean> {
+  if (!isCurrent()) return false;
+  const raw = props.modelValue;
+  let id: string | null = null;
+  if (
+    path.length === 1 &&
+    (path[0] === "kind" ||
+      path[0] === "anchorDate" ||
+      path[0] === "startTime" ||
+      path[0] === "lengthDays")
+  )
+    id = `${prefix}-period.${path[0]}`;
+  else if (path.length === 1 && path[0] === "intervals") id = `${prefix}-intervals`;
+  else if (
+    raw.kind === "custom" &&
+    path[0] === "intervals" &&
+    (path.length === 2 || path.length === 3)
+  ) {
+    const index = Number(path[1]);
+    const row = Number.isSafeInteger(index) && index >= 0 ? raw.custom[index] : undefined;
+    if (row === undefined) return false;
+    if (path.length === 2) id = `${prefix}-${row.key}-row`;
+    else if (path[2] === "startsAt") id = `${prefix}-${row.key}-start`;
+    else if (path[2] === "endsAt") id = `${prefix}-${row.key}-end`;
+    else return false;
+    page.value = Math.floor(index / 50);
+  } else if (path.length !== 0) return false;
+  await nextTick();
+  if (!isCurrent() || props.modelValue !== raw) return false;
+  const element = id === null ? host.value : document.getElementById(id);
+  if (element == null || !host.value?.contains(element)) return false;
+  element.focus();
+  return document.activeElement === element;
+}
+defineExpose({ focusField });
 </script>
 
 <template>
-  <fieldset ref="host" class="field-stack" :disabled="disabled">
+  <fieldset ref="host" tabindex="-1" class="field-stack" :disabled="disabled">
     <legend>{{ copy.calendarPeriod }}</legend>
     <label :for="`${prefix}-period.kind`">{{ copy.calendarPeriod }}</label>
     <select
@@ -211,14 +246,26 @@ async function remove(key: string): Promise<void> {
         </p>
       </div>
     </template>
-    <fieldset v-if="modelValue.kind === 'custom'" class="field-stack">
+    <fieldset
+      v-if="modelValue.kind === 'custom'"
+      :id="`${prefix}-intervals`"
+      tabindex="-1"
+      class="field-stack"
+    >
       <legend>{{ copy.customIntervals }}</legend>
       <p class="text-danger" role="status">{{ errors?.["period.intervals"] }}</p>
-      <div v-for="(row, index) in rows" :key="row.key" :data-row-key="row.key" class="field-stack">
+      <div
+        v-for="(row, index) in rows"
+        :id="`${prefix}-${row.key}-row`"
+        :key="row.key"
+        tabindex="-1"
+        :data-row-key="row.key"
+        class="field-stack"
+      >
         <DateTimeRangeField
           v-bind="context"
           :id="`${prefix}-${row.key}`"
-          :label="`${copy.customIntervals} ${offset + index + 1}`"
+          :label="copy.customIntervalNumber(formatNumber(offset + index + 1, locale))"
           :model-value="row.interval"
           :error="errors?.[`period.intervals.${offset + index}`]"
           :feedback="feedback(offset + index)"
@@ -229,13 +276,15 @@ async function remove(key: string): Promise<void> {
         </button>
       </div>
       <nav
-        :aria-label="`${copy.customIntervals}: ${copy.collectionPages}`"
+        :aria-label="copy.collectionPagesFor(copy.customIntervals)"
         class="flex flex-wrap items-center gap-2"
       >
-        <span role="status"
-          >{{ copy.rows }} {{ modelValue.custom.length }} · {{ copy.page }}
-          {{ offset / 50 + 1 }}</span
-        >
+        <span role="status">{{
+          copy.collectionPageStatus(
+            formatNumber(modelValue.custom.length, locale),
+            formatNumber(offset / 50 + 1, locale),
+          )
+        }}</span>
         <button
           type="button"
           class="button-secondary"

@@ -65,6 +65,8 @@ pub enum WorkforceSetupQueryV1 {
     EntityPage(EntityPageParametersV1),
     #[serde(rename = "eutheto.setup.entity_detail")]
     EntityDetail(EntityDetailParametersV1),
+    #[serde(rename = "official.workforce.setup.entity_summary")]
+    EntitySummary(EntitySummaryParametersV1),
     #[serde(rename = "official.workforce.setup.people_page")]
     PeoplePage(PeoplePageParametersV1),
     #[serde(rename = "official.workforce.setup.availability_records")]
@@ -139,6 +141,12 @@ pub struct EntityPageParametersV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EntityDetailParametersV1 {
     pub entity_kind: WorkforceEntityKindV1,
+    pub entity_id: EntityId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntitySummaryParametersV1 {
     pub entity_id: EntityId,
 }
 
@@ -334,6 +342,7 @@ pub enum WorkforceSetupViewDataV1 {
     SettingsPreparation(ScenarioSettings),
     EntityPage(SetupPageV1<EntitySummaryV1>),
     EntityDetail(Box<WorkforceEntity>),
+    EntitySummary(EntitySummaryV1),
     PeoplePage(SetupPageV1<PersonSummaryV1>),
     AvailabilityRecords(SetupPageV1<AvailabilityRecordSummaryV1>),
     RuleCatalog(RuleCatalogV1),
@@ -808,6 +817,9 @@ impl WorkforceSetupQueryV1 {
             "eutheto.setup.entity_detail" => {
                 Deserialize::deserialize(&query.parameters).map(Self::EntityDetail)
             }
+            "official.workforce.setup.entity_summary" => {
+                Deserialize::deserialize(&query.parameters).map(Self::EntitySummary)
+            }
             "official.workforce.setup.people_page" => {
                 Deserialize::deserialize(&query.parameters).map(Self::PeoplePage)
             }
@@ -863,6 +875,7 @@ impl WorkforceSetupQueryV1 {
             Self::SettingsPreparation(_) => "official.workforce.setup.settings_preparation",
             Self::EntityPage(_) => "eutheto.setup.entity_page",
             Self::EntityDetail(_) => "eutheto.setup.entity_detail",
+            Self::EntitySummary(_) => "official.workforce.setup.entity_summary",
             Self::PeoplePage(_) => "official.workforce.setup.people_page",
             Self::AvailabilityRecords(_) => "official.workforce.setup.availability_records",
             Self::RuleCatalog(_) => "eutheto.setup.rule_catalog",
@@ -891,6 +904,7 @@ impl WorkforceSetupViewDataV1 {
             Self::SettingsPreparation(_) => "official.workforce.setup.settings_preparation",
             Self::EntityPage(_) => "eutheto.setup.entity_page",
             Self::EntityDetail(_) => "eutheto.setup.entity_detail",
+            Self::EntitySummary(_) => "official.workforce.setup.entity_summary",
             Self::PeoplePage(_) => "official.workforce.setup.people_page",
             Self::AvailabilityRecords(_) => "official.workforce.setup.availability_records",
             Self::RuleCatalog(_) => "eutheto.setup.rule_catalog",

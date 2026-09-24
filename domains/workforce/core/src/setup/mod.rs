@@ -163,6 +163,9 @@ fn project(
 ) -> Result<(WorkforceSetupViewDataV1, Option<DomainBatchCommand>)> {
     let result = match query {
         WorkforceSetupQueryV1::Overview(_) => overview::facts(document, position, budget),
+        WorkforceSetupQueryV1::EntitySummary(parameters) => {
+            entities::summary(document, &parameters, position, budget)
+        }
         WorkforceSetupQueryV1::LocalTimeResolution(parameters) => {
             time::local_time_resolution(document, &parameters, position, budget)
         }

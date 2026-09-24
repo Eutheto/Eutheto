@@ -127,7 +127,7 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
             const detail = await operation.result;
             const proposed = detail.result.view.data.result.data;
             if (proposed.id !== inspectTarget.id || proposed.kind !== inspectTarget.kind)
-              throw new Error("The native proposed record did not match the requested identity.");
+              throw new Error(messages.setup.proposedIdentityMismatch);
             return {
               ...detail,
               result: {
@@ -179,7 +179,7 @@ export function useSetupCommandReview(home: ProjectHomeController, project: () =
             const detail = await detailOperation.result;
             proposed = detail.result.view.data.result.data;
             if (proposed.id !== snapshot.target.id || proposed.kind !== snapshot.target.kind)
-              throw new Error("The native proposed record did not match the requested identity.");
+              throw new Error(messages.setup.proposedIdentityMismatch);
             proposedWarnings = detail.warnings;
           }
           return {

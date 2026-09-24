@@ -158,6 +158,14 @@
         }
       }
     },
+    "SetupEntitySummaryParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityId"],
+      "properties": {
+        "entityId": { "$ref": "#/$defs/Uuid" }
+      }
+    },
     "SetupPeoplePageParameters": {
       "type": "object",
       "additionalProperties": false,
@@ -2445,6 +2453,23 @@
             "data": {
               "$ref": "#/$defs/Entity"
             }
+          }
+        }
+      }
+    },
+    "SetupEntitySummaryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "entitySummary" },
+            "data": { "$ref": "#/$defs/SetupEntitySummary" }
           }
         }
       }
@@ -6734,6 +6759,29 @@
             "018f7b40-a000-7000-8000-000000000004"
           ]
         }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.entity_summary",
+      "sources": ["stored"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.entity_summary.title",
+        "defaultText": "Entity identity and kind"
+      },
+      "description": {
+        "key": "official.workforce.setup.entity_summary.description",
+        "defaultText": "Resolve one stored entity's stable identity, native kind and bounded display name at the captured revision. This is a structural header, not validation or a complete record."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupEntitySummaryParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupEntitySummaryResult" },
+      "validExamples": [
+        { "entityId": "018f7b40-a000-7000-8000-000000000014" }
+      ],
+      "invalidExamples": [
+        {},
+        { "entityId": "invalid" },
+        { "entityId": "018f7b40-a000-7000-8000-000000000014", "entityKind": "person" }
       ]
     },
     {

@@ -2,14 +2,16 @@
 import { computed, nextTick, reactive, ref, useId, watch } from "vue";
 import type { DomainEntityRef } from "../api/generated";
 import type { WorkforceWeekday } from "../api/generated-domain-pack-contracts";
-import { messages } from "../messages";
+import { formatNumber, messages } from "../messages";
 import type { ProjectSummary } from "../project-home";
 import type { SupportingRecordDraft } from "../supporting-record-fields";
 import {
   workRecordValue,
   workRowKey,
+  type WorkCoverageDraft,
   type WorkRecordDraft,
   type WorkShiftFieldsDraft,
+  type WorkShiftScopeDraft,
   type WorkTextRowDraft,
   type WorkTransitionDraft,
 } from "../work-record-draft";
@@ -19,6 +21,8 @@ import WorkCoverageFields from "./WorkCoverageFields.vue";
 import DateTimeRangeField from "./planner/DateTimeRangeField.vue";
 import DurationField from "./planner/DurationField.vue";
 import WorkforceEntityPicker from "./planner/WorkforceEntityPicker.vue";
+import ShiftScopePicker from "./ShiftScopePicker.vue";
+import type { WorkforceDateRange } from "../api/generated-domain-pack-contracts";
 import type { TemporalDraft, TemporalFeedback } from "./planner/field-contracts";
 
 const props = defineProps<{
@@ -34,11 +38,16 @@ const props = defineProps<{
   readonly showErrors?: boolean;
   readonly errors?: Readonly<Record<string, string>>;
   readonly temporalFeedback?: TemporalFeedback;
+  readonly dates?: WorkforceDateRange;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: WorkRecordDraft] }>();
 const copy = messages.work.fields;
 const prefix = useId();
 const host = ref<HTMLElement>();
+const coverageFields = ref<InstanceType<typeof WorkCoverageFields>>();
+const supportingFields = ref<InstanceType<typeof SupportingRecordFields>>();
+const calendarFields = ref<InstanceType<typeof WorkCalendarFields>>();
+const shiftPicker = ref<InstanceType<typeof ShiftScopePicker>>();
 const pages = reactive({ transitions: 0, tags: 0, excludedDates: 0 });
 const locked = computed(() => props.disabled || props.readOnly);
 const errors = computed(() => {
@@ -189,8 +198,14 @@ function field(path: string) {
   };
 }
 function setName(event: Event): void {
-  if (!locked.value && props.modelValue.kind !== "shiftInstance")
-    emit("update:modelValue", { ...props.modelValue, name: text(event) });
+  if (
+    !locked.value &&
+    props.modelValue.kind !== "shiftInstance" &&
+    props.modelValue.kind !== "coverageRequirement"
+  ) {
+    const draft = props.modelValue;
+    emit("update:modelValue", { ...draft, name: text(event) });
+  }
 }
 function setAssignment(value: SupportingRecordDraft): void {
   if (
@@ -370,12 +385,147 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
     host.value?.querySelector<HTMLElement>(`[data-row-key="${nearby.key}"] input`)?.focus();
   else host.value?.querySelector<HTMLElement>(`[data-add-collection="${collection}"]`)?.focus();
 }
+async function focusField(path: readonly string[], isCurrent: () => boolean): Promise<boolean> {
+  const draft = props.modelValue;
+  const current = () => isCurrent() && props.modelValue === draft;
+  if (!current()) return false;
+  if (draft.kind === "assignmentType")
+    return (await supportingFields.value?.focusField(path, current)) ?? false;
+  if (draft.kind === "calendar" && path[0] === "period")
+    return (await calendarFields.value?.focusField(path.slice(1), current)) ?? false;
+  if (
+    path[0] === "coverage" &&
+    (draft.kind === "shiftTemplate" ||
+      draft.kind === "shiftInstance" ||
+      draft.kind === "coverageRequirement")
+  )
+    return (await coverageFields.value?.focusField(path.slice(1), current)) ?? false;
+  const key = path.join(".");
+  let suffix: string | null =
+    key === "name" && draft.kind !== "shiftInstance" && draft.kind !== "coverageRequirement"
+      ? "name"
+      : null;
+  if (draft.kind === "coverageRequirement") {
+    if (path[0] === "scope" && path[1] === "shiftIds")
+      return (await shiftPicker.value?.focusField(path.slice(2), current)) ?? false;
+    const fields: Readonly<Record<string, string>> = {
+      active: "active",
+      scope: "scope",
+      "scope.kind": "scope.kind",
+      "scope.assignmentTypeIds": "scope.assignmentTypeIds",
+      "scope.locationIds": "scope.locationIds",
+      "scope.startDateRange": "scope.startDateRange",
+      "scope.startDateRange.startDate": "scope.startDateRange.startDate",
+      "scope.startDateRange.endDateExclusive": "scope.startDateRange.endDateExclusive",
+    };
+    if (Object.hasOwn(fields, key)) suffix = fields[key] ?? null;
+  } else if (draft.kind === "workloadBucket") {
+    if (key === "measurement" || key === "overlappingContribution") suffix = key;
+  } else if (draft.kind === "location") {
+    if (key === "transitions") suffix = "transitions";
+    if (path[0] === "transitions" && /^\d+$/.test(path[1] ?? "")) {
+      const index = Number(path[1]);
+      const row = Number.isSafeInteger(index) ? draft.transitions[index] : undefined;
+      if (row === undefined) return false;
+      if (path.length === 2) suffix = `${row.key}-transition`;
+      else if (path.length === 3 && path[2] === "locationId") suffix = `${row.key}-location`;
+      else if (path.length === 3 && path[2] === "minutes") suffix = `${row.key}-minutes`;
+      else return false;
+      pages.transitions = Math.floor(index / 50);
+    }
+  } else if (draft.kind === "shiftTemplate" || draft.kind === "shiftInstance") {
+    const fields: Readonly<Record<string, string>> = {
+      assignmentTypeId: "assignmentTypeId",
+      locationId: "locationId",
+      reportingAttribution: "reportingAttribution",
+      tags: "tags",
+      "recurrence.effectiveRange": "recurrence-range",
+      "recurrence.effectiveRange.startDate": "recurrence.effectiveRange.startDate",
+      "recurrence.effectiveRange.endDateExclusive": "recurrence.effectiveRange.endDateExclusive",
+      "recurrence.weekdays": "recurrence-weekdays",
+      "recurrence.excludedDates": "recurrence.excludedDates",
+      timing: "timing-group",
+      "timing.kind": "timing.kind",
+      "timing.startTime":
+        draft.kind === "shiftTemplate" && draft.timingMode === "elapsedDuration"
+          ? "timing.startTime"
+          : "timing-start",
+      "timing.endTime": "timing-end",
+      "timing.endDayOffset": "timing-endDayOffset",
+      "timing.durationMinutes": "duration",
+      startsAt: "interval-start",
+      "startsAt.local": "interval-start",
+      "startsAt.offsetSeconds": "interval-start",
+      endsAt: "interval-end",
+      "endsAt.local": "interval-end",
+      "endsAt.offsetSeconds": "interval-end",
+    };
+    if (Object.hasOwn(fields, key)) suffix = fields[key] ?? null;
+    if (path[0] === "tags" && path.length === 2 && /^\d+$/.test(path[1] ?? "")) {
+      const index = Number(path[1]);
+      if (!Number.isSafeInteger(index) || draft.tags[index] === undefined) return false;
+      pages.tags = Math.floor(index / 50);
+      suffix = `tags.${String(index)}`;
+    }
+    if (
+      draft.kind === "shiftTemplate" &&
+      path[0] === "recurrence" &&
+      path.length === 3 &&
+      /^\d+$/.test(path[2] ?? "")
+    ) {
+      const index = Number(path[2]);
+      if (!Number.isSafeInteger(index)) return false;
+      const day = draft.recurrence.weekdays[index];
+      if (path[1] === "excludedDates" && draft.recurrence.excludedDates[index] !== undefined) {
+        pages.excludedDates = Math.floor(index / 50);
+        suffix = `recurrence.excludedDates.${String(index)}`;
+      } else if (path[1] === "weekdays" && day !== undefined) suffix = day;
+      else return false;
+    }
+  }
+  if (suffix === null) return false;
+  await nextTick();
+  if (!current()) return false;
+  const element = document.getElementById(`${prefix}-${suffix}`);
+  if (!(element instanceof HTMLElement) || !host.value?.contains(element)) return false;
+  element.focus();
+  return document.activeElement === element;
+}
+defineExpose({ focusField });
+function setCoverage(value: WorkCoverageDraft): void {
+  if (!locked.value && props.modelValue.kind === "coverageRequirement") {
+    const draft = props.modelValue;
+    emit("update:modelValue", { ...draft, coverage: value });
+  }
+}
+function setScopeField<K extends keyof WorkShiftScopeDraft>(
+  key: K,
+  value: WorkShiftScopeDraft[K],
+): void {
+  if (!locked.value && props.modelValue.kind === "coverageRequirement") {
+    const draft = props.modelValue;
+    emit("update:modelValue", { ...draft, scope: { ...draft.scope, [key]: value } });
+  }
+}
+function setScopeKind(event: Event): void {
+  const value = text(event);
+  if (
+    !locked.value &&
+    props.modelValue.kind === "coverageRequirement" &&
+    (value === "all" || value === "selected" || value === "filter")
+  )
+    emit("update:modelValue", {
+      ...props.modelValue,
+      scope: { ...props.modelValue.scope, scopeKind: value },
+    });
+}
 </script>
 
 <template>
   <div ref="host" class="field-stack">
     <SupportingRecordFields
       v-if="modelValue.kind === 'assignmentType'"
+      ref="supportingFields"
       v-bind="pickerContext"
       :model-value="modelValue"
       :show-errors="showErrors"
@@ -384,7 +534,10 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
     />
     <template v-else>
       <p :id="`${prefix}-native-help`" class="field-help">{{ copy.nativeValidation }}</p>
-      <div v-if="modelValue.kind !== 'shiftInstance'" class="field-stack">
+      <div
+        v-if="modelValue.kind !== 'shiftInstance' && modelValue.kind !== 'coverageRequirement'"
+        class="field-stack"
+      >
         <label :for="`${prefix}-name`">{{ copy.name }}</label>
         <input
           v-bind="field('name')"
@@ -395,16 +548,26 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
         />
         <p :id="`${prefix}-name-error`" class="text-danger" role="status">{{ errors.name }}</p>
       </div>
-      <fieldset v-if="modelValue.kind === 'location'" class="field-stack" :disabled="disabled">
+      <fieldset
+        v-if="modelValue.kind === 'location'"
+        :id="`${prefix}-transitions`"
+        tabindex="-1"
+        class="field-stack"
+        :disabled="disabled"
+      >
         <legend>{{ copy.transitions }}</legend>
         <p class="text-danger" role="status">{{ errors.transitions }}</p>
         <fieldset
           v-for="(row, index) in transitions.rows"
+          :id="`${prefix}-${row.key}-transition`"
           :key="row.key"
           :data-row-key="row.key"
+          tabindex="-1"
           class="field-stack"
         >
-          <legend>{{ copy.destination }} {{ transitions.offset + index + 1 }}</legend>
+          <legend>
+            {{ copy.destinationNumber(formatNumber(transitions.offset + index + 1, locale)) }}
+          </legend>
           <WorkforceEntityPicker
             v-bind="pickerContext"
             :id="`${prefix}-${row.key}-location`"
@@ -433,13 +596,15 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
           </button>
         </fieldset>
         <nav
-          :aria-label="`${copy.transitions}: ${copy.collectionPages}`"
+          :aria-label="copy.collectionPagesFor(copy.transitions)"
           class="flex flex-wrap items-center gap-2"
         >
-          <span role="status"
-            >{{ copy.rows }} {{ transitions.total }} · {{ copy.page }}
-            {{ transitions.offset / 50 + 1 }}</span
-          >
+          <span role="status">{{
+            copy.collectionPageStatus(
+              formatNumber(transitions.total, locale),
+              formatNumber(transitions.offset / 50 + 1, locale),
+            )
+          }}</span>
           <button
             type="button"
             class="button-secondary"
@@ -515,6 +680,7 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
       </template>
       <WorkCalendarFields
         v-if="modelValue.kind === 'calendar'"
+        ref="calendarFields"
         v-bind="temporalContext"
         :model-value="modelValue.period"
         :errors="errors"
@@ -555,7 +721,12 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
           @update:model-value="setShift('locationId', $event[0] ?? '')"
         />
         <template v-if="modelValue.kind === 'shiftTemplate'">
-          <fieldset class="field-stack" :disabled="disabled">
+          <fieldset
+            :id="`${prefix}-recurrence-range`"
+            tabindex="-1"
+            class="field-stack"
+            :disabled="disabled"
+          >
             <legend>{{ copy.effectiveRange }}</legend>
             <div class="field-stack">
               <label :for="`${prefix}-recurrence.effectiveRange.startDate`">{{
@@ -597,6 +768,8 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
             </div>
           </fieldset>
           <fieldset
+            :id="`${prefix}-recurrence-weekdays`"
+            tabindex="-1"
             class="field-stack"
             :disabled="disabled"
             :aria-describedby="`${prefix}-weekdays-error`"
@@ -620,58 +793,61 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
               {{ errors["recurrence.weekdays"] }}
             </p>
           </fieldset>
-          <div class="field-stack">
-            <label :for="`${prefix}-timing.kind`">{{ copy.timing }}</label>
-            <select
-              v-bind="field('timing.kind')"
-              :disabled="locked"
-              :value="modelValue.timingMode"
-              @change="timingMode"
-            >
-              <option value="">{{ copy.selection }}</option>
-              <option v-for="(label, value) in copy.timings" :key="value" :value="value">
-                {{ label }}
-              </option>
-            </select>
-            <p :id="`${prefix}-timing.kind-error`" class="text-danger" role="status">
-              {{ errors["timing.kind"] }}
-            </p>
-          </div>
-          <DateTimeRangeField
-            v-if="modelValue.timingMode === 'localWindow'"
-            v-bind="temporalContext"
-            :id="`${prefix}-timing`"
-            :label="copy.localWindow"
-            :model-value="modelValue.localWindow"
-            :feedback="feedback"
-            @update:model-value="
-              $event.raw.kind === 'localWindow' && setTemplate('localWindow', $event)
-            "
-          />
-          <template v-if="modelValue.timingMode === 'elapsedDuration'">
+          <fieldset :id="`${prefix}-timing-group`" tabindex="-1" class="field-stack">
+            <legend>{{ copy.timing }}</legend>
             <div class="field-stack">
-              <label :for="`${prefix}-timing.startTime`">{{ copy.elapsedStartTime }}</label>
-              <input
-                v-bind="field('timing.startTime')"
-                type="text"
-                :spellcheck="false"
-                :value="modelValue.elapsedStartTime"
-                @input="setTemplate('elapsedStartTime', text($event))"
-              />
-              <p :id="`${prefix}-timing.startTime-error`" class="text-danger" role="status">
-                {{ errors["timing.startTime"] }}
+              <label :for="`${prefix}-timing.kind`">{{ copy.timing }}</label>
+              <select
+                v-bind="field('timing.kind')"
+                :disabled="locked"
+                :value="modelValue.timingMode"
+                @change="timingMode"
+              >
+                <option value="">{{ copy.selection }}</option>
+                <option v-for="(label, value) in copy.timings" :key="value" :value="value">
+                  {{ label }}
+                </option>
+              </select>
+              <p :id="`${prefix}-timing.kind-error`" class="text-danger" role="status">
+                {{ errors["timing.kind"] }}
               </p>
             </div>
-            <DurationField
-              v-bind="fieldContext"
-              :id="`${prefix}-duration`"
-              :label="copy.duration"
-              :model-value="modelValue.duration"
-              :minimum="1"
-              :error="errors['timing.durationMinutes']"
-              @update:model-value="setTemplate('duration', $event)"
+            <DateTimeRangeField
+              v-if="modelValue.timingMode === 'localWindow'"
+              v-bind="temporalContext"
+              :id="`${prefix}-timing`"
+              :label="copy.localWindow"
+              :model-value="modelValue.localWindow"
+              :feedback="feedback"
+              @update:model-value="
+                $event.raw.kind === 'localWindow' && setTemplate('localWindow', $event)
+              "
             />
-          </template>
+            <template v-if="modelValue.timingMode === 'elapsedDuration'">
+              <div class="field-stack">
+                <label :for="`${prefix}-timing.startTime`">{{ copy.elapsedStartTime }}</label>
+                <input
+                  v-bind="field('timing.startTime')"
+                  type="text"
+                  :spellcheck="false"
+                  :value="modelValue.elapsedStartTime"
+                  @input="setTemplate('elapsedStartTime', text($event))"
+                />
+                <p :id="`${prefix}-timing.startTime-error`" class="text-danger" role="status">
+                  {{ errors["timing.startTime"] }}
+                </p>
+              </div>
+              <DurationField
+                v-bind="fieldContext"
+                :id="`${prefix}-duration`"
+                :label="copy.duration"
+                :model-value="modelValue.duration"
+                :minimum="1"
+                :error="errors['timing.durationMinutes']"
+                @update:model-value="setTemplate('duration', $event)"
+              />
+            </template>
+          </fieldset>
         </template>
         <DateTimeRangeField
           v-if="modelValue.kind === 'shiftInstance'"
@@ -701,7 +877,9 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
         </div>
         <fieldset
           v-for="collection in textCollections"
+          :id="`${prefix}-${collection.path}`"
           :key="collection.key"
+          tabindex="-1"
           class="field-stack"
           :disabled="disabled"
         >
@@ -739,13 +917,15 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
             </button>
           </div>
           <nav
-            :aria-label="`${collection.label}: ${copy.collectionPages}`"
+            :aria-label="copy.collectionPagesFor(collection.label)"
             class="flex flex-wrap items-center gap-2"
           >
-            <span role="status"
-              >{{ copy.rows }} {{ collection.total }} · {{ copy.page }}
-              {{ collection.offset / 50 + 1 }}</span
-            >
+            <span role="status">{{
+              copy.collectionPageStatus(
+                formatNumber(collection.total, locale),
+                formatNumber(collection.offset / 50 + 1, locale),
+              )
+            }}</span>
             <button
               type="button"
               class="button-secondary"
@@ -782,12 +962,182 @@ async function removeTextRow(collection: TextCollection, key: string): Promise<v
           </button>
         </fieldset>
         <WorkCoverageFields
+          ref="coverageFields"
           v-bind="fieldContext"
           :project="project"
           :library-epoch="libraryEpoch"
           :model-value="modelValue.coverage"
           :errors="errors"
           @update:model-value="setShift('coverage', $event)"
+        />
+      </template>
+      <template v-if="modelValue.kind === 'coverageRequirement'">
+        <label :for="`${prefix}-active`">
+          <input
+            :id="`${prefix}-active`"
+            type="checkbox"
+            :disabled="locked"
+            :checked="modelValue.active"
+            @change="
+              !locked &&
+              emit('update:modelValue', {
+                ...modelValue,
+                active: ($event.target as HTMLInputElement).checked,
+              })
+            "
+          />
+          {{ copy.active }}
+        </label>
+        <fieldset :id="`${prefix}-scope`" tabindex="-1" class="field-stack">
+          <legend>{{ copy.scopeMode }}</legend>
+          <label :for="`${prefix}-scope.kind`">{{ copy.scopeMode }}</label>
+          <select
+            v-bind="field('scope.kind')"
+            :disabled="locked"
+            :value="modelValue.scope.scopeKind"
+            @change="setScopeKind"
+          >
+            <option v-for="(label, value) in copy.scopeModes" :key="value" :value="value">
+              {{ label }}
+            </option>
+          </select>
+          <p :id="`${prefix}-scope.kind-error`" class="text-danger" role="status">
+            {{ errors["scope.kind"] ?? errors.scope }}
+          </p>
+          <template v-if="modelValue.scope.scopeKind === 'selected'">
+            <ShiftScopePicker
+              v-if="dates"
+              :id="`${prefix}-scope.shiftIds`"
+              ref="shiftPicker"
+              v-bind="fieldContext"
+              :selected-ids="modelValue.scope.selectedShiftIds"
+              :project="project"
+              :library-epoch="libraryEpoch"
+              :dates="dates"
+              :error="errors['scope.shiftIds']"
+              @update:model-value="setScopeField('selectedShiftIds', $event)"
+            />
+            <p v-else role="status">{{ copy.shiftWindowUnavailable }}</p>
+          </template>
+          <template v-if="modelValue.scope.scopeKind === 'filter'">
+            <label :for="`${prefix}-scope-types-enabled`"
+              ><input
+                :id="`${prefix}-scope-types-enabled`"
+                type="checkbox"
+                :disabled="locked"
+                :checked="modelValue.scope.filterAssignmentTypesEnabled"
+                @change="
+                  setScopeField(
+                    'filterAssignmentTypesEnabled',
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+              {{ copy.filterAssignmentTypeIds }}</label
+            >
+            <WorkforceEntityPicker
+              v-if="modelValue.scope.filterAssignmentTypesEnabled"
+              v-bind="pickerContext"
+              :id="`${prefix}-scope.assignmentTypeIds`"
+              kind="assignmentType"
+              multiple
+              :label="copy.filterAssignmentTypeIds"
+              :model-value="modelValue.scope.filterAssignmentTypeIds"
+              :error="errors['scope.assignmentTypeIds']"
+              @update:model-value="setScopeField('filterAssignmentTypeIds', $event)"
+            />
+            <label :for="`${prefix}-scope-locations-enabled`"
+              ><input
+                :id="`${prefix}-scope-locations-enabled`"
+                type="checkbox"
+                :disabled="locked"
+                :checked="modelValue.scope.filterLocationsEnabled"
+                @change="
+                  setScopeField(
+                    'filterLocationsEnabled',
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+              {{ copy.filterLocationIds }}</label
+            >
+            <WorkforceEntityPicker
+              v-if="modelValue.scope.filterLocationsEnabled"
+              v-bind="pickerContext"
+              :id="`${prefix}-scope.locationIds`"
+              kind="location"
+              multiple
+              :label="copy.filterLocationIds"
+              :model-value="modelValue.scope.filterLocationIds"
+              :error="errors['scope.locationIds']"
+              @update:model-value="setScopeField('filterLocationIds', $event)"
+            />
+            <label :for="`${prefix}-scope-dates-enabled`"
+              ><input
+                :id="`${prefix}-scope-dates-enabled`"
+                type="checkbox"
+                :disabled="locked"
+                :checked="modelValue.scope.filterDateRangeEnabled"
+                @change="
+                  setScopeField(
+                    'filterDateRangeEnabled',
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+              {{ copy.filterStartDateRange }}</label
+            >
+            <fieldset
+              v-if="modelValue.scope.filterDateRangeEnabled"
+              :id="`${prefix}-scope.startDateRange`"
+              tabindex="-1"
+              class="field-stack"
+              :disabled="disabled"
+            >
+              <legend>{{ copy.filterStartDateRange }}</legend>
+              <label :for="`${prefix}-scope.startDateRange.startDate`">{{ copy.startDate }}</label>
+              <input
+                v-bind="field('scope.startDateRange.startDate')"
+                type="text"
+                :spellcheck="false"
+                :value="modelValue.scope.filterStartDateRangeStart"
+                @input="setScopeField('filterStartDateRangeStart', text($event))"
+              />
+              <p
+                :id="`${prefix}-scope.startDateRange.startDate-error`"
+                class="text-danger"
+                role="status"
+              >
+                {{ errors["scope.startDateRange.startDate"] }}
+              </p>
+              <label :for="`${prefix}-scope.startDateRange.endDateExclusive`">{{
+                copy.endDateExclusive
+              }}</label>
+              <input
+                v-bind="field('scope.startDateRange.endDateExclusive')"
+                type="text"
+                :spellcheck="false"
+                :value="modelValue.scope.filterStartDateRangeEndExclusive"
+                @input="setScopeField('filterStartDateRangeEndExclusive', text($event))"
+              />
+              <p
+                :id="`${prefix}-scope.startDateRange.endDateExclusive-error`"
+                class="text-danger"
+                role="status"
+              >
+                {{ errors["scope.startDateRange.endDateExclusive"] }}
+              </p>
+            </fieldset>
+          </template>
+        </fieldset>
+        <WorkCoverageFields
+          ref="coverageFields"
+          v-bind="fieldContext"
+          :project="project"
+          :library-epoch="libraryEpoch"
+          :model-value="modelValue.coverage"
+          :errors="errors"
+          @update:model-value="setCoverage($event)"
         />
       </template>
     </template>

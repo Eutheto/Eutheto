@@ -485,6 +485,18 @@ describe("setup operation ownership using the pinned SDK Channel", () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects oversized setup search before native preparation or draft snapshot", () => {
+    const scope = new generated.SetupOperationScope(scenarioId, 3);
+    expect(() =>
+      generated.searchScenarioEntities(scope, {
+        kind: "person",
+        search: "x".repeat(2 * 64 * 1024),
+      }),
+    ).toThrow(RangeError);
+    expect(tauri.invoke).not.toHaveBeenCalled();
+    scope.dispose();
+  });
+
   it("releases a late preparation after disposal without claiming or registering a channel", async () => {
     const native = nativeOperations();
     const scope = new generated.SetupOperationScope(scenarioId, 3);

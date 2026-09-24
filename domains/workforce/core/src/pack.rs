@@ -136,7 +136,9 @@ impl DomainPack for WorkforcePack {
         {
             Ok(()) => DomainValidationReport::default(),
             Err(error) => DomainValidationReport {
-                issues: vec![AssignmentRuleError::InvalidDocument(error).validation_issue()],
+                issues: vec![
+                    AssignmentRuleError::InvalidDocument(error).validation_issue(document),
+                ],
             },
         }
     }

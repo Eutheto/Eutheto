@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkforceCalendar,
+  WorkforceCoverageRequirement,
   WorkforceLocation,
   WorkforceQualificationMinimum,
   WorkforceShiftTemplate,
@@ -8,7 +9,7 @@ import type {
 import { parseDurationDraft } from "./components/planner/duration-field";
 import { parseTemporalDraft } from "./components/planner/temporal-field";
 import { rebaseEntityDraft } from "./entity-draft";
-import { createWorkRecordDraft } from "./work-record-draft";
+import { createWorkRecordDraft, workRecordValue } from "./work-record-draft";
 
 beforeEach(() => vi.stubGlobal("window", { crypto: globalThis.crypto }));
 afterEach(() => vi.unstubAllGlobals());
@@ -280,5 +281,107 @@ describe("rebased work collection raw buffers", () => {
     expect(oldKeys).not.toContain(rows[0]?.key);
     expect(oldKeys).not.toContain(rows[3]?.key);
     expect(oldKeys).not.toContain(rows[5]?.key);
+  });
+});
+
+describe("coverage requirement scope and rebase", () => {
+  const base: WorkforceCoverageRequirement = {
+    id,
+    kind: "coverageRequirement",
+    active: false,
+    scope: { kind: "filter", assignmentTypeIds: [] },
+    coverage: { kind: "atLeast", minimum: 3, qualificationMinimums: [] },
+  };
+  const preparation = { baseline: base, startsAt: null, endsAt: null };
+
+  it("preserves an explicit empty filter without introducing an absent filter", () => {
+    const draft = createWorkRecordDraft(base);
+    const result = workRecordValue(id, draft, preparation);
+    expect(result.value).toEqual(base);
+    expect(result.errors).toEqual({});
+  });
+
+  it("rejects a partly authored enabled date range instead of broadening scope", () => {
+    const draft = createWorkRecordDraft(base);
+    if (draft.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    const result = workRecordValue(
+      id,
+      {
+        ...draft,
+        scope: {
+          ...draft.scope,
+          filterDateRangeEnabled: true,
+          filterStartDateRangeStart: "2030-01-01",
+          filterStartDateRangeEndExclusive: "",
+        },
+      },
+      preparation,
+    );
+    expect(result.value).toBeNull();
+    expect(result.errors["scope.startDateRange.endDateExclusive"]).toBeDefined();
+  });
+
+  it("adopts changed coverage and scope while preserving inactive raw input", () => {
+    const draft = createWorkRecordDraft(base);
+    if (draft.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    const raw = { ...draft, coverage: { ...draft.coverage, minimum: "003", count: "unfinished" } };
+    const changed: WorkforceCoverageRequirement = {
+      ...base,
+      scope: { kind: "filter", assignmentTypeIds: [firstId], locationIds: [secondId] },
+      coverage: { kind: "atLeast", minimum: 5, qualificationMinimums: [] },
+    };
+    const merged = rebaseEntityDraft(base, base, changed);
+    const restored = createWorkRecordDraft(merged.value, { value: merged.local, raw });
+    if (restored.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    expect(restored.coverage.minimum).toBe("5");
+    expect(restored.coverage.count).toBe("unfinished");
+    expect(workRecordValue(id, restored, preparation).value).toEqual(changed);
+  });
+
+  it("does not reactivate inactive restrictions when adopting a different scope variant", () => {
+    const original: WorkforceCoverageRequirement = { ...base, scope: { kind: "all" } };
+    const draft = createWorkRecordDraft(original);
+    if (draft.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    const raw = {
+      ...draft,
+      scope: {
+        ...draft.scope,
+        filterAssignmentTypesEnabled: true,
+        filterAssignmentTypeIds: [firstId],
+        filterLocationsEnabled: true,
+        filterLocationIds: [secondId],
+        filterDateRangeEnabled: true,
+        filterStartDateRangeStart: "2030-01-01",
+        filterStartDateRangeEndExclusive: "2030-02-01",
+      },
+    };
+    const current: WorkforceCoverageRequirement = { ...original, scope: { kind: "filter" } };
+    const merged = rebaseEntityDraft(original, original, current);
+    const restored = createWorkRecordDraft(merged.value, { value: merged.local, raw });
+    if (restored.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    expect(workRecordValue(id, restored, preparation).value).toEqual(current);
+    expect(restored.scope.filterAssignmentTypeIds).toEqual([firstId]);
+    expect(restored.scope.filterLocationIds).toEqual([secondId]);
+    expect(restored.scope.filterStartDateRangeStart).toBe("2030-01-01");
+  });
+
+  it("retains inactive filter intent when a whole-field rebase adopts all shifts", () => {
+    const original: WorkforceCoverageRequirement = {
+      ...base,
+      scope: {
+        kind: "filter",
+        assignmentTypeIds: [firstId],
+        startDateRange: { startDate: "2030-01-01", endDateExclusive: "2030-02-01" },
+      },
+    };
+    const raw = createWorkRecordDraft(original);
+    if (raw.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    const current: WorkforceCoverageRequirement = { ...original, scope: { kind: "all" } };
+    const merged = rebaseEntityDraft(original, original, current);
+    const restored = createWorkRecordDraft(merged.value, { value: merged.local, raw });
+    if (restored.kind !== "coverageRequirement") throw new Error("Expected coverage requirement");
+    expect(restored.scope.filterAssignmentTypeIds).toEqual([firstId]);
+    expect(restored.scope.filterStartDateRangeStart).toBe("2030-01-01");
+    expect(workRecordValue(id, restored, preparation).value).toEqual(current);
   });
 });

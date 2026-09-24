@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/vue";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
-import { h, shallowRef } from "vue";
+import { h, ref, shallowRef } from "vue";
 import {
   createPersonFieldsDraft,
   personFieldsValue,
@@ -33,13 +33,15 @@ function mountFields(initial: PersonFieldsDraft) {
 describe("person field editing", () => {
   it("retains incomplete raw numbers and date text across an optional section toggle", async () => {
     const draft = mountFields(createPersonFieldsDraft());
-    await userEvent.fill(screen.getByRole("textbox", { name: "Numerator" }), "2e");
+    await userEvent.click(screen.getByText(/Workload and targets/u));
+    await userEvent.fill(screen.getByRole("textbox", { name: "Top number" }), "2e");
     expect(draft.value.weightNumerator).toBe("2e");
     expect(personFieldsValue(draft.value).value).toBeNull();
-    await userEvent.click(screen.getByRole("checkbox", { name: "Limit active dates" }));
+    await userEvent.click(screen.getByText(/Dates, teams and home location/u));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Only active during these dates" }));
     await userEvent.fill(screen.getByRole("textbox", { name: "Active from" }), "2026-0");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Limit active dates" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Limit active dates" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Only active during these dates" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Only active during these dates" }));
     await expect
       .element(screen.getByRole("textbox", { name: "Active from" }))
       .toHaveValue("2026-0");
@@ -60,19 +62,35 @@ describe("person field editing", () => {
         text: `Tag ${String(index)}`,
       })),
     });
+    await userEvent.click(screen.getByText(/Qualifications and work types/u));
+    await userEvent.click(screen.getByText(/Tags and appearance/u));
     expect(screen.getAllByRole("combobox", { name: "Search Qualification" })).toHaveLength(50);
     expect(screen.getAllByRole("textbox", { name: /^Tag [\d,]+$/u })).toHaveLength(50);
-    await userEvent.click(screen.getByRole("button", { name: "Next grants" }));
+    await userEvent.click(screen.getByRole("button", { name: "Next qualifications" }));
     await expect
-      .element(screen.getByRole("heading", { name: "Qualification grants" }))
+      .element(screen.getByRole("heading", { name: "Qualifications and valid times" }))
       .toHaveFocus();
-    expect(
-      screen.getAllByRole("textbox", { name: "Effective from (optional instant)" }),
-    ).toHaveLength(50);
+    expect(screen.getAllByRole("textbox", { name: "Valid from (optional time)" })).toHaveLength(50);
     await userEvent.click(screen.getByRole("button", { name: "Remove tag 1" }));
     await userEvent.click(screen.getByRole("button", { name: "Add tag" }));
     await expect.element(screen.getByRole("textbox", { name: "Tag 10,000" })).toHaveFocus();
     expect(draft.value.tags).toHaveLength(10_000);
     expect(screen.getAllByRole("textbox", { name: /^Tag [\d,]+$/u })).toHaveLength(50);
+  });
+
+  it("opens a collapsed option when native validation routes to its exact field", async () => {
+    const fields = ref<InstanceType<typeof PersonFields>>();
+    render({
+      render: () =>
+        h(PersonFields, {
+          ref: fields,
+          project,
+          libraryEpoch: 1,
+          modelValue: createPersonFieldsDraft(),
+        }),
+    });
+    expect(screen.queryByRole("textbox", { name: "Top number" })).toBeNull();
+    expect(await fields.value?.focusField(["workloadWeight", "numerator"], () => true)).toBe(true);
+    await expect.element(screen.getByRole("textbox", { name: "Top number" })).toHaveFocus();
   });
 });

@@ -2,6 +2,7 @@
 import { computed, nextTick, onScopeDispose, ref, shallowRef, watch } from "vue";
 import {
   getScenarioEntity,
+  getScenarioView,
   searchScenarioEntities,
   newUuidV7,
   SetupOperationScope,
@@ -34,6 +35,7 @@ import PeopleRecordFields from "./PeopleRecordFields.vue";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
 import PeopleBulkEditor from "./PeopleBulkEditor.vue";
 import type { PeopleBulkSelection } from "../people-bulk-draft";
+import { useValidationRoute } from "../validation-route";
 
 const props = defineProps<{
   home: ProjectHomeController;
@@ -53,6 +55,7 @@ const pageError = ref<string | null>(null);
 const detailLoading = ref(false);
 const detailError = ref<string | null>(null);
 const form = ref<HTMLFormElement>();
+const recordFields = ref<InstanceType<typeof PeopleRecordFields>>();
 const reviewHeading = ref<HTMLElement>();
 const editorHeading = ref<HTMLElement>();
 const conflictHeading = ref<HTMLElement>();
@@ -234,8 +237,12 @@ async function loadDetail(
       };
     }
     if (!refresh) {
+      const ownsDetail = () =>
+        captured === detailGeneration &&
+        contextMatches(scenarioId, revision, epoch) &&
+        editor.value?.id === id;
       await nextTick();
-      editorHeading.value?.focus();
+      if (ownsDetail()) editorHeading.value?.focus();
     }
   } catch (failure) {
     if (captured === detailGeneration) detailError.value = safeMessage(failure);
@@ -278,6 +285,16 @@ function update(raw: PeopleRecordDraft): void {
   invalidateDraft();
   editor.value = { ...value, raw, dirty: true, rebase: null };
 }
+function revealInvalidField(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || !form.value?.contains(target)) return;
+  for (
+    let detail = target.closest("details");
+    detail && form.value.contains(detail);
+    detail = detail.parentElement?.closest("details") ?? null
+  )
+    detail.open = true;
+}
 function candidate(): PeopleRecord | null {
   const value = editor.value;
   if (value === null) return null;
@@ -285,6 +302,19 @@ function candidate(): PeopleRecord | null {
   const converted = peopleRecordValue(value.id, value.raw);
   fieldErrors.value = converted.errors;
   if (!form.value?.reportValidity()) return null;
+  if (converted.value === null && value.raw.kind === "person") {
+    const field = Object.keys(converted.errors)[0];
+    const path =
+      field === "weightNumerator"
+        ? ["workloadWeight", "numerator"]
+        : field === "weightDenominator"
+          ? ["workloadWeight", "denominator"]
+          : field === "target"
+            ? ["workloadTarget", "target"]
+            : null;
+    if (path)
+      void recordFields.value?.focusField(path, () => editor.value === value && !busy.value);
+  }
   return converted.value;
 }
 async function preview(): Promise<void> {
@@ -598,21 +628,85 @@ onScopeDispose(() => {
   listScope?.dispose();
   detailScope?.dispose();
 });
+const navigationError = useValidationRoute(
+  props.home,
+  () => props.project,
+  () => true,
+  async (target, isCurrent) => {
+    const clean = () => isCurrent() && !dirty.value && !busy.value;
+    if (
+      target.collection !== "entities" ||
+      !clean() ||
+      review.state.pending ||
+      review.state.review !== null ||
+      editor.value?.editing
+    )
+      return false;
+    const beforeDraft = draftGeneration;
+    const beforeDetail = detailGeneration;
+    const owned = new SetupOperationScope(target.scenarioId, target.revision);
+    try {
+      const { result } = await getScenarioView(owned, {
+        source: { kind: "stored" },
+        query: {
+          schemaVersion: 1,
+          viewId: "official.workforce.setup.entity_summary",
+          parameters: { entityId: target.id },
+        },
+      }).result;
+      if (!clean() || beforeDraft !== draftGeneration || beforeDetail !== detailGeneration)
+        return false;
+      const summary = result.view.data.result.data;
+      if (
+        summary.entityId !== target.id ||
+        (summary.kind !== "person" &&
+          summary.kind !== "qualification" &&
+          summary.kind !== "team" &&
+          summary.kind !== "assignmentType")
+      )
+        return false;
+      await loadDetail(target.id, summary.kind);
+      const loaded = editor.value;
+      if (!clean() || loaded?.id !== target.id || loaded.base === null || loaded.editing)
+        return false;
+      kind.value = summary.kind;
+      void loadPage();
+      invalidateDraft();
+      const opened = { ...loaded, editing: true };
+      editor.value = opened;
+      const valid = () => isCurrent() && editor.value === opened && !dirty.value && !busy.value;
+      await nextTick();
+      if (!valid()) return false;
+      if (target.fieldPath.length === 0) {
+        editorHeading.value?.focus();
+        return document.activeElement === editorHeading.value;
+      }
+      return recordFields.value?.focusField(target.fieldPath, valid) ?? false;
+    } finally {
+      owned.dispose();
+    }
+  },
+);
 </script>
 
 <template>
   <section class="page-stack" aria-labelledby="people-heading">
     <h2 id="people-heading" data-route-heading tabindex="-1">{{ copy.heading }}</h2>
+    <p v-if="navigationError" class="text-danger" role="alert">{{ navigationError }}</p>
     <p>{{ copy.description }}</p>
     <p v-if="project.domainPackId !== 'official.workforce'">{{ messages.setup.unsupported }}</p>
     <template v-else>
-      <RouterLink
-        :to="{ name: 'project-people-import', params: { scenarioId: project.scenarioId } }"
+      <section
+        v-show="editor === null && bulkSelection === null"
+        class="state-panel field-stack"
+        aria-labelledby="people-list-heading"
       >
-        {{ copy.importCsv }}
-      </RouterLink>
-      <section class="state-panel field-stack" aria-labelledby="people-list-heading">
         <h3 id="people-list-heading" ref="listHeading" tabindex="-1">{{ copy.records }}</h3>
+        <RouterLink
+          :to="{ name: 'project-people-import', params: { scenarioId: project.scenarioId } }"
+        >
+          {{ copy.importCsv }}
+        </RouterLink>
         <label for="people-kind">{{ copy.recordKind }}</label>
         <select
           id="people-kind"
@@ -656,8 +750,8 @@ onScopeDispose(() => {
                   :disabled="busy || editor?.editing || bulkSelection !== null"
                   @change="selectPerson(item.entityId, ($event.target as HTMLInputElement).checked)"
                 />
-                {{ messages.bulkPeople.select }} · {{ item.name ?? copy.unnamed }} ·
-                {{ item.entityId }}
+                {{ messages.bulkPeople.select }} · {{ item.name ?? copy.unnamed
+                }}<span class="sr-only"> · {{ item.entityId }}</span>
               </label>
               <button
                 type="button"
@@ -665,7 +759,7 @@ onScopeDispose(() => {
                 :disabled="busy || editor?.editing || bulkSelection !== null"
                 @click="loadDetail(item.entityId, kind)"
               >
-                {{ item.name ?? copy.unnamed }} · {{ item.entityId }}
+                {{ item.name ?? copy.unnamed }}<span class="sr-only"> · {{ item.entityId }}</span>
               </button>
             </li>
           </ul>
@@ -724,14 +818,24 @@ onScopeDispose(() => {
       </div>
       <section
         v-if="editor"
-        class="state-panel field-stack"
+        class="state-panel field-stack people-editor"
         aria-labelledby="people-editor-heading"
       >
         <h3 id="people-editor-heading" ref="editorHeading" tabindex="-1">
           {{ copy.kinds[editor.raw.kind] }}: {{ editor.base?.name ?? copy.newRecord }}
         </h3>
-        <p class="break-all">{{ copy.identity }} {{ editor.id }}</p>
-        <p>{{ copy.baseline }} {{ formatNumber(editor.revision, locale) }}</p>
+        <button
+          v-if="editor.raw.kind === 'person' && !editor.editing"
+          type="button"
+          :disabled="busy || stale || detailLoading"
+          @click="edit"
+        >
+          {{ copy.editPerson }}
+        </button>
+        <template v-if="editor.raw.kind !== 'person'">
+          <p class="break-all">{{ copy.identity }} {{ editor.id }}</p>
+          <p>{{ copy.baseline }} {{ formatNumber(editor.revision, locale) }}</p>
+        </template>
         <p v-if="editor.dirty" role="status">{{ copy.unsaved }}</p>
         <div v-if="stale" class="state-panel" role="status">
           <p>{{ copy.stale }}</p>
@@ -744,8 +848,14 @@ onScopeDispose(() => {
             {{ copy.reviewCurrent }}
           </button>
         </div>
-        <form ref="form" class="field-stack" @submit.prevent="preview">
+        <form
+          ref="form"
+          class="field-stack"
+          @invalid.capture="revealInvalidField"
+          @submit.prevent="preview"
+        >
           <PeopleRecordFields
+            ref="recordFields"
             v-bind="fieldContext"
             :model-value="editor.raw"
             :read-only="!editor.editing"
@@ -756,7 +866,7 @@ onScopeDispose(() => {
           />
           <div class="action-row">
             <button
-              v-if="!editor.editing"
+              v-if="!editor.editing && editor.raw.kind !== 'person'"
               type="button"
               :disabled="busy || stale || detailLoading"
               @click="edit"
@@ -782,6 +892,11 @@ onScopeDispose(() => {
             </button>
           </div>
         </form>
+        <details v-if="editor.raw.kind === 'person'" class="setup-more">
+          <summary>{{ copy.recordDetails }}</summary>
+          <p class="break-all">{{ copy.identity }} {{ editor.id }}</p>
+          <p>{{ copy.baseline }} {{ formatNumber(editor.revision, locale) }}</p>
+        </details>
         <section v-if="editor.rebase" class="field-stack" :aria-label="copy.conflicts">
           <h4 ref="conflictHeading" tabindex="-1">{{ copy.conflicts }}</h4>
           <p>{{ copy.conflictHelp }}</p>

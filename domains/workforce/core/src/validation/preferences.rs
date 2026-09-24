@@ -1,5 +1,5 @@
 use super::{
-    common::{Result, require, unique, weight},
+    common::{Result, prefix, require, unique, weight},
     context::Context,
     time::time_window,
 };
@@ -12,13 +12,13 @@ use crate::model::{
 impl Context<'_> {
     pub(super) fn preference(&self, preference: &WorkforcePreference) -> Result {
         let (_, active, scope, _, preference_weight) = preference.header();
-        self.scope(scope, active)?;
+        prefix(self.scope(scope, active), "scope")?;
         weight(preference_weight, "weight")?;
         match preference {
             WorkforcePreference::Time {
                 time_window: window,
                 ..
-            } => time_window(window)?,
+            } => prefix(time_window(window), "timeWindow")?,
             WorkforcePreference::AssignmentType {
                 assignment_type_ids,
                 ..

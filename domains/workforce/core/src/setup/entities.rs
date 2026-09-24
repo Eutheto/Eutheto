@@ -1,6 +1,7 @@
 use super::contracts::{
-    EntityDetailParametersV1, EntityPageParametersV1, EntitySummaryV1, ORDINARY_DATA_BYTES,
-    QUERY_STRING_BYTES, WorkforceEntityKindV1, WorkforcePositionV1, WorkforceSetupViewDataV1,
+    EntityDetailParametersV1, EntityPageParametersV1, EntitySummaryParametersV1, EntitySummaryV1,
+    ORDINARY_DATA_BYTES, QUERY_STRING_BYTES, WorkforceEntityKindV1, WorkforcePositionV1,
+    WorkforceSetupViewDataV1,
 };
 use super::paging::{PageBuilder, ProjectionBudget, Result, invalid};
 use crate::model::WorkforceEntity;
@@ -106,6 +107,32 @@ pub(super) fn detail(
     let entity = WorkforceEntity::deserialize(record)
         .map_err(|_| invalid("/domain/entities", "entity has an invalid typed record"))?;
     Ok(WorkforceSetupViewDataV1::EntityDetail(Box::new(entity)))
+}
+
+pub(super) fn summary(
+    document: &ScenarioDocument,
+    parameters: &EntitySummaryParametersV1,
+    position: Option<WorkforcePositionV1>,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<WorkforceSetupViewDataV1> {
+    if position.is_some() {
+        return Err(invalid(
+            "/query/continuation",
+            "entity summary does not accept continuation",
+        ));
+    }
+    budget.visit()?;
+    let record = document
+        .domain
+        .entities
+        .get(&parameters.entity_id)
+        .ok_or_else(|| invalid("/query/parameters/entityId", "entity is absent"))?;
+    let (kind, name) = header(parameters.entity_id, record)?;
+    Ok(WorkforceSetupViewDataV1::EntitySummary(EntitySummaryV1 {
+        entity_id: parameters.entity_id,
+        kind,
+        name: name.map(str::to_owned),
+    }))
 }
 
 /// Inspect only structural identity/name facts; this is deliberately not full validation

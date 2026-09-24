@@ -4053,6 +4053,136 @@
         }
       ]
     },
+    "official.workforce.setup.entity_summary": {
+      "invalidExamples": [
+        {},
+        {
+          "entityId": "invalid"
+        },
+        {
+          "entityId": "018f7b40-a000-7000-8000-000000000014",
+          "entityKind": "person"
+        }
+      ],
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "entityId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entityId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "additionalProperties": false,
+                "properties": {
+                  "entityId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "oneOf": [
+                      {
+                        "const": "person"
+                      },
+                      {
+                        "const": "qualification"
+                      },
+                      {
+                        "const": "team"
+                      },
+                      {
+                        "const": "location"
+                      },
+                      {
+                        "const": "workloadBucket"
+                      },
+                      {
+                        "const": "calendar"
+                      },
+                      {
+                        "const": "assignmentType"
+                      },
+                      {
+                        "const": "shiftTemplate"
+                      },
+                      {
+                        "const": "shiftInstance"
+                      },
+                      {
+                        "const": "availability"
+                      },
+                      {
+                        "const": "coverageRequirement"
+                      },
+                      {
+                        "const": "baseSchedule"
+                      },
+                      {
+                        "const": "scorePolicy"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "oneOf": [
+                      {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "entityId",
+                  "kind",
+                  "name"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "entitySummary"
+              }
+            },
+            "required": [
+              "data",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "result",
+          "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "sources": [
+        "stored"
+      ],
+      "supportsContinuation": false,
+      "validExamples": [
+        {
+          "entityId": "018f7b40-a000-7000-8000-000000000014"
+        }
+      ]
+    },
     "official.workforce.setup.generation_review": {
       "invalidExamples": [
         {},

@@ -260,6 +260,13 @@ pub(super) fn active_interval(
             settings,
             eutheto_types::EntityId::from_uuid(person.id.as_uuid()),
         )
+        .map_err(|error| {
+            super::super::intervals::authored_temporal_error(
+                error,
+                crate::temporal::TemporalOrigin::PersonActiveRange,
+                None,
+            )
+        })
         .map(Some),
     }
 }
@@ -360,4 +367,61 @@ pub(super) fn bounds(coverage: &Coverage) -> (u64, Option<u64>) {
             ..
         } => (u64::from(*minimum), maximum_count.map(u64::from)),
     }
+}
+
+/// Map each canonical minimum index to the first authored `qualificationMinimums` row index
+/// that produced it. The mapping is purely evidential: it never feeds into `MinimumKey`
+/// ordering, equality, serialization, or hash identity.
+///
+/// Validated qualification lists are unique, so membership in the canonical sorted list
+/// plus equal length proves equivalence without copying or sorting authored lists again.
+pub(super) fn authored_source_rows(
+    coverage: &Coverage,
+    minima: &[MinimumKey],
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<usize>, AssignmentRuleError> {
+    let values = match coverage {
+        Coverage::Exact {
+            qualification_minimums,
+            ..
+        }
+        | Coverage::AtLeast {
+            qualification_minimums,
+            ..
+        } => qualification_minimums,
+    };
+    let retained = count(minima.len())?;
+    budget.reserve(
+        0,
+        retained,
+        retained
+            .checked_mul(size_of::<usize>() as u64)
+            .ok_or_else(invalid)?,
+    )?;
+    let mut result = Vec::with_capacity(minima.len());
+    for key in minima {
+        let mut found = None;
+        for (index, value) in values.iter().enumerate() {
+            budget.step()?;
+            let all = &value.qualifications.all_qualification_ids;
+            let any = &value.qualifications.any_qualification_ids;
+            if key.minimum != value.minimum
+                || key.all.len() != all.len()
+                || key.any.len() != any.len()
+            {
+                continue;
+            }
+            // One binary search per authored ID: charge the existing n*log(n) work bound.
+            budget.sort_work(all.len())?;
+            budget.sort_work(any.len())?;
+            if all.iter().all(|id| key.all.binary_search(id).is_ok())
+                && any.iter().all(|id| key.any.binary_search(id).is_ok())
+            {
+                found = Some(index);
+                break;
+            }
+        }
+        result.push(found.ok_or_else(invalid)?);
+    }
+    Ok(result)
 }

@@ -4,11 +4,14 @@ import type {
   WorkforceCalendar,
   WorkforceCalendarPeriod,
   WorkforceCoverage,
+  WorkforceCoverageRequirement,
   WorkforceEntity,
   WorkforceLocation,
   WorkforceQualificationMinimum,
   WorkforceResolvedLocalTime,
+  WorkforceShiftFilter,
   WorkforceShiftInstance,
+  WorkforceShiftScope,
   WorkforceShiftTemplate,
   WorkforceWeekday,
   WorkforceWorkloadBucket,
@@ -30,7 +33,8 @@ export type WorkRecord =
   | WorkforceAssignmentType
   | WorkforceCalendar
   | WorkforceShiftTemplate
-  | WorkforceShiftInstance;
+  | WorkforceShiftInstance
+  | WorkforceCoverageRequirement;
 
 export interface WorkTextRowDraft {
   readonly key: string;
@@ -71,6 +75,17 @@ export interface WorkCalendarPeriodDraft {
     readonly lengthDays: string;
   };
   readonly custom: readonly WorkCalendarIntervalDraft[];
+}
+export interface WorkShiftScopeDraft {
+  readonly scopeKind: "all" | "selected" | "filter";
+  readonly selectedShiftIds: readonly string[];
+  readonly filterAssignmentTypesEnabled: boolean;
+  readonly filterAssignmentTypeIds: readonly string[];
+  readonly filterLocationsEnabled: boolean;
+  readonly filterLocationIds: readonly string[];
+  readonly filterDateRangeEnabled: boolean;
+  readonly filterStartDateRangeStart: string;
+  readonly filterStartDateRangeEndExclusive: string;
 }
 export interface WorkShiftFieldsDraft {
   readonly assignmentTypeId: string;
@@ -115,7 +130,13 @@ export type WorkRecordDraft =
   | (WorkShiftFieldsDraft & {
       readonly kind: "shiftInstance";
       readonly interval: TemporalDraft;
-    });
+    })
+  | {
+      readonly kind: "coverageRequirement";
+      readonly active: boolean;
+      readonly scope: WorkShiftScopeDraft;
+      readonly coverage: WorkCoverageDraft;
+    };
 
 export interface WorkEndpointResolution {
   readonly local: string;
@@ -142,7 +163,8 @@ export function isWorkRecord(entity: WorkforceEntity): entity is WorkRecord {
     entity.kind === "assignmentType" ||
     entity.kind === "calendar" ||
     entity.kind === "shiftTemplate" ||
-    entity.kind === "shiftInstance"
+    entity.kind === "shiftInstance" ||
+    entity.kind === "coverageRequirement"
   );
 }
 function duration(minutes?: number): DurationDraft {
@@ -339,6 +361,75 @@ function calendarDraft(
         : (raw?.custom ?? []),
   };
 }
+function shiftScopeDraft(
+  value?: WorkforceShiftScope,
+  before?: WorkforceShiftScope,
+  raw?: WorkShiftScopeDraft,
+): WorkShiftScopeDraft {
+  const selected = value?.kind === "selected" ? value : undefined;
+  const oldSelected = before?.kind === "selected" ? before : undefined;
+  const filter = value?.kind === "filter" ? value : undefined;
+  const oldFilter = before?.kind === "filter" ? before : undefined;
+  const keepRange =
+    raw !== undefined && sameField(filter?.startDateRange, oldFilter?.startDateRange);
+  return {
+    scopeKind: restore(value?.kind ?? "all", before?.kind, raw?.scopeKind),
+    selectedShiftIds:
+      selected === undefined
+        ? (raw?.selectedShiftIds ?? [])
+        : restore(selected.shiftIds, oldSelected?.shiftIds, raw?.selectedShiftIds),
+    filterAssignmentTypesEnabled:
+      filter === undefined
+        ? (raw?.filterAssignmentTypesEnabled ?? false)
+        : oldFilter === undefined
+          ? filter.assignmentTypeIds !== undefined
+          : restore(
+              filter.assignmentTypeIds !== undefined,
+              oldFilter.assignmentTypeIds !== undefined,
+              raw?.filterAssignmentTypesEnabled,
+            ),
+    filterAssignmentTypeIds:
+      filter?.assignmentTypeIds === undefined
+        ? (raw?.filterAssignmentTypeIds ?? [])
+        : restore(
+            filter.assignmentTypeIds,
+            oldFilter?.assignmentTypeIds,
+            raw?.filterAssignmentTypeIds,
+          ),
+    filterLocationsEnabled:
+      filter === undefined
+        ? (raw?.filterLocationsEnabled ?? false)
+        : oldFilter === undefined
+          ? filter.locationIds !== undefined
+          : restore(
+              filter.locationIds !== undefined,
+              oldFilter.locationIds !== undefined,
+              raw?.filterLocationsEnabled,
+            ),
+    filterLocationIds:
+      filter?.locationIds === undefined
+        ? (raw?.filterLocationIds ?? [])
+        : restore(filter.locationIds, oldFilter?.locationIds, raw?.filterLocationIds),
+    filterDateRangeEnabled:
+      filter === undefined
+        ? (raw?.filterDateRangeEnabled ?? false)
+        : oldFilter === undefined
+          ? filter.startDateRange !== undefined
+          : restore(
+              filter.startDateRange !== undefined,
+              oldFilter.startDateRange !== undefined,
+              raw?.filterDateRangeEnabled,
+            ),
+    filterStartDateRangeStart:
+      filter?.startDateRange === undefined || keepRange
+        ? (raw?.filterStartDateRangeStart ?? "")
+        : filter.startDateRange.startDate,
+    filterStartDateRangeEndExclusive:
+      filter?.startDateRange === undefined || keepRange
+        ? (raw?.filterStartDateRangeEndExclusive ?? "")
+        : filter.startDateRange.endDateExclusive,
+  };
+}
 function shiftDraft(
   value?: WorkforceShiftInstance | WorkforceShiftTemplate,
   before?: WorkforceShiftInstance | WorkforceShiftTemplate,
@@ -400,6 +491,13 @@ export function createWorkRecordDraft(
         };
       case "shiftInstance":
         return { ...shiftDraft(), kind: record, interval: interval() };
+      case "coverageRequirement":
+        return {
+          kind: record,
+          active: false,
+          scope: shiftScopeDraft(),
+          coverage: coverageDraft(),
+        };
     }
   }
   switch (record.kind) {
@@ -552,6 +650,19 @@ export function createWorkRecordDraft(
             : record.startsAt.local,
           sameField(record.endsAt, before?.endsAt) && local ? local.endsAt : record.endsAt.local,
         ),
+      };
+    }
+    case "coverageRequirement": {
+      const before = retained?.value.kind === record.kind ? retained.value : undefined;
+      const raw = retained?.raw.kind === record.kind ? retained.raw : undefined;
+      return {
+        kind: record.kind,
+        active:
+          raw && before !== undefined && record.active === before.active
+            ? raw.active
+            : record.active,
+        scope: shiftScopeDraft(record.scope, before?.scope, raw?.scope),
+        coverage: coverageDraft(record.coverage, before?.coverage, raw?.coverage),
       };
     }
   }
@@ -788,6 +899,46 @@ export function workRecordValue(
         startsAt,
         endsAt,
         origin: baseline?.origin ?? { kind: "manual" },
+      });
+    }
+    case "coverageRequirement": {
+      let scope: WorkforceShiftScope;
+      if (draft.scope.scopeKind === "all") {
+        scope = { kind: "all" };
+      } else if (draft.scope.scopeKind === "selected") {
+        scope = { kind: "selected", shiftIds: draft.scope.selectedShiftIds };
+      } else {
+        const filter: WorkforceShiftFilter = {
+          kind: "filter",
+          ...(draft.scope.filterAssignmentTypesEnabled
+            ? { assignmentTypeIds: draft.scope.filterAssignmentTypeIds }
+            : {}),
+          ...(draft.scope.filterLocationsEnabled
+            ? { locationIds: draft.scope.filterLocationIds }
+            : {}),
+          ...(draft.scope.filterDateRangeEnabled
+            ? {
+                startDateRange: {
+                  startDate: draft.scope.filterStartDateRangeStart,
+                  endDateExclusive: draft.scope.filterStartDateRangeEndExclusive,
+                },
+              }
+            : {}),
+        };
+        scope = filter;
+        if (draft.scope.filterDateRangeEnabled) {
+          if (draft.scope.filterStartDateRangeStart === "")
+            errors["scope.startDateRange.startDate"] = copy.incomplete;
+          if (draft.scope.filterStartDateRangeEndExclusive === "")
+            errors["scope.startDateRange.endDateExclusive"] = copy.incomplete;
+        }
+      }
+      return result({
+        kind: draft.kind,
+        id,
+        active: draft.active,
+        coverage: coverage(draft.coverage),
+        scope,
       });
     }
   }

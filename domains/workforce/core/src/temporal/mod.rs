@@ -2,6 +2,7 @@
 //! Public results are Rust values, not another stored format or an IPC approval token.
 
 mod calendar;
+pub(crate) mod diagnostics;
 mod generation;
 mod review;
 pub(crate) use calendar::potentially_intersects;
@@ -45,6 +46,7 @@ pub(crate) fn issue(
         local_date,
         endpoint: None,
         occurrence_date: None,
+        origin: None,
     })
 }
 
@@ -67,6 +69,7 @@ pub(crate) fn resolve_endpoint(
             local_date: Some(local.date()),
             endpoint: Some(endpoint),
             occurrence_date: None,
+            origin: None,
         })
     })
 }

@@ -12,6 +12,7 @@ import { redoScenario, undoScenario } from "./api/generated";
 import { createApplicationSettingsController } from "./application-settings";
 import { messages } from "./messages";
 import { createProjectHomeController, safeMessage } from "./project-home";
+import OperationPanel from "./components/OperationPanel.vue";
 import { useWorkspaceStore, type ProjectDeletionReview } from "./stores/workspace";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog";
 
@@ -332,7 +333,12 @@ onUnmounted(() => {
       <RouterLink :to="{ name: 'backup-restore' }">{{ messages.shell.backupRestore }}</RouterLink>
       <RouterLink :to="{ name: 'about' }">{{ messages.shell.about }}</RouterLink>
     </nav>
-    <main id="workspace-main" ref="main" tabindex="-1">
+    <main
+      id="workspace-main"
+      ref="main"
+      tabindex="-1"
+      :data-operation-active="home.state.operation !== null ? 'true' : 'false'"
+    >
       <p v-if="contextProject" class="workspace-context">
         {{ messages.app.selectedProject(contextProject.title) }}
       </p>
@@ -370,35 +376,7 @@ onUnmounted(() => {
       >
         {{ home.state.errorMessage }}
       </p>
-      <section
-        v-if="home.state.operation"
-        class="state-panel operation-panel"
-        aria-labelledby="operation-label"
-      >
-        <div>
-          <h2 id="operation-label">{{ home.state.operation.label }}</h2>
-          <p role="status" aria-live="polite" aria-atomic="true">
-            {{
-              home.state.operation.settled
-                ? messages.operations.refreshing
-                : home.state.operation.cancellationRequested
-                  ? messages.operations.cancelling
-                  : home.state.operation.phase
-                    ? messages.operations.phases[home.state.operation.phase]
-                    : messages.operations.pending
-            }}
-          </p>
-        </div>
-        <button
-          v-if="home.state.operation.cancel && !home.state.operation.settled"
-          type="button"
-          class="button-secondary"
-          :disabled="home.state.operation.cancellationRequested"
-          @click="home.cancelOperation"
-        >
-          {{ messages.operations.cancel }}
-        </button>
-      </section>
+      <OperationPanel :operation="home.state.operation" @cancel="home.cancelOperation" />
       <section
         v-if="
           home.state.mutation &&

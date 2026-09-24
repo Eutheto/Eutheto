@@ -706,4 +706,29 @@ describe("root project controller", () => {
     await home.dispose();
     for (const release of releases) expect(release).toHaveBeenCalledOnce();
   });
+
+  it("identifies the changed project without treating a different project's refresh as local", async () => {
+    const api = fakeApi([project]);
+    let changed: ((event: ScenarioChangedEvent) => void) | undefined;
+    api.onScenarioChanged.mockImplementation((listener) => {
+      changed = listener;
+      return Promise.resolve(vi.fn());
+    });
+    const home = createHome(api);
+    await home.load();
+    await home.startEventListeners();
+    const initialEpoch = home.state.libraryEpoch;
+    const unrelatedId = "01900000-0000-7000-8000-000000000002";
+    changed?.({
+      ...changedEvent,
+      payload: {
+        ...changedEvent.payload,
+        context: { ...changedEvent.payload.context, scenarioId: unrelatedId },
+      },
+    });
+    expect(home.state.changeSignal).toEqual({ scenarioId: unrelatedId });
+    await vi.waitFor(() => {
+      expect(home.state.libraryEpoch).toBeGreaterThan(initialEpoch);
+    });
+  });
 });

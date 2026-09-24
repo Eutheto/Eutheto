@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useId } from "vue";
+import { computed, nextTick, ref, useId } from "vue";
 import type { DomainEntityRef } from "../api/generated";
 import { messages } from "../messages";
 import type { ProjectSummary } from "../project-home";
@@ -21,6 +21,7 @@ const props = defineProps<{
 const emit = defineEmits<{ "update:modelValue": [value: SupportingRecordDraft] }>();
 const copy = messages.supportingFields;
 const prefix = useId();
+const host = ref<HTMLElement>();
 const locked = computed(() => props.disabled || props.readOnly);
 const errors = computed(() => ({
   ...(props.showErrors ? supportingRecordValue("", props.modelValue).errors : {}),
@@ -77,10 +78,38 @@ function timeBehavior(event: Event): void {
   if (value === "" || value === "localWallClock" || value === "elapsed")
     setAssignment("timeBehavior", value);
 }
+async function focusField(path: readonly string[], isCurrent: () => boolean): Promise<boolean> {
+  const fields: Readonly<Record<string, string>> = {
+    name: "name",
+    description: "description",
+    category: "category",
+    defaultDurationMinutes: "duration",
+    qualifications: "qualification-mode",
+    "qualifications.kind": "qualification-mode",
+    "qualifications.allQualificationIds": "all-qualifications",
+    "qualifications.anyQualificationIds": "any-qualifications",
+    locationBehavior: "location-mode",
+    "locationBehavior.kind": "location-mode",
+    "locationBehavior.locationId": "fixed-location",
+    timeBehavior: "time-behavior",
+    workloadBucketIds: "workload-buckets",
+  };
+  const key = path.join(".");
+  const suffix = Object.hasOwn(fields, key) ? fields[key] : undefined;
+  if (!isCurrent() || suffix === undefined) return false;
+  const raw = props.modelValue;
+  await nextTick();
+  if (!isCurrent() || props.modelValue !== raw) return false;
+  const element = document.getElementById(`${prefix}-${suffix}`);
+  if (element === null || !host.value?.contains(element)) return false;
+  element.focus();
+  return document.activeElement === element;
+}
+defineExpose({ focusField });
 </script>
 
 <template>
-  <div class="field-stack">
+  <div ref="host" class="field-stack">
     <p :id="`${prefix}-native-help`" class="field-help">{{ copy.nativeValidation }}</p>
     <div class="field-stack">
       <label :for="`${prefix}-name`">{{ copy.name }}</label>
