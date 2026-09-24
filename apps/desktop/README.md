@@ -385,12 +385,18 @@ See [identity gates](../../docs/architecture/identity-gates.md).
 
 ## Phase 06 manual native checkpoint script
 
-This is a reproducible **pending** review, not a passed accessibility or
-unfamiliar-user gate. The first manual pass found setup overwhelming. The
-simplified navigation improved the first steps, but the second pass found
-**Individual Person Edit/Update** overwhelming. Its optional groups and the
-plain-language labels and explanations across setup need a fresh unprompted
-review before accepting Phase 06. Earlier clicks are feedback, not acceptance.
+The maintainer explicitly approved the Phase 06 manual checkpoint items on
+2026-09-24 for local candidate `cbfb6c746ca053fc2737d8124e762d91fd17f867`.
+The maintainer also confirmed that the manual checkpoint was not run on this
+candidate. Approval is a recorded decision, not evidence that the checks below
+passed. No per-step results, native screen-reader observations, or unfamiliar-user
+outcomes are available.
+
+The first manual pass found setup overwhelming; the second found **Individual
+Person Edit/Update** overwhelming. Its optional groups and the plain-language
+labels across setup still need a fresh unprompted review before claiming Phase 06
+exit evidence.
+
 Run the actual `just desktop-dev` Tauri application on a supported platform
 with a disposable local data profile and test files. The Vite-only page has
 no native service. Record the platform, OS, webview, screen reader/version,
@@ -491,8 +497,9 @@ cannot understand from the screen rather than supplying a definition.
 
 Automation covers selected native paths, but it does not supply the human
 understanding, platform editing accelerator, installer or assistive-technology
-evidence in this script. Record failures for correction and repeat the affected
-steps before requesting the explicit maintainer checkpoint acceptance.
+evidence in this script. Record observed outcomes and failures, correct failures,
+and repeat affected steps before treating Phase 06 exit or Phase 07 entry as
+evidenced. Checkpoint approval alone does not authorize remote publication.
 
 ## Development commands
 
