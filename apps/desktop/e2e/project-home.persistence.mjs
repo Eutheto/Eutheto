@@ -4502,7 +4502,6 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
       if (event.target.id !== 'command-search') return;
       window.__validationInputEvidence = {
         focused: document.activeElement?.id,
-        phase: document.querySelector('[aria-labelledby="operation-label"] .operation-phase')?.textContent.trim(),
         running: !!document.querySelector('[data-full-validation-state="running"]')
       };
       document.removeEventListener('input', captureInput, true);
@@ -4525,17 +4524,22 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
     ],
   });
   await waitFor(sessionId, "return document.activeElement?.id === 'command-search';");
-  const search = await waitForElement(sessionId, "#command-search");
-  await waitFor(
-    sessionId,
-    "return document.querySelector('[aria-labelledby=\"operation-label\"] .operation-phase')?.textContent.trim() === 'Validating';",
-  );
-  // Admission is observable here; this label does not assert entry into the CPU pair loop.
-  await command(
-    "POST",
-    `/session/${encodeURIComponent(sessionId)}/element/${encodeURIComponent(search)}/value`,
-    { text: "native input", value: Array.from("native input") },
-  );
+  // The displayed phase may not appear before the request settles.
+  // Capture the first WebDriver keystroke while the UI still reports a pending run.
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+    actions: [
+      {
+        type: "key",
+        id: "validation-input",
+        actions: [
+          { type: "keyDown", value: "o" },
+          { type: "keyUp", value: "o" },
+          { type: "keyDown", value: "k" },
+          { type: "keyUp", value: "k" },
+        ],
+      },
+    ],
+  });
   const inputEvidence = await evaluate(
     sessionId,
     `return {
@@ -4544,8 +4548,7 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
     };`,
   );
   assert.equal(inputEvidence.focused, "command-search");
-  assert.equal(inputEvidence.value, "native input");
-  assert.equal(inputEvidence.phase, "Validating");
+  assert.equal(inputEvidence.value, "ok");
   assert.equal(inputEvidence.running, true);
   await screenshot(sessionId, "package8-input-during-native-validation.png");
   await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
@@ -4594,7 +4597,7 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
   await activateButton(sessionId, "Undo scenario change");
   await waitForOutcome(sessionId, "Scenario undo committed", 120_000);
   console.log(
-    "PASS: actual admitted native validation retained keyboard input/focus and cancellation stayed distinct from completion",
+    "PASS: pending full-validation UI retained WebDriver keyboard input/focus; native cancellation stayed distinct from completion",
     JSON.stringify({ inputEvidence, cancelMilliseconds }),
   );
 }

@@ -389,13 +389,17 @@ The maintainer explicitly approved the Phase 06 manual checkpoint items on
 2026-09-24 for local candidate `cbfb6c746ca053fc2737d8124e762d91fd17f867`.
 The maintainer also confirmed that the manual checkpoint was not run on this
 candidate. Approval is a recorded decision, not evidence that the checks below
-passed. No per-step results, native screen-reader observations, or unfamiliar-user
-outcomes are available.
+passed. An [agent-operated native walkthrough](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#assisted-native-walkthrough--24-september-2026)
+records per-step automated results and an initially failing timing assertion that
+was corrected before the full native suite passed. The maintainer deferred
+unfamiliar-user research and spoken native screen-reader QA to beta; neither
+unrun check is recorded as passed. Explicit user review and checkpoint acceptance
+are still required before Phase 07.
 
 The first manual pass found setup overwhelming; the second found **Individual
 Person Edit/Update** overwhelming. Its optional groups and the plain-language
-labels across setup still need a fresh unprompted review before claiming Phase 06
-exit evidence.
+labels across setup require fresh unprompted review at beta before claiming
+unfamiliar-user acceptance; automation cannot measure comprehension.
 
 Run the actual `just desktop-dev` Tauri application on a supported platform
 with a disposable local data profile and test files. The Vite-only page has
@@ -495,9 +499,12 @@ cannot understand from the screen rather than supplying a definition.
     platform), record actual field names, descriptions, logical headers,
     exact validation navigation and cancellation/completion announcements.
 
-Automation covers selected native paths, but it does not supply the human
-understanding, platform editing accelerator, installer or assistive-technology
-evidence in this script. Record observed outcomes and failures, correct failures,
+Automation covers selected native paths, but it does not supply human
+understanding, platform editing accelerator, installer or spoken
+assistive-technology evidence in this script. The maintainer deferred
+unfamiliar-user research and spoken native screen-reader QA to beta; the
+remaining typical interaction gaps in the [agent-operated record](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#assisted-native-walkthrough--24-september-2026)
+remain unverified. Record observed outcomes and failures, correct failures,
 and repeat affected steps before treating Phase 06 exit or Phase 07 entry as
 evidenced. Checkpoint approval alone does not authorize remote publication.
 
@@ -567,8 +574,10 @@ validation attempts. It follows an authoritative standalone-coverage shortage to
 the exact count field and reviews a manual repair. An America/New_York repeated-time
 fixture demonstrates that zero fast errors need not imply full readiness and
 navigates the full finding to the second authored weekly start without mutation.
-The native workload also exercises retained keyboard input during admitted
-validation; admission is not evidence of entry into a particular computation loop.
+The native runner also checks WebDriver keyboard input and focus while the UI
+reports a pending full-validation request. That UI flag does not prove native
+admission or entry into the computation loop; input during admitted native
+validation remains unverified by this run.
 
 The native Optimize handoff reads real `app_get_capabilities` and checks
 unvalidated, current-full and stale saved revisions. Start/cancel remain unavailable;
