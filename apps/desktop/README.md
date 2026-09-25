@@ -389,12 +389,15 @@ The maintainer explicitly approved the Phase 06 manual checkpoint items on
 2026-09-24 for local candidate `cbfb6c746ca053fc2737d8124e762d91fd17f867`.
 The maintainer also confirmed that the manual checkpoint was not run on this
 candidate. Approval is a recorded decision, not evidence that the checks below
-passed. An [agent-operated native walkthrough](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#assisted-native-walkthrough--24-september-2026)
-records per-step automated results and an initially failing timing assertion that
-was corrected before the full native suite passed. The maintainer deferred
-unfamiliar-user research and spoken native screen-reader QA to beta; neither
-unrun check is recorded as passed. Explicit user review and checkpoint acceptance
-are still required before Phase 07.
+passed.
+
+An [agent-operated native walkthrough](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#assisted-native-walkthrough--24-september-2026)
+records the checks actually exercised. The 25 September native runner on source
+`d1470e0` covered the corrected invalid-time field focus and seven keyboard
+route-to-heading transitions. Approval of `cbfb6c7` does not accept
+this candidate or establish that the manual checkpoint passed. Unfamiliar-user
+research and spoken native screen-reader QA remain deferred to beta, not passed.
+Explicit user review and checkpoint acceptance are still required before Phase 07.
 
 The first manual pass found setup overwhelming; the second found **Individual
 Person Edit/Update** overwhelming. Its optional groups and the plain-language
@@ -406,9 +409,9 @@ with a disposable local data profile and test files. The Vite-only page has
 no native service. Record the platform, OS, webview, screen reader/version,
 theme, locale, display scale, application revision, date, and each observed
 failure. Do not use a personal project library for restore or replacement
-exercises. A second person unfamiliar with solver terminology should attempt
-the setup without being led through individual controls; record terms they
-cannot understand from the screen rather than supplying a definition.
+exercises. Independent solver-naive participant research is deferred to beta;
+record any comprehension failures directly observed in the current checkpoint
+without leading someone through individual controls.
 
 1. Start with an empty library and no account/network connection. From
    **Work schedule**, create a small project covering 31 October–3 November
