@@ -4364,6 +4364,23 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
   await activateButton(sessionId, "Shifts starting in these dates");
   await setValue(sessionId, "#work-window-start", "01/15/2030");
   await setValue(sessionId, "#work-window-end", "01/18/2030");
+  // WebKitWebDriver can lose a date-editor keystroke while Vue reflects the typed segment.
+  // Check the actual control before using this range to select the saved shift.
+  if (
+    !(await evaluate(
+      sessionId,
+      "return document.querySelector('#work-window-end').value === '2030-01-18';",
+    ))
+  )
+    await setValue(sessionId, "#work-window-end", "01/18/2030");
+  assert.deepEqual(
+    await evaluate(
+      sessionId,
+      "return [document.querySelector('#work-window-start').value, document.querySelector('#work-window-end').value];",
+    ),
+    ["2030-01-15", "2030-01-18"],
+    "The WebDriver date editor must display the intended local-date window before native review",
+  );
   await activateButton(sessionId, "Read this local-date window");
   await activateButton(sessionId, "Saved work records");
   await selectValue(sessionId, "#work-record-kind", "coverageRequirement");
@@ -4607,9 +4624,22 @@ async function package8TemporalAcceptance(sessionId, originalScenarioId) {
   await navigate(sessionId, "/projects/new");
   await setValue(sessionId, "#create-title", "Package8 native DST navigation");
   await setValue(sessionId, "#create-time-zone", "America/New_York");
-  await setValue(sessionId, "#first-date", "11/01/2026");
-  await setValue(sessionId, "#last-date", "11/01/2026");
-  await activate(sessionId, "form details summary");
+  await setValue(sessionId, "#first-date", "10/31/2026");
+  await setValue(sessionId, "#last-date", "11/03/2026");
+  await evaluate(sessionId, "document.querySelector('form details summary').focus();");
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+    actions: [
+      {
+        type: "key",
+        id: "dst-policy-keyboard",
+        actions: [
+          { type: "keyDown", value: " " },
+          { type: "keyUp", value: " " },
+        ],
+      },
+    ],
+  });
+  await waitFor(sessionId, "return document.querySelector('form details').open;");
   await selectValue(sessionId, "#create-gap", "reject");
   await selectValue(sessionId, "#create-overlap", "reject");
   await submitForm(sessionId, "#create-title");
@@ -4619,6 +4649,19 @@ async function package8TemporalAcceptance(sessionId, originalScenarioId) {
     "return window.location.hash.match(/^#\\/project\\/([^/]+)\\/setup$/)?.[1];",
   );
   assert(scenarioId);
+  const created = await package10NativeScenarioShape(sessionId, scenarioId, true);
+  assert.deepEqual(created.shape.planningDates, {
+    startDate: "2026-10-31",
+    endDateExclusive: "2026-11-04",
+  });
+  assert.equal(created.shape.settings.timeZone, "America/New_York");
+  assert.equal(created.shape.settings.gapPolicy, "reject");
+  assert.equal(created.shape.settings.overlapPolicy, "reject");
+  assert.equal(
+    Date.parse(created.shape.settings.horizon.start),
+    Date.parse("2026-10-31T04:00:00Z"),
+  );
+  assert.equal(Date.parse(created.shape.settings.horizon.end), Date.parse("2026-11-04T05:00:00Z"));
   const typeId = requestId();
   const personId = requestId();
   const shiftId = requestId();
@@ -4793,6 +4836,268 @@ async function package8TemporalAcceptance(sessionId, originalScenarioId) {
   );
 }
 
+async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId) {
+  await navigate(sessionId, "/projects");
+  await navigate(sessionId, "/projects/new");
+  await setValue(sessionId, "#create-title", "Native four-day recurring duty");
+  await setValue(sessionId, "#create-time-zone", "America/New_York");
+  await setValue(sessionId, "#first-date", "10/31/2026");
+  await setValue(sessionId, "#last-date", "11/03/2026");
+  await activate(sessionId, "form details summary");
+  await selectValue(sessionId, "#create-gap", "reject");
+  await selectValue(sessionId, "#create-overlap", "earlier");
+  await submitForm(sessionId, "#create-title");
+  await waitForElement(sessionId, "#setup-calendar");
+  const scenarioId = await evaluate(
+    sessionId,
+    "return window.location.hash.match(/^#\\/project\\/([^/]+)\\/setup$/)?.[1];",
+  );
+  assert(scenarioId);
+  await navigate(sessionId, `/project/${scenarioId}/people`);
+  await waitForElement(sessionId, "#people-list-heading");
+  const peopleEditor = 'section[aria-labelledby="people-editor-heading"]';
+  const peopleList = 'section[aria-labelledby="people-list-heading"]';
+  await selectValue(sessionId, "#people-kind", "assignmentType");
+  await activateButton(sessionId, "Create a record", peopleList);
+  await setValue(sessionId, `${peopleEditor} input[name="name"]`, "Repeated-hour duty");
+  await setValue(sessionId, `${peopleEditor} input[name="category"]`, "clinic");
+  await setValue(sessionId, `${peopleEditor} input[id$="-duration"]`, "120");
+  await selectValue(sessionId, `${peopleEditor} select[name="qualificationMode"]`, "unconstrained");
+  await selectValue(sessionId, `${peopleEditor} select[name="locationMode"]`, "none");
+  await selectValue(sessionId, `${peopleEditor} select[name="timeBehavior"]`, "elapsed");
+  await activateButton(sessionId, "Review changes", peopleEditor);
+  await activateButton(sessionId, "Save this change");
+  await waitFor(sessionId, "return !document.querySelector('#people-editor-heading');");
+  for (const name of ["Native Alice", "Native Bob"]) {
+    await selectValue(sessionId, "#people-kind", "person");
+    await activateButton(sessionId, "Create a record", peopleList);
+    await setValue(sessionId, `${peopleEditor} input[name="name"]`, name);
+    await openPersonOptions(sessionId, "Qualifications and work types", peopleEditor);
+    await choosePeopleReference(sessionId, "Work types this person may do", "Repeated-hour duty");
+    await activateButton(sessionId, "Review changes", peopleEditor);
+    await activateButton(sessionId, "Save this change");
+    await waitFor(sessionId, "return !document.querySelector('#people-editor-heading');");
+  }
+  await navigate(sessionId, `/project/${scenarioId}/work`);
+  await activateButton(sessionId, "Saved work records");
+  await selectValue(sessionId, "#work-record-kind", "shiftTemplate");
+  await activateButton(sessionId, "Create a record: Recurring shift template");
+  const workEditor = '[aria-labelledby="work-editor-heading"]';
+  await setValue(sessionId, `${workEditor} input[id$="-name"]`, "Sunday repeated-hour duty");
+  await choosePeopleReference(sessionId, "Work type", "Repeated-hour duty", workEditor);
+  await setValue(
+    sessionId,
+    `${workEditor} input[id$="-recurrence.effectiveRange.startDate"]`,
+    "2026-10-31",
+  );
+  await setValue(
+    sessionId,
+    `${workEditor} input[id$="-recurrence.effectiveRange.endDateExclusive"]`,
+    "2026-11-04",
+  );
+  await activate(sessionId, `${workEditor} input[id$="-sunday"]`);
+  await selectValue(sessionId, `${workEditor} select[id$="-timing.kind"]`, "localWindow");
+  await setValue(sessionId, `${workEditor} input[id$="-timing-start"]`, "01:30:00");
+  await setValue(sessionId, `${workEditor} input[id$="-timing-end"]`, "02:30:00");
+  await setValue(sessionId, `${workEditor} input[id$="-timing-endDayOffset"]`, "0");
+  await selectValue(
+    sessionId,
+    `${workEditor} select[name="reportingAttribution"]`,
+    "startLocalDate",
+  );
+  await selectValue(sessionId, `${workEditor} select[id$="-coverage.kind"]`, "exact");
+  await setValue(sessionId, `${workEditor} input[id$="-coverage.count"]`, "1");
+  await activateButton(sessionId, "Review changes", workEditor);
+  await waitForElement(sessionId, "#work-review-heading");
+  await activateButton(sessionId, "Apply this exact reviewed proposal");
+  await waitFor(sessionId, "return !document.querySelector('#work-editor-heading');");
+  const created = await package10NativeScenarioShape(sessionId, scenarioId, true);
+  assert.deepEqual(created.shape.planningDates, {
+    startDate: "2026-10-31",
+    endDateExclusive: "2026-11-04",
+  });
+  assert.equal(created.shape.entityCounts.person, 2);
+  assert.equal(created.shape.entityCounts.assignmentType, 1);
+  assert.equal(created.shape.entityCounts.shiftTemplate, 1);
+  assert.equal(created.shape.resolvedShiftCount, 1);
+  assert.equal(created.shape.settings.overlapPolicy, "earlier");
+  const work = (
+    await nativeSetupRequest(
+      sessionId,
+      scenarioId,
+      "scenario_get_view",
+      "official.workforce.setup.work_window",
+      {
+        source: { kind: "stored" },
+        query: {
+          schemaVersion: 1,
+          viewId: "official.workforce.setup.work_window",
+          parameters: { dates: created.shape.planningDates, limit: 10 },
+        },
+      },
+    )
+  ).result.view.data.result.data;
+  assert.equal(work.items[0].templateName, "Sunday repeated-hour duty");
+  assert.equal(work.items[0].reportingDate, "2026-11-01");
+  assert.equal(work.items[0].elapsed.seconds, "7200");
+  assert.equal(work.items[0].interval.startsAt.instant, "2026-11-01T05:30:00Z");
+  assert.equal(work.items[0].interval.startsAt.offsetSeconds, -14400);
+  assert.equal(work.items[0].interval.endsAt.instant, "2026-11-01T07:30:00Z");
+  assert.equal(work.items[0].interval.endsAt.offsetSeconds, -18000);
+  await activateButton(sessionId, "Shifts starting in these dates");
+  await waitFor(
+    sessionId,
+    "return document.querySelector('[aria-labelledby=\"work-window-heading\"]')?.textContent.includes('Sunday repeated-hour duty');",
+  );
+  await screenshot(sessionId, "package8-four-day-recurring-duty.png");
+  await activateButton(sessionId, "Saved work records");
+  await activateButton(
+    sessionId,
+    "Sunday repeated-hour duty",
+    '[aria-labelledby="work-records-heading"]',
+  );
+  await activateButton(sessionId, "Edit record", workEditor);
+  const beforeInvalidReview = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  await setValue(sessionId, `${workEditor} input[id$="-timing-start"]`, "25:61");
+  await activateButton(sessionId, "Review changes", workEditor);
+  await waitForElement(sessionId, '[aria-label="Native time and input diagnostics"]');
+  await idle(sessionId);
+  assert.equal(
+    await evaluate(
+      sessionId,
+      'return document.querySelector(\'[aria-labelledby="work-editor-heading"] input[id$="-timing-start"]\')?.value;',
+    ),
+    "25:61",
+    "Rejected local-time input must remain available in the draft",
+  );
+  assert.equal(
+    await evaluate(sessionId, "return !!document.querySelector('#work-review-heading');"),
+    false,
+    "Rejected local-time input must not open an approvable review",
+  );
+  const invalidFocus = await evaluate(sessionId, "return document.activeElement?.id;");
+  console.log("Native invalid local-time focus:", invalidFocus);
+  assert.equal(
+    (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
+    beforeInvalidReview,
+    "Invalid local time must remain a draft, not a saved mutation",
+  );
+  await screenshot(sessionId, "package8-work-invalid-local-time.png");
+  await activateButton(sessionId, "Discard draft and close", workEditor);
+  await waitFor(sessionId, "return !document.querySelector('#work-editor-heading');");
+  await idle(sessionId);
+  await activateButton(sessionId, "Shifts starting in these dates");
+  await waitFor(
+    sessionId,
+    "return document.querySelector('[aria-labelledby=\"work-window-heading\"]')?.textContent.includes('Sunday repeated-hour duty');",
+  );
+  await waitFor(
+    sessionId,
+    'return !document.querySelector(\'[aria-labelledby="work-window-heading"] > p[role="status"]\');',
+  );
+  await idle(sessionId);
+  const originalRect = await command(
+    "GET",
+    `/session/${encodeURIComponent(sessionId)}/window/rect`,
+  );
+  const enlargedRect = await command(
+    "POST",
+    `/session/${encodeURIComponent(sessionId)}/window/rect`,
+    {
+      width: 1360,
+      height: 1000,
+    },
+  );
+  assert(enlargedRect.width >= 1280, "400% reflow needs at least 320 CSS pixels");
+  for (const factor of [2, 4]) {
+    const width = await evaluate(
+      sessionId,
+      `document.documentElement.style.zoom = arguments[0];
+      return {
+        viewport: document.documentElement.clientWidth,
+        content: document.documentElement.scrollWidth
+      };`,
+      [String(factor)],
+    );
+    await screenshot(sessionId, `package8-work-css-zoom-${factor}x.png`);
+    assert(
+      width.content <= width.viewport + 1,
+      `Work view must not require page-wide horizontal scrolling at CSS zoom ${factor}x: ${JSON.stringify(width)}`,
+    );
+  }
+  await evaluate(sessionId, "document.documentElement.style.zoom = '';");
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/window/rect`, {
+    width: originalRect.width,
+    height: originalRect.height,
+  });
+  for (const [route, heading] of [
+    ["people", "people-heading"],
+    ["work", "work-heading"],
+    ["rules", "rules-heading"],
+    ["validation", "validation-heading"],
+    ["setup", "setup-heading"],
+  ]) {
+    const link = `nav[aria-label="Saved setup sections"] a[href="#/project/${scenarioId}/${route}"]`;
+    let arrived = false;
+    for (let attempt = 0; attempt < 2 && !arrived; attempt += 1) {
+      await evaluate(sessionId, "document.querySelector(arguments[0]).focus();", [link]);
+      await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+        actions: [
+          {
+            type: "key",
+            id: "native-route-keyboard",
+            actions: [
+              { type: "keyDown", value: "\uE007" },
+              { type: "keyUp", value: "\uE007" },
+            ],
+          },
+        ],
+      });
+      const outcome = await waitFor(
+        sessionId,
+        "return document.activeElement?.id === arguments[0] ? 'arrived' : document.querySelector('[role=\"dialog\"]')?.textContent ?? null;",
+        [heading],
+      );
+      if (outcome === "arrived") {
+        arrived = true;
+        break;
+      }
+      assert(
+        !outcome.includes("Your unsubmitted changes"),
+        `Keyboard navigation must not discard a dirty Work draft: ${outcome}`,
+      );
+      assert.match(
+        outcome,
+        /Native work is still running|This operation cannot be interrupted|The operation has settled/u,
+        "Only a native operation may defer a clean route transition",
+      );
+      await activateButton(sessionId, "Stay here", '[role="dialog"]');
+      await waitFor(
+        sessionId,
+        'return !document.querySelector(\'[role="dialog"]\') && !document.querySelector(\'[aria-labelledby="work-window-heading"] > p[role="status"]\');',
+      );
+      await idle(sessionId);
+    }
+    assert(arrived, `Keyboard navigation to ${route} did not settle after native work`);
+  }
+  await navigate(sessionId, "/projects");
+  await navigate(sessionId, `/projects?project=${scenarioId}`);
+  await activateButton(sessionId, "Delete project");
+  await activateButton(sessionId, "Delete permanently", '[role="dialog"]');
+  await waitForOutcome(sessionId, "Deleted");
+  assert.deepEqual(
+    (await projects(sessionId)).map((project) => project.scenarioId),
+    [originalScenarioId],
+  );
+  await navigate(sessionId, `/project/${originalScenarioId}/setup`);
+  await waitForElement(sessionId, "#setup-calendar");
+  console.log(
+    "PASS: four-day New York scenario, two native-edited eligible people and reviewed Sunday repeated-hour Work template resolved as 120 minutes",
+  );
+}
+
 async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   const rest = await package8Rule(sessionId, scenarioId, expected.restId);
   const inactive = await package8Rule(sessionId, scenarioId, expected.inactiveId);
@@ -4927,6 +5232,7 @@ async function run() {
     await package8CoverageAcceptance(firstSessionId, scenarioId, package7Expected.shiftInstanceId);
     await package8CancellationAcceptance(firstSessionId, scenarioId, package7Expected.shiftTypeId);
     await package8TemporalAcceptance(firstSessionId, scenarioId);
+    await package8FirstTimeDstWorkAcceptance(firstSessionId, scenarioId);
     await navigate(firstSessionId, "/about/licenses");
     await waitForElement(firstSessionId, "#about-inventory-title");
     await waitFor(
