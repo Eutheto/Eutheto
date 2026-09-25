@@ -4960,15 +4960,15 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
   const beforeInvalidReview = (await projects(sessionId)).find(
     (project) => project.scenarioId === scenarioId,
   ).revision;
-  await setValue(sessionId, `${workEditor} input[id$="-timing-start"]`, "25:61");
+  const invalidStart = `${workEditor} input[id$="-timing-start"]`;
+  await setValue(sessionId, invalidStart, "25:61");
   await activateButton(sessionId, "Review changes", workEditor);
   await waitForElement(sessionId, '[aria-label="Native time and input diagnostics"]');
   await idle(sessionId);
   assert.equal(
-    await evaluate(
-      sessionId,
-      'return document.querySelector(\'[aria-labelledby="work-editor-heading"] input[id$="-timing-start"]\')?.value;',
-    ),
+    await evaluate(sessionId, "return document.querySelector(arguments[0])?.value;", [
+      invalidStart,
+    ]),
     "25:61",
     "Rejected local-time input must remain available in the draft",
   );
@@ -4977,8 +4977,18 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
     false,
     "Rejected local-time input must not open an approvable review",
   );
-  const invalidFocus = await evaluate(sessionId, "return document.activeElement?.id;");
-  console.log("Native invalid local-time focus:", invalidFocus);
+  await waitFor(
+    sessionId,
+    "return document.querySelector(arguments[0])?.getAttribute('aria-invalid') === 'true';",
+    [invalidStart],
+    10_000,
+  );
+  await waitFor(
+    sessionId,
+    "return document.activeElement === document.querySelector(arguments[0]);",
+    [invalidStart],
+    10_000,
+  );
   assert.equal(
     (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
     beforeInvalidReview,

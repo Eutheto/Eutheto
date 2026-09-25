@@ -883,8 +883,18 @@ export function useWorkSetup(home: ProjectHomeController, project: () => Project
     });
     if (!ready && matches(captured) && draft === state.draftGeneration && state.editor !== null) {
       const editor = state.editor;
-      if (editor.kind === "record")
-        state.errors = relativeErrors(review.state.failure, `/domain/entities/${editor.id}`);
+      if (editor.kind === "record") {
+        // Only a single-record command preview can attribute a payload leaf to this draft.
+        const singleRecord =
+          source.kind === "commandPreview" &&
+          source.command.type === "applyDomainCommand" &&
+          (source.command.payload.commandType === WORKFORCE_ADD_ENTITY_COMMAND_ID ||
+            source.command.payload.commandType === WORKFORCE_UPDATE_ENTITY_COMMAND_ID);
+        state.errors = {
+          ...relativeErrors(review.state.failure, `/domain/entities/${editor.id}`),
+          ...(singleRecord ? relativeErrors(review.state.failure, "/payload/entity") : {}),
+        };
+      }
       if (editor.kind === "preset") {
         for (const entry of editor.entries) {
           const errors = relativeErrors(review.state.failure, `/domain/entities/${entry.id}`);

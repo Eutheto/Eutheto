@@ -10,7 +10,7 @@ use super::{
 };
 use crate::validation::common::{Result, invalid};
 use eutheto_types::{DomainCommandEnvelope, OperationControl, ScenarioDocument};
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
 pub(super) fn apply_one(
@@ -113,7 +113,27 @@ pub(super) fn apply_one(
 }
 
 fn decode<T: DeserializeOwned>(value: &Value) -> Result<T> {
-    T::deserialize(value).map_err(|_| invalid("/payload", "invalid Workforce command payload"))
+    T::deserialize(value).map_err(|_| {
+        // A tagged enum loses its nested serde path. On failure only, ask the same native
+        // time type which authored field failed; other malformed payloads stay general.
+        if value.pointer("/entity/kind").and_then(Value::as_str) == Some("shiftTemplate") {
+            for (input, field) in [
+                (
+                    "/entity/timing/startTime",
+                    "/payload/entity/timing/startTime",
+                ),
+                ("/entity/timing/endTime", "/payload/entity/timing/endTime"),
+            ] {
+                if value
+                    .pointer(input)
+                    .is_some_and(|raw| jiff::civil::Time::deserialize(raw).is_err())
+                {
+                    return invalid(field, "invalid local time");
+                }
+            }
+        }
+        invalid("/payload", "invalid Workforce command payload")
+    })
 }
 
 fn record_operation<'a>(

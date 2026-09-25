@@ -2663,6 +2663,7 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
                 Err::<CommandWrite<()>, StoreError>(StoreError::CommandApplication {
                     code: "must-not-run".to_owned(),
                     message: "stale callback ran".to_owned(),
+                    field_path: None,
                 })
             })
             .await,

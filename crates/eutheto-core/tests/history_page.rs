@@ -499,6 +499,7 @@ async fn recorded_empty_summary_and_nonreversible_entry_are_not_omissions_or_und
                     eutheto_store::StoreError::CommandApplication {
                         code: "history.fixture_command_failed".to_owned(),
                         message: format!("{error:?}"),
+                        field_path: None,
                     }
                 })?;
                 Ok(eutheto_store::CommandWrite {

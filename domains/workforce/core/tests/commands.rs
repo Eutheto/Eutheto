@@ -341,6 +341,35 @@ fn update_cannot_retype_identity_or_smuggle_unknown_payload_fields() -> Result<(
 }
 
 #[test]
+fn malformed_recurring_time_identifies_its_actual_input_field() -> Result<(), Box<dyn Error>> {
+    let mut original = fixture()?;
+    let saved = entity(&mut original, 6)?.clone();
+    for field in ["startTime", "endTime"] {
+        let mut template = saved.clone();
+        template["timing"] = json!({
+            "kind": "localWindow", "startTime": "01:30:00",
+            "endTime": "02:30:00", "endDayOffset": 0
+        });
+        template["timing"][field] = json!("25:61");
+        let Err(error) = commands::apply_batch(
+            &original,
+            &batch(vec![envelope(
+                commands::UPDATE_ENTITY,
+                json!({"entity": template}),
+            )])?,
+        ) else {
+            return Err("malformed local time must be rejected".into());
+        };
+        assert!(
+            matches!(error, DomainPackError::InvalidPayload { ref path, .. }
+                if path == &format!("/payload/entity/timing/{field}")),
+            "expected the authored {field} path, got {error:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn forward_batch_is_rejected_if_its_inverse_would_not_be_replayable() -> Result<(), Box<dyn Error>>
 {
     let mut original = fixture()?;

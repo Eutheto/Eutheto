@@ -691,6 +691,62 @@ async fn setup_preview_cursor_binds_the_exact_draft_without_persisting_it() -> T
 }
 
 #[tokio::test]
+async fn invalid_recurring_time_keeps_field_provenance_and_revision() -> TestResult {
+    use eutheto_core::SetupSourceV2;
+    use eutheto_domain_api::DomainSetupQueryV1;
+
+    let original = workforce_fixture::fixture()?;
+    let (_directory, _dependencies, app) = stored(&original).await?;
+    let mut template = entity(&original, 6)?.clone();
+    template["timing"]["startTime"] = json!("25:61");
+    let command = domain(commands::UPDATE_ENTITY, json!({"entity": template}));
+    let query = DomainSetupQueryV1 {
+        schema_version: 1,
+        view_id: "eutheto.setup.command_changes".to_owned(),
+        parameters: json!({"limit": 10}),
+        continuation: None,
+    };
+    for (candidate, expected_path) in [
+        (command.clone(), "/payload/entity/timing/startTime"),
+        (batch(vec![command]), "/command"),
+    ] {
+        let Err(AppError::Validation(report)) = app
+            .setup_view(
+                original.scenario_id,
+                Revision::INITIAL,
+                SetupSourceV2::CommandPreview {
+                    command: candidate.clone(),
+                },
+                query.clone(),
+                app.setup_cancellation(),
+            )
+            .await
+        else {
+            return Err("malformed recurring local time must prevent review".into());
+        };
+        let issue = report
+            .issues
+            .first()
+            .ok_or("missing invalid-time diagnostic")?;
+        assert_eq!(issue.code, "command.invalid_domain_payload");
+        assert_eq!(issue.field_path.as_deref(), Some(expected_path));
+        let Err(AppError::Validation(report)) =
+            execute(&app, envelope(&original, Revision::INITIAL, candidate)?).await?
+        else {
+            return Err("malformed recurring local time must reject mutation".into());
+        };
+        assert_eq!(
+            report
+                .issues
+                .first()
+                .and_then(|issue| issue.field_path.as_deref()),
+            Some(expected_path)
+        );
+    }
+    assert_state(&app, &original, Revision::INITIAL, &[]).await
+}
+
+#[tokio::test]
 async fn generation_preview_requires_executable_reconciliation_and_isolates_cancellation()
 -> TestResult {
     use eutheto_core::SetupSourceV2;

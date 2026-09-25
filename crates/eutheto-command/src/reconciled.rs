@@ -23,6 +23,9 @@ pub struct PreparedReconciledCommand {
 pub enum ReconciledCommandError {
     #[error(transparent)]
     Command(#[from] CommandError),
+    /// The user-supplied draft failed before derived reconciliation was applied.
+    #[error(transparent)]
+    DraftCommand(CommandError),
     #[error(transparent)]
     Reconciliation(#[from] DomainPackError),
 }
@@ -57,7 +60,8 @@ pub fn apply_reconciled_command_with_registry(
     let prepared_draft = if let Some(command) = draft {
         let before_issues = context.pack.validate_fast(document).issues;
         let mut working = document.clone();
-        let effect = apply_nested(&mut working, command, &mut context, 0)?;
+        let effect = apply_nested(&mut working, command, &mut context, 0)
+            .map_err(ReconciledCommandError::DraftCommand)?;
         Some(DraftApplication {
             command,
             working,
