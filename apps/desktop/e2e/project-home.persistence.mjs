@@ -5047,8 +5047,33 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
     ["work", "work-heading"],
     ["rules", "rules-heading"],
     ["validation", "validation-heading"],
+    ["eligibility", "eligibility-setup-heading"],
+    ["availability", "availability-heading"],
     ["setup", "setup-heading"],
   ]) {
+    if (route === "eligibility" || route === "availability") {
+      const more = 'nav[aria-label="Saved setup sections"] details.project-nav-more';
+      if (
+        !(await evaluate(sessionId, "return document.querySelector(arguments[0])?.open;", [more]))
+      ) {
+        await evaluate(sessionId, "document.querySelector(arguments[0]).focus();", [
+          `${more} > summary`,
+        ]);
+        await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+          actions: [
+            {
+              type: "key",
+              id: "native-more-tools-keyboard",
+              actions: [
+                { type: "keyDown", value: " " },
+                { type: "keyUp", value: " " },
+              ],
+            },
+          ],
+        });
+        await waitFor(sessionId, "return document.querySelector(arguments[0])?.open;", [more]);
+      }
+    }
     const link = `nav[aria-label="Saved setup sections"] a[href="#/project/${scenarioId}/${route}"]`;
     let arrived = false;
     for (let attempt = 0; attempt < 2 && !arrived; attempt += 1) {

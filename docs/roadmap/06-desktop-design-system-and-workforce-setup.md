@@ -635,6 +635,10 @@ The prior invalid-time focus failure is corrected in the local candidate. On a f
 
 The local `just check` passed generated drift, fixture/protocol and architecture validation, formatting, workspace Clippy and tests, desktop type/lint/component checks, and doc tests. This does not establish hosted-platform or maintainer checkpoint acceptance.
 
+### Additional native keyboard routes — 25 September 2026
+
+The subsequent full Linux WebKit/Tauri `just e2e` run passed with keyboard Space expanding **More project tools** and Enter navigating to Eligibility and Availability; focus landed on each route heading, in addition to the previously exercised five direct setup routes. The runner SHA-256 is `f455f6afd89edcf7997896251cf40e873e99e8aa87a30289bd7a220157d4666e`. This establishes those seven transitions only: it does not prove complete Tab/Shift+Tab traversal, editor/dialog focus restoration, native 200%/400% zoom and contrast across routes, or responsiveness after **confirmed** native validation admission. Those checks and the explicit maintainer checkpoint remain outstanding.
+
 ### Phase exit gate
 
 **User manual checkpoint:** Before this phase exits or Phase 07 implementation starts, hand off the real desktop setup workflow for user review, resolve feedback, and obtain explicit acceptance and authorization to proceed under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates). Agent-operated typical interaction checks do not themselves grant acceptance. The maintainer's dated Phase 06 exception defers independent unfamiliar-user research and spoken screen-reader testing to beta/Phase 12; it does not call those tests passed, waive keyboard/semantic accessibility requirements, or authorize Phase 07, remote publication or release.
