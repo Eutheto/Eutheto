@@ -108,6 +108,16 @@ export const messages = {
     maximumInvalid: "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
     calendarRequired: "Choose a reporting-date calendar.",
     qualificationMinimumInvalid: "Enter an exact whole number from 0 to 65,535.",
+    fixedAssignmentPersonRequired: "Choose a person for this active fixed assignment.",
+    fixedAssignmentShiftRequired: "Choose a shift for this active fixed assignment.",
+    fixedAssignmentTargetOutsideScope:
+      "The named person and shift must both be members of the reviewed native scope before an active fixed assignment can be saved.",
+    fixedAssignmentScopeHelp:
+      "The default full scope is intentional. Narrowing the scope remains explicit, and native review must prove that the exact named person and shift are included.",
+    fixedAssignmentScopeProofLimit:
+      "Native scope review reached its bounded page limit before proving the named target. Narrow the scope or retry the review.",
+    fixedAssignmentScopeRequired:
+      "An active fixed assignment can be saved only after native review proves that its exact person and shift are in the reviewed scope.",
     repairField: "Open field",
     fields: {
       name: "Name",
@@ -119,6 +129,10 @@ export const messages = {
       maximum: "Total assignment cap per reporting-date period",
       maximumHelp:
         "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
+      fixedAssignmentPerson: "Named person",
+      fixedAssignmentShift: "Named shift",
+      fixedAssignmentShiftStart: "Show shifts from",
+      fixedAssignmentShiftEnd: "Until (exclusive)",
       qualificationMinimums: "Qualification minimums per matching shift",
       qualificationMinimumHelp:
         "Each row requires a minimum number of distinct assigned people whose qualifications match the selected all and any expressions.",
@@ -220,6 +234,8 @@ export const messages = {
         .join(" and ");
       return `At least ${minimum} distinct assigned people per matching shift must match ${expressions || "the selected qualification expression"}.`;
     },
+    fixedAssignmentSentence: (personId: string, shiftId: string) =>
+      `Require person ${personId} to work shift ${shiftId}.`,
     reviewActions: {
       create: "Create Required rule",
       update: "Update Required rule",

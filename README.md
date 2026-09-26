@@ -161,13 +161,15 @@ are reviewed and applied as one undoable batch; they are not assignment-feasibil
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support seven implemented kinds, including Maximum
-Assignment Count with a reporting-date calendar and nonnegative cap, and Required
-Qualification Mix with per-shift qualification-expression minimums. A clinic shift requiring
-one Specialist and one Nurse may count the same dual-qualified person toward both
-minimums, but each minimum counts distinct assigned people. Native scope
-previews and reviewed commands remain required. Explicit full validation checks the saved
-revision, distinguishes stale, failed and cancelled attempts, and navigates supported
+inspector. Required-rule editors support eight implemented kinds, including Maximum
+Assignment Count with a reporting-date calendar and nonnegative cap, Required
+Qualification Mix with per-shift qualification-expression minimums, and Fixed
+Assignment with an exact named person and shift whose active scope must include
+both targets. A clinic shift requiring one Specialist and one Nurse may count the
+same dual-qualified person toward both minimums, but each minimum counts distinct
+assigned people. Native scope previews and reviewed commands remain required.
+Explicit full validation checks the saved revision, distinguishes stale, failed
+and cancelled attempts, and navigates supported
 findings to their owning editor fields; it does not prove plan feasibility. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
 native editing-accelerator, accessibility and packaged-platform gates.
@@ -305,6 +307,40 @@ target/cli-package/optimizer scenario validate ./clinic-tiny-with-mix.json
 
 This edits a separate portable file; it does not assert that a clinic-and-call
 workflow, live desktop solving, or practitioner-specific workload policy is complete.
+
+To force Synthetic clinician 1 onto the reconciled 1 September clinic occurrence,
+save this as `fixed-command.json`:
+
+```json
+{
+  "type": "applyDomainCommand",
+  "payload": {
+    "commandType": "official.workforce.add_rule",
+    "payload": {
+      "rule": {
+        "kind": "fixedAssignment",
+        "id": "01900000-0000-7000-8000-000000000044",
+        "active": true,
+        "strength": "required",
+        "scope": { "people": { "kind": "all" } },
+        "personId": "01a04a99-f980-7d5f-a8da-39b1f78107f2",
+        "shiftId": "01a04a99-f980-7578-b426-5976dc49020d"
+      }
+    }
+  }
+}
+```
+
+```sh
+target/cli-package/optimizer scenario apply domains/workforce/fixtures/v1/clinic-tiny.json \
+  --commands ./fixed-command.json --expected-revision 0 \
+  --output ./clinic-tiny-with-fixed.json
+target/cli-package/optimizer scenario validate ./clinic-tiny-with-fixed.json
+```
+
+The fixed rule forces that pair; an authored Hard lock also forces its named pair
+without inferring an accepted base schedule. Soft-lock scoring and interactive
+repair are not yet available.
 
 Full validation returns its complete report and exit 3 for errors; an obvious
 coverage contradiction is not itself a solver feasibility result. Solve defaults

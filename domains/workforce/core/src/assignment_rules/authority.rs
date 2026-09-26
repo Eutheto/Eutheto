@@ -354,6 +354,7 @@ pub(super) fn original_obligations(
                 | WorkforceRule::MinimumRest(_)
                 | WorkforceRule::MaximumAssignmentCount { .. }
                 | WorkforceRule::RequiredSkillMix { .. }
+                | WorkforceRule::FixedAssignment { .. }
         ) {
             budget
                 .reserve(1, 2, 48)
@@ -374,12 +375,19 @@ pub(super) fn original_obligations(
     }
     for lock in input.domain.locked_assignments.values() {
         budget.step().map_err(|error| operation_error(&error))?;
-        let value = match lock.state {
-            LockState::Hard {} => UnsupportedWorkforceObligation::HardLock(lock.id),
-            LockState::Soft { .. } => UnsupportedWorkforceObligation::SoftLock(lock.id),
-            LockState::Unlocked {} => continue,
-        };
-        unsupported = Some(unsupported.map_or(value, |prior| prior.min(value)));
+        match lock.state {
+            LockState::Hard {} => {
+                budget
+                    .reserve(1, 2, 48)
+                    .map_err(|error| operation_error(&error))?;
+                obligations.push((RuleId::from_uuid(lock.id.as_uuid()), "hard_lock"));
+            }
+            LockState::Soft { .. } => {
+                let value = UnsupportedWorkforceObligation::SoftLock(lock.id);
+                unsupported = Some(unsupported.map_or(value, |prior| prior.min(value)));
+            }
+            LockState::Unlocked {} => {}
+        }
     }
     if let Some(value) = unsupported {
         return Err(operation_error(

@@ -741,16 +741,12 @@ fn every_applicable_available_only_predicate_is_required() -> TestResult {
 }
 
 #[test]
-fn editable_reserved_data_never_silently_becomes_supported_execution() -> TestResult {
+fn unsupported_preferences_and_soft_locks_never_silently_execute() -> TestResult {
     let baseline = small_document()?;
     for (collection, record) in [
         (
             "preferences",
             json!({"kind":"assignmentType","id":id(40),"active":true,"scope":{"people":{"kind":"all"}},"priority":"normal","weight":1,"direction":"prefer","assignmentTypeIds":[id(4)]}),
-        ),
-        (
-            "lockedAssignments",
-            json!({"id":id(40),"personId":id(1),"shiftId":id(8),"state":{"kind":"hard"}}),
         ),
         (
             "lockedAssignments",

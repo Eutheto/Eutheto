@@ -63,7 +63,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "fixedAssignment",
         "official.workforce.rule.fixed-assignment",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "mutualAssignmentRestriction",

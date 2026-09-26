@@ -617,7 +617,7 @@ fn coverage_intersects_reporting_weekdays_with_local_start_dates() -> Result {
 }
 
 #[test]
-fn hard_lock_readiness_and_partition_exclude_soft_and_unlocked_states() -> Result {
+fn hard_locks_force_named_pairs_but_soft_and_unlocked_states_do_not() -> Result {
     let mut value = document()?;
     rule(&mut value, 23, "noOverlap")?;
     for (index, shift) in [(50, 7), (51, 8)] {
@@ -627,10 +627,9 @@ fn hard_lock_readiness_and_partition_exclude_soft_and_unlocked_states() -> Resul
         );
     }
     let hard = compile(&value)?;
-    assert_eq!(
-        hard.obligations.remaining,
-        vec![id(50).parse()?, id(51).parse()?]
-    );
+    assert!(hard.obligations.remaining.is_empty());
+    assert!(!allows(&hard, &[])?);
+    assert!(!allows(&hard, &[pair(1, 7)?])?);
     assert!(
         hard.validation
             .issues
@@ -670,10 +669,11 @@ fn hard_lock_readiness_and_partition_exclude_soft_and_unlocked_states() -> Resul
             .iter()
             .any(|issue| issue.code == "official.workforce.hard_lock_unresolved_shift")
     );
+    assert!(!allows(&dormant, &[])?);
     Ok(())
 }
 #[test]
-fn maximum_assignment_count_hard_lock_excess_is_readiness_only() -> Result {
+fn maximum_assignment_count_and_hard_locks_reject_impossible_joint_selection() -> Result {
     let mut value = document()?;
     value.domain.rules.insert(
         id(20).parse()?,
@@ -699,15 +699,13 @@ fn maximum_assignment_count_hard_lock_excess_is_readiness_only() -> Result {
         })
     );
     assert!(!allows(&result, &[pair(1, 7)?, pair(1, 8)?])?);
-    assert_eq!(
-        result.obligations.remaining,
-        vec![id(50).parse()?, id(51).parse()?]
-    );
+    assert!(result.obligations.remaining.is_empty());
+    assert!(!allows(&result, &[])?);
     Ok(())
 }
 
 #[test]
-fn rejected_hard_locks_and_excess_hard_coverage_are_readiness_only() -> Result {
+fn rejected_hard_locks_and_excess_hard_coverage_remain_infeasible() -> Result {
     let mut value = document()?;
     rule(&mut value, 20, "eligibility")?;
     rule(&mut value, 22, "coverage")?;
@@ -733,7 +731,8 @@ fn rejected_hard_locks_and_excess_hard_coverage_are_readiness_only() -> Result {
             .iter()
             .any(|issue| issue.code == "official.workforce.hard_locked_coverage_excess")
     );
-    assert_eq!(result.obligations.remaining, vec![id(50).parse()?]);
+    assert!(result.obligations.remaining.is_empty());
+    assert!(!allows(&result, &[])?);
     Ok(())
 }
 
@@ -1792,7 +1791,7 @@ fn rest_only_hard_locks_do_not_scan_unrelated_overlap_pairs() -> Result {
     // 20 million steps on these locks despite there being no NoOverlap rule.
     let result = compile(&value)?;
     assert_eq!(result.estimate.variables, 1_000);
-    assert_eq!(result.estimate.constraints, 0);
+    assert_eq!(result.estimate.constraints, 1_000);
     assert!(result.validation.issues.is_empty());
     // Even with an active overlap rule, unrelated rest rules must not be rescanned
     // for each overlapping lock pair.
@@ -1803,7 +1802,7 @@ fn rest_only_hard_locks_do_not_scan_unrelated_overlap_pairs() -> Result {
         .get_mut(&id(25).parse()?)
         .ok_or("overlap rule")?["scope"] = json!({"people":{"kind":"all"},"categories":["absent"]});
     let mixed = compile(&value)?;
-    assert_eq!(mixed.estimate.constraints, 0);
+    assert_eq!(mixed.estimate.constraints, 1_000);
     assert!(mixed.validation.issues.is_empty());
     Ok(())
 }

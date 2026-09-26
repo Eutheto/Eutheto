@@ -4439,6 +4439,67 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   assert.deepEqual(skillMix.record.qualificationMinimums[0].qualifications.allQualificationIds, [
     expected.qualificationId,
   ]);
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Fixed assignments");
+  const fixedId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(fixedId, "A new fixed assignment needs a stable UUIDv7");
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "return !document.querySelector('#rule-review-heading') && document.activeElement?.id === 'rule-fixed-person';",
+  );
+  const fixedPerson = expected.seeded.people[1];
+  await choosePeopleReference(
+    sessionId,
+    "Named person",
+    fixedPerson.name,
+    '[aria-labelledby="rule-editor-heading"]',
+  );
+  await setValue(sessionId, "#rule-fixed-shift-start", "01/16/2030");
+  await setValue(sessionId, "#rule-fixed-shift-end", "01/17/2030");
+  for (const [selector, typed, expectedDate] of [
+    ["#rule-fixed-shift-start", "01/16/2030", "2030-01-16"],
+    ["#rule-fixed-shift-end", "01/17/2030", "2030-01-17"],
+  ]) {
+    if (
+      !(await evaluate(
+        sessionId,
+        "return document.querySelector(arguments[0]).value === arguments[1];",
+        [selector, expectedDate],
+      ))
+    )
+      await setValue(sessionId, selector, typed);
+  }
+  assert.deepEqual(
+    await evaluate(
+      sessionId,
+      "return [document.querySelector('#rule-fixed-shift-start').value, document.querySelector('#rule-fixed-shift-end').value];",
+    ),
+    ["2030-01-16", "2030-01-17"],
+    "The native date controls must select the saved shift's local date",
+  );
+  const fixedShiftChoice = await waitFor(
+    sessionId,
+    "return [...document.querySelectorAll('#rule-fixed-shift ul > li')].find(row => row.querySelector('code')?.textContent.trim() === arguments[0])?.querySelector('input[type=\"checkbox\"]:not(:disabled)') ?? null;",
+    [expected.shiftInstanceId],
+  );
+  await activateElement(sessionId, fixedShiftChoice);
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return review?.textContent.includes(arguments[0]) && review.textContent.includes(arguments[1]) && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+    [fixedPerson.id, expected.shiftInstanceId],
+  );
+  await screenshot(sessionId, "package8-fixed-assignment-review.png");
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const fixed = await package8Rule(sessionId, scenarioId, fixedId);
+  assert.equal(fixed.record.kind, "fixedAssignment");
+  assert.equal(fixed.record.personId, fixedPerson.id);
+  assert.equal(fixed.record.shiftId, expected.shiftInstanceId);
   await navigate(sessionId, `/project/${scenarioId}/validation`);
   await waitForElement(sessionId, "[data-full-validation-stale]");
   await screenshot(sessionId, "package8-stale-validation.png");
@@ -4448,6 +4509,9 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
     maximumId,
     inactiveId,
     skillMixId,
+    fixedId,
+    fixedPersonId: fixedPerson.id,
+    fixedShiftId: expected.shiftInstanceId,
     counts,
     calendarId: expected.calendarId,
     qualificationId: expected.qualificationId,
@@ -4597,7 +4661,7 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: seven native Required kinds including reporting-date maximum assignment count and qualification mix; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
+    "PASS: eight native Required kinds including reporting-date maximum assignment count, qualification mix and named fixed assignment; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
   );
 }
 
@@ -5506,14 +5570,18 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   assert.deepEqual(skillMix.record.qualificationMinimums[0].qualifications.allQualificationIds, [
     expected.qualificationId,
   ]);
+  const fixed = await package8Rule(sessionId, scenarioId, expected.fixedId);
+  assert.equal(fixed.record.kind, "fixedAssignment");
+  assert.equal(fixed.record.personId, expected.fixedPersonId);
+  assert.equal(fixed.record.shiftId, expected.fixedShiftId);
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < 4; index += 1) {
     await activateButton(sessionId, "Undo scenario change", '[aria-labelledby="history-heading"]');
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: native ten-hour Required rest and reporting-date maximum-count review/save/restart; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
+    "PASS: native ten-hour Required rest, reporting-date maximum count, qualification mix and fixed named assignment review/save/restart; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
   );
 }
 

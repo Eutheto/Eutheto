@@ -1,10 +1,10 @@
 //! Independent original-domain predicates. This module never consumes candidate or IR decisions.
 mod coverage;
+mod fixed;
 mod maximum_count;
 mod predicates;
 mod rest;
 mod skill_mix;
-
 use super::{
     AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleEvaluation,
     AssignmentRuleLimit, InstantInterval, RequiredRulePartition,
@@ -35,8 +35,9 @@ pub(super) const VIOLATIONS: &str = "official.workforce.fact.violation_count";
 pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
-/// Evaluates Eligibility, Availability, Coverage, `RequiredSkillMix`, `NoOverlap`, `MinimumRest` and
-/// `MaximumAssignmentCount`, plus unconditional activity/approved-leave facts.
+/// Evaluates Eligibility, Availability, Coverage, `RequiredSkillMix`, `FixedAssignment`, authored
+/// Hard locks, `NoOverlap`, `MinimumRest` and `MaximumAssignmentCount`, plus unconditional
+/// activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
 /// but inadmissible selections remain in the population and yield original-domain violations.
@@ -176,6 +177,17 @@ fn evaluate_prepared(
         }
         let mut summary = Summary::default();
         match rule {
+            WorkforceRule::FixedAssignment {
+                person_id,
+                shift_id,
+                ..
+            } => {
+                retain_id(&mut obligations.handled, id, budget)?;
+                evaluations.push(fixed::fixed_assignment(
+                    input, selected, id, scope, *person_id, *shift_id, budget,
+                )?);
+                continue;
+            }
             WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. } => {
                 summary = pair_rule(input, selected, rule, settings, budget)?;
             }
@@ -214,12 +226,22 @@ fn evaluate_prepared(
     }
     for lock in input.domain.locked_assignments.values() {
         budget.step()?;
-        if matches!(lock.state, LockState::Hard {}) {
-            retain_id(
-                &mut obligations.remaining,
-                RuleId::from_uuid(lock.id.as_uuid()),
-                budget,
-            )?;
+        let lock_id = RuleId::from_uuid(lock.id.as_uuid());
+        match lock.state {
+            LockState::Hard {} => {
+                retain_id(&mut obligations.handled, lock_id, budget)?;
+                evaluations.push(fixed::hard_lock(
+                    selected,
+                    lock_id,
+                    lock.person_id,
+                    lock.shift_id,
+                    budget,
+                )?);
+            }
+            LockState::Soft { .. } => {
+                retain_id(&mut obligations.remaining, lock_id, budget)?;
+            }
+            LockState::Unlocked {} => {}
         }
     }
     budget.sort_work(obligations.handled.len())?;
@@ -436,6 +458,19 @@ struct Selected<'a> {
 }
 
 impl<'a> Selected<'a> {
+    fn contains(
+        &self,
+        pair: AssignmentPair,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<bool, AssignmentRuleError> {
+        budget.step()?;
+        let Some(people) = self.by_shift.get(&pair.shift_id) else {
+            return Ok(false);
+        };
+        budget.steps(u64::from(usize::BITS - people.len().leading_zeros()))?;
+        Ok(people.binary_search(&pair.person_id).is_ok())
+    }
+
     fn new(
         input: &'a AssignmentInput,
         pairs: &[AssignmentPair],

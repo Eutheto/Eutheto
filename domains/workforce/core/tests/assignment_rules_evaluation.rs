@@ -724,18 +724,19 @@ fn required_partition_retains_other_active_families_and_only_hard_locks() -> Res
     let result = run(&value, &[])?;
     assert_eq!(
         result.obligations.handled,
-        [1, 20, 30]
+        [1, 20, 30, 40]
             .map(|index| id(index).parse())
             .into_iter()
             .collect::<std::result::Result<Vec<RuleId>, _>>()?
     );
     assert_eq!(
         result.obligations.remaining,
-        [21, 40]
+        [21, 41]
             .map(|index| id(index).parse())
             .into_iter()
             .collect::<std::result::Result<Vec<RuleId>, _>>()?
     );
+    assert_eq!(totals(&result, 40)?, (1, 1));
     Ok(())
 }
 

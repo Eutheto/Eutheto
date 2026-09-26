@@ -188,8 +188,6 @@ fn active_unsupported_obligations_cannot_disappear_from_complete_compilation() -
     for expected in [
         UnsupportedWorkforceObligation::RequiredRule(rule_id),
         UnsupportedWorkforceObligation::Preference(preference_id),
-        UnsupportedWorkforceObligation::HardLock(lock_id),
-        UnsupportedWorkforceObligation::SoftLock(lock_id),
     ] {
         assert!(matches!(
             compile_workforce(&document, &context),
@@ -206,22 +204,29 @@ fn active_unsupported_obligations_cannot_disappear_from_complete_compilation() -
                     .get_mut(&preference_id)
                     .ok_or("preference")?["active"] = json!(false);
             }
-            UnsupportedWorkforceObligation::HardLock(_) => {
-                document
-                    .domain
-                    .locked_assignments
-                    .get_mut(&lock_id)
-                    .ok_or("lock")?["state"] = json!({"kind":"soft","stabilityWeight":1});
-            }
-            UnsupportedWorkforceObligation::SoftLock(_) => {
-                document
-                    .domain
-                    .locked_assignments
-                    .get_mut(&lock_id)
-                    .ok_or("lock")?["state"] = json!({"kind":"unlocked"});
-            }
+            UnsupportedWorkforceObligation::SoftLock(_) => unreachable!(),
         }
     }
+    let hard = compile_workforce(&document, &context)?;
+    assert!(
+        hard.problem.constraints.iter().any(|record| {
+            matches!(&record.body, eutheto_planning_ir::Constraint::BoolOr { .. })
+        })
+    );
+    document
+        .domain
+        .locked_assignments
+        .get_mut(&lock_id)
+        .ok_or("lock")?["state"] = json!({"kind":"soft","stabilityWeight":1});
+    assert!(matches!(
+        compile_workforce(&document, &context),
+        Err(AssignmentRuleError::UnsupportedObligation(UnsupportedWorkforceObligation::SoftLock(actual))) if actual == lock_id
+    ));
+    document
+        .domain
+        .locked_assignments
+        .get_mut(&lock_id)
+        .ok_or("lock")?["state"] = json!({"kind":"unlocked"});
     let compiled = compile_workforce(&document, &context)?;
     assert_eq!(compiled.problem.objectives.levels[0].upper_bound, 3);
     assert_eq!(compiled.problem.objectives.levels.len(), 1);

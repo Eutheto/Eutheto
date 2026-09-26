@@ -4,7 +4,10 @@ import {
   newUuidV7,
   searchScenarioEntities,
   SetupOperationScope,
+  type ScenarioSetupViewResultV2,
+  type SetupOperation,
   type ScenarioCommand,
+  type SetupContinuationV1,
   type SetupSourceV2,
 } from "./api/generated";
 import {
@@ -82,6 +85,10 @@ interface ScopeState {
 interface PickerState extends ScopeEntityOptions {
   readonly continuation: WorkforceSetupEntityContinuation | null;
 }
+interface FixedAssignmentTargetProof {
+  readonly personId: string;
+  readonly shiftId: string;
+}
 interface ReviewedRule {
   readonly snapshot: SetupCommandSnapshot;
   readonly draftGeneration: number;
@@ -90,6 +97,7 @@ interface ReviewedRule {
   readonly after: EditableRule | null;
   readonly summary: WorkforceSetupRuleScopeSummary | null;
   readonly scopeError: string | null;
+  readonly targetProof: FixedAssignmentTargetProof | null;
 }
 
 const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
@@ -100,6 +108,7 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.minimum-rest": "minimumRest",
   "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
   "official.workforce.rule.required-skill-mix": "requiredSkillMix",
+  "official.workforce.rule.fixed-assignment": "fixedAssignment",
 };
 function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
   return (
@@ -110,6 +119,8 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     left.calendarId === right.calendarId &&
     sameField(left.maximum, right.maximum) &&
     sameField(left.minimumRest, right.minimumRest) &&
+    left.personId === right.personId &&
+    left.shiftId === right.shiftId &&
     sameField(left.compatibleCategoryPairs, right.compatibleCategoryPairs) &&
     left.qualificationMinimums.length === right.qualificationMinimums.length &&
     left.qualificationMinimums.every((row, index) => {
@@ -252,6 +263,13 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       return false;
     if (reviewed.after === null || !reviewed.after.active) return true;
     const population = reviewed.summary?.population;
+    if (
+      reviewed.after.kind === "fixedAssignment" &&
+      (reviewed.targetProof === null ||
+        reviewed.targetProof.personId !== reviewed.after.personId ||
+        reviewed.targetProof.shiftId !== reviewed.after.shiftId)
+    )
+      return false;
     if (population === undefined || population.peopleCount === 0) return false;
     return reviewed.after.kind === "minimumRest"
       ? population.kind === "minimumRest" &&
@@ -536,7 +554,13 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     }
     const snapshot = review.state.review?.snapshot;
     if (!owns() || snapshot === undefined) return false;
-    const base = { snapshot, draftGeneration: generation, action, before: editor.base };
+    const base = {
+      snapshot,
+      draftGeneration: generation,
+      action,
+      before: editor.base,
+      targetProof: null as FixedAssignmentTargetProof | null,
+    };
     if (after === null) {
       state.reviewed = { ...base, after: null, summary: null, scopeError: null };
       return true;
@@ -584,6 +608,105 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               "The native proposed rule did not match the reviewed identity and kind.",
             );
           const proposed = detail.record;
+          let targetProof: FixedAssignmentTargetProof | null = null;
+          if (proposed.kind === "fixedAssignment" && proposed.active) {
+            const inspectTargetAxis = async (
+              axis: "people" | "shifts",
+              targetId: string,
+            ): Promise<boolean> => {
+              let continuation: SetupContinuationV1 | null = null;
+              for (let page = 0; page < 256; page += 1) {
+                if (isCancelled() || !current()) return false;
+                const operation: SetupOperation<
+                  ScenarioSetupViewResultV2<"official.workforce.setup.rule_scope">
+                > = getScenarioView(
+                  read.scope,
+                  {
+                    source,
+                    query: {
+                      schemaVersion: 1,
+                      viewId: "official.workforce.setup.rule_scope",
+                      parameters: {
+                        rule: reference(editor),
+                        part: "main",
+                        axis,
+                        limit: 200,
+                      },
+                      ...(continuation === null ? {} : { continuation }),
+                    },
+                  },
+                  report,
+                );
+                cancelCurrent = () => operation.cancel();
+                const pageResponse = await operation.result;
+                if (isCancelled() || !current()) return false;
+                const inspection = pageResponse.result.view.data.result.data;
+                if (
+                  !sameField(inspection.rule, reference(editor)) ||
+                  inspection.part !== "main" ||
+                  inspection.population.axis !== axis
+                )
+                  throw new Error(
+                    "The native scope page did not match the reviewed fixed-assignment target.",
+                  );
+                if (axis === "people") {
+                  if (inspection.population.axis !== "people")
+                    throw new Error(
+                      "The native people scope page did not match the reviewed fixed-assignment target.",
+                    );
+                  if (inspection.population.page.items.some((item) => item.personId === targetId))
+                    return true;
+                  continuation = inspection.population.page.continuation;
+                } else {
+                  if (inspection.population.axis !== "shifts")
+                    throw new Error(
+                      "The native shift scope page did not match the reviewed fixed-assignment target.",
+                    );
+                  if (inspection.population.page.items.some((item) => item.shiftId === targetId))
+                    return true;
+                  continuation = inspection.population.page.continuation;
+                }
+                if (continuation === null) return false;
+              }
+              throw new Error(messages.ruleSetup.fixedAssignmentScopeProofLimit);
+            };
+            try {
+              const personInScope = await inspectTargetAxis("people", proposed.personId);
+              if (!personInScope)
+                return {
+                  ...detailResponse,
+                  result: {
+                    ...base,
+                    after: proposed,
+                    summary: null,
+                    scopeError: messages.ruleSetup.fixedAssignmentTargetOutsideScope,
+                  },
+                };
+              const shiftInScope = await inspectTargetAxis("shifts", proposed.shiftId);
+              if (!shiftInScope)
+                return {
+                  ...detailResponse,
+                  result: {
+                    ...base,
+                    after: proposed,
+                    summary: null,
+                    scopeError: messages.ruleSetup.fixedAssignmentTargetOutsideScope,
+                  },
+                };
+              targetProof = { personId: proposed.personId, shiftId: proposed.shiftId };
+            } catch (failure) {
+              if (isOperationCancelled(failure)) throw failure;
+              return {
+                ...detailResponse,
+                result: {
+                  ...base,
+                  after: proposed,
+                  summary: null,
+                  scopeError: safeMessage(failure),
+                },
+              };
+            }
+          }
           const summaryOperation = getScenarioView(
             read.scope,
             {
@@ -607,13 +730,19 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               throw new Error("The native scope did not match the reviewed rule.");
             return {
               ...summaryResponse,
-              result: { ...base, after: proposed, summary, scopeError: null },
+              result: { ...base, after: proposed, summary, scopeError: null, targetProof },
             };
           } catch (failure) {
             if (isOperationCancelled(failure)) throw failure;
             return {
               ...detailResponse,
-              result: { ...base, after: proposed, summary: null, scopeError: safeMessage(failure) },
+              result: {
+                ...base,
+                after: proposed,
+                summary: null,
+                scopeError: safeMessage(failure),
+                targetProof,
+              },
             };
           }
         },

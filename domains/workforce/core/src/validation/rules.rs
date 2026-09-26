@@ -86,6 +86,9 @@ impl Context<'_> {
             } => {
                 self.person(*person_id)?;
                 self.shift(*shift_id)?;
+                if active {
+                    self.fixed_target_scope(*person_id, *shift_id, scope)?;
+                }
             }
             WorkforceRule::MutualAssignmentRestriction { person_ids, .. } => {
                 unique(person_ids, active, "personIds")?;

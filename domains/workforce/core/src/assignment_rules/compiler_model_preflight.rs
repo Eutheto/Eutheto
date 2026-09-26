@@ -1,13 +1,13 @@
 use super::super::{
     AssignmentRuleLimit,
-    analysis::Predicate,
+    analysis::{PlannedConstraint, Predicate},
     budget::{add, count, within},
     compiler::{BOOL_ID, CONSTRAINT_ID, PROVENANCE_ID, preflight, reserve_fact},
-    compiler_rank::emit_rank,
+    compiler_rank::{RankIds, RankIndex, emit_rank},
 };
 use super::{
     AssignmentAnalysis, AssignmentRuleError, COMPILER_ID, CompileContext, ModelInput,
-    OperationBudget, PlanningIrLimitsV1, RANK_LEVEL, RESERVED_METADATA, RankIds, RankIndex,
+    OperationBudget, PlanningIrLimitsV1, RANK_LEVEL, RESERVED_METADATA,
     WORKFORCE_PROJECTION_VERSION, invalid, level_fact, metadata_values,
 };
 use eutheto_domain_ir::OptimizationDirection;
@@ -199,21 +199,10 @@ fn validate_shape(
     }
     for planned in &plan.constraints {
         budget.step()?;
-        let capability = if planned.impossible {
-            Capability::BoolOr
-        } else {
+        if !planned.impossible {
             edges = add(edges, count(planned.population.len())?.saturating_sub(1))?;
-            match planned.predicate {
-                Predicate::Headcount { .. }
-                | Predicate::Qualification { .. }
-                | Predicate::SkillMixQualification { .. }
-                | Predicate::MaximumAssignmentCount { .. } => Capability::CardinalityRange,
-                Predicate::Overlap { .. }
-                | Predicate::OverlapClique { .. }
-                | Predicate::MinimumRest { .. } => Capability::AtMostOne,
-            }
-        };
-        capabilities.insert(capability);
+        }
+        capabilities.insert(constraint_capability(planned));
     }
     within(
         edges,
@@ -221,6 +210,22 @@ fn validate_shape(
         AssignmentRuleLimit::PerRecord,
     )?;
     Ok(capabilities)
+}
+
+fn constraint_capability(planned: &PlannedConstraint) -> Capability {
+    if planned.impossible {
+        return Capability::BoolOr;
+    }
+    match planned.predicate {
+        Predicate::Headcount { .. }
+        | Predicate::Qualification { .. }
+        | Predicate::SkillMixQualification { .. }
+        | Predicate::MaximumAssignmentCount { .. } => Capability::CardinalityRange,
+        Predicate::Overlap { .. }
+        | Predicate::OverlapClique { .. }
+        | Predicate::MinimumRest { .. } => Capability::AtMostOne,
+        Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => Capability::BoolOr,
+    }
 }
 
 fn preflight_ranks(

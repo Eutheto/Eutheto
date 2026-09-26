@@ -558,6 +558,56 @@ fn original_evaluator_detects_removed_skill_mix_constraints_without_other_rule_f
     assert!(!original_accepts(&document, &selected)?);
     Ok(())
 }
+#[test]
+fn original_evaluator_quarantines_removed_fixed_and_hard_lock_constraints() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["rules"] = json!({
+        (id(34)): {
+            "kind":"fixedAssignment","id":id(34),"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}},"personId":id(1),"shiftId":id(8)
+        }
+    });
+    value["domain"]["lockedAssignments"] = json!({
+        (id(35)): {
+            "id":id(35),"personId":id(1),"shiftId":id(8),"state":{"kind":"hard"}
+        }
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let selected = [];
+    assert!(!mathematics_accepts(&compiled, &selected)?);
+    let report = authority::verify_selection(&document, &selected)?;
+    assert!(!report.accepted);
+    for owner in [34, 35] {
+        let rule_id: RuleId = id(owner).parse()?;
+        assert!(
+            !report
+                .required_rule_results
+                .iter()
+                .find(|item| item.rule_id == rule_id)
+                .ok_or("missing original forced-pair obligation")?
+                .satisfied
+        );
+    }
+    let accepted = authority::verify_selection(&document, &[pair(1, 8)?])?;
+    assert!(accepted.accepted);
+    for owner in [34, 35] {
+        let rule_id: RuleId = id(owner).parse()?;
+        assert!(
+            accepted
+                .required_rule_results
+                .iter()
+                .find(|item| item.rule_id == rule_id)
+                .ok_or("missing accepted forced-pair obligation")?
+                .satisfied
+        );
+    }
+    let mut mutant = compiled.clone();
+    mutant.constraints.clear();
+    assert!(mathematics_accepts(&mutant, &selected)?);
+    assert!(!original_accepts(&document, &selected)?);
+    Ok(())
+}
 
 fn detects_mutation(document: &ScenarioDocument, mutant: &AssignmentRuleCompilation) -> TestResult {
     for selected in selections()? {
@@ -917,6 +967,73 @@ async fn real_worker_enforces_required_skill_mix_even_when_other_rules_have_cand
     let impossible: ScenarioDocument = serde_json::from_value(value)?;
     let compiled = compile_assignment_rules(&impossible, &context())?;
     let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_fixed_assignment_and_hard_lock() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(21)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    value["domain"]["rules"][id(34)] = json!({
+        "kind":"fixedAssignment", "id":id(34), "active":true, "strength":"required",
+        "scope":{"people":{"kind":"all"}},"personId":id(21),"shiftId":id(8)
+    });
+    value["domain"]["lockedAssignments"][id(35)] = json!({
+        "id":id(35),"personId":id(20),"shiftId":id(22),"state":{"kind":"hard"}
+    });
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let result = solve_with_real_worker(problem(&document, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let candidate = result
+        .candidates
+        .first()
+        .ok_or("missing feasible worker candidate")?;
+    let selected = compiled
+        .variables
+        .iter()
+        .filter_map(|item| {
+            candidate
+                .values
+                .booleans
+                .get(&item.variable.id)
+                .copied()
+                .filter(|included| *included)
+                .map(|_| item.pair)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([pair(21, 8)?, pair(20, 22)?])
+    );
+    assert!(original_accepts(&document, &[pair(21, 8)?, pair(20, 22)?])?);
+
+    value["domain"]["entities"][id(21)]["qualificationGrants"] = json!([]);
+    let pruned_fixed: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&pruned_fixed, &context())?;
+    let result = solve_with_real_worker(problem(&pruned_fixed, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+
+    value["domain"]["entities"][id(21)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    value["domain"]["lockedAssignments"][id(35)]["shiftId"] = json!(id(8));
+    let pruned_lock: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&pruned_lock, &context())?;
+    let result = solve_with_real_worker(problem(&pruned_lock, &compiled)?).await?;
     assert_eq!(
         result.outcome.termination,
         BackendTerminationReason::InfeasibilityClaimed

@@ -56,7 +56,8 @@ export type EditableRule = Extract<
       | "noOverlap"
       | "minimumRest"
       | "maximumAssignmentCount"
-      | "requiredSkillMix";
+      | "requiredSkillMix"
+      | "fixedAssignment";
   }
 >;
 export type EditableRuleKind = EditableRule["kind"];
@@ -95,6 +96,8 @@ export interface RuleDraft {
     readonly firstCategory: string;
     readonly secondCategory: string;
   }[];
+  readonly personId: string;
+  readonly shiftId: string;
   readonly qualificationMinimums: readonly QualificationMinimumDraft[];
 }
 
@@ -106,7 +109,8 @@ export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
     rule.kind === "noOverlap" ||
     rule.kind === "minimumRest" ||
     rule.kind === "maximumAssignmentCount" ||
-    rule.kind === "requiredSkillMix"
+    rule.kind === "requiredSkillMix" ||
+    rule.kind === "fixedAssignment"
   );
 }
 
@@ -271,6 +275,20 @@ export function createRuleDraft(
       record?.kind === "noOverlap"
         ? record.compatibleCategoryPairs
         : (previous?.raw.compatibleCategoryPairs ?? []),
+    personId:
+      record?.kind === "fixedAssignment"
+        ? previous?.value.kind === "fixedAssignment" &&
+          (previous.raw.personId === "" || sameField(record.personId, previous.value.personId))
+          ? previous.raw.personId
+          : record.personId
+        : (previous?.raw.personId ?? ""),
+    shiftId:
+      record?.kind === "fixedAssignment"
+        ? previous?.value.kind === "fixedAssignment" &&
+          (previous.raw.shiftId === "" || sameField(record.shiftId, previous.value.shiftId))
+          ? previous.raw.shiftId
+          : record.shiftId
+        : (previous?.raw.shiftId ?? ""),
     qualificationMinimums:
       record?.kind === "requiredSkillMix"
         ? requiredSkillMixDraft(record, previousSkillMix, previous?.raw.qualificationMinimums)
@@ -286,6 +304,18 @@ export function ruleDraftValue(
 ): { readonly value: EditableRule | null; readonly errors: Readonly<Record<string, string>> } {
   const common = { id, active: draft.active, strength: "required" as const, scope: draft.scope };
   switch (kind) {
+    case "fixedAssignment": {
+      const errors: Record<string, string> = {};
+      if (draft.active && draft.personId === "")
+        errors.personId = messages.ruleSetup.fixedAssignmentPersonRequired;
+      if (draft.active && draft.shiftId === "")
+        errors.shiftId = messages.ruleSetup.fixedAssignmentShiftRequired;
+      if (Object.keys(errors).length > 0) return { value: null, errors };
+      return {
+        value: { ...common, kind, personId: draft.personId, shiftId: draft.shiftId },
+        errors: {},
+      };
+    }
     case "maximumAssignmentCount": {
       const maximum = parseMaximumAssignmentCountDraft(draft.maximum.raw);
       const errors: Record<string, string> = {};
@@ -353,6 +383,14 @@ export function ruleDraftValue(
 export function ruleRebaseValue(base: EditableRule, draft: RuleDraft): EditableRule | null {
   const parsed = ruleDraftValue(base.id, base.kind, draft).value;
   if (parsed !== null) return parsed;
+  if (base.kind === "fixedAssignment")
+    return {
+      ...base,
+      active: draft.active,
+      scope: draft.scope,
+      personId: draft.personId || base.personId,
+      shiftId: draft.shiftId || base.shiftId,
+    };
   if (base.kind === "maximumAssignmentCount")
     return {
       ...base,

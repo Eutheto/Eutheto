@@ -131,7 +131,6 @@ pub struct WorkforceCompilation {
 pub enum UnsupportedWorkforceObligation {
     RequiredRule(RuleId),
     Preference(RuleId),
-    HardLock(AssignmentId),
     SoftLock(AssignmentId),
 }
 

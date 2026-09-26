@@ -45,6 +45,15 @@ const skillMix: EditableRule & { readonly kind: "requiredSkillMix" } = {
     },
   ],
 };
+const fixed: EditableRule & { readonly kind: "fixedAssignment" } = {
+  id: "01900000-0000-7000-8000-000000000046",
+  kind: "fixedAssignment",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  personId: "01900000-0000-7000-8000-000000000047",
+  shiftId: "01900000-0000-7000-8000-000000000048",
+};
 
 describe("Required rule raw duration custody", () => {
   it("keeps invalid raw duration after adopting unrelated native changes and refuses submission", () => {
@@ -284,5 +293,56 @@ describe("Required skill mix raw qualification minima", () => {
     });
     if (local?.kind !== "requiredSkillMix") throw new Error("Incomplete rows must rebase");
     expect(local.qualificationMinimums).toEqual([second, first, { ...first, minimum: 2 }]);
+  });
+});
+describe("Fixed assignment target custody", () => {
+  it("uses the full scope by default and produces the exact named pair", () => {
+    expect(createRuleDraft("new").scope).toEqual({ people: { kind: "all" } });
+    expect(ruleDraftValue(fixed.id, fixed.kind, createRuleDraft(fixed)).value).toEqual(fixed);
+  });
+
+  it("lets native admission decide whether an inactive target may be absent", () => {
+    const result = ruleDraftValue(fixed.id, fixed.kind, {
+      ...createRuleDraft(fixed),
+      active: false,
+      personId: "",
+      shiftId: "",
+    });
+    expect(result.errors).toEqual({});
+    expect(result.value).toEqual({ ...fixed, active: false, personId: "", shiftId: "" });
+  });
+
+  it("retains unselected target custody while adopting unrelated saved target changes", () => {
+    const raw = { ...createRuleDraft(fixed), personId: "", shiftId: "" };
+    const local = ruleRebaseValue(fixed, raw);
+    if (local === null) throw new Error("Unselected targets must not block rebasing");
+    const current = {
+      ...fixed,
+      personId: "01900000-0000-7000-8000-000000000049",
+      shiftId: "01900000-0000-7000-8000-00000000004a",
+    };
+    const merged = rebaseEntityDraft(fixed, local, current);
+    const restored = createRuleDraft(merged.value, { value: local, raw });
+    expect(restored.personId).toBe("");
+    expect(restored.shiftId).toBe("");
+    expect(ruleDraftValue(fixed.id, fixed.kind, restored).errors).toEqual({
+      personId: expect.any(String),
+      shiftId: expect.any(String),
+    });
+  });
+
+  it("treats each named target as a whole-field rebase conflict", () => {
+    const local = ruleRebaseValue(fixed, {
+      ...createRuleDraft(fixed),
+      personId: "01900000-0000-7000-8000-000000000049",
+    });
+    if (local === null) throw new Error("Valid fixed target must rebase");
+    const merged = rebaseEntityDraft(fixed, local, {
+      ...fixed,
+      personId: "01900000-0000-7000-8000-00000000004a",
+    });
+    expect(merged.conflicts).toContain("personId");
+    if (merged.value.kind !== "fixedAssignment") throw new Error("Wrong rule kind");
+    expect(merged.value.personId).toBe("01900000-0000-7000-8000-000000000049");
   });
 });

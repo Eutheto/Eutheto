@@ -3,7 +3,10 @@ use super::{
     UnsupportedWorkforceObligation, WorkforceCompilation,
     analysis::{Plan, prepare, supported_rule},
     budget::{OperationBudget, count, effective_limits},
-    compiler::{DecisionVariables, compile_constraint, rule_fact, variable_fact},
+    compiler::{
+        DecisionVariables, compile_constraint, materialize_hard_lock_parents,
+        materialize_rule_parents, variable_fact,
+    },
     compiler_rank::{RankIds, RankIndex, emit_rank},
     identity::{IdentityKind, PlanningIdentities, RANK_LEVEL, WORKFORCE_PROJECTION_VERSION},
     input::AssignmentInput,
@@ -135,9 +138,8 @@ fn require_supported(
     for lock in input.domain.locked_assignments.values() {
         budget.step()?;
         let value = match lock.state {
-            LockState::Hard {} => UnsupportedWorkforceObligation::HardLock(lock.id),
             LockState::Soft { .. } => UnsupportedWorkforceObligation::SoftLock(lock.id),
-            LockState::Unlocked {} => continue,
+            LockState::Hard {} | LockState::Unlocked {} => continue,
         };
         unsupported = Some(unsupported.map_or(value, |prior| prior.min(value)));
     }
@@ -284,21 +286,17 @@ fn construct(
         projections.push(emitted.projection);
         provenance.push(emitted.fact);
     }
-    let mut parents = BTreeMap::new();
-    for (rule, kind) in &plan.parents {
-        budget.step()?;
-        let id = ProvenanceId::new(identities.derive(
-            IdentityKind::Provenance,
-            &("rule", rule, kind),
-            budget,
-        )?)
-        .map_err(|_| invalid())?;
-        budget.reserve(1, 1, 128)?;
-        parents.insert(*rule, id.clone());
-        provenance.push(rule_fact(*rule, kind, id));
-    }
+    let parents = materialize_rule_parents(plan, &mut identities, &mut provenance, budget)?;
+    let hard_lock_parents =
+        materialize_hard_lock_parents(plan, &mut identities, &mut provenance, budget)?;
     for planned in &plan.constraints {
-        let parent = parents.get(&planned.rule).ok_or_else(invalid)?.clone();
+        let parent = match planned.predicate {
+            super::analysis::Predicate::HardLock { assignment, .. } => hard_lock_parents
+                .get(&assignment)
+                .ok_or_else(invalid)?
+                .clone(),
+            _ => parents.get(&planned.rule).ok_or_else(invalid)?.clone(),
+        };
         let (record, fact) = compile_constraint(
             planned,
             plan,

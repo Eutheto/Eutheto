@@ -29,8 +29,8 @@ use crate::{
 use eutheto_domain_api::DomainValidationReport;
 use eutheto_planning_ir::PlanningIrLimitsV1;
 use eutheto_types::{
-    CancellationToken, EntityId, PersonId, ResourceRef, RuleId, ScenarioDocument, ValidationIssue,
-    ValidationSeverity,
+    AssignmentId, CancellationToken, EntityId, PersonId, ResourceRef, RuleId, ScenarioDocument,
+    ValidationIssue, ValidationSeverity,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
@@ -95,6 +95,15 @@ pub(super) enum Predicate {
         source: ShiftId,
         target: ShiftId,
         minimum_minutes: u32,
+    },
+    FixedAssignment {
+        person: PersonId,
+        shift: ShiftId,
+    },
+    HardLock {
+        assignment: AssignmentId,
+        person: PersonId,
+        shift: ShiftId,
     },
 }
 
@@ -467,6 +476,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::MinimumRest(_)
             | WorkforceRule::MaximumAssignmentCount { .. }
             | WorkforceRule::RequiredSkillMix { .. }
+            | WorkforceRule::FixedAssignment { .. }
     )
 }
 
@@ -511,7 +521,7 @@ fn obligations(
         budget.step()?;
         if matches!(lock.state, LockState::Hard {}) {
             budget.reserve(0, 1, 16)?;
-            result.remaining.push(RuleId::from_uuid(lock.id.as_uuid()));
+            result.handled.push(RuleId::from_uuid(lock.id.as_uuid()));
         }
     }
     budget.sort_work(result.handled.len())?;
@@ -609,12 +619,188 @@ fn plan(
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 count::plan(document, input, &result.candidates, rule, &mut plan, budget)?;
             }
+            WorkforceRule::FixedAssignment { .. } => plan_fixed(
+                input,
+                &result.candidates,
+                &mut plan,
+                &mut result.validation,
+                rule,
+                budget,
+            )?,
             _ => {}
         }
     }
+    plan_hard_locks(input, &result.candidates, &mut plan, budget)?;
     coverage_bound_findings(&plan, &mut result.validation, budget)?;
     estimate_contribution(result, &plan, budget, limits)?;
     Ok(plan)
+}
+
+fn plan_hard_locks(
+    input: &AssignmentInput,
+    candidates: &[AssignmentPair],
+    plan: &mut Plan,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    for lock in input.domain.locked_assignments.values() {
+        budget.step()?;
+        if !matches!(lock.state, LockState::Hard {}) {
+            continue;
+        }
+        let pair = AssignmentPair {
+            person_id: lock.person_id,
+            shift_id: lock.shift_id,
+        };
+        budget.reserve(1, 3, 64)?;
+        let candidate = candidates.binary_search(&pair);
+        let (population, impossible) = match candidate {
+            Ok(index) => {
+                budget.reserve(0, 1, 8)?;
+                (vec![index], false)
+            }
+            Err(_) => (Vec::new(), true),
+        };
+        append(
+            plan,
+            PlannedConstraint {
+                rule: RuleId::from_uuid(lock.id.as_uuid()),
+                predicate: Predicate::HardLock {
+                    assignment: lock.id,
+                    person: lock.person_id,
+                    shift: lock.shift_id,
+                },
+                population,
+                impossible,
+            },
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn plan_fixed(
+    input: &AssignmentInput,
+    candidates: &[AssignmentPair],
+    plan: &mut Plan,
+    report: &mut DomainValidationReport,
+    fixed: &WorkforceRule,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let WorkforceRule::FixedAssignment {
+        id: rule,
+        scope,
+        person_id,
+        shift_id,
+        ..
+    } = fixed
+    else {
+        return Err(invalid());
+    };
+    let (rule, person_id, shift_id) = (*rule, *person_id, *shift_id);
+    budget.step()?;
+    let pair = AssignmentPair {
+        person_id,
+        shift_id,
+    };
+    let person = input.person(person_id);
+    let shift = input.shift(shift_id);
+    let missing = if person.is_none() {
+        Some(("fixed_assignment_unresolved_person", "personId"))
+    } else if shift.is_none() {
+        Some(("fixed_assignment_unresolved_shift", "shiftId"))
+    } else {
+        None
+    };
+    if let Some((code, field)) = missing {
+        fixed_finding(
+            report,
+            code,
+            rule,
+            pair,
+            &format!("domain.rules.{rule}.{field}"),
+            budget,
+        )?;
+        return append(
+            plan,
+            PlannedConstraint {
+                rule,
+                predicate: Predicate::FixedAssignment {
+                    person: person_id,
+                    shift: shift_id,
+                },
+                population: Vec::new(),
+                impossible: true,
+            },
+            budget,
+        );
+    }
+    let person = person.ok_or_else(invalid)?;
+    let shift = shift.ok_or_else(invalid)?;
+    let metadata = input.metadata(shift)?;
+    let in_scope =
+        person_scope(scope, person, budget)? && shift_scope(scope, shift, &metadata, budget)?;
+    let (population, impossible) = if in_scope {
+        if let Ok(index) = candidates.binary_search(&pair) {
+            budget.reserve(0, 1, 8)?;
+            (vec![index], false)
+        } else {
+            fixed_finding(
+                report,
+                "fixed_assignment_rejected_pair",
+                rule,
+                pair,
+                &format!("domain.rules.{rule}"),
+                budget,
+            )?;
+            (Vec::new(), true)
+        }
+    } else {
+        fixed_finding(
+            report,
+            "fixed_assignment_out_of_scope",
+            rule,
+            pair,
+            &format!("domain.rules.{rule}.scope"),
+            budget,
+        )?;
+        (Vec::new(), true)
+    };
+    append(
+        plan,
+        PlannedConstraint {
+            rule,
+            predicate: Predicate::FixedAssignment {
+                person: person_id,
+                shift: shift_id,
+            },
+            population,
+            impossible,
+        },
+        budget,
+    )
+}
+
+fn fixed_finding(
+    report: &mut DomainValidationReport,
+    code: &str,
+    rule: RuleId,
+    pair: AssignmentPair,
+    field_path: &str,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    budget.step()?;
+    budget.reserve(1, 5, 768)?;
+    report.issues.push(ValidationIssue {
+        code: format!("official.workforce.{code}"),
+        severity: ValidationSeverity::Error,
+        message: format!(
+            "Fixed assignment rule {rule} requires person {} on shift {} but its authored target is not a viable assignment. Review the named target, active scope, eligibility, and availability. This is not a solver feasibility result.",
+            pair.person_id, pair.shift_id
+        ),
+        field_path: Some(field_path.to_owned()),
+        resource: Some(ResourceRef::Rule(rule)),
+    });
+    Ok(())
 }
 
 struct CoveragePlanner<'a> {
@@ -1049,7 +1235,17 @@ fn estimate_contribution(
 ) -> Result<(), AssignmentRuleError> {
     let variables = result.estimate.variables;
     let constraints = count(plan.constraints.len())?;
-    let provenance = add(add(variables, constraints)?, count(plan.parents.len())?)?;
+    let mut hard_lock_parents = 0;
+    for constraint in &plan.constraints {
+        budget.step()?;
+        if matches!(constraint.predicate, Predicate::HardLock { .. }) {
+            hard_lock_parents = add(hard_lock_parents, 1)?;
+        }
+    }
+    let provenance = add(
+        add(variables, constraints)?,
+        add(count(plan.parents.len())?, hard_lock_parents)?,
+    )?;
     within(
         provenance,
         budget.provenance_limit(),
@@ -1058,6 +1254,10 @@ fn estimate_contribution(
     let defaults = PlanningIrLimitsV1::DEFAULT;
     // variable -> fact; fact -> person/shift
     let mut references = variables.checked_mul(3).ok_or_else(invalid)?;
+    references = add(
+        references,
+        hard_lock_parents.checked_mul(3).ok_or_else(invalid)?,
+    )?;
     for constraint in &plan.constraints {
         budget.step()?;
         let literals = if constraint.impossible {
@@ -1107,6 +1307,15 @@ fn estimate_contribution(
             AssignmentRuleLimit::PerRecord,
         )?;
     }
+    if hard_lock_parents > 0 {
+        within(
+            3,
+            limits
+                .max_entity_refs_per_record
+                .min(defaults.max_entity_refs_per_record),
+            AssignmentRuleLimit::PerRecord,
+        )?;
+    }
     if constraints > 0 {
         within(
             2,
@@ -1147,6 +1356,7 @@ pub(super) fn predicate_shape(
         Predicate::Overlap { .. } => (3, 0),
         Predicate::OverlapClique { .. } => (1, 0),
         Predicate::MinimumRest { .. } => (3, 3),
+        Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => (2, 0),
     })
 }
 
@@ -1161,7 +1371,9 @@ fn append(
         budget.constraint_limit(),
         AssignmentRuleLimit::Constraints,
     )?;
-    if let Entry::Vacant(entry) = plan.parents.entry(constraint.rule) {
+    if !matches!(constraint.predicate, Predicate::HardLock { .. })
+        && let Entry::Vacant(entry) = plan.parents.entry(constraint.rule)
+    {
         budget.reserve(1, 1, 64)?;
         entry.insert(match constraint.predicate {
             Predicate::Overlap { .. } | Predicate::OverlapClique { .. } => "no_overlap",
@@ -1169,6 +1381,8 @@ fn append(
             Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
             Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
             Predicate::SkillMixQualification { .. } => "required_skill_mix",
+            Predicate::FixedAssignment { .. } => "fixed_assignment",
+            Predicate::HardLock { .. } => unreachable!(),
         });
     }
     budget.reserve(1, 4, 128)?;
@@ -1191,7 +1405,9 @@ fn coverage_bound_findings(
             Predicate::MaximumAssignmentCount { .. }
             | Predicate::Overlap { .. }
             | Predicate::OverlapClique { .. }
-            | Predicate::MinimumRest { .. } => continue,
+            | Predicate::MinimumRest { .. }
+            | Predicate::FixedAssignment { .. }
+            | Predicate::HardLock { .. } => continue,
         };
         budget.reserve(1, 2, 24)?;
         by_shift.entry(shift).or_default().push(constraint);
@@ -1223,7 +1439,9 @@ fn coverage_bound_findings(
                 Predicate::MaximumAssignmentCount { .. }
                 | Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
-                | Predicate::MinimumRest { .. } => continue,
+                | Predicate::MinimumRest { .. }
+                | Predicate::FixedAssignment { .. }
+                | Predicate::HardLock { .. } => continue,
             };
             for upper in &predicates {
                 budget.step()?;

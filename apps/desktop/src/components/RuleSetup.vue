@@ -3,6 +3,7 @@ import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
 import type {
+  WorkforceDateRange,
   WorkforceSetupRuleCatalogEntry,
   WorkforceSetupRuleReference,
   WorkforceSetupScopePart,
@@ -15,6 +16,7 @@ import { useValidationRoute } from "../validation-route";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
 import RuleScopeBuilder from "./planner/RuleScopeBuilder.vue";
 import DurationField from "./planner/DurationField.vue";
+import ShiftScopePicker from "./ShiftScopePicker.vue";
 import WorkforceEntityPicker from "./planner/WorkforceEntityPicker.vue";
 
 const props = defineProps<{
@@ -35,6 +37,7 @@ const pairKeys = ref<string[]>([]);
 const pairPage = ref(0);
 const skillMixPage = ref(0);
 const warningPage = ref(0);
+const fixedShiftDates = ref<WorkforceDateRange>({ startDate: "", endDateExclusive: "" });
 let rowSequence = 0;
 let focusGeneration = 0;
 let alive = true;
@@ -104,6 +107,13 @@ watch(
     );
   },
   { immediate: true, flush: "sync" },
+);
+watch(
+  () => [props.project.scenarioId, state.facts?.initialWorkWindow] as const,
+  ([, dates]) => {
+    if (dates) fixedShiftDates.value = { ...dates };
+  },
+  { immediate: true },
 );
 watch(
   () => review.state.review?.snapshot,
@@ -231,6 +241,8 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       maximum: "rule-maximum",
       minimumMinutes: "rule-minimum-rest",
       compatibleCategoryPairs: "rule-category-pairs",
+      personId: "rule-fixed-person",
+      shiftId: "rule-fixed-shift",
       qualificationMinimums: "rule-qualification-minimums",
     } as const;
     const field = path[0];
@@ -757,6 +769,83 @@ const navigationError = useValidationRoute(
               "
               @preview="vm.inspectScope(part, $event)"
             />
+            <fieldset
+              v-if="state.editor.kind === 'fixedAssignment'"
+              id="rule-fixed-assignment-target"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <p class="field-help">{{ copy.fixedAssignmentScopeHelp }}</p>
+              <WorkforceEntityPicker
+                id="rule-fixed-person"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="person"
+                :label="copy.fields.fixedAssignmentPerson"
+                :model-value="state.editor.raw.personId === '' ? [] : [state.editor.raw.personId]"
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.personId === undefined ? {} : { error: state.errors.personId }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, personId: $event[0] ?? '' })
+                "
+              />
+              <h4 id="rule-fixed-shift-label">{{ copy.fields.fixedAssignmentShift }}</h4>
+              <div v-if="state.facts" class="form-grid">
+                <label for="rule-fixed-shift-start">
+                  {{ copy.fields.fixedAssignmentShiftStart }}
+                  <input
+                    id="rule-fixed-shift-start"
+                    v-model="fixedShiftDates.startDate"
+                    type="date"
+                    :min="state.facts.planningDates.startDate"
+                    :max="state.facts.planningDates.endDateExclusive"
+                  />
+                </label>
+                <label for="rule-fixed-shift-end">
+                  {{ copy.fields.fixedAssignmentShiftEnd }}
+                  <input
+                    id="rule-fixed-shift-end"
+                    v-model="fixedShiftDates.endDateExclusive"
+                    type="date"
+                    :min="state.facts.planningDates.startDate"
+                    :max="state.facts.planningDates.endDateExclusive"
+                  />
+                </label>
+              </div>
+              <ShiftScopePicker
+                v-if="state.facts"
+                id="rule-fixed-shift"
+                aria-labelledby="rule-fixed-shift-label"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                :dates="fixedShiftDates"
+                :selected-ids="state.editor.raw.shiftId === '' ? [] : [state.editor.raw.shiftId]"
+                :error="state.errors.shiftId"
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, shiftId: $event[0] ?? '' })
+                "
+              />
+              <p v-else role="status">{{ recordsCopy.loading }}</p>
+              <p>
+                {{
+                  copy.fixedAssignmentSentence(
+                    state.editor.raw.personId || copy.absent,
+                    state.editor.raw.shiftId || copy.absent,
+                  )
+                }}
+              </p>
+            </fieldset>
             <template v-if="state.editor.kind === 'maximumAssignmentCount'">
               <WorkforceEntityPicker
                 id="rule-calendar"
@@ -1192,6 +1281,14 @@ const navigationError = useValidationRoute(
               </li>
             </ul>
           </template>
+          <p v-if="state.reviewed.after?.kind === 'fixedAssignment'">
+            {{
+              copy.fixedAssignmentSentence(
+                state.reviewed.after.personId || copy.absent,
+                state.reviewed.after.shiftId || copy.absent,
+              )
+            }}
+          </p>
           <p>{{ copy.previewHelp }}</p>
           <dl v-if="state.reviewed.summary">
             <div>
@@ -1219,7 +1316,11 @@ const navigationError = useValidationRoute(
           </dl>
           <p v-if="state.reviewed.scopeError" role="alert">{{ state.reviewed.scopeError }}</p>
           <p v-if="!canApply && !busy && state.reviewed.after?.active" role="status">
-            {{ copy.activeScopeRequired }}
+            {{
+              state.reviewed.after?.kind === "fixedAssignment"
+                ? copy.fixedAssignmentScopeRequired
+                : copy.activeScopeRequired
+            }}
           </p>
         </template>
         <section v-if="warnings.length" :aria-label="recordsCopy.warnings">

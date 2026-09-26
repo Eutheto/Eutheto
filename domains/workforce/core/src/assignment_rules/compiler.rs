@@ -15,7 +15,7 @@ use eutheto_planning_ir::{
     PlanningIrLimitsV1, ProvenanceId, ProvenanceParameter, ProvenanceRecord, ProvenanceSourceKind,
     Variable,
 };
-use eutheto_types::{EntityId, PersonId, RuleId, ScenarioDocument};
+use eutheto_types::{AssignmentId, EntityId, PersonId, RuleId, ScenarioDocument};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 use std::collections::BTreeMap;
 
@@ -101,21 +101,17 @@ fn construct(
             },
         });
     }
-    let mut parents = BTreeMap::new();
-    for (rule, kind) in &plan.parents {
-        budget.step()?;
-        let id = ProvenanceId::new(identities.derive(
-            IdentityKind::Provenance,
-            &("rule", rule, kind),
-            budget,
-        )?)
-        .map_err(|_| invalid_id())?;
-        budget.reserve(1, 1, 128)?;
-        parents.insert(*rule, id.clone());
-        provenance.push(rule_fact(*rule, kind, id));
-    }
+    let parents = materialize_rule_parents(plan, &mut identities, &mut provenance, budget)?;
+    let hard_lock_parents =
+        materialize_hard_lock_parents(plan, &mut identities, &mut provenance, budget)?;
     for planned in &plan.constraints {
-        let parent = parents.get(&planned.rule).ok_or_else(invalid)?.clone();
+        let parent = match planned.predicate {
+            Predicate::HardLock { assignment, .. } => hard_lock_parents
+                .get(&assignment)
+                .ok_or_else(invalid)?
+                .clone(),
+            _ => parents.get(&planned.rule).ok_or_else(invalid)?.clone(),
+        };
         let (record, fact) = compile_constraint(
             planned,
             plan,
@@ -237,6 +233,9 @@ fn constraint_body(
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
         | Predicate::MinimumRest { .. } => Ok(Constraint::at_most_one(literals)),
+        Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
+            Ok(Constraint::bool_or(literals))
+        }
     }
 }
 
@@ -255,18 +254,17 @@ fn derive_predicate(
             lower,
             upper,
             ..
-        } => identities.derive(
-            kind,
-            &(
+        } => {
+            let key = (
                 "headcount",
                 planned.rule,
                 plan.definitions[definition].owner,
                 shift,
                 lower,
                 upper,
-            ),
-            budget,
-        ),
+            );
+            identities.derive(kind, &key, budget)
+        }
         Predicate::Qualification {
             definition,
             minimum,
@@ -327,18 +325,27 @@ fn derive_predicate(
             source,
             target,
             minimum_minutes,
-        } => identities.derive(
-            kind,
-            &(
+        } => {
+            let key = (
                 "minimum_rest",
                 planned.rule,
                 person,
                 source,
                 target,
                 minimum_minutes,
-            ),
+            );
+            identities.derive(kind, &key, budget)
+        }
+        Predicate::FixedAssignment { person, shift } => identities.derive(
+            kind,
+            &("fixed_assignment", planned.rule, person, shift),
             budget,
         ),
+        Predicate::HardLock {
+            assignment,
+            person,
+            shift,
+        } => identities.derive(kind, &("hard_lock", assignment, person, shift), budget),
     }
 }
 fn derive_clique(
@@ -431,6 +438,90 @@ pub(super) fn rule_fact(rule: RuleId, kind: &str, id: ProvenanceId) -> Provenanc
         parameters: BTreeMap::new(),
         parent: None,
     }
+}
+
+pub(super) fn materialize_rule_parents(
+    plan: &Plan,
+    identities: &mut PlanningIdentities,
+    provenance: &mut Vec<ProvenanceRecord>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<BTreeMap<RuleId, ProvenanceId>, AssignmentRuleError> {
+    let mut parents = BTreeMap::new();
+    for (rule, kind) in &plan.parents {
+        budget.step()?;
+        let id = ProvenanceId::new(identities.derive(
+            IdentityKind::Provenance,
+            &("rule", rule, kind),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        budget.reserve(1, 1, 128)?;
+        parents.insert(*rule, id.clone());
+        provenance.push(rule_fact(*rule, kind, id));
+    }
+    Ok(parents)
+}
+
+pub(super) fn hard_lock_fact(
+    assignment: AssignmentId,
+    pair: AssignmentPair,
+    id: ProvenanceId,
+    budget: &mut OperationBudget<'_>,
+) -> Result<ProvenanceRecord, AssignmentRuleError> {
+    budget.reserve(0, 3, 192)?;
+    let mut entity_refs = vec![
+        entity("assignment_lock", EntityId::from_uuid(assignment.as_uuid()))?,
+        entity("person", EntityId::from_uuid(pair.person_id.as_uuid()))?,
+        entity("shift", pair.shift_id.as_entity_id())?,
+    ];
+    budget.sort_work(entity_refs.len())?;
+    entity_refs.sort_unstable();
+    Ok(ProvenanceRecord {
+        id,
+        source_kind: ProvenanceSourceKind::Fact,
+        source_id: assignment.to_string(),
+        entity_refs,
+        message_key: "official.workforce.hard_lock".to_owned(),
+        parameters: BTreeMap::new(),
+        parent: None,
+    })
+}
+
+pub(super) fn materialize_hard_lock_parents(
+    plan: &Plan,
+    identities: &mut PlanningIdentities,
+    provenance: &mut Vec<ProvenanceRecord>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<BTreeMap<AssignmentId, ProvenanceId>, AssignmentRuleError> {
+    let mut parents = BTreeMap::new();
+    for planned in &plan.constraints {
+        let Predicate::HardLock {
+            assignment,
+            person,
+            shift,
+        } = planned.predicate
+        else {
+            continue;
+        };
+        budget.step()?;
+        if parents.contains_key(&assignment) {
+            continue;
+        }
+        let pair = AssignmentPair {
+            person_id: person,
+            shift_id: shift,
+        };
+        let id = ProvenanceId::new(identities.derive(
+            IdentityKind::Provenance,
+            &("hard_lock_fact", assignment, person, shift),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        budget.reserve(1, 3, 256)?;
+        parents.insert(assignment, id.clone());
+        provenance.push(hard_lock_fact(assignment, pair, id, budget)?);
+    }
+    Ok(parents)
 }
 
 // Keep each predicate's source identities and parameters adjacent in one auditable match.
@@ -569,13 +660,31 @@ fn constraint_fact(
             minimum_rest_payload(person, source, target, minimum_minutes, &mut parameters)?,
             "official.workforce.minimum_rest",
         ),
+        Predicate::FixedAssignment { person, shift } => (
+            vec![
+                entity("person", EntityId::from_uuid(person.as_uuid()))?,
+                entity("shift", shift.as_entity_id())?,
+            ],
+            "official.workforce.fixed_assignment",
+        ),
+        Predicate::HardLock { person, shift, .. } => (
+            vec![
+                entity("person", EntityId::from_uuid(person.as_uuid()))?,
+                entity("shift", shift.as_entity_id())?,
+            ],
+            "official.workforce.hard_lock",
+        ),
+    };
+    let source_id = match planned.predicate {
+        Predicate::HardLock { assignment, .. } => assignment.to_string(),
+        _ => planned.rule.to_string(),
     };
     budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
     Ok(ProvenanceRecord {
         id,
         source_kind: ProvenanceSourceKind::Derived,
-        source_id: planned.rule.to_string(),
+        source_id,
         entity_refs,
         message_key: message_key.to_owned(),
         parameters,
@@ -712,23 +821,13 @@ pub(super) fn preflight(
         )?;
     }
     let placeholder = ProvenanceId::new(PROVENANCE_ID).map_err(|_| invalid_id())?;
-    for pair in pairs {
-        budget.step()?;
-        let variable = MeasuredVariable {
-            id: BOOL_ID,
-            provenance: PROVENANCE_ID,
-        };
-        budget.reserve_ir(1, 1, budget.measure_ir(&variable)?)?;
-        // Temporary small provenance payloads are charged separately before materialization.
-        budget.reserve(1, 2, 1024)?;
-        let fact = variable_fact(*pair, placeholder.clone(), budget)?;
-        reserve_fact(&fact, budget, limits)?;
-    }
+    preflight_variable_facts(pairs, &placeholder, budget, limits)?;
     for (rule, kind) in &plan.parents {
         budget.step()?;
         budget.reserve(1, 0, 512)?;
         reserve_fact(&rule_fact(*rule, kind, placeholder.clone()), budget, limits)?;
     }
+    preflight_hard_lock_facts(plan, &placeholder, budget, limits)?;
     for planned in &plan.constraints {
         budget.step()?;
         let literals = MeasuredLiterals(if planned.impossible {
@@ -773,6 +872,9 @@ pub(super) fn preflight(
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MinimumRest { .. } => MeasuredBody::AtMostOne { literals },
+                Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
+                    MeasuredBody::BoolOr { literals }
+                }
             }
         };
         let record = MeasuredConstraint {
@@ -801,6 +903,57 @@ pub(super) fn preflight(
         )?;
     }
     budget.check()
+}
+
+fn preflight_variable_facts(
+    pairs: &[AssignmentPair],
+    placeholder: &ProvenanceId,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<(), AssignmentRuleError> {
+    for pair in pairs {
+        budget.step()?;
+        let variable = MeasuredVariable {
+            id: BOOL_ID,
+            provenance: PROVENANCE_ID,
+        };
+        budget.reserve_ir(1, 1, budget.measure_ir(&variable)?)?;
+        // Temporary small provenance payloads are charged separately before materialization.
+        budget.reserve(1, 2, 1024)?;
+        let fact = variable_fact(*pair, placeholder.clone(), budget)?;
+        reserve_fact(&fact, budget, limits)?;
+    }
+    Ok(())
+}
+
+fn preflight_hard_lock_facts(
+    plan: &Plan,
+    placeholder: &ProvenanceId,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<(), AssignmentRuleError> {
+    for planned in &plan.constraints {
+        let Predicate::HardLock {
+            assignment,
+            person,
+            shift,
+        } = planned.predicate
+        else {
+            continue;
+        };
+        budget.step()?;
+        budget.reserve(1, 3, 512)?;
+        let pair = AssignmentPair {
+            person_id: person,
+            shift_id: shift,
+        };
+        reserve_fact(
+            &hard_lock_fact(assignment, pair, placeholder.clone(), budget)?,
+            budget,
+            limits,
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn reserve_fact(
