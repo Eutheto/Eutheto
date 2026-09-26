@@ -2,6 +2,7 @@
 mod coverage;
 mod fixed;
 mod maximum_count;
+mod mutual;
 mod predicates;
 mod rest;
 mod skill_mix;
@@ -215,6 +216,9 @@ fn evaluate_prepared(
             }
             WorkforceRule::RequiredSkillMix { .. } => {
                 skill_mix::evaluate(input, selected, rule, &mut summary, budget)?;
+            }
+            WorkforceRule::MutualAssignmentRestriction { .. } => {
+                mutual::evaluate(input, selected, rule, &mut summary, budget)?;
             }
             _ => {
                 retain_id(&mut obligations.remaining, id, budget)?;
@@ -587,6 +591,7 @@ fn overlap(
 #[derive(Clone, Copy)]
 struct Witness {
     person: Option<PersonId>,
+    other_person: Option<PersonId>,
     shift: ShiftId,
     other_shift: Option<ShiftId>,
     owner: EntityId,
@@ -617,6 +622,7 @@ impl Witness {
     ) -> Self {
         Self {
             person: Some(pair.person_id),
+            other_person: None,
             shift: pair.shift_id,
             other_shift: None,
             owner,
@@ -636,6 +642,7 @@ impl Witness {
     fn precedes(&self, other: &Self) -> bool {
         (
             self.person,
+            self.other_person,
             self.period,
             self.shift,
             self.owner,
@@ -644,6 +651,7 @@ impl Witness {
             self.other_shift,
         ) < (
             other.person,
+            other.other_person,
             other.period,
             other.shift,
             other.owner,
@@ -759,6 +767,14 @@ fn witness_evidence(
             budget,
         )?;
     }
+    if let Some(person) = witness.other_person {
+        entity(
+            &mut result.affected_entities,
+            "person",
+            EntityId::from_uuid(person.as_uuid()),
+            budget,
+        )?;
+    }
     entity(
         &mut result.affected_entities,
         "shift",
@@ -779,6 +795,9 @@ fn witness_evidence(
         witness.owner,
         budget,
     )?;
+    if witness.other_person.is_some() {
+        mutual_pair_evidence(witness, result, budget)?;
+    }
     for (key, value) in [
         ("official.workforce.fact.witness_minimum", witness.lower),
         ("official.workforce.fact.witness_maximum", witness.upper),
@@ -814,6 +833,47 @@ fn witness_evidence(
             &mut result.observed,
             "official.workforce.fact.witness_end",
             &interval.end.to_string(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn mutual_pair_evidence(
+    witness: &Witness,
+    result: &mut RuleEvaluation,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let first_person = witness.person.ok_or_else(invalid)?;
+    let second_person = witness.other_person.ok_or_else(invalid)?;
+    let second_shift = witness.other_shift.ok_or_else(invalid)?;
+    for (key, kind, id) in [
+        (
+            "official.workforce.fact.witness_first_person",
+            "person",
+            EntityId::from_uuid(first_person.as_uuid()),
+        ),
+        (
+            "official.workforce.fact.witness_first_shift",
+            "shift",
+            witness.shift.as_entity_id(),
+        ),
+        (
+            "official.workforce.fact.witness_second_person",
+            "person",
+            EntityId::from_uuid(second_person.as_uuid()),
+        ),
+        (
+            "official.workforce.fact.witness_second_shift",
+            "shift",
+            second_shift.as_entity_id(),
+        ),
+    ] {
+        let entity = entity_ref(kind, id, budget)?;
+        fact(
+            &mut result.observed,
+            key,
+            VerificationValue::Entity(entity),
             budget,
         )?;
     }

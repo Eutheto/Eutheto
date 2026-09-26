@@ -1,4 +1,5 @@
 import type {
+  WorkforcePairingMode,
   WorkforceQualificationMinimum,
   WorkforceRequiredSkillMixRule,
   WorkforceRule,
@@ -57,7 +58,8 @@ export type EditableRule = Extract<
       | "minimumRest"
       | "maximumAssignmentCount"
       | "requiredSkillMix"
-      | "fixedAssignment";
+      | "fixedAssignment"
+      | "mutualAssignmentRestriction";
   }
 >;
 export type EditableRuleKind = EditableRule["kind"];
@@ -98,6 +100,8 @@ export interface RuleDraft {
   }[];
   readonly personId: string;
   readonly shiftId: string;
+  readonly personIds: readonly string[];
+  readonly mode: WorkforcePairingMode;
   readonly qualificationMinimums: readonly QualificationMinimumDraft[];
 }
 
@@ -110,7 +114,8 @@ export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
     rule.kind === "minimumRest" ||
     rule.kind === "maximumAssignmentCount" ||
     rule.kind === "requiredSkillMix" ||
-    rule.kind === "fixedAssignment"
+    rule.kind === "fixedAssignment" ||
+    rule.kind === "mutualAssignmentRestriction"
   );
 }
 
@@ -246,6 +251,15 @@ export function createRuleDraft(
     record?.kind === "requiredSkillMix" && previous?.value.kind === "requiredSkillMix"
       ? previous.value
       : undefined;
+  const keepMutualPeople =
+    record?.kind === "mutualAssignmentRestriction" &&
+    previous?.value.kind === "mutualAssignmentRestriction" &&
+    sameField(record.personIds, previous.value.personIds);
+  const keepMutualMode =
+    record?.kind === "mutualAssignmentRestriction" &&
+    previous?.value.kind === "mutualAssignmentRestriction" &&
+    sameField(record.mode, previous.value.mode);
+
   return {
     active: record?.active ?? true,
     scope: record?.scope ?? { people: { kind: "all" } },
@@ -289,6 +303,18 @@ export function createRuleDraft(
           ? previous.raw.shiftId
           : record.shiftId
         : (previous?.raw.shiftId ?? ""),
+    personIds:
+      record?.kind === "mutualAssignmentRestriction"
+        ? keepMutualPeople
+          ? previous.raw.personIds
+          : record.personIds
+        : (previous?.raw.personIds ?? []),
+    mode:
+      record?.kind === "mutualAssignmentRestriction"
+        ? keepMutualMode
+          ? previous.raw.mode
+          : record.mode
+        : (previous?.raw.mode ?? "sameShift"),
     qualificationMinimums:
       record?.kind === "requiredSkillMix"
         ? requiredSkillMixDraft(record, previousSkillMix, previous?.raw.qualificationMinimums)
@@ -369,6 +395,11 @@ export function ruleDraftValue(
         errors: {},
       };
     }
+    case "mutualAssignmentRestriction":
+      return {
+        value: { ...common, kind, personIds: draft.personIds, mode: draft.mode },
+        errors: {},
+      };
     case "noOverlap":
       return {
         value: { ...common, kind, compatibleCategoryPairs: draft.compatibleCategoryPairs },

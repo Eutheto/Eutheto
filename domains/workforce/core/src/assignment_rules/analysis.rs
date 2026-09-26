@@ -6,6 +6,8 @@ mod rest;
 
 #[path = "compiler_count.rs"]
 mod count;
+#[path = "compiler_mutual.rs"]
+mod mutual;
 
 #[path = "compiler_overlap.rs"]
 mod overlap;
@@ -22,7 +24,8 @@ use crate::{
     ids::{ShiftId, WorkCalendarId},
     model::{
         AssignmentLock, AssignmentPair, Availability, AvailabilityKind, CategoryPair, Coverage,
-        LockState, Person, QualificationMinimum, Scope, WorkforceEntity, WorkforceRule,
+        LockState, PairingMode, Person, QualificationMinimum, Scope, WorkforceEntity,
+        WorkforceRule,
     },
     temporal::ResolvedShift,
 };
@@ -89,6 +92,15 @@ pub(super) enum Predicate {
     },
     OverlapClique {
         person: PersonId,
+    },
+    MutualSameShift {
+        shift: ShiftId,
+    },
+    MutualOverlap {
+        first_person: PersonId,
+        first_shift: ShiftId,
+        second_person: PersonId,
+        second_shift: ShiftId,
     },
     MinimumRest {
         person: PersonId,
@@ -477,6 +489,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::MaximumAssignmentCount { .. }
             | WorkforceRule::RequiredSkillMix { .. }
             | WorkforceRule::FixedAssignment { .. }
+            | WorkforceRule::MutualAssignmentRestriction { .. }
     )
 }
 
@@ -608,6 +621,15 @@ fn plan(
                     budget,
                 )?;
             }
+            WorkforceRule::MutualAssignmentRestriction { .. } => mutual::plan(
+                input,
+                &result.candidates,
+                &by_shift,
+                &mut plan,
+                rule,
+                budget,
+                limits,
+            )?,
             WorkforceRule::MinimumRest(rest) => rest::RestRule {
                 id,
                 scope,
@@ -1354,10 +1376,66 @@ pub(super) fn predicate_shape(
         }
         Predicate::MaximumAssignmentCount { .. } => (2, 3),
         Predicate::Overlap { .. } => (3, 0),
-        Predicate::OverlapClique { .. } => (1, 0),
+        Predicate::OverlapClique { .. } | Predicate::MutualSameShift { .. } => (1, 0),
+        Predicate::MutualOverlap {
+            first_shift,
+            second_shift,
+            ..
+        } => (3 + u64::from(first_shift != second_shift), 0),
         Predicate::MinimumRest { .. } => (3, 3),
         Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => (2, 0),
     })
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AppendReservation {
+    add_parent: bool,
+}
+
+pub(super) fn reserve_append(
+    plan: &Plan,
+    rule: RuleId,
+    predicate: Predicate,
+    budget: &mut OperationBudget<'_>,
+) -> Result<AppendReservation, AssignmentRuleError> {
+    budget.step()?;
+    within(
+        add(count(plan.constraints.len())?, 1)?,
+        budget.constraint_limit(),
+        AssignmentRuleLimit::Constraints,
+    )?;
+    let add_parent =
+        !matches!(predicate, Predicate::HardLock { .. }) && !plan.parents.contains_key(&rule);
+    if add_parent {
+        budget.reserve(1, 1, 64)?;
+    }
+    budget.reserve(1, 4, 128)?;
+    Ok(AppendReservation { add_parent })
+}
+
+pub(super) fn commit_append(
+    plan: &mut Plan,
+    constraint: PlannedConstraint,
+    reservation: AppendReservation,
+) {
+    if reservation.add_parent {
+        plan.parents.insert(
+            constraint.rule,
+            match constraint.predicate {
+                Predicate::Overlap { .. } | Predicate::OverlapClique { .. } => "no_overlap",
+                Predicate::MutualSameShift { .. } | Predicate::MutualOverlap { .. } => {
+                    "mutual_assignment_restriction"
+                }
+                Predicate::MinimumRest { .. } => "minimum_rest",
+                Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
+                Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
+                Predicate::SkillMixQualification { .. } => "required_skill_mix",
+                Predicate::FixedAssignment { .. } => "fixed_assignment",
+                Predicate::HardLock { .. } => unreachable!(),
+            },
+        );
+    }
+    plan.constraints.push(constraint);
 }
 
 fn append(
@@ -1365,31 +1443,13 @@ fn append(
     constraint: PlannedConstraint,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
-    budget.step()?;
-    within(
-        add(count(plan.constraints.len())?, 1)?,
-        budget.constraint_limit(),
-        AssignmentRuleLimit::Constraints,
-    )?;
-    if !matches!(constraint.predicate, Predicate::HardLock { .. })
-        && let Entry::Vacant(entry) = plan.parents.entry(constraint.rule)
-    {
-        budget.reserve(1, 1, 64)?;
-        entry.insert(match constraint.predicate {
-            Predicate::Overlap { .. } | Predicate::OverlapClique { .. } => "no_overlap",
-            Predicate::MinimumRest { .. } => "minimum_rest",
-            Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
-            Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
-            Predicate::SkillMixQualification { .. } => "required_skill_mix",
-            Predicate::FixedAssignment { .. } => "fixed_assignment",
-            Predicate::HardLock { .. } => unreachable!(),
-        });
-    }
-    budget.reserve(1, 4, 128)?;
-    plan.constraints.push(constraint);
+    let reservation = reserve_append(plan, constraint.rule, constraint.predicate, budget)?;
+    commit_append(plan, constraint, reservation);
     Ok(())
 }
 
+// Keep source-bound pairing, subset proof, and the owning finding in one auditable path.
+#[allow(clippy::too_many_lines)]
 fn coverage_bound_findings(
     plan: &Plan,
     report: &mut DomainValidationReport,
@@ -1405,6 +1465,8 @@ fn coverage_bound_findings(
             Predicate::MaximumAssignmentCount { .. }
             | Predicate::Overlap { .. }
             | Predicate::OverlapClique { .. }
+            | Predicate::MutualSameShift { .. }
+            | Predicate::MutualOverlap { .. }
             | Predicate::MinimumRest { .. }
             | Predicate::FixedAssignment { .. }
             | Predicate::HardLock { .. } => continue,
@@ -1439,6 +1501,8 @@ fn coverage_bound_findings(
                 Predicate::MaximumAssignmentCount { .. }
                 | Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
+                | Predicate::MutualSameShift { .. }
+                | Predicate::MutualOverlap { .. }
                 | Predicate::MinimumRest { .. }
                 | Predicate::FixedAssignment { .. }
                 | Predicate::HardLock { .. } => continue,
@@ -1610,6 +1674,7 @@ fn hard_lock_findings(
         )
     });
     locked_overlap_findings(input, &locks, &mut result.validation, budget)?;
+    mutual::locked_findings(input, &locks, &mut result.validation, budget)?;
     rest::locked_rest_findings(input, &locks, &mut result.validation, budget)?;
     count::locked_findings(document, input, &locks, &mut result.validation, budget)?;
     locked_coverage_findings(input, &pairs, plan, &mut result.validation, budget)

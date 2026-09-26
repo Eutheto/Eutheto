@@ -89,6 +89,10 @@ interface FixedAssignmentTargetProof {
   readonly personId: string;
   readonly shiftId: string;
 }
+interface MutualAssignmentScopeProof {
+  readonly selectedPersonIds: readonly string[];
+  readonly inScopePersonIds: readonly string[];
+}
 interface ReviewedRule {
   readonly snapshot: SetupCommandSnapshot;
   readonly draftGeneration: number;
@@ -98,6 +102,20 @@ interface ReviewedRule {
   readonly summary: WorkforceSetupRuleScopeSummary | null;
   readonly scopeError: string | null;
   readonly targetProof: FixedAssignmentTargetProof | null;
+  readonly mutualScopeProof: MutualAssignmentScopeProof | null;
+}
+
+function needsMutualPairProof(
+  before: EditableRule | null,
+  after: Extract<EditableRule, { kind: "mutualAssignmentRestriction" }>,
+): boolean {
+  return (
+    before === null ||
+    before.kind !== "mutualAssignmentRestriction" ||
+    !before.active ||
+    !sameField(before.personIds, after.personIds) ||
+    !sameField(before.scope, after.scope)
+  );
 }
 
 const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
@@ -109,6 +127,7 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
   "official.workforce.rule.required-skill-mix": "requiredSkillMix",
   "official.workforce.rule.fixed-assignment": "fixedAssignment",
+  "official.workforce.rule.mutual-assignment-restriction": "mutualAssignmentRestriction",
 };
 function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
   return (
@@ -120,6 +139,8 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     sameField(left.maximum, right.maximum) &&
     sameField(left.minimumRest, right.minimumRest) &&
     left.personId === right.personId &&
+    sameField(left.personIds, right.personIds) &&
+    left.mode === right.mode &&
     left.shiftId === right.shiftId &&
     sameField(left.compatibleCategoryPairs, right.compatibleCategoryPairs) &&
     left.qualificationMinimums.length === right.qualificationMinimums.length &&
@@ -270,6 +291,15 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
         reviewed.targetProof.shiftId !== reviewed.after.shiftId)
     )
       return false;
+    if (reviewed.after.kind === "mutualAssignmentRestriction") {
+      const proof = reviewed.mutualScopeProof;
+      if (
+        proof === null ||
+        !sameField(proof.selectedPersonIds, reviewed.after.personIds) ||
+        (needsMutualPairProof(reviewed.before, reviewed.after) && proof.inScopePersonIds.length < 2)
+      )
+        return false;
+    }
     if (population === undefined || population.peopleCount === 0) return false;
     return reviewed.after.kind === "minimumRest"
       ? population.kind === "minimumRest" &&
@@ -560,6 +590,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       action,
       before: editor.base,
       targetProof: null as FixedAssignmentTargetProof | null,
+      mutualScopeProof: null as MutualAssignmentScopeProof | null,
     };
     if (after === null) {
       state.reviewed = { ...base, after: null, summary: null, scopeError: null };
@@ -707,6 +738,80 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               };
             }
           }
+          let mutualScopeProof: MutualAssignmentScopeProof | null = null;
+          let mutualScopeError: string | null = null;
+          if (proposed.kind === "mutualAssignmentRestriction" && proposed.active) {
+            const selectedPersonIds = [...new Set(proposed.personIds)];
+            const selected = new Set(selectedPersonIds);
+            const inScope = new Set<string>();
+            const pairProofRequired = needsMutualPairProof(editor.base, proposed);
+            const required = pairProofRequired ? Math.min(2, selected.size) : selected.size;
+            let continuation: SetupContinuationV1 | null = null;
+            let complete = required === 0;
+            try {
+              for (let page = 0; page < 256 && !complete; page += 1) {
+                if (isCancelled() || !current()) return { ...detailResponse, result: null };
+                const operation: SetupOperation<
+                  ScenarioSetupViewResultV2<"official.workforce.setup.rule_scope">
+                > = getScenarioView(
+                  read.scope,
+                  {
+                    source,
+                    query: {
+                      schemaVersion: 1,
+                      viewId: "official.workforce.setup.rule_scope",
+                      parameters: {
+                        rule: reference(editor),
+                        part: "main",
+                        axis: "people",
+                        limit: 200,
+                      },
+                      ...(continuation === null ? {} : { continuation }),
+                    },
+                  },
+                  report,
+                );
+                cancelCurrent = () => operation.cancel();
+                const pageResponse = await operation.result;
+                if (isCancelled() || !current()) return { ...pageResponse, result: null };
+                const inspection = pageResponse.result.view.data.result.data;
+                if (
+                  !sameField(inspection.rule, reference(editor)) ||
+                  inspection.part !== "main" ||
+                  inspection.population.axis !== "people"
+                )
+                  throw new Error(
+                    "The native people scope page did not match the reviewed mutual-assignment rule.",
+                  );
+                for (const item of inspection.population.page.items)
+                  if (selected.has(item.personId)) inScope.add(item.personId);
+                complete = inScope.size >= required;
+                continuation = inspection.population.page.continuation;
+                if (!complete && continuation === null) break;
+              }
+              if (!complete && continuation !== null)
+                throw new Error(messages.ruleSetup.mutualAssignmentRestrictionScopeProofLimit);
+              if (pairProofRequired && inScope.size < 2)
+                mutualScopeError = messages.ruleSetup.mutualAssignmentRestrictionPairRequired;
+              mutualScopeProof = {
+                selectedPersonIds: proposed.personIds,
+                inScopePersonIds: [...inScope],
+              };
+            } catch (failure) {
+              if (isOperationCancelled(failure)) throw failure;
+              return {
+                ...detailResponse,
+                result: {
+                  ...base,
+                  after: proposed,
+                  summary: null,
+                  scopeError: safeMessage(failure),
+                  targetProof,
+                  mutualScopeProof: null,
+                },
+              };
+            }
+          }
           const summaryOperation = getScenarioView(
             read.scope,
             {
@@ -730,7 +835,14 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               throw new Error("The native scope did not match the reviewed rule.");
             return {
               ...summaryResponse,
-              result: { ...base, after: proposed, summary, scopeError: null, targetProof },
+              result: {
+                ...base,
+                after: proposed,
+                summary,
+                scopeError: mutualScopeError,
+                targetProof,
+                mutualScopeProof,
+              },
             };
           } catch (failure) {
             if (isOperationCancelled(failure)) throw failure;
@@ -740,8 +852,9 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
                 ...base,
                 after: proposed,
                 summary: null,
-                scopeError: safeMessage(failure),
+                scopeError: mutualScopeError ?? safeMessage(failure),
                 targetProof,
+                mutualScopeProof,
               },
             };
           }

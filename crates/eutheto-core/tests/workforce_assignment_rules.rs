@@ -618,6 +618,251 @@ fn detects_mutation(document: &ScenarioDocument, mutant: &AssignmentRuleCompilat
     Err("independent evaluator failed to detect weakened compiler mathematics".into())
 }
 
+fn mutual_fixture(mode: &str) -> Result<Value, Box<dyn Error>> {
+    let mut value = fixture_value()?;
+    value["domain"]["rules"][id(32)]["active"] = json!(false);
+    value["domain"]["rules"][id(33)]["active"] = json!(false);
+    value["domain"]["rules"][id(34)] = json!({
+        "kind":"mutualAssignmentRestriction", "id":id(34), "active":true,
+        "strength":"required", "scope":{"people":{"kind":"all"}},
+        "personIds":[id(1),id(20)], "mode":mode
+    });
+    Ok(value)
+}
+
+#[test]
+fn mutual_modes_match_original_verifier_over_every_small_selection() -> TestResult {
+    let same = mutual_fixture("sameShift")?;
+    let overlap = mutual_fixture("overlappingShifts")?;
+    let mut touching = overlap.clone();
+    touching["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    let mut one_person_in_scope = overlap.clone();
+    one_person_in_scope["domain"]["rules"][id(34)]["scope"]["people"] =
+        json!({"kind":"selected","personIds":[id(1)]});
+    let mut one_shift_in_scope = overlap.clone();
+    one_shift_in_scope["domain"]["entities"][id(22)]["locationId"] = json!(id(40));
+    one_shift_in_scope["domain"]["entities"][id(40)] =
+        json!({"kind":"location","id":id(40),"name":"South","transitions":[]});
+    one_shift_in_scope["domain"]["rules"][id(34)]["scope"]["locationIds"] = json!([id(40)]);
+    for (name, value) in [
+        ("same shift", same),
+        ("overlapping", overlap),
+        ("touching endpoints", touching),
+        ("person scope intersection", one_person_in_scope),
+        ("shift scope intersection", one_shift_in_scope),
+    ] {
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_assignment_rules(&document, &context())?;
+        assert!(compiled.obligations.handled.contains(&id(34).parse()?));
+        assert!(compiled.obligations.remaining.is_empty());
+        summarize(&problem(&document, &compiled)?, PlanningIrLimitsV1::DEFAULT)?;
+        for selected in selections()? {
+            assert_eq!(
+                mathematics_accepts(&compiled, &selected)?,
+                original_accepts(&document, &selected)?,
+                "{name}: {selected:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn mutual_restriction_quarantines_cross_person_mutant_without_forbidding_same_person() -> TestResult
+{
+    let mutual_rule_id: RuleId = id(34).parse()?;
+    let same = serde_json::from_value(mutual_fixture("sameShift")?)?;
+    let overlap = serde_json::from_value(mutual_fixture("overlappingShifts")?)?;
+    let two_on_one_shift = [pair(1, 22)?, pair(20, 22)?];
+    let two_overlapping_shifts = [pair(1, 8)?, pair(20, 22)?];
+    let one_person_two_shifts = [pair(1, 8)?, pair(1, 22)?];
+    for (document, cross_shift_rejected) in [(&same, false), (&overlap, true)] {
+        let compiled = compile_assignment_rules(document, &context())?;
+        assert!(!mathematics_accepts(&compiled, &two_on_one_shift)?);
+        assert!(!original_accepts(document, &two_on_one_shift)?);
+        assert!(mathematics_accepts(&compiled, &one_person_two_shifts)?);
+        assert!(original_accepts(document, &one_person_two_shifts)?);
+        assert_eq!(
+            mathematics_accepts(&compiled, &two_overlapping_shifts)?,
+            !cross_shift_rejected
+        );
+        assert_eq!(
+            original_accepts(document, &two_overlapping_shifts)?,
+            !cross_shift_rejected
+        );
+        let report = authority::verify_selection(document, &two_on_one_shift)?;
+        let rule = report
+            .required_rule_results
+            .iter()
+            .find(|entry| entry.rule_id == mutual_rule_id)
+            .ok_or("missing required mutual restriction evaluation")?;
+        assert!(!rule.satisfied);
+        for person in [1, 20] {
+            assert!(rule.affected_entities.iter().any(|entity| {
+                entity.kind.as_str() == "official.workforce.person"
+                    && entity.id.as_str() == format!("official.workforce.{}", id(person))
+            }));
+        }
+        let mut mutant = compiled.clone();
+        mutant.constraints.clear();
+        assert!(mathematics_accepts(&mutant, &two_on_one_shift)?);
+        assert!(!original_accepts(document, &two_on_one_shift)?);
+    }
+    Ok(())
+}
+
+#[test]
+fn legacy_singleton_mutual_restriction_stays_loadable_and_never_excludes_a_pair() -> TestResult {
+    let mut value = mutual_fixture("overlappingShifts")?;
+    for selected in [json!([]), json!([id(1)])] {
+        value["domain"]["rules"][id(34)]["personIds"] = selected;
+        let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+        compile_workforce(&document, &context())?;
+        let compiled = compile_assignment_rules(&document, &context())?;
+        assert!(compiled.obligations.handled.contains(&id(34).parse()?));
+        assert!(original_accepts(&document, &[pair(1, 22)?, pair(20, 22)?])?);
+    }
+    Ok(())
+}
+
+#[test]
+fn mutual_command_inverse_and_portable_roundtrip_preserve_rule_meaning() -> TestResult {
+    use eutheto_domain_api::{
+        DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPack, PortableImportContext,
+    };
+    use eutheto_types::{DomainCommandEnvelope, ScenarioDomain};
+    use eutheto_workforce::{WorkforcePack, commands};
+
+    let original: ScenarioDocument = serde_json::from_value(mutual_fixture("overlappingShifts")?)?;
+    let selected = [pair(1, 8)?, pair(20, 22)?];
+    assert!(!original_accepts(&original, &selected)?);
+    let mut relaxed = original
+        .domain
+        .rules
+        .get(&id(34).parse()?)
+        .ok_or("missing mutual restriction")?
+        .clone();
+    relaxed["mode"] = json!("sameShift");
+    let change = WorkforcePack.apply_batch(
+        &original,
+        &DomainBatchCommand {
+            schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
+            pack_id: original.domain_pack.id.clone(),
+            scenario_schema_version: 1,
+            label: None,
+            commands: vec![DomainCommandEnvelope {
+                command_type: commands::UPDATE_RULE.to_owned(),
+                payload: json!({"rule":relaxed}),
+            }],
+        },
+        &CancellationToken::new(),
+    )?;
+    assert!(original_accepts(&change.document, &selected)?);
+    let undone =
+        WorkforcePack.apply_batch(&change.document, &change.inverse, &CancellationToken::new())?;
+    assert_eq!(undone.document, original);
+    let portable = WorkforcePack.export_portable(&original)?;
+    let mut shell = original.clone();
+    shell.domain = ScenarioDomain::default();
+    shell.extensions.clear();
+    let restored = WorkforcePack.import_portable(
+        &serde_json::from_slice(&serde_json::to_vec(&portable)?)?,
+        &PortableImportContext {
+            scenario_shell: shell,
+        },
+    )?;
+    assert_eq!(restored, original);
+    assert!(!original_accepts(&restored, &selected)?);
+    let compiled = compile_assignment_rules(&restored, &context())?;
+    for selection in selections()? {
+        assert_eq!(
+            mathematics_accepts(&compiled, &selection)?,
+            original_accepts(&restored, &selection)?
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn mutual_hard_lock_conflicts_are_reported_from_original_pairs_even_when_pruned() -> TestResult {
+    let first_lock_id = id(35).parse()?;
+    for (mode, first_shift, second_shift) in [
+        ("sameShift", 22, 22),
+        ("overlappingShifts", 8, 22),
+        ("overlappingShifts", 8, 8),
+    ] {
+        let mut value = mutual_fixture(mode)?;
+        value["domain"]["lockedAssignments"] = json!({
+            (id(35)): {
+                "id":id(35),"personId":id(1),"shiftId":id(first_shift),"state":{"kind":"hard"}
+            },
+            (id(36)): {
+                "id":id(36),"personId":id(20),"shiftId":id(second_shift),"state":{"kind":"hard"}
+            }
+        });
+        let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+        let compiled = compile_assignment_rules(&document, &context())?;
+        assert!(
+            compiled.validation.issues.iter().any(|issue| {
+                issue.code == "official.workforce.hard_lock_mutual_conflict"
+                    && issue.field_path.as_deref()
+                        == Some(format!("domain.lockedAssignments.{}", id(35)).as_str())
+                    && issue.resource == Some(eutheto_types::ResourceRef::Assignment(first_lock_id))
+            }),
+            "{mode} must report source-resolved locked conflict"
+        );
+        value["domain"]["rules"][id(34)]["scope"]["people"] =
+            json!({"kind":"selected","personIds":[id(1)]});
+        let without_pair: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_assignment_rules(&without_pair, &context())?;
+        assert!(
+            compiled
+                .validation
+                .issues
+                .iter()
+                .all(|issue| issue.code != "official.workforce.hard_lock_mutual_conflict")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn mutual_dense_overlap_conflicts_fail_at_the_existing_constraint_budget() -> TestResult {
+    let mut value = mutual_fixture("overlappingShifts")?;
+    let mut people = vec![id(1), id(20)];
+    let prototype_person = value["domain"]["entities"][id(1)].clone();
+    for index in 101..109 {
+        let mut person = prototype_person.clone();
+        person["id"] = json!(id(index));
+        person["externalId"] = json!(format!("synthetic-{index}"));
+        value["domain"]["entities"][id(index)] = person;
+        people.push(id(index));
+    }
+    let prototype_shift = value["domain"]["entities"][id(22)].clone();
+    for index in 200..208 {
+        let mut shift = prototype_shift.clone();
+        shift["id"] = json!(id(index));
+        value["domain"]["entities"][id(index)] = shift;
+    }
+    value["domain"]["rules"][id(34)]["personIds"] = json!(people);
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let mut limited = context();
+    limited.planning_limits.max_constraints = 32;
+    let outcome = compile_assignment_rules(&document, &limited);
+    assert!(
+        matches!(
+            outcome,
+            Err(
+                eutheto_workforce::assignment_rules::AssignmentRuleError::LimitExceeded(
+                    eutheto_workforce::assignment_rules::AssignmentRuleLimit::Constraints
+                )
+            )
+        ),
+        "{outcome:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn original_evaluator_detects_pruning_overlap_and_coverage_mutants() -> TestResult {
     let document: ScenarioDocument = serde_json::from_value(fixture_value()?)?;
@@ -916,6 +1161,72 @@ async fn real_worker_solves_and_rejects_minimum_rest_models() -> TestResult {
         BackendTerminationReason::InfeasibilityClaimed
     );
     assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_mutual_modes_and_half_open_endpoint() -> TestResult {
+    let mutual_rule_id: RuleId = id(34).parse()?;
+    let same = mutual_fixture("sameShift")?;
+    let overlap = mutual_fixture("overlappingShifts")?;
+    let mut touching = overlap.clone();
+    touching["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    // Both coverage shifts require one person. Only person 1 can take the first
+    // shift; person 20 can take the second, so the overlap restriction is decisive.
+    for (name, mut value, feasible) in [
+        ("same shift", same, true),
+        ("overlapping", overlap, false),
+        ("touching endpoints", touching, true),
+    ] {
+        value["domain"]["rules"][id(32)]["active"] = json!(true);
+        value["domain"]["rules"][id(33)]["active"] = json!(true);
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_workforce(&document, &context())?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        if !feasible {
+            assert_eq!(
+                result.outcome.termination,
+                BackendTerminationReason::InfeasibilityClaimed,
+                "{name}"
+            );
+            assert!(result.candidates.is_empty(), "{name}");
+            continue;
+        }
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed,
+            "{name}"
+        );
+        let candidate = result
+            .candidates
+            .first()
+            .ok_or("missing real worker candidate")?;
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let eutheto_verify::AcceptanceDecision::Accepted { result, .. } =
+            reviewer.review(candidate, id(501).parse()?, &context().control)
+        else {
+            return Err(format!("{name}: real worker candidate was not accepted").into());
+        };
+        assert_eq!(result.verification.score.feasibility, 0, "{name}");
+        assert!(
+            result
+                .verification
+                .required_rule_results
+                .iter()
+                .find(|item| item.rule_id == mutual_rule_id)
+                .ok_or("missing mutual verification result")?
+                .satisfied
+        );
+    }
     Ok(())
 }
 

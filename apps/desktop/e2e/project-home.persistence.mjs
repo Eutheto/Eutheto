@@ -4500,6 +4500,93 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   assert.equal(fixed.record.kind, "fixedAssignment");
   assert.equal(fixed.record.personId, fixedPerson.id);
   assert.equal(fixed.record.shiftId, expected.shiftInstanceId);
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Assignment restrictions");
+  const mutualId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(mutualId, "A new assignment restriction needs a stable native UUIDv7");
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review?.querySelector('[role=\"alert\"]') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && button.disabled);",
+  );
+  const firstMutualPerson = expected.seeded.people[0];
+  const secondMutualPerson = expected.seeded.people[1];
+  await choosePeopleReference(
+    sessionId,
+    "People to keep apart",
+    firstMutualPerson.name,
+    '[aria-labelledby="rule-editor-heading"]',
+  );
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review?.querySelector('[role=\"alert\"]') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && button.disabled);",
+  );
+  await activate(sessionId, "#rule-active");
+  await waitFor(sessionId, "return !document.querySelector('#rule-review-heading');");
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+  );
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const inactiveMutual = await package8Rule(sessionId, scenarioId, mutualId);
+  assert.equal(inactiveMutual.record.active, false);
+  assert.deepEqual(inactiveMutual.record.personIds, [firstMutualPerson.id]);
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  const mutualRow = await waitFor(
+    sessionId,
+    "return [...document.querySelectorAll('button')].find(button => button.textContent.includes(arguments[0]) && button.closest('[aria-labelledby=\"rule-list-heading\"]')) ?? null;",
+    [mutualId],
+  );
+  await activateElement(sessionId, mutualRow);
+  await waitForElement(sessionId, "#rule-editor-heading");
+  const beforeBlockedActivation = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  await activateButton(sessionId, "Review activation change");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review?.querySelector('[role=\"alert\"]') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && button.disabled);",
+  );
+  assert.equal(
+    (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
+    beforeBlockedActivation,
+    "Blocked singleton activation must not mutate the native scenario",
+  );
+  await activateButton(sessionId, "Edit");
+  await waitForElement(sessionId, "#rule-mutual-people");
+  await choosePeopleReference(
+    sessionId,
+    "People to keep apart",
+    secondMutualPerson.name,
+    '[aria-labelledby="rule-editor-heading"]',
+  );
+  await selectValue(sessionId, "#rule-mutual-mode", "overlappingShifts");
+  await activate(sessionId, "#rule-active");
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+  );
+  await evaluate(
+    sessionId,
+    "document.querySelector('[aria-labelledby=\"rule-review-heading\"]').scrollIntoView({block:'start'}); return true;",
+  );
+  await screenshot(sessionId, "package8-mutual-restriction-review.png");
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const mutual = await package8Rule(sessionId, scenarioId, mutualId);
+  assert.equal(mutual.record.kind, "mutualAssignmentRestriction");
+  assert.equal(mutual.record.mode, "overlappingShifts");
+  assert.deepEqual(
+    [...mutual.record.personIds].sort(),
+    [firstMutualPerson.id, secondMutualPerson.id].sort(),
+  );
   await navigate(sessionId, `/project/${scenarioId}/validation`);
   await waitForElement(sessionId, "[data-full-validation-stale]");
   await screenshot(sessionId, "package8-stale-validation.png");
@@ -4512,6 +4599,8 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
     fixedId,
     fixedPersonId: fixedPerson.id,
     fixedShiftId: expected.shiftInstanceId,
+    mutualId,
+    mutualPersonIds: [firstMutualPerson.id, secondMutualPerson.id],
     counts,
     calendarId: expected.calendarId,
     qualificationId: expected.qualificationId,
@@ -4661,7 +4750,7 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: eight native Required kinds including reporting-date maximum assignment count, qualification mix and named fixed assignment; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
+    "PASS: nine native Required kinds including reporting-date maximum assignment count, qualification mix, named fixed assignment and mutual assignment restriction; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
   );
 }
 
@@ -5574,14 +5663,18 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   assert.equal(fixed.record.kind, "fixedAssignment");
   assert.equal(fixed.record.personId, expected.fixedPersonId);
   assert.equal(fixed.record.shiftId, expected.fixedShiftId);
+  const mutual = await package8Rule(sessionId, scenarioId, expected.mutualId);
+  assert.equal(mutual.record.kind, "mutualAssignmentRestriction");
+  assert.equal(mutual.record.mode, "overlappingShifts");
+  assert.deepEqual([...mutual.record.personIds].sort(), [...expected.mutualPersonIds].sort());
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 6; index += 1) {
     await activateButton(sessionId, "Undo scenario change", '[aria-labelledby="history-heading"]');
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: native ten-hour Required rest, reporting-date maximum count, qualification mix and fixed named assignment review/save/restart; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
+    "PASS: native ten-hour Required rest, reporting-date maximum count, qualification mix, fixed named assignment and mutual restriction review/save/restart; active mutual without an effective pair blocked; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
   );
 }
 

@@ -111,6 +111,7 @@ pub(super) fn evaluate(
             }
             let witness = Witness {
                 person: None,
+                other_person: None,
                 shift: shift.id,
                 other_shift: None,
                 owner,

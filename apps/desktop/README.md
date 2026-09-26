@@ -198,18 +198,24 @@ The shared person–assignment inspector reads applied native blockers and ident
 Required rules not covered by its analysis. It does not establish whole-plan
 feasibility.
 
-**Required rules** exposes eight implemented kinds: eligibility, availability,
+**Required rules** exposes nine implemented kinds: eligibility, availability,
 coverage, no overlap, minimum rest, Maximum Assignment Count, Required
-Qualification Mix and Fixed Assignment. The count cap applies to matching
-person–shift assignments by the shift's reporting date in a selected calendar
-period; zero forbids any matching assignment. A clinic shift requiring one
-Specialist and one Nurse can count the same dual-qualified person toward both
-minimums, but each minimum counts distinct assigned people on that shift.
+Qualification Mix, Fixed Assignment and Mutual Assignment Restriction. The count
+cap applies to matching person–shift assignments by the shift's reporting date
+in a selected calendar period; zero forbids any matching assignment. A clinic
+shift requiring one Specialist and one Nurse can count the same dual-qualified
+person toward both minimums, but each minimum counts distinct assigned people
+on that shift.
 Qualification mix uses whole-shift qualification grants and does not prorate
 partial shifts. Fixed Assignment chooses a native person and shift, allows
 browsing a bounded date window, and requires the exact named pair to belong to
-the active rule's reviewed scope. Commands retain stable identities across draft
-edits, require native before/after review, and show native affected counts.
+the active rule's reviewed scope. Mutual Assignment Restriction chooses native
+people and either limits them to one on each matching shift or forbids distinct
+selected people on matching half-open overlapping shifts (including the same
+shift). New active rules need two selected people inside their reviewed native
+scope; previously saved singleton or empty active rules remain readable no-ops.
+Commands retain stable identities across draft edits, require native before/after
+review, and show native affected counts.
 Independent bounded people/assignment scope previews use the captured revision.
 An active rule with an empty evaluated scope cannot be applied; explicitly
 inactive rules remain supported. Soft locks, Preferences and later rule kinds

@@ -232,6 +232,8 @@ fn constraint_body(
         }
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
+        | Predicate::MutualSameShift { .. }
+        | Predicate::MutualOverlap { .. }
         | Predicate::MinimumRest { .. } => Ok(Constraint::at_most_one(literals)),
         Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
             Ok(Constraint::bool_or(literals))
@@ -239,6 +241,8 @@ fn constraint_body(
     }
 }
 
+// Keep each predicate's canonical identity key adjacent to its variant.
+#[allow(clippy::too_many_lines)]
 fn derive_predicate(
     kind: IdentityKind,
     planned: &PlannedConstraint,
@@ -320,6 +324,26 @@ fn derive_predicate(
         Predicate::OverlapClique { person } => {
             derive_clique(kind, planned, person, variables, identities, budget)
         }
+        Predicate::MutualSameShift { shift } => {
+            identities.derive(kind, &("mutual_same_shift", planned.rule, shift), budget)
+        }
+        Predicate::MutualOverlap {
+            first_person,
+            first_shift,
+            second_person,
+            second_shift,
+        } => identities.derive(
+            kind,
+            &(
+                "mutual_overlapping_shifts",
+                planned.rule,
+                first_person,
+                first_shift,
+                second_person,
+                second_shift,
+            ),
+            budget,
+        ),
         Predicate::MinimumRest {
             person,
             source,
@@ -651,6 +675,24 @@ fn constraint_fact(
             vec![entity("person", EntityId::from_uuid(person.as_uuid()))?],
             "official.workforce.incompatible_overlap_clique",
         ),
+        Predicate::MutualSameShift { shift } => (
+            vec![entity("shift", shift.as_entity_id())?],
+            "official.workforce.mutual_assignment_restriction.same_shift",
+        ),
+        Predicate::MutualOverlap {
+            first_person,
+            first_shift,
+            second_person,
+            second_shift,
+        } => (
+            vec![
+                entity("person", EntityId::from_uuid(first_person.as_uuid()))?,
+                entity("shift", first_shift.as_entity_id())?,
+                entity("person", EntityId::from_uuid(second_person.as_uuid()))?,
+                entity("shift", second_shift.as_entity_id())?,
+            ],
+            "official.workforce.mutual_assignment_restriction.overlapping_shifts",
+        ),
         Predicate::MinimumRest {
             person,
             source,
@@ -681,6 +723,16 @@ fn constraint_fact(
     };
     budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
+    if matches!(
+        planned.predicate,
+        Predicate::MutualOverlap {
+            first_shift,
+            second_shift,
+            ..
+        } if first_shift == second_shift
+    ) {
+        entity_refs.dedup();
+    }
     Ok(ProvenanceRecord {
         id,
         source_kind: ProvenanceSourceKind::Derived,
@@ -871,6 +923,8 @@ pub(super) fn preflight(
                 }
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
+                | Predicate::MutualSameShift { .. }
+                | Predicate::MutualOverlap { .. }
                 | Predicate::MinimumRest { .. } => MeasuredBody::AtMostOne { literals },
                 Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
                     MeasuredBody::BoolOr { literals }

@@ -346,3 +346,70 @@ describe("Fixed assignment target custody", () => {
     expect(merged.value.personId).toBe("01900000-0000-7000-8000-000000000049");
   });
 });
+
+const mutual: EditableRule & { readonly kind: "mutualAssignmentRestriction" } = {
+  id: "01900000-0000-7000-8000-00000000004b",
+  kind: "mutualAssignmentRestriction",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  personIds: ["01900000-0000-7000-8000-000000000047", "01900000-0000-7000-8000-000000000049"],
+  mode: "sameShift",
+};
+
+describe("Mutual assignment restriction draft custody", () => {
+  it("preserves both native modes and the whole selected-person set", () => {
+    const saved = ruleDraftValue(mutual.id, mutual.kind, createRuleDraft(mutual));
+    expect(saved.value).toEqual(mutual);
+    expect(
+      ruleDraftValue(mutual.id, mutual.kind, {
+        ...createRuleDraft(mutual),
+        mode: "overlappingShifts",
+      }).value,
+    ).toEqual({ ...mutual, mode: "overlappingShifts" });
+  });
+
+  it("adopts an independent native mode edit without dropping local selected people", () => {
+    const raw = {
+      ...createRuleDraft(mutual),
+      personIds: [...mutual.personIds, "01900000-0000-7000-8000-00000000004a"],
+    };
+    const local = ruleRebaseValue(mutual, raw);
+    if (local === null) throw new Error("Edited person set must be rebasable");
+    const current = { ...mutual, mode: "overlappingShifts" as const };
+    const merged = rebaseEntityDraft(mutual, local, current);
+    expect(merged.conflicts).toEqual([]);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(ruleDraftValue(mutual.id, mutual.kind, rebased).value).toEqual({
+      ...current,
+      personIds: raw.personIds,
+    });
+  });
+
+  it("keeps conflicting selected sets whole and preserves legacy singleton input", () => {
+    const [firstPerson, secondPerson] = mutual.personIds;
+    if (firstPerson === undefined || secondPerson === undefined)
+      throw new Error("Mutual draft fixture needs two people");
+    const raw = {
+      ...createRuleDraft(mutual),
+      personIds: [firstPerson],
+    };
+    const local = ruleRebaseValue(mutual, raw);
+    if (local === null) throw new Error("Existing singleton rule remains readable");
+    const current = {
+      ...mutual,
+      personIds: [secondPerson, "01900000-0000-7000-8000-00000000004a"],
+    };
+    const merged = rebaseEntityDraft(mutual, local, current);
+    expect(merged.conflicts).toContain("personIds");
+    if (merged.value.kind !== "mutualAssignmentRestriction")
+      throw new Error("Rebase must retain mutual rule kind");
+    expect(merged.value.personIds).toEqual(raw.personIds);
+    expect(
+      ruleDraftValue(mutual.id, mutual.kind, {
+        ...createRuleDraft(merged.value, { value: local, raw }),
+        active: false,
+      }).value,
+    ).toEqual({ ...merged.value, active: false });
+  });
+});

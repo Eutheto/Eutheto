@@ -355,6 +355,7 @@ pub(super) fn original_obligations(
                 | WorkforceRule::MaximumAssignmentCount { .. }
                 | WorkforceRule::RequiredSkillMix { .. }
                 | WorkforceRule::FixedAssignment { .. }
+                | WorkforceRule::MutualAssignmentRestriction { .. }
         ) {
             budget
                 .reserve(1, 2, 48)

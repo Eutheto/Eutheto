@@ -209,6 +209,7 @@ fn check(
     let actual = count(population.len())?;
     let mut witness = Witness {
         person: None,
+        other_person: None,
         shift: shift.id,
         other_shift: None,
         owner: requirement.owner,

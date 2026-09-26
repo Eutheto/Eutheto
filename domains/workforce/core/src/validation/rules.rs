@@ -91,7 +91,7 @@ impl Context<'_> {
                 }
             }
             WorkforceRule::MutualAssignmentRestriction { person_ids, .. } => {
-                unique(person_ids, active, "personIds")?;
+                unique(person_ids, false, "personIds")?;
                 for id in person_ids {
                     self.person(*id)?;
                 }

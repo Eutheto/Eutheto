@@ -68,7 +68,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "mutualAssignmentRestriction",
         "official.workforce.rule.mutual-assignment-restriction",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "transitionTime",

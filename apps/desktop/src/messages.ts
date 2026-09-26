@@ -117,8 +117,17 @@ export const messages = {
     fixedAssignmentScopeProofLimit:
       "Native scope review reached its bounded page limit before proving the named target. Narrow the scope or retry the review.",
     fixedAssignmentScopeRequired:
-      "An active fixed assignment can be saved only after native review proves that its exact person and shift are in the reviewed scope.",
+      "An active fixed assignment can be saved only after native review proves that its exact named person and shift are in the reviewed native scope.",
+    mutualAssignmentRestrictionScopeHelp:
+      "Choose the people who must be kept apart. Native review checks the selected people against this scope, including people selected through tags and teams.",
+    mutualAssignmentRestrictionScopeProofLimit:
+      "Native scope review reached its bounded page limit before proving the selected people. Narrow the scope or retry the review.",
+    mutualAssignmentRestrictionPairRequired:
+      "A new active assignment restriction needs at least two selected people in its reviewed native scope. Switch to Inactive or add people, tags, or teams before saving.",
+    mutualAssignmentRestrictionScopeRequired:
+      "An active assignment restriction can be saved only after native review proves its selected people in the reviewed scope.",
     repairField: "Open field",
+
     fields: {
       name: "Name",
       kind: "Rule kind",
@@ -131,6 +140,14 @@ export const messages = {
         "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
       fixedAssignmentPerson: "Named person",
       fixedAssignmentShift: "Named shift",
+      mutualPeople: "People to keep apart",
+      mutualPeopleHelp:
+        "Select the people who must not be assigned together. Select at least two people for a new active rule.",
+      mutualMode: "Restriction mode",
+      mutualModeHelp:
+        "Choose whether the restriction applies within one shift or across overlapping shifts.",
+      sameShift: "Same shift",
+      overlappingShifts: "Overlapping shifts",
       fixedAssignmentShiftStart: "Show shifts from",
       fixedAssignmentShiftEnd: "Until (exclusive)",
       qualificationMinimums: "Qualification minimums per matching shift",
@@ -236,6 +253,8 @@ export const messages = {
     },
     fixedAssignmentSentence: (personId: string, shiftId: string) =>
       `Require person ${personId} to work shift ${shiftId}.`,
+    mutualAssignmentRestrictionSentence: (count: string, mode: string) =>
+      `Keep ${count} selected people apart on ${mode === "sameShift" ? "the same shift" : "overlapping shifts"}.`,
     reviewActions: {
       create: "Create Required rule",
       update: "Update Required rule",

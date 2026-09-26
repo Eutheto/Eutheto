@@ -243,6 +243,8 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       compatibleCategoryPairs: "rule-category-pairs",
       personId: "rule-fixed-person",
       shiftId: "rule-fixed-shift",
+      personIds: "rule-mutual-people",
+      mode: "rule-mutual-mode",
       qualificationMinimums: "rule-qualification-minimums",
     } as const;
     const field = path[0];
@@ -770,6 +772,68 @@ const navigationError = useValidationRoute(
               @preview="vm.inspectScope(part, $event)"
             />
             <fieldset
+              v-if="state.editor.kind === 'mutualAssignmentRestriction'"
+              id="rule-mutual-assignment"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <p class="field-help">{{ copy.mutualAssignmentRestrictionScopeHelp }}</p>
+              <WorkforceEntityPicker
+                id="rule-mutual-people"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="person"
+                multiple
+                :label="copy.fields.mutualPeople"
+                :description="copy.fields.mutualPeopleHelp"
+                :model-value="state.editor.raw.personIds"
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.personIds === undefined
+                    ? {}
+                    : { error: state.errors.personIds }),
+                }"
+                @update:model-value="vm.updateRaw({ ...state.editor.raw, personIds: $event })"
+              />
+              <div class="field-stack">
+                <label for="rule-mutual-mode">{{ copy.fields.mutualMode }}</label>
+                <p id="rule-mutual-mode-help" class="field-help">
+                  {{ copy.fields.mutualModeHelp }}
+                </p>
+                <select
+                  id="rule-mutual-mode"
+                  :value="state.editor.raw.mode"
+                  :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
+                  aria-describedby="rule-mutual-mode-help rule-mutual-mode-error"
+                  :aria-invalid="Boolean(state.errors.mode) || undefined"
+                  @change="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      mode:
+                        text($event) === 'overlappingShifts' ? 'overlappingShifts' : 'sameShift',
+                    })
+                  "
+                >
+                  <option value="sameShift">{{ copy.fields.sameShift }}</option>
+                  <option value="overlappingShifts">{{ copy.fields.overlappingShifts }}</option>
+                </select>
+                <p id="rule-mutual-mode-error" class="text-danger" role="status">
+                  {{ state.errors.mode }}
+                </p>
+              </div>
+              <p>
+                {{
+                  copy.mutualAssignmentRestrictionSentence(
+                    formatNumber(state.editor.raw.personIds.length, locale),
+                    state.editor.raw.mode,
+                  )
+                }}
+              </p>
+            </fieldset>
+            <fieldset
               v-if="state.editor.kind === 'fixedAssignment'"
               id="rule-fixed-assignment-target"
               tabindex="-1"
@@ -1289,6 +1353,14 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
+          <p v-if="state.reviewed.after?.kind === 'mutualAssignmentRestriction'">
+            {{
+              copy.mutualAssignmentRestrictionSentence(
+                formatNumber(state.reviewed.after.personIds.length, locale),
+                state.reviewed.after.mode,
+              )
+            }}
+          </p>
           <p>{{ copy.previewHelp }}</p>
           <dl v-if="state.reviewed.summary">
             <div>
@@ -1319,7 +1391,13 @@ const navigationError = useValidationRoute(
             {{
               state.reviewed.after?.kind === "fixedAssignment"
                 ? copy.fixedAssignmentScopeRequired
-                : copy.activeScopeRequired
+                : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
+                    state.reviewed.mutualScopeProof === null
+                  ? copy.mutualAssignmentRestrictionScopeRequired
+                  : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
+                      state.reviewed.scopeError === copy.mutualAssignmentRestrictionPairRequired
+                    ? copy.mutualAssignmentRestrictionPairRequired
+                    : copy.activeScopeRequired
             }}
           </p>
         </template>

@@ -223,6 +223,8 @@ fn constraint_capability(planned: &PlannedConstraint) -> Capability {
         | Predicate::MaximumAssignmentCount { .. } => Capability::CardinalityRange,
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
+        | Predicate::MutualSameShift { .. }
+        | Predicate::MutualOverlap { .. }
         | Predicate::MinimumRest { .. } => Capability::AtMostOne,
         Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => Capability::BoolOr,
     }
