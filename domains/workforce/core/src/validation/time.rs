@@ -1,5 +1,5 @@
 use super::{
-    common::{Result, bounded, invalid, require, unique},
+    common::{Result, bounded, invalid, prefix, require, unique},
     context::Context,
 };
 use crate::model::{CalendarPeriod, DateRange, Recurrence, ShiftTiming, TimeWindow};
@@ -9,15 +9,15 @@ use jiff::{civil::Time, tz::AmbiguousOffset};
 pub(super) fn date_range(range: DateRange) -> Result {
     require(
         range.start_date < range.end_date_exclusive,
-        "dateRange",
+        "endDateExclusive",
         "date range must be increasing and nonempty",
     )
 }
 
-fn local_window(start: Time, end: Time, offset: u8) -> Result {
+fn local_window(start: Time, end: Time, offset: u8, path: &str) -> Result {
     require(
         offset > 0 || start < end,
-        "localWindow",
+        path,
         "local interval must have positive duration",
     )
 }
@@ -28,7 +28,7 @@ pub(super) fn timing(value: &ShiftTiming) -> Result {
             start_time,
             end_time,
             end_day_offset,
-        } => local_window(start_time, end_time, end_day_offset),
+        } => local_window(start_time, end_time, end_day_offset, "endTime"),
         ShiftTiming::ElapsedDuration {
             duration_minutes, ..
         } => require(
@@ -40,7 +40,7 @@ pub(super) fn timing(value: &ShiftTiming) -> Result {
 }
 
 pub(super) fn recurrence(value: &Recurrence) -> Result {
-    date_range(value.effective_range)?;
+    prefix(date_range(value.effective_range), "effectiveRange")?;
     unique(&value.weekdays, true, "weekdays")?;
     unique(&value.excluded_dates, false, "excludedDates")
 }
@@ -77,14 +77,25 @@ pub(super) fn time_window(value: &TimeWindow) -> Result {
     match value {
         TimeWindow::Instant { starts_at, ends_at } => require(
             starts_at < ends_at,
-            "timeWindow",
+            "endsAt",
             "instant interval must be increasing and nonempty",
         ),
         TimeWindow::Weekly { windows } => {
             bounded(windows, true, "windows")?;
-            for window in windows {
-                unique(&window.weekdays, true, "weekdays")?;
-                local_window(window.start_time, window.end_time, window.end_day_offset)?;
+            for (idx, window) in windows.iter().enumerate() {
+                prefix(
+                    unique(&window.weekdays, true, "weekdays"),
+                    format_args!("windows.{idx}"),
+                )?;
+                prefix(
+                    local_window(
+                        window.start_time,
+                        window.end_time,
+                        window.end_day_offset,
+                        "endTime",
+                    ),
+                    format_args!("windows.{idx}"),
+                )?;
             }
             Ok(())
         }
@@ -93,48 +104,65 @@ pub(super) fn time_window(value: &TimeWindow) -> Result {
 
 impl Context<'_> {
     pub(super) fn resolved_time(&self, value: &ResolvedLocalTime) -> Result {
-        validate_resolved_time(value, self.settings, &self.zone)
+        resolved_time_inner(value, self.settings, &self.zone, "")
     }
 }
 
+/// Public wrapper preserving the `resolvedTime.` path prefix for settings consumers.
 pub(crate) fn validate_resolved_time(
     value: &ResolvedLocalTime,
     settings: &eutheto_types::ScenarioSettings,
     zone: &jiff::tz::TimeZone,
 ) -> Result {
+    resolved_time_inner(value, settings, zone, "resolvedTime")
+}
+
+fn resolved_time_inner(
+    value: &ResolvedLocalTime,
+    settings: &eutheto_types::ScenarioSettings,
+    zone: &jiff::tz::TimeZone,
+    path_prefix: &str,
+) -> Result {
     let actual = value.instant.as_timestamp().to_zoned(zone.clone());
-    require(
-        actual.offset().seconds() == value.offset_seconds,
-        "resolvedTime.offsetSeconds",
-        "offset does not match the scenario-zone instant",
-    )?;
-    if actual.datetime() == value.local.as_datetime() {
-        return Ok(());
-    }
-    require(
-        settings.gap_policy == GapPolicy::MoveForward
-            && matches!(
-                zone.to_ambiguous_zoned(value.local.as_datetime()).offset(),
-                AmbiguousOffset::Gap { .. }
-            ),
-        "resolvedTime.local",
-        "local intent does not match the scenario-zone instant",
-    )?;
-    let resolved = resolve_local_time(
-        value.local,
-        &settings.time_zone,
-        settings.gap_policy,
-        settings.overlap_policy,
-    )
-    .map_err(|_| {
-        invalid(
-            "resolvedTime.local",
-            "local intent cannot be resolved under the scenario policy",
+    let result: Result = (|| {
+        require(
+            actual.offset().seconds() == value.offset_seconds,
+            "offsetSeconds",
+            "offset does not match the scenario-zone instant",
+        )?;
+        if actual.datetime() == value.local.as_datetime() {
+            return Ok(());
+        }
+        require(
+            settings.gap_policy == GapPolicy::MoveForward
+                && matches!(
+                    zone.to_ambiguous_zoned(value.local.as_datetime()).offset(),
+                    AmbiguousOffset::Gap { .. }
+                ),
+            "local",
+            "local intent does not match the scenario-zone instant",
+        )?;
+        let resolved = resolve_local_time(
+            value.local,
+            &settings.time_zone,
+            settings.gap_policy,
+            settings.overlap_policy,
         )
-    })?;
-    require(
-        resolved == *value,
-        "resolvedTime",
-        "resolved gap differs from the explicit scenario resolver",
-    )
+        .map_err(|_| {
+            invalid(
+                "local",
+                "local intent cannot be resolved under the scenario policy",
+            )
+        })?;
+        require(
+            resolved == *value,
+            "",
+            "resolved gap differs from the explicit scenario resolver",
+        )
+    })();
+    if path_prefix.is_empty() {
+        result
+    } else {
+        prefix(result, path_prefix)
+    }
 }

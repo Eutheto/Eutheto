@@ -25,10 +25,11 @@ env:
   LC_ALL: C.UTF-8
   RUST_TEST_THREADS: "1"
   CARGO_TERM_COLOR: never
+  PHASE_PACKAGE: ${{ github.event_name == 'pull_request' && github.base_ref == 'phase/06-desktop' }}
 
 jobs:
   canonical-linux:
-    name: Canonical Linux / locked Nix
+    name: ${{ github.event_name == 'pull_request' && github.base_ref == 'phase/06-desktop' && 'Phase06 package / source checks' || 'Canonical Linux / locked Nix' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -48,7 +49,14 @@ jobs:
 
       - name: Evaluate the locked flake
         id: flake
-        run: nix flake check --no-update-lock-file
+        run: |
+          if [ "$PHASE_PACKAGE" = "true" ]; then
+            echo "scope=evaluation-only" >> "$GITHUB_OUTPUT"
+            nix flake check --no-build --no-update-lock-file
+          else
+            echo "scope=full-build" >> "$GITHUB_OUTPUT"
+            nix flake check --no-update-lock-file
+          fi
 
       - name: Install locked workspace dependencies
         id: install
@@ -93,6 +101,11 @@ jobs:
           nix develop --no-update-lock-file --command just check
           test -z "$(git status --porcelain --untracked-files=all)"
 
+      - name: Build the phase package production frontend
+        id: frontend
+        if: env.PHASE_PACKAGE == 'true'
+        run: nix develop --no-update-lock-file --command just frontend-build
+
       - name: Verify browser keyboard focus and accessibility behavior
         id: browser
         env:
@@ -103,6 +116,8 @@ jobs:
         if: always()
         env:
           FLAKE_OUTCOME: ${{ steps.flake.outcome }}
+          FLAKE_SCOPE: ${{ steps.flake.outputs.scope }}
+          FRONTEND_OUTCOME: ${{ steps.frontend.outcome }}
           INSTALL_OUTCOME: ${{ steps.install.outcome }}
           CHECK_OUTCOME: ${{ steps.check.outcome }}
           BROWSER_OUTCOME: ${{ steps.browser.outcome }}
@@ -112,6 +127,8 @@ jobs:
           printf '%s\n' \
             'workflow=pr' \
             "flake_check=$FLAKE_OUTCOME" \
+            "flake_scope=$FLAKE_SCOPE" \
+            "phase_frontend_build=$FRONTEND_OUTCOME" \
             "locked_install=$INSTALL_OUTCOME" \
             "non_mutating_check=$CHECK_OUTCOME" \
             "browser_components=$BROWSER_OUTCOME" \

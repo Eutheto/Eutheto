@@ -61,7 +61,7 @@ impl EuthetoApp {
         }
         if let SetupSourceV2::CommandPreview { command } = &request.source {
             preflight_setup_command(command, "/source/command", cancellation)
-                .map_err(|error| store_error(super::command_store_error(&error)))?;
+                .map_err(|error| store_error(super::command_store_error(&error, Some(command))))?;
         }
         check_cancelled(cancellation)
     }
@@ -118,6 +118,7 @@ impl EuthetoApp {
                             code: "scenario.setup_source_changed".to_owned(),
                             message: "The captured scenario was replaced; review generation again."
                                 .to_owned(),
+                            field_path: None,
                         });
                     }
                     let mut applied = prepared.applied;
@@ -188,7 +189,7 @@ fn prepare_generation(
                 "The prospective scenario differs from the reviewed generation; review it again.",
             )
         } else {
-            reconciliation_error(error)
+            reconciliation_error(error, draft)
         }
     })?
     .ok_or_else(|| {

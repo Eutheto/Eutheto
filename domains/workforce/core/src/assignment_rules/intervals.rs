@@ -5,7 +5,8 @@ use super::{
 use crate::{
     model::{Availability, DateRange, TimeWindow},
     temporal::{
-        TemporalIssue, TemporalIssueKind, potentially_intersects, resolve_interval, weekday,
+        TemporalIssue, TemporalIssueKind, TemporalOrigin, potentially_intersects, resolve_interval,
+        weekday,
     },
 };
 use eutheto_types::{EntityId, Horizon, ScenarioSettings};
@@ -39,6 +40,18 @@ pub(crate) fn date_range(
     })
 }
 
+pub(super) fn authored_temporal_error(
+    mut error: AssignmentRuleError,
+    origin: TemporalOrigin,
+    occurrence_date: Option<Date>,
+) -> AssignmentRuleError {
+    if let AssignmentRuleError::Temporal(issue) = &mut error {
+        issue.origin = Some(origin);
+        issue.occurrence_date = occurrence_date;
+    }
+    error
+}
+
 pub(crate) fn availability_intervals(
     availability: &Availability,
     shift: InstantInterval,
@@ -48,30 +61,7 @@ pub(crate) fn availability_intervals(
     budget.step()?;
     let owner = availability.id.as_entity_id();
     let zone = TimeZone::get(settings.time_zone.as_str()).map_err(|_| overflow(owner, None))?;
-    // As in calendar queries, reject ambiguity only in a potentially relevant interval.
-    if !potentially_intersects(
-        availability
-            .effective_range
-            .start_date
-            .to_datetime(Time::MIN),
-        availability
-            .effective_range
-            .end_date_exclusive
-            .to_datetime(Time::MIN),
-        &zone,
-        Horizon {
-            start: shift.start,
-            end: shift.end,
-        },
-        owner,
-    )? {
-        return Ok(AvailabilityIntervals {
-            query: None,
-            intervals: Vec::new(),
-        });
-    }
-    let effective = date_range(availability.effective_range, settings, owner)?;
-    let Some(query) = shift.intersection(effective) else {
+    let Some(query) = availability_query(availability, shift, settings, &zone)? else {
         return Ok(AvailabilityIntervals {
             query: None,
             intervals: Vec::new(),
@@ -89,9 +79,11 @@ pub(crate) fn availability_intervals(
             }
         }
         TimeWindow::Weekly { windows } => {
-            for window in windows {
+            for (index, window) in windows.iter().enumerate() {
+                let origin = TemporalOrigin::AvailabilityWeeklyWindow { index };
                 budget.step()?;
-                let (first, last) = weekly_start_bounds(query, window.end_day_offset, owner)?;
+                let (first, last) = weekly_start_bounds(query, window.end_day_offset, owner)
+                    .map_err(|error| authored_temporal_error(error, origin, None))?;
                 let mut date = first;
                 loop {
                     budget.step()?;
@@ -99,7 +91,13 @@ pub(crate) fn availability_intervals(
                     if window.weekdays.contains(&weekday(date)) {
                         let end_date = date
                             .checked_add(Span::new().days(i64::from(window.end_day_offset)))
-                            .map_err(|_| overflow(owner, Some(date)))?;
+                            .map_err(|_| {
+                                authored_temporal_error(
+                                    overflow(owner, Some(date)),
+                                    origin,
+                                    Some(date),
+                                )
+                            })?;
                         let start = date.to_datetime(window.start_time);
                         let end = end_date.to_datetime(window.end_time);
                         if potentially_intersects(
@@ -111,9 +109,15 @@ pub(crate) fn availability_intervals(
                                 end: query.end,
                             },
                             owner,
-                        )? {
+                        )
+                        .map_err(|error| {
+                            authored_temporal_error(error.into(), origin, Some(date))
+                        })? {
                             budget.expanded_interval()?;
-                            let resolved = resolve_interval(start, end, settings, owner)?;
+                            let resolved =
+                                resolve_interval(start, end, settings, owner).map_err(|error| {
+                                    authored_temporal_error(error.into(), origin, Some(date))
+                                })?;
                             if let Some(interval) = query.intersection(InstantInterval {
                                 start: resolved.starts_at.instant,
                                 end: resolved.ends_at.instant,
@@ -125,9 +129,9 @@ pub(crate) fn availability_intervals(
                     if date == last {
                         break;
                     }
-                    date = date
-                        .checked_add(Span::new().days(1))
-                        .map_err(|_| overflow(owner, Some(date)))?;
+                    date = date.checked_add(Span::new().days(1)).map_err(|_| {
+                        authored_temporal_error(overflow(owner, Some(date)), origin, Some(date))
+                    })?;
                 }
             }
         }
@@ -140,6 +144,38 @@ pub(crate) fn availability_intervals(
         query: Some(query),
         intervals,
     })
+}
+
+fn availability_query(
+    availability: &Availability,
+    shift: InstantInterval,
+    settings: &ScenarioSettings,
+    zone: &TimeZone,
+) -> Result<Option<InstantInterval>, AssignmentRuleError> {
+    let owner = availability.id.as_entity_id();
+    // As in calendar queries, reject ambiguity only in a potentially relevant interval.
+    if !potentially_intersects(
+        availability
+            .effective_range
+            .start_date
+            .to_datetime(Time::MIN),
+        availability
+            .effective_range
+            .end_date_exclusive
+            .to_datetime(Time::MIN),
+        zone,
+        Horizon {
+            start: shift.start,
+            end: shift.end,
+        },
+        owner,
+    )? {
+        return Ok(None);
+    }
+    let effective = date_range(availability.effective_range, settings, owner).map_err(|error| {
+        authored_temporal_error(error, TemporalOrigin::AvailabilityEffectiveRange, None)
+    })?;
+    Ok(shift.intersection(effective))
 }
 
 /// Resolved endpoints equal intended civil time minus an offset within these bounds,
@@ -180,5 +216,8 @@ fn overflow(owner: EntityId, date: Option<Date>) -> AssignmentRuleError {
         kind: TemporalIssueKind::DateOverflow,
         entity_id: Some(owner),
         local_date: date,
+        endpoint: None,
+        occurrence_date: None,
+        origin: None,
     })
 }

@@ -327,7 +327,8 @@ e2e:
       "$(command -v env)"
       "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
       "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
-      "$(command -v xvfb-run)" -a --server-args="-screen 0 1280x720x24"
+      "EUTHETO_XDOTOOL=$(command -v xdotool)"
+      "$(command -v xvfb-run)" -a --server-args="-screen 0 1600x1200x24"
       "$(command -v eutheto-desktop-runtime)"
       "$(command -v pnpm)" --filter @eutheto/desktop run e2e
     )
@@ -386,8 +387,12 @@ nix-check:
 dco-self-test:
     python3 scripts/check_dco.py --self-test
 
+
+# Exercise actual CI target selection and fail-closed terminal gates.
+ci-policy-test:
+    python3 tests/security/test_ci_policy.py
 # Run the complete non-deferred Phase-01 repository suite.
-check: generate-check protocol-check fixtures-check architecture-check dco-self-test fmt-check lint typecheck test
+check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test fmt-check lint typecheck test
 
 # Run real clean-tree checks, then stop at the unresolved Phase-11 release gate.
 release-preflight: check

@@ -28,6 +28,8 @@ Change an authoritative source and its tests together rather than documenting ar
 
 Use short-lived branches and focused commits. A change is ready for review only when affected callers, tests, schemas, generated products, and documentation move together.
 
+For the remainder of Phase06 only, the user-authorized [temporary phase integration trial](docs/contributors/git-workflow.md#temporary-phase06-integration) is the bounded operating exception: package PRs target a protected phase branch, while final-main and manual gates remain intact. Its proposed ADR records the instruction without claiming formal governance approval.
+
 ## Development commands
 
 The Phase 00 contract makes Nix the canonical Linux environment and the language/tool provider on macOS, `Justfile` the human command authority, Cargo the Rust workspace authority, pnpm the JavaScript/TypeScript workspace authority, and `xtask` the owner of cross-platform generation, hashing, assembly, fixtures, licenses, and release manifests. Native pinned Windows tooling remains authoritative for Windows-specific behavior.

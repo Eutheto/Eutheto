@@ -111,6 +111,7 @@ async fn csv_native_snapshot_approval_commit_reports_and_undo_remain_separate() 
             people_csv_source_open,
             people_csv_source_close,
             people_csv_detect,
+            people_csv_record_sample,
             people_csv_preview,
             people_csv_apply,
             people_csv_preview_discard,
@@ -127,10 +128,11 @@ async fn csv_native_snapshot_approval_commit_reports_and_undo_remain_separate() 
         &window,
         "project_create",
         &json!({
+            "schemaVersion":1,
             "requestId":next()?, "title":"CSV native integration", "description":"",
             "domainPack":{"id":"official.workforce","schemaVersion":1},
             "settings":{"timeZone":"UTC","locale":"en-US","units":"metric",
-                "horizon":{"start":"2026-09-01T00:00:00Z","end":"2026-09-02T00:00:00Z"},"gapPolicy":"reject","overlapPolicy":"earlier"}
+                "firstDate":"2026-09-01","lastDate":"2026-09-01","gapPolicy":"reject","overlapPolicy":"earlier"}
         }),
     )?;
     let scenario: ScenarioId = created.result["scenarioId"]
@@ -185,6 +187,50 @@ async fn csv_native_snapshot_approval_commit_reports_and_undo_remain_separate() 
         detection.result["dialects"][0]["samples"][0]["cells"][0]["text"],
         "external"
     );
+    let operation = prepared(&window, scenario, 0, "csvSample")?;
+    let invalid = heavy(
+        &window,
+        "people_csv_record_sample",
+        json!({
+            "schemaVersion":1,"requestId":next()?,"operationId":operation,"scenarioId":scenario,
+            "expectedRevision":0,"sourceId":source,"dialect":"comma","record":0
+        }),
+    )?
+    .err()
+    .ok_or("zero is not a logical record")?;
+    assert_eq!(invalid["code"], "people_csv.invalid_record");
+    let sample = heavy(
+        &window,
+        "people_csv_record_sample",
+        json!({
+            "schemaVersion":1,"requestId":next()?,"operationId":operation,"scenarioId":scenario,
+            "expectedRevision":0,"sourceId":source,"dialect":"comma","record":3
+        }),
+    )?
+    .map_err(boxed)?;
+    assert_eq!(sample.current_revision, None);
+    assert_eq!(
+        sample.result,
+        json!({
+            "schemaVersion":1,"sourceId":source,"dialect":"comma","record":3,
+            "cells":[{"text":"bad","truncated":false},{"text":"","truncated":false}]
+        })
+    );
+    let absent = heavy(&window, "people_csv_record_sample", json!({
+        "schemaVersion":1,"requestId":next()?,"operationId":prepared(&window, scenario, 0, "csvSample")?,
+        "scenarioId":scenario,"expectedRevision":0,"sourceId":source,"dialect":"comma","record":4
+    }))?.map_err(boxed)?;
+    assert_eq!(absent.result["cells"], Value::Null);
+    let wrong_context = heavy(&window, "people_csv_record_sample", json!({
+        "schemaVersion":1,"requestId":next()?,"operationId":prepared(&window, scenario, 0, "csvSample")?,
+        "scenarioId":scenario,"expectedRevision":1,"sourceId":source,"dialect":"comma","record":3
+    }))?.err().ok_or("request revision must match prepared context")?;
+    assert_eq!(wrong_context["code"], "operation.claim_mismatch");
+    let denied = heavy(&observer, "people_csv_record_sample", json!({
+        "schemaVersion":1,"requestId":next()?,"operationId":prepared(&observer, scenario, 0, "csvSample")?,
+        "scenarioId":scenario,"expectedRevision":0,"sourceId":source,"dialect":"comma","record":3
+    }))?.err().ok_or("another window must not inspect the source")?;
+    assert_eq!(denied["code"], "people_csv.source_unavailable");
     let person = next()?;
     let rejected_person = next()?;
     let mapping = json!({"dialect":"comma","hasHeader":true,"expectedColumns":2,

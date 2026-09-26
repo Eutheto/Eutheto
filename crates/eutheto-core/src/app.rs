@@ -46,19 +46,20 @@ use eutheto_store::{
     StoredAcceptedResultV2, StoredProject,
 };
 use eutheto_types::{
-    ActorRef, AppError, BackendId, BundleId, CancellationToken, Change, ChangeKind, ChangeSet,
-    Clock, CommandEnvelope, CommandResult, CommandSource, DirectoryAvailabilityLabel,
-    DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator, MonotonicClock,
-    OperationControl, OperationInterruption, PackId, PortableAsset, PortableDomainDocument,
-    PortableProjectMetadata, ProjectMetadataDto, ProjectSummaryDto, ProtocolFailure, RequestId,
-    ResourceRef, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
-    SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata,
-    ScenarioSettings, ScenarioSnapshotV1, ScenarioViewDto, SolutionId, SolveRunId, SolveStatus,
-    StorageFailure, SupportApplicationMetadataDto, SupportDirectoryMetadataDto,
-    SupportLibraryMetadataDto, SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature,
-    ValidationIssue, ValidationReport, ValidationSeverity, VerificationFailure,
-    collect_scenario_owned_uuids, extract_asset_references, extract_result_dependency,
-    extract_result_id, extract_scenario_references,
+    ActorRef, AppError, ApplicationSettingsWriteResultV1, BackendId, BundleId, CancellationToken,
+    Change, ChangeKind, ChangeSet, Clock, CommandEnvelope, CommandResult, CommandSource,
+    DirectoryAvailabilityLabel, DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator,
+    MonotonicClock, OperationControl, OperationInterruption, PROJECT_LIST_SCHEMA_VERSION, PackId,
+    PortableAsset, PortableDomainDocument, PortableProjectMetadata, ProjectListItemV1,
+    ProjectMetadataDto, ProtocolFailure, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
+    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioDocument,
+    ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
+    ScenarioViewDto, SolutionId, SolveRunId, SolveStatus, StorageFailure,
+    SupportApplicationMetadataDto, SupportDirectoryMetadataDto, SupportLibraryMetadataDto,
+    SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue,
+    ValidationReport, ValidationSeverity, VerificationFailure, collect_scenario_owned_uuids,
+    extract_asset_references, extract_result_dependency, extract_result_id,
+    extract_scenario_references,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -67,6 +68,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
+
+#[path = "application_settings.rs"]
+mod application_settings;
+use application_settings::PendingSettingsPreview;
+pub use application_settings::*;
 
 #[path = "people_csv.rs"]
 mod people_csv;
@@ -79,6 +85,10 @@ pub use headless::*;
 #[path = "setup.rs"]
 mod setup;
 pub use setup::*;
+
+#[path = "history.rs"]
+mod history;
+pub use history::*;
 
 const EVENT_VERSION: u32 = 1;
 /// Current application solution-read wire schema.
@@ -183,6 +193,19 @@ pub struct BackupSummary {
     pub excluded_asset_count: u64,
     pub excluded_asset_ids: Vec<String>,
     pub exclusion_scope: Option<String>,
+}
+
+/// Safety-backup evidence for a successfully committed portable restore.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SafetyBackupOutcome {
+    NotRequired,
+    CreatedAndVerified { artifact_name: String },
+    ConfirmedBypass,
+}
+
+struct CreatedPortableSafetyBackup {
+    sha256: String,
+    artifact_name: String,
 }
 
 /// Deferred capability families with stable unavailable responses.
@@ -422,11 +445,13 @@ pub enum AppCommand {
     },
     SetSetting {
         request_id: RequestId,
+        expected_library_revision: Revision,
         key: String,
         value: Value,
     },
     DeleteSetting {
         request_id: RequestId,
+        expected_library_revision: Revision,
         key: String,
     },
     SolutionSelect(SolutionSelectRequestV1),
@@ -435,28 +460,33 @@ pub enum AppCommand {
     ExportScenario {
         scenario_id: ScenarioId,
         destination: PathBuf,
+        cancellation: CancellationToken,
     },
     CreateBackup {
         title: String,
         destination: PathBuf,
         selection: BackupSelection,
+        cancellation: CancellationToken,
     },
     PublishPreparedPortable {
         destination: PathBuf,
         bytes: Vec<u8>,
         expected_sha256: String,
         binding: PreparedPortableBinding,
+        cancellation: CancellationToken,
     },
     ApplyImport {
         request_id: RequestId,
         preview_id: RequestId,
         collision_plan: CollisionPlan,
+        cancellation: CancellationToken,
     },
     ApplyRestore {
         request_id: RequestId,
         preview_id: RequestId,
         collision_plan: CollisionPlan,
         authorization: RestoreAuthorization,
+        cancellation: CancellationToken,
     },
     CancelPortablePreview {
         preview_id: RequestId,
@@ -465,6 +495,7 @@ pub enum AppCommand {
     ExactReexportUnopenedBundle {
         preview_id: RequestId,
         destination: PathBuf,
+        cancellation: CancellationToken,
     },
     Deferred(DeferredCapability),
 }
@@ -478,6 +509,7 @@ pub enum AppQuery {
     ScenarioView(ScenarioId),
     ValidateScenario(ScenarioId),
     History(ScenarioId),
+    HistoryPage(HistoryPageRequestV1),
     Setting(String),
     SolutionList(SolutionListRequestV1),
     SolutionGetSummary(SolutionSummaryRequestV1),
@@ -488,15 +520,21 @@ pub enum AppQuery {
     PreviewImport {
         bytes: Vec<u8>,
         options: ImportOptions,
+        cancellation: CancellationToken,
     },
     PreviewRestore {
         bytes: Vec<u8>,
         options: ImportOptions,
+        cancellation: CancellationToken,
     },
-    ExportScenario(ScenarioId),
+    ExportScenario {
+        scenario_id: ScenarioId,
+        cancellation: CancellationToken,
+    },
     ExportBackup {
         title: String,
         selection: BackupSelection,
+        cancellation: CancellationToken,
     },
     SupportPreview,
     Deferred(DeferredCapability),
@@ -509,6 +547,7 @@ pub enum AppQuery {
     /// Performs bounded archive/checksum inspection only and retains exact original bytes.
     InspectUnopenedBundle {
         bytes: Vec<u8>,
+        cancellation: CancellationToken,
     },
 }
 
@@ -525,15 +564,16 @@ pub enum AppCommandResult {
     Project(ProjectMetadataDto),
     Deleted,
     ScenarioCommand(CommandResult),
-    SettingUpdated,
+    SettingsWritten(ApplicationSettingsWriteResultV1),
     SolutionSelected(SolutionSummaryDtoV1),
     CounterfactualStarted(SolutionStartCounterfactualDtoV1),
     CounterfactualCancelled(SolutionCancelCounterfactualDtoV1),
-    SettingDeleted(bool),
     BundleWritten,
     BackupWritten(BackupSummary),
     PortableApplied {
         scenarios: Vec<AppliedPortableScenario>,
+        library_revision: Revision,
+        safety_backup: SafetyBackupOutcome,
     },
     PortablePreviewCancelled,
     UnopenedBundleReexported,
@@ -542,11 +582,12 @@ pub enum AppCommandResult {
 /// Results from read-only application operations.
 #[derive(Clone, Debug)]
 pub enum AppQueryResult {
-    Projects(Vec<ProjectSummaryDto>),
+    Projects(Vec<ProjectListItemV1>),
     Project(ProjectMetadataDto),
     Scenario(Box<ScenarioViewDto>),
     Validation(ValidationReport),
     History(Vec<HistoryEntry>),
+    HistoryPage(HistoryPageDtoV1),
     Setting(Option<AppSetting<Value>>),
     SolutionList(SolutionListDtoV1),
     SolutionSummary(Box<SolutionDetailDtoV1>),
@@ -858,6 +899,7 @@ enum PendingPortablePreview {
     Import(Box<PendingImportPreview>),
     Unopened(UnopenedBundle),
     PeopleCsv(PendingPeopleCsvPreview),
+    Settings(PendingSettingsPreview),
 }
 
 impl PendingPortablePreview {
@@ -868,6 +910,7 @@ impl PendingPortablePreview {
                 pending_tree_memory_charge(1, size_of::<(RequestId, Self)>()).unwrap_or(usize::MAX),
             ),
             Self::PeopleCsv(preview) => preview.retained_bytes(),
+            Self::Settings(preview) => preview.retained_bytes(),
         }
     }
 }
@@ -881,11 +924,14 @@ struct StagedPortableApply {
     import: eutheto_import::StagedImport,
     scenarios: Vec<AppliedPortableScenario>,
     events: Vec<(ScenarioId, Revision, ChangeKind)>,
+    remove_scenario_ids: BTreeSet<ScenarioId>,
 }
 struct CommittedPortableApply {
     scenarios: Vec<AppliedPortableScenario>,
     events: Vec<(ScenarioId, Revision, ChangeKind)>,
     library_changed: bool,
+    library_revision: Revision,
+    safety_backup: SafetyBackupOutcome,
 }
 
 #[derive(Clone, Copy)]
@@ -1074,7 +1120,9 @@ impl EuthetoApp {
     /// Returns validation, conflict, unsupported, storage, or protocol errors
     /// without exposing backend diagnostics.
     pub async fn execute(&self, command: AppCommand) -> Result<AppCommandResult, AppError> {
-        self.check_cancelled()?;
+        if !matches!(command, AppCommand::CancelPortablePreview { .. }) {
+            self.check_cancelled()?;
+        }
         match command {
             command @ (AppCommand::CreateProject { .. } | AppCommand::DuplicateProject { .. }) => {
                 self.execute_project_creation_command(command).await
@@ -1123,42 +1171,13 @@ impl EuthetoApp {
             AppCommand::SolutionCancelCounterfactual(request) => {
                 self.cancel_counterfactual(request).await
             }
-            AppCommand::ExportScenario {
-                scenario_id,
-                destination,
-            } => {
-                let (bytes, _, _) = self.export_scenario(scenario_id).await?;
-                self.write_bundle(destination, bytes).await?;
-                Ok(AppCommandResult::BundleWritten)
-            }
-            AppCommand::CreateBackup {
-                title,
-                destination,
-                selection,
-            } => {
-                let (bytes, summary, _) = self.export_backup(title, selection).await?;
-                self.write_bundle(destination, bytes).await?;
-                Ok(AppCommandResult::BackupWritten(summary))
-            }
-            AppCommand::PublishPreparedPortable {
-                destination,
-                bytes,
-                expected_sha256,
-                binding,
-            } => {
-                self.publish_prepared_portable(destination, bytes, &expected_sha256, binding)
-                    .await
-            }
-            AppCommand::ExactReexportUnopenedBundle {
-                preview_id,
-                destination,
-            } => {
-                self.exact_reexport_unopened_bundle(preview_id, destination)
-                    .await
-            }
             command @ (AppCommand::ApplyImport { .. }
             | AppCommand::ApplyRestore { .. }
-            | AppCommand::CancelPortablePreview { .. }) => {
+            | AppCommand::CancelPortablePreview { .. }
+            | AppCommand::ExportScenario { .. }
+            | AppCommand::CreateBackup { .. }
+            | AppCommand::PublishPreparedPortable { .. }
+            | AppCommand::ExactReexportUnopenedBundle { .. }) => {
                 self.execute_portable_command(command).await
             }
             AppCommand::Deferred(capability) => Err(unsupported(capability)),
@@ -1192,55 +1211,62 @@ impl EuthetoApp {
         }
     }
 
-    async fn execute_setting_command(
-        &self,
-        command: AppCommand,
-    ) -> Result<AppCommandResult, AppError> {
-        match command {
-            AppCommand::SetSetting {
-                request_id,
-                key,
-                value,
-            } => {
-                validate_app_setting(&key, &value)?;
-                self.store
-                    .set_setting(key, value, self.clock.now())
-                    .await
-                    .map_err(store_error)?;
-                self.publish_app_notification(
-                    request_id,
-                    "settings.updated",
-                    "Application settings changed.",
-                );
-                Ok(AppCommandResult::SettingUpdated)
-            }
-            AppCommand::DeleteSetting { request_id, key } => {
-                validate_app_setting_key(&key)?;
-                let existed = self.store.delete_setting(key).await.map_err(store_error)?;
-                if existed {
-                    self.publish_app_notification(
-                        request_id,
-                        "settings.deleted",
-                        "Application settings changed.",
-                    );
-                }
-                Ok(AppCommandResult::SettingDeleted(existed))
-            }
-            _ => unreachable!("dispatcher passes only setting commands"),
-        }
-    }
-
     async fn execute_portable_command(
         &self,
         command: AppCommand,
     ) -> Result<AppCommandResult, AppError> {
         match command {
+            AppCommand::ExportScenario {
+                scenario_id,
+                destination,
+                cancellation,
+            } => {
+                let (bytes, _, _) = self.export_scenario(scenario_id, &cancellation).await?;
+                self.write_bundle(destination, bytes, &cancellation).await?;
+                Ok(AppCommandResult::BundleWritten)
+            }
+            AppCommand::CreateBackup {
+                title,
+                destination,
+                selection,
+                cancellation,
+            } => {
+                let (bytes, summary, _) =
+                    self.export_backup(title, selection, &cancellation).await?;
+                self.write_bundle(destination, bytes, &cancellation).await?;
+                Ok(AppCommandResult::BackupWritten(summary))
+            }
+            AppCommand::PublishPreparedPortable {
+                destination,
+                bytes,
+                expected_sha256,
+                binding,
+                cancellation,
+            } => {
+                self.publish_prepared_portable(
+                    destination,
+                    bytes,
+                    &expected_sha256,
+                    binding,
+                    &cancellation,
+                )
+                .await
+            }
+            AppCommand::ExactReexportUnopenedBundle {
+                preview_id,
+                destination,
+                cancellation,
+            } => {
+                self.exact_reexport_unopened_bundle(preview_id, destination, &cancellation)
+                    .await
+            }
             AppCommand::ApplyImport {
                 request_id,
                 preview_id,
                 collision_plan,
+                cancellation,
             } => {
-                self.apply_portable(request_id, preview_id, collision_plan, None)
+                self.apply_portable(request_id, preview_id, collision_plan, None, cancellation)
                     .await
             }
             AppCommand::ApplyRestore {
@@ -1248,9 +1274,16 @@ impl EuthetoApp {
                 preview_id,
                 collision_plan,
                 authorization,
+                cancellation,
             } => {
-                self.apply_portable(request_id, preview_id, collision_plan, Some(authorization))
-                    .await
+                self.apply_portable(
+                    request_id,
+                    preview_id,
+                    collision_plan,
+                    Some(authorization),
+                    cancellation,
+                )
+                .await
             }
             AppCommand::CancelPortablePreview { preview_id } => {
                 self.cancel_portable_preview(preview_id).await
@@ -1447,7 +1480,7 @@ impl EuthetoApp {
                     .await
                     .map_err(store_error)?;
                 Ok(AppQueryResult::Projects(
-                    projects.iter().map(project_summary).collect(),
+                    projects.into_iter().map(project_summary).collect(),
                 ))
             }
             AppQuery::ProjectMetadata(id) => {
@@ -1463,6 +1496,10 @@ impl EuthetoApp {
                 .await
                 .map(AppQueryResult::History)
                 .map_err(store_error),
+            AppQuery::HistoryPage(request) => self
+                .history_page(request)
+                .await
+                .map(AppQueryResult::HistoryPage),
             AppQuery::Setting(key) => {
                 validate_app_setting_key(&key)?;
                 self.store
@@ -1480,29 +1517,11 @@ impl EuthetoApp {
             AppQuery::SolutionVerify(request) => self.query_solution_verify(request).await,
             AppQuery::SolutionCompare(request) => self.query_solution_compare(request).await,
             AppQuery::SolutionExplain(request) => self.query_solution_explain(request).await,
-            AppQuery::PreviewImport { bytes, options } => {
-                self.query_preview_import(bytes, options).await
-            }
-            AppQuery::PreviewRestore { bytes, options } => {
-                self.query_preview_restore(bytes, options).await
-            }
-            AppQuery::ExportScenario(id) => {
-                let (bytes, scenario_revision, library_revision) = self.export_scenario(id).await?;
-                Ok(AppQueryResult::Bundle {
-                    bytes,
-                    scenario_revision,
-                    library_revision,
-                })
-            }
-            AppQuery::ExportBackup { title, selection } => {
-                let (bytes, summary, library_revision) =
-                    self.export_backup(title, selection).await?;
-                Ok(AppQueryResult::BackupBundle {
-                    bytes,
-                    summary,
-                    library_revision,
-                })
-            }
+            query @ (AppQuery::PreviewImport { .. }
+            | AppQuery::PreviewRestore { .. }
+            | AppQuery::ExportScenario { .. }
+            | AppQuery::ExportBackup { .. }
+            | AppQuery::InspectUnopenedBundle { .. }) => self.query_portable(query).await,
             AppQuery::SupportPreview => self
                 .support_preview()
                 .await
@@ -1527,8 +1546,76 @@ impl EuthetoApp {
                 candidates.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
                 Ok(AppQueryResult::DeferredSolverGates(candidates))
             }
-            AppQuery::InspectUnopenedBundle { bytes } => self.inspect_unopened_bundle(bytes).await,
         }
+    }
+
+    async fn query_portable(&self, query: AppQuery) -> Result<AppQueryResult, AppError> {
+        match query {
+            AppQuery::PreviewImport {
+                bytes,
+                options,
+                cancellation,
+            } => {
+                self.query_preview_import(bytes, options, &cancellation)
+                    .await
+            }
+            AppQuery::PreviewRestore {
+                bytes,
+                options,
+                cancellation,
+            } => {
+                self.query_preview_restore(bytes, options, &cancellation)
+                    .await
+            }
+            AppQuery::ExportScenario {
+                scenario_id,
+                cancellation,
+            } => {
+                let (bytes, scenario_revision, library_revision) =
+                    self.export_scenario(scenario_id, &cancellation).await?;
+                Ok(AppQueryResult::Bundle {
+                    bytes,
+                    scenario_revision,
+                    library_revision,
+                })
+            }
+            AppQuery::ExportBackup {
+                title,
+                selection,
+                cancellation,
+            } => {
+                let (bytes, summary, library_revision) =
+                    self.export_backup(title, selection, &cancellation).await?;
+                Ok(AppQueryResult::BackupBundle {
+                    bytes,
+                    summary,
+                    library_revision,
+                })
+            }
+            AppQuery::InspectUnopenedBundle {
+                bytes,
+                cancellation,
+            } => self.inspect_unopened_bundle(bytes, &cancellation).await,
+            _ => unreachable!("dispatcher passes only portable queries"),
+        }
+    }
+
+    /// Records an explicit project opening and returns only bounded list metadata.
+    ///
+    /// # Errors
+    ///
+    /// Rejects cancelled requests, missing or malformed projects, and storage failures.
+    pub async fn open_project_metadata(
+        &self,
+        id: ScenarioId,
+    ) -> Result<ProjectListItemV1, AppError> {
+        self.check_cancelled()?;
+        let project = self
+            .store
+            .open_project(id, self.clock.now())
+            .await
+            .map_err(store_error)?;
+        Ok(project_summary(project.summary))
     }
 
     async fn query_open_project(&self, id: ScenarioId) -> Result<AppQueryResult, AppError> {
@@ -1982,9 +2069,10 @@ impl EuthetoApp {
         &self,
         bytes: Vec<u8>,
         options: ImportOptions,
+        cancellation: &CancellationToken,
     ) -> Result<AppQueryResult, AppError> {
         if options.restore_mode == RestoreMode::ImportScenario {
-            self.preview_portable(bytes, options).await
+            self.preview_portable(bytes, options, cancellation).await
         } else {
             Err(validation_error(
                 "portable.import_mode_invalid",
@@ -1998,6 +2086,7 @@ impl EuthetoApp {
         &self,
         bytes: Vec<u8>,
         options: ImportOptions,
+        cancellation: &CancellationToken,
     ) -> Result<AppQueryResult, AppError> {
         if options.restore_mode == RestoreMode::ImportScenario {
             Err(validation_error(
@@ -2006,7 +2095,7 @@ impl EuthetoApp {
                 "Backup restore requires add-backup or replace-library mode.",
             ))
         } else {
-            self.preview_portable(bytes, options).await
+            self.preview_portable(bytes, options, cancellation).await
         }
     }
 
@@ -2192,7 +2281,7 @@ impl EuthetoApp {
                         &pack_registry,
                         &mutation_cancellation,
                     )
-                    .map_err(|error| command_store_error(&error))?;
+                    .map_err(|error| command_store_error(&error, Some(&envelope.command)))?;
                     applied.document.metadata.updated_at = applied_at;
                     let result = applied.result;
                     let command =
@@ -2345,7 +2434,9 @@ impl EuthetoApp {
         &self,
         bytes: Vec<u8>,
         options: ImportOptions,
+        cancellation: &CancellationToken,
     ) -> Result<AppQueryResult, AppError> {
+        self.check_portable_cancelled(cancellation)?;
         let (metadata, bytes) = tokio::task::spawn_blocking(move || {
             let metadata = preflight_bundle_metadata(&bytes, &InspectionPolicy::default())?;
             Ok::<_, eutheto_import::ImportError>((metadata, bytes))
@@ -2353,7 +2444,7 @@ impl EuthetoApp {
         .await
         .map_err(join_error)?
         .map_err(|error| import_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         preflight_import_packs(&metadata, &self.pack_registry)?;
         let registry = Arc::clone(&self.pack_registry);
         let mut inspected =
@@ -2361,13 +2452,14 @@ impl EuthetoApp {
                 .await
                 .map_err(join_error)?
                 .map_err(|error| import_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         let mut portable_settings =
             prepare_portable_inspection(&mut inspected, options.restore_mode, &self.pack_registry)?;
         let (local, local_settings) = self.local_library_snapshot().await?;
+        self.check_portable_cancelled(cancellation)?;
         let mut preview = eutheto_import::build_preview(&inspected, &options, &local)
             .map_err(|error| import_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         preview.settings_changed = portable_settings
             .iter()
             .filter(|(key, imported)| local_settings.get(*key) != Some(*imported))
@@ -2388,7 +2480,7 @@ impl EuthetoApp {
         if options.restore_mode == RestoreMode::AddBackup {
             portable_settings.retain(|key, imported| local_settings.get(key) != Some(&*imported));
         }
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         let preview_id = self
             .retain_portable_preview(
                 None,
@@ -2400,6 +2492,7 @@ impl EuthetoApp {
                     safety_backup_failure: None,
                     retained_bytes: 0,
                 },
+                cancellation,
             )
             .await?;
         Ok(AppQueryResult::PortablePreview {
@@ -2407,14 +2500,19 @@ impl EuthetoApp {
             preview: Box::new(preview),
         })
     }
-    async fn inspect_unopened_bundle(&self, bytes: Vec<u8>) -> Result<AppQueryResult, AppError> {
+    async fn inspect_unopened_bundle(
+        &self,
+        bytes: Vec<u8>,
+        cancellation: &CancellationToken,
+    ) -> Result<AppQueryResult, AppError> {
+        self.check_portable_cancelled(cancellation)?;
         let unopened = tokio::task::spawn_blocking(move || {
             inspect_unopened_bundle_for_exact_reexport(&bytes, &InspectionPolicy::default())
         })
         .await
         .map_err(join_error)?
         .map_err(|error| import_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         let metadata = unopened.metadata().clone();
         let pending = PendingPortablePreview::Unopened(unopened);
         let retained_bytes = pending.retained_bytes();
@@ -2425,12 +2523,12 @@ impl EuthetoApp {
                 false,
             ));
         }
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         let mut previews = self.previews.lock().await;
         let preview_id = self
             .next_preview_id(&previews)?
             .ok_or_else(Self::preview_id_unavailable)?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         while previews.len() >= MAX_PENDING_PREVIEWS
             || preview_total_bytes(&previews)
                 .checked_add(retained_bytes)
@@ -2453,8 +2551,10 @@ impl EuthetoApp {
         &self,
         preview_id: RequestId,
         destination: PathBuf,
+        cancellation: &CancellationToken,
     ) -> Result<AppCommandResult, AppError> {
         let mut previews = self.previews.lock().await;
+        self.check_portable_cancelled(cancellation)?;
         match previews.get(&preview_id) {
             Some(PendingPortablePreview::Unopened(_)) => {}
             Some(_) => {
@@ -2480,9 +2580,9 @@ impl EuthetoApp {
             ));
         };
         drop(previews);
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         let bytes = unopened.into_exact_bytes();
-        let cancellation = self.cancellation.clone();
+        let cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             write_bundle_atomic_cancellable(&destination, &bytes, &cancellation)
         })
@@ -2543,19 +2643,41 @@ impl EuthetoApp {
         preview_id: RequestId,
         collision_plan: CollisionPlan,
         authorization: Option<RestoreAuthorization>,
+        cancellation: CancellationToken,
     ) -> Result<AppCommandResult, AppError> {
-        self.check_cancelled()?;
-        let (pending, local) = self.take_pending_portable_preview(preview_id).await?;
-        let staged = self.stage_portable_apply(&pending, &local, &collision_plan)?;
-        self.check_cancelled()?;
+        let token = cancellation.child();
+        let _guard = CancelOnDrop(token.clone());
+        let app = self.clone();
+        tokio::spawn(async move {
+            app.apply_portable_owned(request_id, preview_id, collision_plan, authorization, token)
+                .await
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    async fn apply_portable_owned(
+        &self,
+        request_id: RequestId,
+        preview_id: RequestId,
+        collision_plan: CollisionPlan,
+        authorization: Option<RestoreAuthorization>,
+        cancellation: CancellationToken,
+    ) -> Result<AppCommandResult, AppError> {
+        self.check_portable_cancelled(&cancellation)?;
+        let (pending, local) = self
+            .take_pending_portable_preview(preview_id, &cancellation)
+            .await?;
+        let staged = self.stage_portable_apply(&pending, local, &collision_plan)?;
+        self.check_portable_cancelled(&cancellation)?;
         let committed = self
             .commit_staged_portable(
                 preview_id,
                 pending,
-                local,
                 &collision_plan,
                 authorization,
                 staged,
+                &cancellation,
             )
             .await?;
         if committed.library_changed {
@@ -2568,14 +2690,18 @@ impl EuthetoApp {
         self.publish_portable_apply_events(request_id, committed.events);
         Ok(AppCommandResult::PortableApplied {
             scenarios: committed.scenarios,
+            library_revision: committed.library_revision,
+            safety_backup: committed.safety_backup,
         })
     }
 
     async fn take_pending_portable_preview(
         &self,
         preview_id: RequestId,
+        cancellation: &CancellationToken,
     ) -> Result<(PendingImportPreview, LocalLibrarySnapshot), AppError> {
         let mut previews = self.previews.lock().await;
+        self.check_portable_cancelled(cancellation)?;
         match previews.get(&preview_id) {
             Some(PendingPortablePreview::Import(_)) => {}
             Some(_) => {
@@ -2621,14 +2747,14 @@ impl EuthetoApp {
     fn stage_portable_apply(
         &self,
         pending: &PendingImportPreview,
-        local: &LocalLibrarySnapshot,
+        local: LocalLibrarySnapshot,
         collision_plan: &CollisionPlan,
     ) -> Result<StagedPortableApply, AppError> {
         let import = eutheto_import::stage_import(
             &pending.inspected,
             &pending.preview,
             &pending.options,
-            local,
+            &local,
             collision_plan,
         )
         .map_err(|error| import_error(&error))?;
@@ -2647,12 +2773,29 @@ impl EuthetoApp {
                 source_scenario_id: item.original_id,
                 scenario_id: item.scenario.document.scenario_id,
             })
-            .collect();
-        let events = portable_apply_events(&import.scenarios);
+            .collect::<Vec<_>>();
+        let mut events = portable_apply_events(&import.scenarios);
+        let remove_scenario_ids = if pending.options.restore_mode == RestoreMode::ReplaceLibrary {
+            let imported = scenarios
+                .iter()
+                .map(|scenario| scenario.scenario_id)
+                .collect::<BTreeSet<_>>();
+            for removed in &local.scenarios {
+                if local.scenario_ids.contains(&removed.scenario_id)
+                    && !imported.contains(&removed.scenario_id)
+                {
+                    events.push((removed.scenario_id, removed.revision, ChangeKind::Removed));
+                }
+            }
+            local.scenario_ids
+        } else {
+            BTreeSet::new()
+        };
         Ok(StagedPortableApply {
             import,
             scenarios,
             events,
+            remove_scenario_ids,
         })
     }
 
@@ -2660,40 +2803,31 @@ impl EuthetoApp {
         &self,
         preview_id: RequestId,
         mut pending: PendingImportPreview,
-        local: LocalLibrarySnapshot,
         collision_plan: &CollisionPlan,
         authorization: Option<RestoreAuthorization>,
         staged: StagedPortableApply,
+        cancellation: &CancellationToken,
     ) -> Result<CommittedPortableApply, AppError> {
         let StagedPortableApply {
             import,
             scenarios,
-            mut events,
+            events,
+            remove_scenario_ids,
         } = staged;
         let applied_at = self.clock.now();
-        let outcome = if let Some(authorization) = authorization {
-            let restore_authorization = self
-                .authorize_portable_restore(preview_id, &mut pending, collision_plan, authorization)
+        let (outcome, safety_backup) = if let Some(authorization) = authorization {
+            let (restore_authorization, safety_backup) = self
+                .authorize_portable_restore(
+                    preview_id,
+                    &mut pending,
+                    collision_plan,
+                    authorization,
+                    cancellation,
+                )
                 .await?;
-            let remove_scenario_ids = if pending.options.restore_mode == RestoreMode::ReplaceLibrary
-            {
-                local.scenario_ids.clone()
-            } else {
-                BTreeSet::new()
-            };
-            let imported = scenarios
-                .iter()
-                .map(|scenario| scenario.scenario_id)
-                .collect::<BTreeSet<_>>();
-            for removed in &local.scenarios {
-                if remove_scenario_ids.contains(&removed.scenario_id)
-                    && !imported.contains(&removed.scenario_id)
-                {
-                    events.push((removed.scenario_id, removed.revision, ChangeKind::Removed));
-                }
-            }
-            self.check_cancelled()?;
-            self.store
+            self.check_portable_cancelled(cancellation)?;
+            let outcome = self
+                .store
                 .apply_staged_library(
                     StagedLibraryApply::BackupRestore {
                         restore: eutheto_import::StagedBackupRestore {
@@ -2704,9 +2838,11 @@ impl EuthetoApp {
                         settings: pending.portable_settings,
                     },
                     applied_at,
+                    cancellation.clone(),
                 )
                 .await
-                .map_err(store_error)?
+                .map_err(store_error)?;
+            (outcome, safety_backup)
         } else {
             if pending.options.restore_mode != RestoreMode::ImportScenario {
                 return Err(validation_error(
@@ -2722,16 +2858,25 @@ impl EuthetoApp {
                     "Application settings may only be restored from a full backup.",
                 ));
             }
-            self.check_cancelled()?;
-            self.store
-                .apply_staged_library(StagedLibraryApply::Import(import), applied_at)
+            self.check_portable_cancelled(cancellation)?;
+            let outcome = self
+                .store
+                .apply_staged_library(
+                    StagedLibraryApply::Import(import),
+                    applied_at,
+                    cancellation.clone(),
+                )
                 .await
-                .map_err(store_error)?
+                .map_err(store_error)?;
+            (outcome, SafetyBackupOutcome::NotRequired)
         };
         Ok(CommittedPortableApply {
             scenarios,
             events,
-            library_changed: outcome.library_revision != local.revision,
+            library_changed: outcome.library_revision
+                != pending.preview.binding.local_library_revision,
+            library_revision: outcome.library_revision,
+            safety_backup,
         })
     }
 
@@ -2741,7 +2886,9 @@ impl EuthetoApp {
         pending: &mut PendingImportPreview,
         collision_plan: &CollisionPlan,
         authorization: RestoreAuthorization,
-    ) -> Result<RestoreAuthorization, AppError> {
+        cancellation: &CancellationToken,
+    ) -> Result<(RestoreAuthorization, SafetyBackupOutcome), AppError> {
+        self.check_portable_cancelled(cancellation)?;
         match pending.options.restore_mode {
             RestoreMode::ImportScenario => Err(validation_error(
                 "portable.restore_mode_invalid",
@@ -2759,16 +2906,25 @@ impl EuthetoApp {
                         "Add restore does not accept safety-backup receipt fields or evidence.",
                     ));
                 }
-                Ok(RestoreAuthorization {
-                    destructive_action_confirmed: authorization.destructive_action_confirmed,
-                    safety_backup: SafetyBackupEvidence::NotRequired,
-                    prospective_failure_receipt_token: None,
-                    collision_plan_sha256: None,
-                })
+                Ok((
+                    RestoreAuthorization {
+                        destructive_action_confirmed: authorization.destructive_action_confirmed,
+                        safety_backup: SafetyBackupEvidence::NotRequired,
+                        prospective_failure_receipt_token: None,
+                        collision_plan_sha256: None,
+                    },
+                    SafetyBackupOutcome::NotRequired,
+                ))
             }
             RestoreMode::ReplaceLibrary => {
-                self.authorize_replace_restore(preview_id, pending, collision_plan, authorization)
-                    .await
+                self.authorize_replace_restore(
+                    preview_id,
+                    pending,
+                    collision_plan,
+                    authorization,
+                    cancellation,
+                )
+                .await
             }
         }
     }
@@ -2779,7 +2935,8 @@ impl EuthetoApp {
         pending: &mut PendingImportPreview,
         collision_plan: &CollisionPlan,
         authorization: RestoreAuthorization,
-    ) -> Result<RestoreAuthorization, AppError> {
+        cancellation: &CancellationToken,
+    ) -> Result<(RestoreAuthorization, SafetyBackupOutcome), AppError> {
         if !authorization.destructive_action_confirmed {
             return Err(validation_error(
                 "restore.confirmation_required",
@@ -2793,7 +2950,8 @@ impl EuthetoApp {
                 failure,
                 &plan_sha256,
                 &authorization.safety_backup,
-            );
+            )
+            .map(|authorization| (authorization, SafetyBackupOutcome::ConfirmedBypass));
         }
         match authorization.safety_backup {
             SafetyBackupEvidence::FailedWithStrongConfirmation { proof } => {
@@ -2804,12 +2962,15 @@ impl EuthetoApp {
                         "The safety-backup override phrase is accepted only after this preview's backup attempt fails.",
                     ));
                 }
-                Ok(RestoreAuthorization {
-                    destructive_action_confirmed: true,
-                    safety_backup: SafetyBackupEvidence::FailedWithStrongConfirmation { proof },
-                    prospective_failure_receipt_token: None,
-                    collision_plan_sha256: Some(plan_sha256),
-                })
+                Ok((
+                    RestoreAuthorization {
+                        destructive_action_confirmed: true,
+                        safety_backup: SafetyBackupEvidence::FailedWithStrongConfirmation { proof },
+                        prospective_failure_receipt_token: None,
+                        collision_plan_sha256: Some(plan_sha256),
+                    },
+                    SafetyBackupOutcome::ConfirmedBypass,
+                ))
             }
             SafetyBackupEvidence::Verified { .. } => Err(validation_error(
                 "restore.safety_backup_override_not_available",
@@ -2829,6 +2990,7 @@ impl EuthetoApp {
                     pending,
                     &plan_sha256,
                     authorization.prospective_failure_receipt_token,
+                    cancellation,
                 )
                 .await
             }
@@ -2841,16 +3003,25 @@ impl EuthetoApp {
         pending: &mut PendingImportPreview,
         collision_plan_sha256: &str,
         prospective_token: Option<String>,
-    ) -> Result<RestoreAuthorization, AppError> {
+        cancellation: &CancellationToken,
+    ) -> Result<(RestoreAuthorization, SafetyBackupOutcome), AppError> {
         let proof = prospective_failure_proof(self.ids.as_ref(), prospective_token)?;
-        match self.create_portable_safety_backup().await {
-            Ok(bundle_sha256) => Ok(RestoreAuthorization {
-                destructive_action_confirmed: true,
-                safety_backup: SafetyBackupEvidence::Verified { bundle_sha256 },
-                prospective_failure_receipt_token: None,
-                collision_plan_sha256: Some(collision_plan_sha256.to_owned()),
-            }),
+        match self.create_portable_safety_backup(cancellation).await {
+            Ok(backup) => Ok((
+                RestoreAuthorization {
+                    destructive_action_confirmed: true,
+                    safety_backup: SafetyBackupEvidence::Verified {
+                        bundle_sha256: backup.sha256,
+                    },
+                    prospective_failure_receipt_token: None,
+                    collision_plan_sha256: Some(collision_plan_sha256.to_owned()),
+                },
+                SafetyBackupOutcome::CreatedAndVerified {
+                    artifact_name: backup.artifact_name,
+                },
+            )),
             Err(error) => {
+                self.check_portable_cancelled(cancellation)?;
                 let Some(safe_reason) = safe_backup_failure_reason(&error) else {
                     return Err(error);
                 };
@@ -2868,7 +3039,7 @@ impl EuthetoApp {
                     proof,
                     collision_plan_sha256: collision_plan_sha256.to_owned(),
                 });
-                self.retain_portable_preview(Some(preview_id), pending.clone())
+                self.retain_portable_preview(Some(preview_id), pending.clone(), cancellation)
                     .await?;
                 Err(protocol_error(
                     "restore.safety_backup_failed",
@@ -2905,6 +3076,7 @@ impl EuthetoApp {
         &self,
         requested_id: Option<RequestId>,
         mut pending: PendingImportPreview,
+        cancellation: &CancellationToken,
     ) -> Result<RequestId, AppError> {
         pending.retained_bytes = pending
             .retained_memory_charge()
@@ -2924,7 +3096,7 @@ impl EuthetoApp {
                 .next_preview_id(&previews)?
                 .ok_or_else(Self::preview_id_unavailable)?,
         };
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         while previews.len() >= MAX_PENDING_PREVIEWS
             || preview_total_bytes(&previews)
                 .checked_add(pending.retained_bytes)
@@ -2963,7 +3135,11 @@ impl EuthetoApp {
         )
     }
 
-    async fn create_portable_safety_backup(&self) -> Result<String, AppError> {
+    async fn create_portable_safety_backup(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<CreatedPortableSafetyBackup, AppError> {
+        self.check_portable_cancelled(cancellation)?;
         let safety_backups = self.paths.safety_backups.clone();
         tokio::task::spawn_blocking(move || {
             eutheto_store::ensure_private_application_directory(safety_backups)
@@ -2975,26 +3151,47 @@ impl EuthetoApp {
             .export_backup(
                 "Automatic pre-restore safety backup".to_owned(),
                 BackupSelection::default(),
+                cancellation,
             )
             .await?;
         let digest = eutheto_export::sha256_hex(&bytes);
+        let expected_length = bytes.len();
         let bundle_id = BundleId::new(self.ids.as_ref()).map_err(id_error)?;
-        let destination = self
-            .paths
-            .safety_backups
-            .join(format!("{bundle_id}.eutheto"));
-        self.write_bundle(destination.clone(), bytes).await?;
+        let artifact_name = format!("{bundle_id}.eutheto");
+        let destination = self.paths.safety_backups.join(&artifact_name);
+        self.write_bundle(destination.clone(), bytes, cancellation)
+            .await?;
+        self.check_portable_cancelled(cancellation)?;
         let registry = Arc::clone(&self.pack_registry);
-        let verified_digest = tokio::task::spawn_blocking(move || {
-            let published = std::fs::read(destination)?;
+        let verification_cancellation = cancellation.clone();
+        let verification = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+
+            let read_limit = expected_length.saturating_add(1);
+            let mut published = Vec::with_capacity(read_limit);
+            std::fs::File::open(destination)?
+                .take(u64::try_from(read_limit).map_err(std::io::Error::other)?)
+                .read_to_end(&mut published)?;
+            if verification_cancellation.is_cancelled() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "Safety backup verification cancelled.",
+                ));
+            }
+            if published.len() != expected_length {
+                return Err(std::io::Error::other(
+                    "published safety backup length differs",
+                ));
+            }
             inspect_application_bundle(&published, &registry).map_err(|_| {
                 std::io::Error::other("published safety backup verification failed")
             })?;
             Ok::<_, std::io::Error>(eutheto_export::sha256_hex(&published))
         })
         .await
-        .map_err(join_error)?
-        .map_err(filesystem_error)?;
+        .map_err(join_error)?;
+        self.check_portable_cancelled(cancellation)?;
+        let verified_digest = verification.map_err(filesystem_error)?;
         if verified_digest != digest {
             return Err(protocol_error(
                 "restore.safety_backup_verification_failed",
@@ -3002,8 +3199,29 @@ impl EuthetoApp {
                 false,
             ));
         }
-        Ok(digest)
+        Ok(CreatedPortableSafetyBackup {
+            sha256: digest,
+            artifact_name,
+        })
     }
+
+    /// Reports whether the same bound restore review survived a real safety-backup failure.
+    /// Native custody uses this for retry ownership, not as authorization to commit.
+    pub async fn portable_restore_retry_is_retained(
+        &self,
+        preview_id: RequestId,
+        expected_library_revision: Revision,
+    ) -> bool {
+        let previews = self.previews.lock().await;
+        matches!(
+            previews.get(&preview_id),
+            Some(PendingPortablePreview::Import(pending))
+                if pending.options.restore_mode == RestoreMode::ReplaceLibrary
+                    && pending.preview.binding.local_library_revision == expected_library_revision
+                    && pending.safety_backup_failure.is_some()
+        )
+    }
+
     async fn cancel_portable_preview(
         &self,
         preview_id: RequestId,
@@ -3011,7 +3229,7 @@ impl EuthetoApp {
         let mut previews = self.previews.lock().await;
         if matches!(
             previews.get(&preview_id),
-            Some(PendingPortablePreview::PeopleCsv(_))
+            Some(PendingPortablePreview::PeopleCsv(_) | PendingPortablePreview::Settings(_))
         ) {
             return Err(protocol_error(
                 "portable.preview_capability_mismatch",
@@ -3032,8 +3250,11 @@ impl EuthetoApp {
     async fn export_scenario(
         &self,
         scenario_id: ScenarioId,
+        cancellation: &CancellationToken,
     ) -> Result<(Vec<u8>, Revision, Revision), AppError> {
+        self.check_portable_cancelled(cancellation)?;
         let library = self.store.library_snapshot().await.map_err(store_error)?;
+        self.check_portable_cancelled(cancellation)?;
         let project = library
             .projects
             .iter()
@@ -3069,14 +3290,16 @@ impl EuthetoApp {
         .await
         .map_err(join_error)?
         .map_err(|error| export_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         Ok((bytes, scenario_revision, library_revision))
     }
     async fn export_backup(
         &self,
         title: String,
         selection: BackupSelection,
+        cancellation: &CancellationToken,
     ) -> Result<(Vec<u8>, BackupSummary, Revision), AppError> {
+        self.check_portable_cancelled(cancellation)?;
         if selection.include_audit {
             return Err(AppError::Unsupported(UnsupportedFeature {
                 code: "backup.audit_unavailable".to_owned(),
@@ -3084,6 +3307,7 @@ impl EuthetoApp {
             }));
         }
         let library = self.store.library_snapshot().await.map_err(store_error)?;
+        self.check_portable_cancelled(cancellation)?;
         let library_revision = library.revision;
         let (sections, summary) = backup_sections(&library, selection)?;
         let scenarios = library
@@ -3125,7 +3349,7 @@ impl EuthetoApp {
         .await
         .map_err(join_error)?
         .map_err(|error| export_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         Ok((bytes, summary, library_revision))
     }
 
@@ -3135,7 +3359,9 @@ impl EuthetoApp {
         bytes: Vec<u8>,
         expected_sha256: &str,
         binding: PreparedPortableBinding,
+        cancellation: &CancellationToken,
     ) -> Result<AppCommandResult, AppError> {
+        self.check_portable_cancelled(cancellation)?;
         if eutheto_export::sha256_hex(&bytes) != expected_sha256 {
             return Err(protocol_error(
                 "portable.prepared_digest_mismatch",
@@ -3151,7 +3377,7 @@ impl EuthetoApp {
         .await
         .map_err(join_error)?
         .map_err(|error| import_error(&error))?;
-        self.check_cancelled()?;
+        self.check_portable_cancelled(cancellation)?;
         let (expected_library_revision, expected_scenario) = match binding {
             PreparedPortableBinding::Scenario {
                 scenario_id,
@@ -3187,15 +3413,15 @@ impl EuthetoApp {
                 (expected_library_revision, None)
             }
         };
-        let cancellation = self.cancellation.clone();
+        let preparation_cancellation = cancellation.clone();
         let prepared = tokio::task::spawn_blocking(move || {
-            prepare_bundle_atomic_cancellable(&destination, &bytes, &cancellation)
+            prepare_bundle_atomic_cancellable(&destination, &bytes, &preparation_cancellation)
         })
         .await
         .map_err(join_error)?
         .map_err(|error| export_error(&error))?;
-        self.check_cancelled()?;
-        let cancellation = self.cancellation.clone();
+        self.check_portable_cancelled(cancellation)?;
+        let cancellation = cancellation.clone();
         self.store
             .with_publication_revision_lease(
                 expected_library_revision,
@@ -3235,8 +3461,26 @@ impl EuthetoApp {
         }
     }
 
-    async fn write_bundle(&self, destination: PathBuf, bytes: Vec<u8>) -> Result<(), AppError> {
-        let cancellation = self.cancellation.clone();
+    fn check_portable_cancelled(&self, cancellation: &CancellationToken) -> Result<(), AppError> {
+        if self.cancellation.is_cancelled() || cancellation.is_cancelled() {
+            Err(protocol_error(
+                "operation.cancelled",
+                "The operation was cancelled.",
+                false,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn write_bundle(
+        &self,
+        destination: PathBuf,
+        bytes: Vec<u8>,
+        cancellation: &CancellationToken,
+    ) -> Result<(), AppError> {
+        self.check_portable_cancelled(cancellation)?;
+        let cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
             write_bundle_atomic_cancellable(&destination, &bytes, &cancellation)
         })
@@ -4369,7 +4613,7 @@ fn history_apply(
         registry,
         cancellation,
     )
-    .map_err(|error| command_store_error(&error))?;
+    .map_err(|error| command_store_error(&error, Some(&envelope.command)))?;
     applied.document.metadata.updated_at = history.target_document_updated_at;
     Ok((applied.document, applied.result))
 }
@@ -4420,6 +4664,7 @@ fn ensure_supported_document(
                 "domain pack {} schema {} is unavailable",
                 document.domain_pack.id, document.domain_pack.schema_version
             ),
+            field_path: None,
         })
     }
 }
@@ -4433,14 +4678,16 @@ fn scenario_view(project: StoredProject, registry: &DomainPackRegistry) -> Scena
     }
 }
 
-fn project_summary(project: &eutheto_store::ProjectSummary) -> ProjectSummaryDto {
-    ProjectSummaryDto {
+fn project_summary(project: eutheto_store::ProjectSummary) -> ProjectListItemV1 {
+    ProjectListItemV1 {
+        schema_version: PROJECT_LIST_SCHEMA_VERSION,
         scenario_id: project.id,
-        title: project.title.clone(),
-        domain_pack_id: project.domain_pack_id.clone(),
+        title: project.title,
+        domain_pack_id: project.domain_pack_id,
         revision: project.revision,
         updated_at: project.updated_at,
         archived: project.archived_at.is_some(),
+        last_opened_at: project.last_opened_at,
     }
 }
 
@@ -4794,7 +5041,7 @@ fn directory_availability(path: Option<&Path>) -> DirectoryAvailabilityLabel {
     }
 }
 
-fn command_store_error(error: &CommandError) -> StoreError {
+fn command_store_error(error: &CommandError, command: Option<&ScenarioCommand>) -> StoreError {
     if matches!(error, CommandError::Cancelled) {
         return StoreError::OperationCancelled;
     }
@@ -4807,6 +5054,15 @@ fn command_store_error(error: &CommandError) -> StoreError {
     StoreError::CommandApplication {
         code: error.code().to_owned(),
         message: error.to_string(),
+        field_path: match error {
+            CommandError::InvalidDomainPayload { path, .. }
+                if matches!(command, Some(ScenarioCommand::ApplyDomainCommand(_)))
+                    && path.starts_with("/payload/") =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        },
     }
 }
 
@@ -4837,7 +5093,11 @@ fn store_error(error: StoreError) -> AppError {
             "/scenarioId",
             "A project with this scenario identity already exists.",
         ),
-        StoreError::CommandApplication { code, message } => {
+        StoreError::CommandApplication {
+            code,
+            message,
+            field_path,
+        } => {
             if code == "command.unsupported" {
                 AppError::Unsupported(UnsupportedFeature {
                     code,
@@ -4846,7 +5106,7 @@ fn store_error(error: StoreError) -> AppError {
             } else if code == "command.resource_limit" {
                 resource_limit_error()
             } else {
-                validation_error(&code, "/command", &message)
+                validation_error(&code, field_path.as_deref().unwrap_or("/command"), &message)
             }
         }
         StoreError::IdentityCollision(_) | StoreError::InvalidScenarioIdentity(_) => {

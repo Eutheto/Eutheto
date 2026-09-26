@@ -691,6 +691,62 @@ async fn setup_preview_cursor_binds_the_exact_draft_without_persisting_it() -> T
 }
 
 #[tokio::test]
+async fn invalid_recurring_time_keeps_field_provenance_and_revision() -> TestResult {
+    use eutheto_core::SetupSourceV2;
+    use eutheto_domain_api::DomainSetupQueryV1;
+
+    let original = workforce_fixture::fixture()?;
+    let (_directory, _dependencies, app) = stored(&original).await?;
+    let mut template = entity(&original, 6)?.clone();
+    template["timing"]["startTime"] = json!("25:61");
+    let command = domain(commands::UPDATE_ENTITY, json!({"entity": template}));
+    let query = DomainSetupQueryV1 {
+        schema_version: 1,
+        view_id: "eutheto.setup.command_changes".to_owned(),
+        parameters: json!({"limit": 10}),
+        continuation: None,
+    };
+    for (candidate, expected_path) in [
+        (command.clone(), "/payload/entity/timing/startTime"),
+        (batch(vec![command]), "/command"),
+    ] {
+        let Err(AppError::Validation(report)) = app
+            .setup_view(
+                original.scenario_id,
+                Revision::INITIAL,
+                SetupSourceV2::CommandPreview {
+                    command: candidate.clone(),
+                },
+                query.clone(),
+                app.setup_cancellation(),
+            )
+            .await
+        else {
+            return Err("malformed recurring local time must prevent review".into());
+        };
+        let issue = report
+            .issues
+            .first()
+            .ok_or("missing invalid-time diagnostic")?;
+        assert_eq!(issue.code, "command.invalid_domain_payload");
+        assert_eq!(issue.field_path.as_deref(), Some(expected_path));
+        let Err(AppError::Validation(report)) =
+            execute(&app, envelope(&original, Revision::INITIAL, candidate)?).await?
+        else {
+            return Err("malformed recurring local time must reject mutation".into());
+        };
+        assert_eq!(
+            report
+                .issues
+                .first()
+                .and_then(|issue| issue.field_path.as_deref()),
+            Some(expected_path)
+        );
+    }
+    assert_state(&app, &original, Revision::INITIAL, &[]).await
+}
+
+#[tokio::test]
 async fn generation_preview_requires_executable_reconciliation_and_isolates_cancellation()
 -> TestResult {
     use eutheto_core::SetupSourceV2;
@@ -993,6 +1049,7 @@ async fn setup_source_and_continuation_policy_rejects_before_scenario_capture() 
     };
     let command_changes = make_query("eutheto.setup.command_changes")?;
     let settings_query = make_query("official.workforce.setup.settings_preparation")?;
+    let local_query = make_query("official.workforce.setup.local_time_resolution")?;
     let mut continued_settings = settings_query.clone();
     continued_settings.continuation = Some(SetupContinuationV1 {
         schema_version: 1,
@@ -1001,10 +1058,14 @@ async fn setup_source_and_continuation_policy_rejects_before_scenario_capture() 
         query_fingerprint: [0; 32],
         position: json!({}),
     });
+    let mut continued_local = local_query.clone();
+    continued_local.continuation = continued_settings.continuation.clone();
     for (source, query) in [
         (SetupSourceV2::Stored, command_changes.clone()),
         (preview.clone(), settings_query.clone()),
         (SetupSourceV2::Stored, continued_settings),
+        (preview.clone(), local_query.clone()),
+        (SetupSourceV2::Stored, continued_local),
     ] {
         assert!(matches!(
             app.setup_view(
@@ -1021,6 +1082,7 @@ async fn setup_source_and_continuation_policy_rejects_before_scenario_capture() 
     for (source, query) in [
         (preview, command_changes),
         (SetupSourceV2::Stored, settings_query),
+        (SetupSourceV2::Stored, local_query),
     ] {
         assert!(matches!(
             app.setup_view(
@@ -1034,5 +1096,189 @@ async fn setup_source_and_continuation_policy_rejects_before_scenario_capture() 
             Err(AppError::NotFound(_))
         ));
     }
+    assert_state(&app, &original, Revision::INITIAL, &[]).await
+}
+
+#[tokio::test]
+async fn setup_temporal_findings_cross_the_service_without_echoing_parser_inputs() -> TestResult {
+    use eutheto_core::SetupSourceV2;
+    use eutheto_domain_api::DomainSetupQueryV1;
+    let original = workforce_fixture::fixture()?;
+    let (_directory, _dependencies, app) = stored(&original).await?;
+    let query = |parameters| DomainSetupQueryV1 {
+        schema_version: 1,
+        view_id: "official.workforce.setup.local_time_resolution".to_owned(),
+        parameters,
+        continuation: None,
+    };
+    for (local, code) in [
+        ("2026-03-08T02:30:00", "workforce.time.gap"),
+        ("2026-11-01T01:30:00", "workforce.time.overlap"),
+        (
+            "secret-sentinel /private/path",
+            "workforce.time.invalid_local",
+        ),
+    ] {
+        let Err(AppError::Validation(report)) = app
+            .setup_view(
+                original.scenario_id,
+                Revision::INITIAL,
+                SetupSourceV2::Stored,
+                query(json!({"local":local})),
+                app.setup_cancellation(),
+            )
+            .await
+        else {
+            return Err("expected native temporal validation".into());
+        };
+        let issue = report.issues.first().ok_or("missing temporal finding")?;
+        assert_eq!(issue.code, code);
+        assert_eq!(issue.field_path.as_deref(), Some("/query/parameters/local"));
+        assert!(!issue.message.contains("secret-sentinel"));
+        assert!(!issue.message.contains("/private/path"));
+    }
+    // Unclassified parser/schema errors remain generic, not newly exposed by this cutover.
+    let Err(AppError::Validation(report)) = app
+        .setup_view(
+            original.scenario_id,
+            Revision::INITIAL,
+            SetupSourceV2::Stored,
+            query(json!({"local":{"secret-sentinel":"/private/path"}})),
+            app.setup_cancellation(),
+        )
+        .await
+    else {
+        return Err("expected a rejected scalar shape".into());
+    };
+    let issue = report.issues.first().ok_or("missing generic finding")?;
+    assert_eq!(issue.code, "scenario.setup_invalid");
+    assert!(!issue.message.contains("secret-sentinel"));
+    assert!(!issue.message.contains("/private/path"));
+
+    let cancelled = app.setup_cancellation();
+    cancelled.cancel();
+    assert!(matches!(
+        app.setup_view(
+            original.scenario_id,
+            Revision::INITIAL,
+            SetupSourceV2::Stored,
+            query(json!({"local":"2026-11-02T12:00:00"})),
+            cancelled,
+        ).await,
+        Err(AppError::Protocol(failure)) if failure.code == "operation.cancelled"
+    ));
+    assert!(matches!(
+        app.setup_view(
+            original.scenario_id,
+            Revision::new(1),
+            SetupSourceV2::Stored,
+            query(json!({"local":"2026-11-02T12:00:00"})),
+            app.setup_cancellation(),
+        )
+        .await,
+        Err(AppError::Conflict {
+            actual_revision: Revision::INITIAL,
+            ..
+        })
+    ));
+    assert_state(&app, &original, Revision::INITIAL, &[]).await
+}
+
+#[tokio::test]
+async fn overnight_temporal_feedback_keeps_endpoint_and_occurrence_context_through_repair()
+-> TestResult {
+    use eutheto_core::SetupSourceV2;
+    use eutheto_domain_api::DomainSetupQueryV1;
+    use eutheto_workforce::setup::contracts::{
+        PriorWorkShiftV1, WorkforceSetupResultV1, WorkforceSetupViewDataV1,
+    };
+    let mut original = workforce_fixture::fixture()?;
+    original.settings.horizon = Horizon::new(
+        "2026-10-31T04:00:00Z".parse()?,
+        "2026-11-01T04:00:00Z".parse()?,
+    )?;
+    let template = entity_mut(&mut original, 6)?;
+    template["recurrence"] = json!({
+        "weekdays":["saturday"],
+        "effectiveRange":{"startDate":"2026-10-31","endDateExclusive":"2026-11-01"},
+        "excludedDates":[]
+    });
+    template["timing"] = json!({
+        "kind":"localWindow", "startTime":"22:00:00", "endTime":"01:30:00", "endDayOffset":1
+    });
+    template["occurrenceIdentities"] = json!({
+        (id(7)):{"id":id(7),"localStartDate":"2026-10-31"}
+    });
+    let (_directory, _dependencies, app) = stored(&original).await?;
+    let expected_field = format!("/domain/entities/{}/timing/endTime", id(6));
+    let Err(AppError::Validation(report)) = app
+        .setup_view(
+            original.scenario_id,
+            Revision::INITIAL,
+            SetupSourceV2::Stored,
+            DomainSetupQueryV1 {
+                schema_version: 1,
+                view_id: "official.workforce.setup.work_window".to_owned(),
+                parameters: json!({
+                    "dates":{"startDate":"2026-10-31","endDateExclusive":"2026-11-01"}
+                }),
+                continuation: None,
+            },
+            app.setup_cancellation(),
+        )
+        .await
+    else {
+        return Err("expected the overnight end to require fold resolution".into());
+    };
+    let issue = report.issues.first().ok_or("missing end finding")?;
+    assert_eq!(issue.code, "workforce.time.overlap");
+    assert_eq!(issue.field_path.as_deref(), Some(expected_field.as_str()));
+    assert!(issue.message.contains("2026-10-31"));
+    assert!(issue.message.contains("2026-11-01"));
+
+    let mut repaired = entity(&original, 6)?.clone();
+    repaired["timing"]["endTime"] = json!("03:30:00");
+    let preview = app
+        .setup_view(
+            original.scenario_id,
+            Revision::INITIAL,
+            SetupSourceV2::CommandPreview {
+                command: domain(
+                    "official.workforce.update_entity",
+                    json!({"entity":repaired}),
+                ),
+            },
+            DomainSetupQueryV1 {
+                schema_version: 1,
+                view_id: "official.workforce.setup.generation_review".to_owned(),
+                parameters: json!({"changesOnly":true}),
+                continuation: None,
+            },
+            app.setup_cancellation(),
+        )
+        .await
+        .map_err(boxed)?;
+    let WorkforceSetupViewDataV1::GenerationReview(review) =
+        serde_json::from_value::<WorkforceSetupResultV1>(preview.view.data)?.result
+    else {
+        return Err("wrong generation review family".into());
+    };
+    let row = review
+        .page
+        .items
+        .iter()
+        .find(|row| row.shift_id.to_string() == id(7))
+        .ok_or("missing repaired occurrence")?;
+    let Some(PriorWorkShiftV1::Unresolved(before)) = &row.before else {
+        return Err("the unresolved prior occurrence was lost".into());
+    };
+    assert_eq!(before.field_path.as_deref(), Some(expected_field.as_str()));
+    assert!(before.message.contains("2026-10-31"));
+    assert!(before.message.contains("2026-11-01"));
+    let after = row.after.as_ref().ok_or("missing resolved proposal")?;
+    assert_eq!(
+        after.interval.ends_at.instant,
+        "2026-11-01T08:30:00Z".parse()?
+    );
     assert_state(&app, &original, Revision::INITIAL, &[]).await
 }

@@ -9,6 +9,7 @@ import type { ExplanationUiState } from "./types";
 const props = defineProps<{
   error: ApiErrorDto | null;
   state: ExplanationUiState;
+  actions: readonly ("retry" | "exportDiagnostic" | "dismiss")[];
 }>();
 
 const emit = defineEmits<{
@@ -19,12 +20,17 @@ const emit = defineEmits<{
 
 const headingId = useId();
 const canAct = computed(() => props.state !== "loading" && props.state !== "empty");
-const canRetry = computed(() => canAct.value && props.error?.retryable === true);
+const canRetry = computed(
+  () => canAct.value && props.actions.includes("retry") && props.error?.retryable === true,
+);
 const canExport = computed(
   () =>
-    canAct.value && props.error?.diagnosticId !== null && props.error?.diagnosticId !== undefined,
+    canAct.value &&
+    props.actions.includes("exportDiagnostic") &&
+    props.error?.diagnosticId !== null &&
+    props.error?.diagnosticId !== undefined,
 );
-const canDismiss = computed(() => canAct.value);
+const canDismiss = computed(() => canAct.value && props.actions.includes("dismiss"));
 const announcementRole = computed(() =>
   props.error || props.state === "stale" || props.state === "internalFailure" ? "alert" : "status",
 );

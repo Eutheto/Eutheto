@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
-  optimizeDeps: { include: ["vue-router"] },
+  optimizeDeps: { include: ["vue-router", "class-variance-authority"] },
   test: {
     include: ["src/**/*.browser.test.ts"],
     browser: {

@@ -1,8 +1,8 @@
 use super::types::{
     CsvDialect, CsvDialectDetection, CsvError, CsvErrorCode, CsvRecord, CsvSampleCell,
     CsvSampleRecord, CsvSource, MAX_CSV_CELL_BYTES, MAX_CSV_COLUMNS, MAX_CSV_DETECTION_BYTES,
-    MAX_CSV_LOGICAL_RECORDS, MAX_CSV_RECORD_BYTES, MAX_CSV_SAMPLE_CELL_BYTES,
-    MAX_CSV_SAMPLE_RECORDS, MAX_CSV_SOURCE_BYTES, PeopleCsvDetection,
+    MAX_CSV_INSPECTED_CELL_BYTES, MAX_CSV_LOGICAL_RECORDS, MAX_CSV_RECORD_BYTES,
+    MAX_CSV_SAMPLE_CELL_BYTES, MAX_CSV_SAMPLE_RECORDS, MAX_CSV_SOURCE_BYTES, PeopleCsvDetection,
 };
 use csv_core::{ReadRecordResult, ReaderBuilder};
 use eutheto_types::CancellationToken;
@@ -262,23 +262,7 @@ pub fn detect_people_csv(
                     Some(_) => {}
                 }
                 if samples.len() < MAX_CSV_SAMPLE_RECORDS {
-                    samples.push(CsvSampleRecord {
-                        record: record.number,
-                        cells: record
-                            .cells
-                            .iter()
-                            .map(|cell| {
-                                let mut end = cell.len().min(MAX_CSV_SAMPLE_CELL_BYTES);
-                                while !cell.is_char_boundary(end) {
-                                    end -= 1;
-                                }
-                                CsvSampleCell {
-                                    text: cell[..end].to_owned(),
-                                    truncated: end != cell.len(),
-                                }
-                            })
-                            .collect(),
-                    });
+                    samples.push(sample_record(&record, MAX_CSV_SAMPLE_CELL_BYTES));
                 }
                 Ok(())
             },
@@ -306,6 +290,51 @@ pub fn detect_people_csv(
         .map_err(|_| CsvError::source(CsvErrorCode::DetectionLimit))?;
     check_cancelled(cancellation)?;
     Ok(detection)
+}
+
+/// Inspects one logical record while validating the entire bounded source.
+///
+/// The projection retains complete valid identity text, not arbitrary CSV cells.
+/// A missing record is distinct from a present record containing empty cells.
+///
+/// # Errors
+/// Rejects invalid original bytes, parser limits, I/O failure, or cancellation,
+/// including failures encountered after the selected record.
+pub fn sample_people_csv_record<R: Read + ?Sized>(
+    input: &mut R,
+    dialect: CsvDialect,
+    record_number: u32,
+    cancellation: &CancellationToken,
+) -> Result<Option<CsvSampleRecord>, CsvError> {
+    let mut sample = None;
+    scan_csv(input, dialect, cancellation, |record| {
+        if record.number == record_number {
+            sample = Some(sample_record(&record, MAX_CSV_INSPECTED_CELL_BYTES));
+        }
+        Ok(())
+    })?;
+    check_cancelled(cancellation)?;
+    Ok(sample)
+}
+
+fn sample_record(record: &CsvRecord<'_>, maximum_cell_bytes: usize) -> CsvSampleRecord {
+    CsvSampleRecord {
+        record: record.number,
+        cells: record
+            .cells
+            .iter()
+            .map(|cell| {
+                let mut end = cell.len().min(maximum_cell_bytes);
+                while !cell.is_char_boundary(end) {
+                    end -= 1;
+                }
+                CsvSampleCell {
+                    text: cell[..end].to_owned(),
+                    truncated: end != cell.len(),
+                }
+            })
+            .collect(),
+    }
 }
 
 #[cfg(test)]

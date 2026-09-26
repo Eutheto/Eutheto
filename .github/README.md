@@ -29,6 +29,8 @@ Repository-wide policy remains in [AGENTS.md](../AGENTS.md), [CONTRIBUTING.md](.
 
 A workflow file or green placeholder job is not passing evidence. Unimplemented commands, unavailable runners, and later-phase product gates must be represented as `deferred` or `unavailable`, never silently skipped or reported as success.
 
+Exact `phase/06-desktop` PRs use the bounded [Phase06 integration trial](../docs/contributors/git-workflow.md#temporary-phase06-integration): source/security/dependency checks on every package, explicitly deferred native/package policy gates only for the documented frontend/documentation allowance, and full risk/milestone matrices. Main context names/protections and non-phase event behavior remain unchanged. `just ci-policy-test` covers real selector and terminal-gate behavior; actual hosted runs remain required evidence.
+
 ## Automation invariants
 
 All GitHub automation follows these invariants:

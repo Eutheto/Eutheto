@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type {
   ApiErrorDto,
   DomainAssignment,
+  FastFindingsV1,
   InfeasibilityEvidenceV1,
   SolutionComparisonV1,
   ValidationIssue,
@@ -59,6 +60,12 @@ const validationIssues: readonly ValidationIssue[] = [
     resource: null,
   },
 ];
+
+const validationFindings: FastFindingsV1 = {
+  counts: { errors: 1, warnings: 1, information: 0 },
+  issues: validationIssues,
+  omitted: 0,
+};
 
 const beforeAssignment: DomainAssignment = {
   id: "assignment.coverage",
@@ -153,19 +160,37 @@ const terminalError: ApiErrorDto = {
 };
 
 describe("evidence explanation components", () => {
-  it("announces the authoritative validation count and renders selectable issue details", async () => {
+  it("renders the selected finding's authoritative details", async () => {
     const html = await render(ValidationSummary, {
-      issues: validationIssues,
+      findings: validationFindings,
       state: "ready",
-      selectedCode: "coverage.required",
+      interaction: "selectable",
+      selectedIssue: validationIssues[0],
     });
 
-    expect(html).toContain("Validation summary");
-    expect(html).toContain('aria-live="polite"');
-    expect(html).toContain("2 validation issues");
-    expect(html).toContain("At least one qualified person is required.");
-    expect(html).toContain("Affected rule:");
-    expect(html).toContain('aria-current="true"');
+    expect(html).toContain(validationIssues[0]?.message);
+    expect(html).toContain(requiredRuleId);
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1);
+  });
+
+  it("keeps omitted fast findings explicit without exposing static findings as actions", async () => {
+    const html = await render(ValidationSummary, {
+      findings: {
+        ...validationFindings,
+        counts: { errors: 3, warnings: 1, information: 0 },
+        omitted: 2,
+      },
+      state: "ready",
+      interaction: "static",
+      presentation: "embedded",
+      headingLevel: 4,
+    });
+    const announcement = html.match(/<p[^>]*role="status"[^>]*>(.*?)<\/p>/s)?.[1];
+    expect(announcement?.match(/\d+/g)).toEqual(["4", "2", "2"]);
+    expect(html).toContain("<h4");
+    expect(html).not.toContain("<h2");
+    expect(html).not.toContain("<button");
+    expect(html).toContain(requiredRuleId);
   });
 
   it("preserves the conflict heading and never upgrades sufficient evidence to minimal", async () => {
@@ -397,23 +422,23 @@ describe("evidence explanation components", () => {
       state: "internalFailure",
     });
     const validationHtml = await render(ValidationSummary, {
-      issues: validationIssues,
+      findings: validationFindings,
       state: "internalFailure",
+      interaction: "selectable",
     });
 
     expect(changeHtml).toContain("An internal verification failure quarantined this candidate.");
     expect(changeHtml).not.toContain("3 verified changes");
     expect(changeHtml).not.toContain("Select added change");
-    expect(validationHtml).toContain(
-      "An internal verification failure quarantined this candidate.",
-    );
-    expect(validationHtml).not.toContain("Select error validation issue");
+    expect(validationHtml).not.toContain(requiredRuleId);
+    expect(validationHtml).not.toContain("<button");
   });
 
   it("gates retry and diagnostic export actions from structured error authority", async () => {
     const recoverableHtml = await render(ErrorRecoveryPanel, {
       error: retryableError,
       state: "unavailable",
+      actions: ["retry", "exportDiagnostic", "dismiss"],
     });
     expect(recoverableHtml).toContain('role="alert"');
     expect(recoverableHtml).toContain("This explanation is unavailable.");
@@ -433,6 +458,7 @@ describe("evidence explanation components", () => {
     const terminalHtml = await render(ErrorRecoveryPanel, {
       error: terminalError,
       state: "ready",
+      actions: ["retry", "exportDiagnostic", "dismiss"],
     });
     expect(terminalHtml).toContain("A required rule is invalid.");
     expect(terminalHtml).toContain("Fields needing attention");
@@ -442,22 +468,14 @@ describe("evidence explanation components", () => {
     expect(terminalHtml).toContain("Dismiss");
   });
 
-  it("renders a terminal plain-text state instead of an indefinite loading indicator", async () => {
-    const loading = await render(ConflictCard, {
-      evidence: null,
-      state: "loading",
-      ruleLabels: {},
+  it("keeps diagnostic identity visible without offering unavailable recovery actions", async () => {
+    const html = await render(ErrorRecoveryPanel, {
+      error: retryableError,
+      state: "ready",
+      actions: [],
     });
-    expect(loading).toContain("Preparing mapped conflict evidence…");
-    expect(loading).toContain("Cancel");
-
-    const stale = await render(ChangeSetPreview, { comparison: null, state: "stale" });
-    expect(stale).toContain("The scenario changed. Refresh before trying again.");
-
-    const cancelled = await render(ValidationSummary, { issues: [], state: "cancelled" });
-    expect(cancelled).toContain("The operation was cancelled.");
-
-    const internal = await render(ErrorRecoveryPanel, { error: null, state: "internalFailure" });
-    expect(internal).toContain("An internal verification failure quarantined this candidate.");
+    expect(html).toContain(retryableError.message);
+    expect(html).toContain(retryableError.diagnosticId);
+    expect(html).not.toContain("<button");
   });
 });

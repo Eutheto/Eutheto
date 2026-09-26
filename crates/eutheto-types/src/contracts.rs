@@ -856,6 +856,36 @@ pub struct ProjectSummaryDto {
     pub archived: bool,
 }
 
+/// Current native project-list and explicit-open projection version.
+pub const PROJECT_LIST_SCHEMA_VERSION: u32 = 1;
+
+/// Lightweight library item, including the existing durable last-opened time.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectListItemV1 {
+    pub schema_version: u32,
+    pub scenario_id: ScenarioId,
+    pub title: String,
+    pub domain_pack_id: PackId,
+    pub revision: Revision,
+    pub updated_at: Rfc3339Timestamp,
+    pub archived: bool,
+    pub last_opened_at: Option<Rfc3339Timestamp>,
+}
+
+impl From<ProjectListItemV1> for ProjectSummaryDto {
+    fn from(project: ProjectListItemV1) -> Self {
+        Self {
+            scenario_id: project.scenario_id,
+            title: project.title,
+            domain_pack_id: project.domain_pack_id,
+            revision: project.revision,
+            updated_at: project.updated_at,
+            archived: project.archived,
+        }
+    }
+}
+
 /// Detailed project metadata view.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1074,7 +1104,7 @@ pub struct ApiResponseDto<T> {
     pub schema_version: u32,
     /// Request correlation identity.
     pub request_id: RequestId,
-    /// Current revision when the response is scenario-specific.
+    /// Authoritative context revision (scenario or library), or `None` for an unrevisioned result.
     pub current_revision: Option<Revision>,
     /// Nonblocking user-safe warnings.
     pub warnings: Vec<ValidationIssue>,

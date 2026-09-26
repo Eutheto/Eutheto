@@ -5,7 +5,7 @@
 //! work budgets, cancellation, exact duration invariants and serialized output limits.
 //! Existing model payloads retain their authoritative complete record representations.
 
-use crate::ids::{AssignmentTypeId, AvailabilityId, ShiftId, ShiftTemplateId};
+use crate::ids::{AssignmentTypeId, AvailabilityId, QualificationId, ShiftId, ShiftTemplateId};
 use crate::model::{
     AvailabilityKind, DateRange, PreferencePriority, WorkforceEntity, WorkforcePreference,
     WorkforceRule,
@@ -57,12 +57,20 @@ pub const SETUP_OUTPUT_LIMITS: eutheto_domain_api::ContractJsonLimits =
 pub enum WorkforceSetupQueryV1 {
     #[serde(rename = "official.workforce.setup.overview")]
     Overview(EmptyParametersV1),
+    #[serde(rename = "official.workforce.setup.local_time_resolution")]
+    LocalTimeResolution(LocalTimeResolutionParametersV1),
     #[serde(rename = "official.workforce.setup.settings_preparation")]
     SettingsPreparation(SettingsPreparationParametersV1),
     #[serde(rename = "eutheto.setup.entity_page")]
     EntityPage(EntityPageParametersV1),
     #[serde(rename = "eutheto.setup.entity_detail")]
     EntityDetail(EntityDetailParametersV1),
+    #[serde(rename = "official.workforce.setup.entity_summary")]
+    EntitySummary(EntitySummaryParametersV1),
+    #[serde(rename = "official.workforce.setup.people_page")]
+    PeoplePage(PeoplePageParametersV1),
+    #[serde(rename = "official.workforce.setup.availability_records")]
+    AvailabilityRecords(AvailabilityRecordsParametersV1),
     #[serde(rename = "eutheto.setup.rule_catalog")]
     RuleCatalog(EmptyParametersV1),
     #[serde(rename = "official.workforce.setup.rule_page")]
@@ -71,6 +79,8 @@ pub enum WorkforceSetupQueryV1 {
     RuleDetail(RuleDetailParametersV1),
     #[serde(rename = "official.workforce.setup.rule_scope")]
     RuleScope(RuleScopeParametersV1),
+    #[serde(rename = "official.workforce.setup.rule_scope_summary")]
+    RuleScopeSummary(RuleDetailParametersV1),
     #[serde(rename = "official.workforce.setup.work_window")]
     WorkWindow(WorkWindowParametersV1),
     #[serde(rename = "official.workforce.setup.work_detail")]
@@ -132,6 +142,35 @@ pub struct EntityPageParametersV1 {
 pub struct EntityDetailParametersV1 {
     pub entity_kind: WorkforceEntityKindV1,
     pub entity_id: EntityId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntitySummaryParametersV1 {
+    pub entity_id: EntityId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeoplePageParametersV1 {
+    pub search: String,
+    // A recorded grant, not qualification validity for a particular shift.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::model::deserialize_present"
+    )]
+    pub qualification_id: Option<QualificationId>,
+    #[serde(default = "default_page_limit")]
+    pub limit: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AvailabilityRecordsParametersV1 {
+    pub person_id: PersonId,
+    #[serde(default = "default_page_limit")]
+    pub limit: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Deserialize, Serialize, PartialEq)]
@@ -299,13 +338,18 @@ pub struct WorkforceSetupResultV1 {
 )]
 pub enum WorkforceSetupViewDataV1 {
     Overview(WorkforceSetupFactsV1),
+    LocalTimeResolution(eutheto_types::ResolvedLocalTime),
     SettingsPreparation(ScenarioSettings),
     EntityPage(SetupPageV1<EntitySummaryV1>),
     EntityDetail(Box<WorkforceEntity>),
+    EntitySummary(EntitySummaryV1),
+    PeoplePage(SetupPageV1<PersonSummaryV1>),
+    AvailabilityRecords(SetupPageV1<AvailabilityRecordSummaryV1>),
     RuleCatalog(RuleCatalogV1),
     RulePage(SetupPageV1<RuleSummaryV1>),
     RuleDetail(Box<RuleRecordV1>),
     RuleScope(ScopeInspectionV1),
+    RuleScopeSummary(RuleScopeSummaryV1),
     WorkWindow(SetupPageV1<WorkShiftV1>),
     WorkDetail(Box<WorkShiftDetailV1>),
     GenerationReview(GenerationReviewV1),
@@ -321,6 +365,8 @@ pub enum WorkforceSetupViewDataV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkforceSetupFactsV1 {
     pub settings: ScenarioSettings,
+    pub planning_dates: DateRange,
+    pub initial_work_window: DateRange,
     pub entities: Vec<EntityKindCountV1>,
     pub required_rules: u32,
     pub active_required_rules: u32,
@@ -403,6 +449,34 @@ pub struct ScopeInspectionV1 {
     pub shift_count: u32,
     pub cartesian_pair_count: u32,
     pub population: ScopePopulationV1,
+}
+
+/// Effective authored populations, not feasibility or a count of conflicting pairs.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuleScopeSummaryV1 {
+    pub rule: RuleReferenceV1,
+    pub population: EffectiveScopePopulationV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum EffectiveScopePopulationV1 {
+    Ordinary {
+        people_count: u32,
+        shift_count: u32,
+    },
+    MinimumRest {
+        // A person must belong to main AND before AND after.
+        people_count: u32,
+        before_shift_count: u32,
+        after_shift_count: u32,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -547,6 +621,8 @@ pub struct PriorUnresolvedShiftV1 {
     // Strict mapped TemporalIssueKind, not Debug text. The separate source enum remains
     // nonserializable; the wire mapping includes its exact resolution subtype.
     pub issue: TemporalIssueCodeV1,
+    pub field_path: Option<String>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -598,6 +674,14 @@ pub struct EligibilityMatrixV1 {
 pub struct InstantIntervalV1 {
     pub start: Rfc3339Timestamp,
     pub end: Rfc3339Timestamp,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AvailabilityRecordSummaryV1 {
+    pub availability_id: AvailabilityId,
+    pub availability_kind: AvailabilityKind,
+    pub effective_range: DateRange,
 }
 
 // Expand with the existing availability_intervals authority, clip to the requested
@@ -671,6 +755,22 @@ pub struct CommandChangeV1 {
     pub change: Change,
 }
 
+/// Stored-only scalar preparation; the catalog bounds input before typed allocation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalTimeResolutionParametersV1 {
+    // Parse in the handler to retain the exact field address on malformed local input.
+    pub local: String,
+}
+
+/// Schema-bounded text parsed by the handler so malformed dates keep their exact field.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingsPlanningDatesV1 {
+    pub start_date: String,
+    pub end_date_exclusive: String,
+}
+
 // Stored-only, no continuation. Rust resolves local midnight boundaries and checks the
 // existing Workforce planning_dates contract; Vue only wraps the result in SetScenarioSettings.
 // dates is the desired entire horizon, NOT a presentation window: no366-day view cap.
@@ -678,8 +778,9 @@ pub struct CommandChangeV1 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPreparationParametersV1 {
-    pub time_zone: eutheto_types::IanaTimeZone,
-    pub dates: DateRange,
+    // Schema-bounded before decoding; parse in the handler to retain the exact field.
+    pub time_zone: String,
+    pub dates: SettingsPlanningDatesV1,
     pub locale: eutheto_types::LocaleTag,
     pub units: eutheto_types::UnitSystem,
     pub gap_policy: eutheto_types::GapPolicy,
@@ -704,6 +805,9 @@ impl WorkforceSetupQueryV1 {
             "official.workforce.setup.overview" => {
                 Deserialize::deserialize(&query.parameters).map(Self::Overview)
             }
+            "official.workforce.setup.local_time_resolution" => {
+                Deserialize::deserialize(&query.parameters).map(Self::LocalTimeResolution)
+            }
             "official.workforce.setup.settings_preparation" => {
                 Deserialize::deserialize(&query.parameters).map(Self::SettingsPreparation)
             }
@@ -712,6 +816,15 @@ impl WorkforceSetupQueryV1 {
             }
             "eutheto.setup.entity_detail" => {
                 Deserialize::deserialize(&query.parameters).map(Self::EntityDetail)
+            }
+            "official.workforce.setup.entity_summary" => {
+                Deserialize::deserialize(&query.parameters).map(Self::EntitySummary)
+            }
+            "official.workforce.setup.people_page" => {
+                Deserialize::deserialize(&query.parameters).map(Self::PeoplePage)
+            }
+            "official.workforce.setup.availability_records" => {
+                Deserialize::deserialize(&query.parameters).map(Self::AvailabilityRecords)
             }
             "eutheto.setup.rule_catalog" => {
                 Deserialize::deserialize(&query.parameters).map(Self::RuleCatalog)
@@ -724,6 +837,9 @@ impl WorkforceSetupQueryV1 {
             }
             "official.workforce.setup.rule_scope" => {
                 Deserialize::deserialize(&query.parameters).map(Self::RuleScope)
+            }
+            "official.workforce.setup.rule_scope_summary" => {
+                Deserialize::deserialize(&query.parameters).map(Self::RuleScopeSummary)
             }
             "official.workforce.setup.work_window" => {
                 Deserialize::deserialize(&query.parameters).map(Self::WorkWindow)
@@ -755,13 +871,18 @@ impl WorkforceSetupQueryV1 {
     pub const fn view_id(&self) -> &'static str {
         match self {
             Self::Overview(_) => "official.workforce.setup.overview",
+            Self::LocalTimeResolution(_) => "official.workforce.setup.local_time_resolution",
             Self::SettingsPreparation(_) => "official.workforce.setup.settings_preparation",
             Self::EntityPage(_) => "eutheto.setup.entity_page",
             Self::EntityDetail(_) => "eutheto.setup.entity_detail",
+            Self::EntitySummary(_) => "official.workforce.setup.entity_summary",
+            Self::PeoplePage(_) => "official.workforce.setup.people_page",
+            Self::AvailabilityRecords(_) => "official.workforce.setup.availability_records",
             Self::RuleCatalog(_) => "eutheto.setup.rule_catalog",
             Self::RulePage(_) => "official.workforce.setup.rule_page",
             Self::RuleDetail(_) => "official.workforce.setup.rule_detail",
             Self::RuleScope(_) => "official.workforce.setup.rule_scope",
+            Self::RuleScopeSummary(_) => "official.workforce.setup.rule_scope_summary",
             Self::WorkWindow(_) => "official.workforce.setup.work_window",
             Self::WorkDetail(_) => "official.workforce.setup.work_detail",
             Self::GenerationReview(_) => "official.workforce.setup.generation_review",
@@ -779,13 +900,18 @@ impl WorkforceSetupViewDataV1 {
     pub const fn view_id(&self) -> &'static str {
         match self {
             Self::Overview(_) => "official.workforce.setup.overview",
+            Self::LocalTimeResolution(_) => "official.workforce.setup.local_time_resolution",
             Self::SettingsPreparation(_) => "official.workforce.setup.settings_preparation",
             Self::EntityPage(_) => "eutheto.setup.entity_page",
             Self::EntityDetail(_) => "eutheto.setup.entity_detail",
+            Self::EntitySummary(_) => "official.workforce.setup.entity_summary",
+            Self::PeoplePage(_) => "official.workforce.setup.people_page",
+            Self::AvailabilityRecords(_) => "official.workforce.setup.availability_records",
             Self::RuleCatalog(_) => "eutheto.setup.rule_catalog",
             Self::RulePage(_) => "official.workforce.setup.rule_page",
             Self::RuleDetail(_) => "official.workforce.setup.rule_detail",
             Self::RuleScope(_) => "official.workforce.setup.rule_scope",
+            Self::RuleScopeSummary(_) => "official.workforce.setup.rule_scope_summary",
             Self::WorkWindow(_) => "official.workforce.setup.work_window",
             Self::WorkDetail(_) => "official.workforce.setup.work_detail",
             Self::GenerationReview(_) => "official.workforce.setup.generation_review",

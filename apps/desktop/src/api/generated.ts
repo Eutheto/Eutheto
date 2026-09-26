@@ -108,6 +108,7 @@ export interface ApiErrorDto {
 export interface ApiResponseDto<T> {
   readonly schemaVersion: typeof API_SCHEMA_VERSION;
   readonly requestId: UuidV7;
+  /** Authoritative revision for this response's scenario or library context; null for unrevisioned reads. */
   readonly currentRevision: Revision | null;
   readonly warnings: readonly ValidationIssue[];
   readonly result: T;
@@ -386,6 +387,7 @@ export interface UnopenedBundleMetadataDto {
 }
 
 export interface UnopenedBundlePreviewDto {
+  readonly schemaVersion: 1;
   readonly previewId: UuidV7;
   readonly metadata: UnopenedBundleMetadataDto;
 }
@@ -409,13 +411,15 @@ export interface ScenarioSettings {
   readonly overlapPolicy: OverlapPolicy;
 }
 
-export interface ProjectSummaryDto {
+export interface ProjectListItemV1 {
+  readonly schemaVersion: 1;
   readonly scenarioId: UuidV7;
   readonly title: string;
   readonly domainPackId: PackId;
   readonly revision: Revision;
   readonly updatedAt: string;
   readonly archived: boolean;
+  readonly lastOpenedAt: string | null;
 }
 
 export interface ProjectMetadataDto {
@@ -427,6 +431,16 @@ export interface ProjectMetadataDto {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly archivedAt: string | null;
+}
+
+export interface CalendarSettingsV1 {
+  readonly timeZone: string;
+  readonly locale: string;
+  readonly units: UnitSystem;
+  readonly firstDate: string;
+  readonly lastDate: string;
+  readonly gapPolicy: GapPolicy;
+  readonly overlapPolicy: OverlapPolicy;
 }
 
 export interface ImportOptions {
@@ -530,6 +544,8 @@ export interface RemovedScenarioDto {
 }
 
 export interface PortablePreviewDto {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
   readonly previewId: UuidV7;
   readonly bundleId: UuidV7;
   readonly bundleKind: "scenario-export" | "full-backup";
@@ -555,20 +571,32 @@ export interface PortablePreviewDto {
 }
 
 export interface PortableAppliedDto {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
+  readonly safetyBackup: SafetyBackupOutcomeDto;
   readonly scenarioIds: readonly UuidV7[];
 }
 
+export type SafetyBackupOutcomeDto =
+  | { readonly kind: "notRequired" }
+  | { readonly kind: "createdAndVerified"; readonly artifactName: string }
+  | { readonly kind: "confirmedBypass" };
+
 export interface PortableFilePreviewDto {
+  readonly schemaVersion: 1;
   readonly title: string;
   readonly byteLength: number;
   readonly backupSummary: BackupSummaryDto | null;
   readonly previewId: UuidV7;
   readonly digest: string;
   readonly currentRevision: Revision | null;
-  readonly libraryRevision: Revision | null;
+  readonly libraryRevision: Revision;
 }
 
 export interface PortableArtifactDto {
+  readonly schemaVersion: 1;
+  readonly currentRevision: Revision | null;
+  readonly libraryRevision: Revision | null;
   readonly artifactName: string;
 }
 
@@ -586,25 +614,38 @@ export interface ActorRef {
 
 export type CommandSource = "desktop" | "cli" | "import" | "system" | "undo" | "redo";
 
-export interface HistoryEntryDto {
+export interface HistoryPageContinuationV1 {
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly beforeSequence: number;
+}
+export interface HistoryPageRequestV1 {
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly limit: number;
+  readonly continuation: HistoryPageContinuationV1 | null;
+}
+export interface HistoryEntrySummaryDtoV1 {
   readonly id: UuidV7;
   readonly revisionBefore: Revision;
   readonly revisionAfter: Revision;
-  readonly commandType: string;
-  readonly command: JsonValue;
-  readonly inverse: JsonValue;
-  readonly actor: ActorRef;
   readonly source: CommandSource;
-  readonly summary: string;
+  /** Null means the stored summary exceeds the 4096-byte display limit. */
+  readonly summary: string | null;
   readonly createdAt: string;
   readonly historySequence: number;
   readonly branchGeneration: number;
   readonly applied: boolean;
 }
-
-export interface SettingEntryDto {
-  readonly value: JsonValue;
-  readonly updatedAt: string;
+export interface HistoryPageDtoV1 {
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly entries: readonly HistoryEntrySummaryDtoV1[];
+  readonly continuation: HistoryPageContinuationV1 | null;
+  readonly undoAvailable: boolean;
+  readonly redoAvailable: boolean;
 }
 
 export type ScenarioCommand =
@@ -751,14 +792,33 @@ export type OperationPurposeV1 =
   | { readonly kind: "applyReviewedGeneration" }
   | { readonly kind: "csvSourceOpen" }
   | { readonly kind: "csvDetect" }
+  | { readonly kind: "csvSample" }
   | { readonly kind: "csvPreview" }
   | { readonly kind: "csvApply" }
-  | { readonly kind: "csvReportSave" };
-export interface OperationContextV1 {
+  | { readonly kind: "csvReportSave" }
+  | { readonly kind: "settingsImportPreview" }
+  | { readonly kind: "settingsImportApply" }
+  | { readonly kind: "settingsExport" }
+  | { readonly kind: "projectImportPreview" }
+  | { readonly kind: "projectImportApply" }
+  | { readonly kind: "projectExportPreview" }
+  | { readonly kind: "projectExportCreate" }
+  | { readonly kind: "projectBackupPreview" }
+  | { readonly kind: "projectBackupCreate" }
+  | { readonly kind: "projectRestorePreview" }
+  | { readonly kind: "projectRestoreApply" }
+  | { readonly kind: "projectUnopenedBundleInspect" }
+  | { readonly kind: "projectUnopenedBundleReexport" };
+export type ScenarioOperationContextV1 = {
   readonly kind: "scenario";
   readonly scenarioId: UuidV7;
   readonly expectedRevision: Revision | null;
-}
+};
+export type LibraryOperationContextV1 = {
+  readonly kind: "library";
+  readonly expectedLibraryRevision: Revision | null;
+};
+export type OperationContextV1 = ScenarioOperationContextV1 | LibraryOperationContextV1;
 export interface OperationPreparedV1 {
   readonly schemaVersion: 1;
   readonly operationId: UuidV7;
@@ -780,7 +840,8 @@ export type OperationPhaseV1 =
   | "preparingResponse"
   | "selectingFile"
   | "detectingFormat"
-  | "publishingReport";
+  | "publishingReport"
+  | "publishingFile";
 export interface OperationProgressV1 {
   readonly eventVersion: 1;
   readonly timestamp: string;
@@ -790,6 +851,123 @@ export interface OperationProgressV1 {
   readonly context: OperationContextV1;
   readonly sequence: number;
   readonly phase: OperationPhaseV1;
+}
+
+export interface ApplicationSettingValues {
+  readonly appearance: {
+    readonly theme?: "system" | "light" | "dark";
+    readonly reducedMotion?: boolean;
+  };
+  readonly locale: string;
+  readonly units: "metric" | "us-customary";
+}
+export type ApplicationSettingKey = keyof ApplicationSettingValues;
+export interface ApplicationSettingEntryV1<
+  K extends ApplicationSettingKey = ApplicationSettingKey,
+> {
+  readonly value: ApplicationSettingValues[K];
+  readonly updatedAt: string;
+}
+export type ApplicationSettingsValuesV1 = {
+  readonly [K in ApplicationSettingKey]: ApplicationSettingEntryV1<K> | null;
+};
+export interface ApplicationSettingsSnapshotV1 {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
+  readonly settings: ApplicationSettingsValuesV1;
+}
+export interface ApplicationSettingsWriteResultV1 extends ApplicationSettingsSnapshotV1 {
+  readonly changed: boolean;
+}
+export type NonsecretSettingsDocumentV1 = {
+  readonly format: "eutheto/application-settings";
+  readonly schemaVersion: 1;
+  readonly settings: { readonly [K in ApplicationSettingKey]?: ApplicationSettingEntryV1<K> };
+};
+export type SettingsChangeV1 = {
+  readonly [K in ApplicationSettingKey]: {
+    readonly key: K;
+    readonly before: ApplicationSettingEntryV1<K> | null;
+    readonly after: ApplicationSettingEntryV1<K> | null;
+  };
+}[ApplicationSettingKey];
+export interface SettingsImportPreviewV1 {
+  readonly kind: "preview";
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly sourceSha256: string;
+  readonly approvalSha256: string;
+  readonly libraryRevision: Revision;
+  readonly changes: readonly SettingsChangeV1[];
+}
+export interface SettingsImportAppliedV1 {
+  readonly kind: "applied";
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly libraryRevision: Revision;
+  readonly changed: boolean;
+}
+export interface SettingsImportDiscardedV1 {
+  readonly kind: "discarded";
+  readonly schemaVersion: 1;
+}
+export type SettingsImportResultV1 =
+  SettingsImportPreviewV1 | SettingsImportAppliedV1 | SettingsImportDiscardedV1;
+export type SettingsPreviewTarget =
+  | { readonly kind: "preview"; readonly previewId: UuidV7 }
+  | { readonly kind: "creator"; readonly operationId: UuidV7; readonly requestId: UuidV7 };
+export type SettingsImportRequestV1 =
+  | {
+      readonly action: "preview";
+      readonly schemaVersion: 1;
+      readonly requestId: UuidV7;
+      readonly operationId: UuidV7;
+    }
+  | {
+      readonly action: "apply";
+      readonly schemaVersion: 1;
+      readonly requestId: UuidV7;
+      readonly operationId: UuidV7;
+      readonly previewId: UuidV7;
+      readonly approvalSha256: string;
+      readonly expectedLibraryRevision: Revision;
+    }
+  | {
+      readonly action: "discard";
+      readonly schemaVersion: 1;
+      readonly requestId: UuidV7;
+      readonly target: SettingsPreviewTarget;
+    };
+export interface SettingsExportRequestV1 {
+  readonly schemaVersion: 1;
+  readonly requestId: UuidV7;
+  readonly operationId: UuidV7;
+}
+export interface SettingsExportV1 {
+  readonly schemaVersion: 1;
+  readonly libraryRevision: Revision;
+  readonly writtenBytes: number;
+}
+export interface LicenseInventoryPackageV2 {
+  readonly ecosystem: "cargo" | "npm";
+  readonly name: string;
+  readonly version: string;
+  readonly kind: "workspace" | "dependency";
+  readonly licenseConcluded: string;
+  readonly source: string;
+  readonly checksum?: { readonly algorithm: "SHA256" | "SHA512"; readonly value: string };
+}
+/** Locked-workspace metadata, not linked-artifact attribution or license approval. */
+export interface LicenseInventoryV2 {
+  readonly scope: "lockedWorkspace";
+  readonly schemaVersion: 2;
+  readonly generatedBy: "cargo xtask licenses generate";
+  readonly authoritativeInputs: readonly [
+    "Cargo.lock",
+    "pnpm-lock.yaml",
+    "xtask/supply-chain-inputs.json",
+  ];
+  readonly packages: readonly LicenseInventoryPackageV2[];
 }
 
 export type PeopleCsvDialect = "comma" | "semicolon" | "tab";
@@ -892,6 +1070,13 @@ export interface PeopleCsvDetectionV1 {
         readonly error: { readonly code: PeopleCsvErrorCode; readonly record?: number };
       }
   )[];
+}
+export interface PeopleCsvSampleV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly dialect: PeopleCsvDialect;
+  readonly record: number;
+  readonly cells: readonly { readonly text: string; readonly truncated: boolean }[] | null;
 }
 export type PeopleCsvDisposition = "reviewable" | "blocked" | "noChanges";
 export type PeopleCsvRejectionCode =
@@ -1831,6 +2016,7 @@ export const COMMAND_CATALOG = [
   "solver_get_support_matrix",
   "solver_get_deferred_gates",
   "project_list",
+  "project_open",
   "project_get_metadata",
   "project_create",
   "project_duplicate",
@@ -1855,6 +2041,7 @@ export const COMMAND_CATALOG = [
   "people_csv_source_open",
   "people_csv_source_close",
   "people_csv_detect",
+  "people_csv_record_sample",
   "people_csv_preview",
   "people_csv_apply",
   "people_csv_preview_discard",
@@ -1872,7 +2059,7 @@ export const COMMAND_CATALOG = [
   "scenario_validate",
   "scenario_undo",
   "scenario_redo",
-  "scenario_get_history",
+  "scenario_get_history_page",
   "scenario_migrate_preview",
   "solve_get_backend_options",
   "solve_estimate_model",
@@ -2216,13 +2403,15 @@ function parseResponse<T>(
 }
 
 const isDomainPackRef = shape<DomainPackRef>({ id: isPackId, schemaVersion: isU32 });
-const isProjectSummary = shape<ProjectSummaryDto>({
+const isProjectListItem = shape<ProjectListItemV1>({
+  schemaVersion: literal(1),
   scenarioId: isUuid,
   title: isText,
   domainPackId: isPackId,
   revision: isRevision,
   updatedAt: isTimestamp,
   archived: isBoolean,
+  lastOpenedAt: nullable(isTimestamp),
 });
 const isProjectMetadata = shape<ProjectMetadataDto>({
   scenarioId: isUuid,
@@ -2324,6 +2513,8 @@ const isRemovedScenario = shape<RemovedScenarioDto>({
   archived: isBoolean,
 });
 const isPortablePreview = shape<PortablePreviewDto>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
   previewId: isUuid,
   bundleId: isUuid,
   bundleKind: choices("scenario-export", "full-backup"),
@@ -2347,17 +2538,32 @@ const isPortablePreview = shape<PortablePreviewDto>({
   settingsRemoved: arrayOf(isText),
   appliedMigrations: arrayOf(isAppliedMigration),
 });
-const isPortableApplied = shape<PortableAppliedDto>({ scenarioIds: arrayOf(isUuid) });
+const isPortableApplied = shape<PortableAppliedDto>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  scenarioIds: arrayOf(isUuid),
+  safetyBackup: union<SafetyBackupOutcomeDto>(
+    shape({ kind: literal("notRequired") }),
+    shape({ kind: literal("createdAndVerified"), artifactName: isText }),
+    shape({ kind: literal("confirmedBypass") }),
+  ),
+});
 const isPortableFilePreview = shape<PortableFilePreviewDto>({
+  schemaVersion: literal(1),
   title: isText,
   byteLength: isRevision,
   backupSummary: nullable(isBackupSummary),
   previewId: isUuid,
   digest: isDigest,
   currentRevision: nullable(isRevision),
+  libraryRevision: isRevision,
+});
+const isPortableArtifact = shape<PortableArtifactDto>({
+  schemaVersion: literal(1),
+  artifactName: isText,
+  currentRevision: nullable(isRevision),
   libraryRevision: nullable(isRevision),
 });
-const isPortableArtifact = shape<PortableArtifactDto>({ artifactName: isText });
 const isFoundation = shape<FoundationStatus>({ schemaVersion: isU32, capability: isText });
 const isAppInfo = shape<AppInfoDto>({
   name: isText,
@@ -2615,6 +2821,7 @@ const isUnopenedMetadata = shape<UnopenedBundleMetadataDto>({
   ),
 });
 const isUnopenedPreview = shape<UnopenedBundlePreviewDto>({
+  schemaVersion: literal(1),
   previewId: isUuid,
   metadata: isUnopenedMetadata,
 });
@@ -2696,23 +2903,56 @@ const isCommandResult = shape<CommandResultDto>({
   validationDelta: isValidationDelta,
   inverse: nullable(isScenarioCommand),
 });
-const isActor = shape<ActorRef>({ actorId: nullable(isText), displayName: isText });
-const isHistoryEntry = shape<HistoryEntryDto>({
+const HISTORY_PAGE_LIMITS = {
+  entries: 100,
+  summaryBytes: 4096,
+  requestBytes: 4096,
+  responseBytes: 4 * 1_048_576,
+} as const;
+const isHistorySequence = (value: unknown): value is number => isRevision(value) && value > 0;
+const isHistoryContinuation = shape<HistoryPageContinuationV1>({
+  scenarioId: isUuid,
+  revision: isRevision,
+  beforeSequence: isHistorySequence,
+});
+const historyRequestShape = shape<HistoryPageRequestV1>({
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  expectedRevision: isRevision,
+  limit: (value): value is number =>
+    isRevision(value) && value > 0 && value <= HISTORY_PAGE_LIMITS.entries,
+  continuation: nullable(isHistoryContinuation),
+});
+const isHistoryRequest: Guard<HistoryPageRequestV1> = (value): value is HistoryPageRequestV1 =>
+  historyRequestShape(value) &&
+  (value.continuation === null ||
+    (value.continuation.scenarioId === value.scenarioId &&
+      value.continuation.revision === value.expectedRevision));
+const isHistoryEntrySummary = shape<HistoryEntrySummaryDtoV1>({
   id: isUuid,
   revisionBefore: isRevision,
   revisionAfter: isRevision,
-  commandType: isText,
-  command: isJson,
-  inverse: isJson,
-  actor: isActor,
   source: choices("desktop", "cli", "import", "system", "undo", "redo"),
-  summary: isText,
+  summary: nullable((value): value is string => isCsvText(value, HISTORY_PAGE_LIMITS.summaryBytes)),
   createdAt: isTimestamp,
-  historySequence: isRevision,
+  historySequence: isHistorySequence,
   branchGeneration: isRevision,
   applied: isBoolean,
 });
-const isSetting = shape<SettingEntryDto>({ value: isJson, updatedAt: isTimestamp });
+const historyPageShape = shape<HistoryPageDtoV1>({
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  revision: isRevision,
+  entries: arrayOf(isHistoryEntrySummary, HISTORY_PAGE_LIMITS.entries),
+  continuation: nullable(isHistoryContinuation),
+  undoAvailable: isBoolean,
+  redoAvailable: isBoolean,
+});
+const isHistoryPage: Guard<HistoryPageDtoV1> = (value): value is HistoryPageDtoV1 =>
+  historyPageShape(value) &&
+  (value.continuation === null ||
+    (value.continuation.scenarioId === value.scenarioId &&
+      value.continuation.revision === value.revision));
 const isEventContext = shape<EventContextDto>({
   eventVersion: literal(1),
   timestamp: isTimestamp,
@@ -3476,11 +3716,24 @@ const isFullValidation = shape<FullValidationResultV2>({
   revision: isRevision,
   report: shape({ issues: arrayOf(isValidationIssue, 100_000) }),
 });
-const isOperationContext = shape<OperationContextV1>({
-  kind: literal("scenario"),
-  scenarioId: isUuid,
-  expectedRevision: nullable(isRevision),
-});
+const isOperationContext = union<OperationContextV1>(
+  shape<ScenarioOperationContextV1>({
+    kind: literal("scenario"),
+    scenarioId: isUuid,
+    expectedRevision: nullable(isRevision),
+  }),
+  shape<LibraryOperationContextV1>({
+    kind: literal("library"),
+    expectedLibraryRevision: nullable(isRevision),
+  }),
+);
+function sameOperationContext(left: OperationContextV1, right: OperationContextV1): boolean {
+  return left.kind === "scenario"
+    ? right.kind === "scenario" &&
+        left.scenarioId === right.scenarioId &&
+        left.expectedRevision === right.expectedRevision
+    : right.kind === "library" && left.expectedLibraryRevision === right.expectedLibraryRevision;
+}
 const isOperationPrepared = shape<OperationPreparedV1>({
   schemaVersion: literal(1),
   operationId: isUuid,
@@ -3511,8 +3764,166 @@ const isOperationProgress = shape<OperationProgressV1>({
     "selectingFile",
     "detectingFormat",
     "publishingReport",
+    "publishingFile",
   ),
 });
+
+const SETTINGS_COMPACT_BYTES = 64 * 1024;
+const SETTINGS_WIRE_BYTES = 136 * 1024;
+const INVENTORY_COMPACT_BYTES = 2 * 1_048_576;
+const INVENTORY_WIRE_BYTES = 2368 * 1024;
+const applicationSettingGuards: {
+  readonly [K in ApplicationSettingKey]: Guard<ApplicationSettingValues[K]>;
+} = {
+  appearance: shape<ApplicationSettingValues["appearance"]>({
+    theme: optional(choices("system", "light", "dark")),
+    reducedMotion: optional(isBoolean),
+  }),
+  locale: (value: unknown): value is string =>
+    typeof value === "string" &&
+    value.length <= 64 &&
+    /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value),
+  units: choices("metric", "us-customary"),
+};
+function applicationSettingEntry<K extends ApplicationSettingKey>(
+  key: K,
+): Guard<ApplicationSettingEntryV1<K>> {
+  return shape<ApplicationSettingEntryV1<K>>({
+    value: applicationSettingGuards[key],
+    updatedAt: isTimestamp,
+  });
+}
+const localSettingsShape = shape<ApplicationSettingsValuesV1>({
+  appearance: nullable(applicationSettingEntry("appearance")),
+  locale: nullable(applicationSettingEntry("locale")),
+  units: nullable(applicationSettingEntry("units")),
+});
+const settingsSnapshotShape = shape<ApplicationSettingsSnapshotV1>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  settings: localSettingsShape,
+});
+const isSettingsSnapshot = (value: unknown): value is ApplicationSettingsSnapshotV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) && settingsSnapshotShape(value);
+const settingsWriteShape = shape<ApplicationSettingsWriteResultV1>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  settings: localSettingsShape,
+  changed: isBoolean,
+});
+function settingsWriteGuard(expected: Revision): Guard<ApplicationSettingsWriteResultV1> {
+  return (value: unknown): value is ApplicationSettingsWriteResultV1 =>
+    boundedJson(value, SETTINGS_COMPACT_BYTES) &&
+    settingsWriteShape(value) &&
+    value.libraryRevision === expected + (value.changed ? 1 : 0);
+}
+const settingsChangeGuards = {
+  appearance: shape<Extract<SettingsChangeV1, { readonly key: "appearance" }>>({
+    key: literal("appearance"),
+    before: nullable(applicationSettingEntry("appearance")),
+    after: nullable(applicationSettingEntry("appearance")),
+  }),
+  locale: shape<Extract<SettingsChangeV1, { readonly key: "locale" }>>({
+    key: literal("locale"),
+    before: nullable(applicationSettingEntry("locale")),
+    after: nullable(applicationSettingEntry("locale")),
+  }),
+  units: shape<Extract<SettingsChangeV1, { readonly key: "units" }>>({
+    key: literal("units"),
+    before: nullable(applicationSettingEntry("units")),
+    after: nullable(applicationSettingEntry("units")),
+  }),
+};
+const isSettingsChange = union<SettingsChangeV1>(
+  settingsChangeGuards.appearance,
+  settingsChangeGuards.locale,
+  settingsChangeGuards.units,
+);
+function isChangedSettingEntry(change: SettingsChangeV1): boolean {
+  if (change.before === null || change.after === null) return change.before !== change.after;
+  if (change.before.updatedAt !== change.after.updatedAt) return true;
+  if (change.key === "appearance") {
+    return (
+      change.before.value.theme !== change.after.value.theme ||
+      change.before.value.reducedMotion !== change.after.value.reducedMotion
+    );
+  }
+  return change.before.value !== change.after.value;
+}
+const settingsPreviewShape = shape<SettingsImportPreviewV1>({
+  kind: literal("preview"),
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  sourceSha256: isDigest,
+  approvalSha256: isDigest,
+  libraryRevision: isRevision,
+  changes: arrayOf(isSettingsChange, 3),
+});
+const isSettingsPreview = (value: unknown): value is SettingsImportPreviewV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) &&
+  settingsPreviewShape(value) &&
+  value.changes.every(
+    (change, index) =>
+      isChangedSettingEntry(change) &&
+      (index === 0 || (value.changes[index - 1]?.key ?? "") < change.key),
+  );
+const settingsAppliedShape = shape<SettingsImportAppliedV1>({
+  kind: literal("applied"),
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  libraryRevision: isRevision,
+  changed: isBoolean,
+});
+const isSettingsApplied = (value: unknown): value is SettingsImportAppliedV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) && settingsAppliedShape(value);
+const isSettingsDiscarded = shape<SettingsImportDiscardedV1>({
+  kind: literal("discarded"),
+  schemaVersion: literal(1),
+});
+const settingsExportShape = shape<SettingsExportV1>({
+  schemaVersion: literal(1),
+  libraryRevision: isRevision,
+  writtenBytes: (value: unknown): value is number =>
+    isRevision(value) && value > 0 && value <= SETTINGS_COMPACT_BYTES,
+});
+const isSettingsExport = (value: unknown): value is SettingsExportV1 =>
+  boundedJson(value, SETTINGS_COMPACT_BYTES) && settingsExportShape(value);
+// UTF-8 metadata limits are byte limits, not JavaScript code-unit limits.
+function inventoryText(maximum: number): Guard<string> {
+  return (value: unknown): value is string => isCsvText(value, maximum) && value.length > 0;
+}
+const inventoryChecksumShape = shape<NonNullable<LicenseInventoryPackageV2["checksum"]>>({
+  algorithm: choices("SHA256", "SHA512"),
+  value: (value: unknown): value is string =>
+    typeof value === "string" && /^[0-9a-fA-F]{64}(?:[0-9a-fA-F]{64})?$/.test(value),
+});
+const isInventoryChecksum = (
+  value: unknown,
+): value is NonNullable<LicenseInventoryPackageV2["checksum"]> =>
+  inventoryChecksumShape(value) && value.value.length === (value.algorithm === "SHA256" ? 64 : 128);
+const isInventoryPackage = shape<LicenseInventoryPackageV2>({
+  ecosystem: choices("cargo", "npm"),
+  name: inventoryText(1024),
+  version: inventoryText(1024),
+  kind: choices("workspace", "dependency"),
+  licenseConcluded: inventoryText(4096),
+  source: inventoryText(1024),
+  checksum: optional(isInventoryChecksum),
+});
+const inventoryShape = shape<LicenseInventoryV2>({
+  scope: literal("lockedWorkspace"),
+  schemaVersion: literal(2),
+  generatedBy: literal("cargo xtask licenses generate"),
+  authoritativeInputs: (value: unknown): value is LicenseInventoryV2["authoritativeInputs"] =>
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value[0] === "Cargo.lock" &&
+    value[1] === "pnpm-lock.yaml" &&
+    value[2] === "xtask/supply-chain-inputs.json",
+  packages: arrayOf(isInventoryPackage, 4096),
+});
+const isLicenseInventory = (value: unknown): value is LicenseInventoryV2 =>
+  boundedJson(value, INVENTORY_COMPACT_BYTES) && inventoryShape(value);
 
 const CSV_SOURCE_BYTES = 16 * 1_048_576;
 const CSV_PREVIEW_WIRE_BYTES = ((CSV_SOURCE_BYTES + 65_536) * 9) / 8 + 65_536;
@@ -3699,6 +4110,25 @@ const isCsvDetection = (value: unknown): value is PeopleCsvDetectionV1 =>
   csvDetectionShape(value) &&
   value.dialects.length === 3 &&
   new Set(value.dialects.map((item) => item.dialect)).size === 3;
+const csvSampleShape = shape<PeopleCsvSampleV1>({
+  schemaVersion: literal(1),
+  sourceId: isUuid,
+  dialect: isCsvDialect,
+  record: isCsvRecord,
+  cells: nullable(
+    arrayOf(
+      shape({
+        text: (value: unknown): value is string => isCsvText(value, 256),
+        truncated: isBoolean,
+      }),
+      64,
+    ),
+  ),
+});
+const isCsvSample = (value: unknown): value is PeopleCsvSampleV1 =>
+  boundedJson(value, 131_072) &&
+  csvSampleShape(value) &&
+  (value.cells === null || value.cells.length >= 1);
 const isCsvRejectedRow = shape<PeopleCsvRejectedRow>({ record: isCsvRecord, code: isCsvRejection });
 const isCsvRejectedRows = (value: unknown): value is readonly PeopleCsvRejectedRow[] =>
   boundedJson(value, 65_536) && arrayOf(isCsvRejectedRow, 200)(value);
@@ -3811,7 +4241,7 @@ const isCsvApply = shape<PeopleCsvApplyV1>({
 const isCsvSaved = shape<PeopleCsvReportSavedV1>({ schemaVersion: literal(1), previewId: isUuid });
 const isCsvClosed = shape<{ readonly schemaVersion: 1 }>({ schemaVersion: literal(1) });
 
-function newRequestId(): UuidV7 {
+export function newUuidV7(): UuidV7 {
   const bytes = window.crypto.getRandomValues(new Uint8Array(16));
   const timestamp = BigInt(Date.now());
   bytes[0] = Number((timestamp >> 40n) & 0xffn);
@@ -3864,6 +4294,7 @@ async function call<T>(
   guard: Guard<T>,
   options: {
     readonly maximumBytes?: number;
+    readonly requestMaximumBytes?: number;
     readonly onProgress?: Channel;
     readonly revisionKey?: ResponseRevision<T>;
   } = {},
@@ -3888,6 +4319,11 @@ async function call<T>(
         ? request.cancelRequestId
         : undefined;
   if (!isUuid(requestId)) throw new RangeError("A canonical UUIDv7 request identity is required");
+  if (
+    options.requestMaximumBytes !== undefined &&
+    !boundedJson(request, options.requestMaximumBytes)
+  )
+    throw new RangeError("The operation request exceeds its JSON limits");
   let value: unknown;
   try {
     value = await invoke<unknown>(
@@ -3936,9 +4372,35 @@ type SetupOperationCommand =
   | "workforce_apply_reviewed_generation"
   | "people_csv_source_open"
   | "people_csv_detect"
+  | "people_csv_record_sample"
   | "people_csv_preview"
   | "people_csv_apply"
   | "people_csv_rejected_rows_save";
+const portableCommands = {
+  projectImportPreview: "project_import_preview",
+  projectImportApply: "project_import_apply",
+  projectExportPreview: "project_export_preview",
+  projectExportCreate: "project_export_create",
+  projectBackupPreview: "project_backup_preview",
+  projectBackupCreate: "project_backup_create",
+  projectRestorePreview: "project_restore_preview",
+  projectRestoreApply: "project_restore_apply",
+  projectUnopenedBundleInspect: "project_unopened_bundle_inspect",
+  projectUnopenedBundleReexport: "project_unopened_bundle_reexport",
+} as const;
+type PortablePurpose = keyof typeof portableCommands;
+type PortableCommand = (typeof portableCommands)[PortablePurpose];
+function isPortablePurpose(kind: OperationPurposeV1["kind"]): kind is PortablePurpose {
+  return Object.hasOwn(portableCommands, kind);
+}
+const PORTABLE_COMPACT_BYTES = 64 * 1_048_576;
+const PORTABLE_WIRE_BYTES = 128 * 1_048_576 + 128 * 1024;
+const SETUP_FRAME_BYTES = 64 * 1024;
+const SETUP_VIEW_REQUEST_BYTES = 2 * SETUP_FRAME_BYTES;
+const SETUP_PREVIEW_REQUEST_BYTES = 16 * 1_048_576 + SETUP_VIEW_REQUEST_BYTES;
+function portableGuard<T>(guard: Guard<T>): Guard<T> {
+  return (value: unknown): value is T => boundedJson(value, PORTABLE_COMPACT_BYTES) && guard(value);
+}
 interface NativeCallbackRegistry {
   readonly unregisterCallback: (id: number) => void;
 }
@@ -3958,27 +4420,27 @@ function inactiveOperation(): Error & ApiErrorDto {
   return Object.assign(new Error(error.message), error);
 }
 
-/** One immutable scenario/revision presentation context; dispose it when that context changes. */
-export class SetupOperationScope {
-  readonly #context: OperationContextV1;
+/** Shared channel and reservation ownership for the two concrete presentation contexts. */
+class OperationScope<C extends OperationContextV1> {
+  readonly #context: C;
   readonly #windowLabel: string;
   readonly #callbacks: NativeCallbackRegistry;
   readonly #running = new Set<{ readonly dispose: () => void }>();
   #disposed = false;
 
-  constructor(scenarioId: UuidV7, expectedRevision: Revision | null) {
-    if (!isUuid(scenarioId) || (expectedRevision !== null && !isRevision(expectedRevision))) {
-      throw new RangeError("A canonical scenario identity and exact safe revision are required");
-    }
+  constructor(context: C) {
+    if (!isOperationContext(context))
+      throw new RangeError("A canonical operation context and exact safe revision are required");
     const callbacks: unknown = Reflect.get(window, "__TAURI_INTERNALS__");
     if (!hasCallbackRegistry(callbacks))
       throw new Error("The native operation channel is unavailable");
     this.#callbacks = callbacks;
     this.#windowLabel = getCurrentWebviewWindow().label;
-    this.#context = Object.freeze({ kind: "scenario", scenarioId, expectedRevision });
+    Object.freeze(context);
+    this.#context = context;
   }
 
-  get context(): OperationContextV1 {
+  get context(): C {
     return this.#context;
   }
 
@@ -3989,26 +4451,98 @@ export class SetupOperationScope {
   }
 
   run<T>(
-    command: SetupOperationCommand,
+    command:
+      | SetupOperationCommand
+      | PortableCommand
+      | "settings_import_nonsecret"
+      | "settings_export_nonsecret",
     purpose: OperationPurposeV1,
     payload: object,
     guard: Guard<T>,
     maximumBytes: number,
     revisionKey: ResponseRevision<T>,
     onProgress?: (event: OperationProgressV1) => void,
+    onAbandon?: () => void,
   ): SetupOperation<T> {
     if (this.#disposed) throw inactiveOperation();
-    if (!boundedJson(payload, RESPONSE_MAX_BYTES))
+    const portablePurpose = isPortablePurpose(purpose.kind);
+    const settingsPurpose =
+      purpose.kind === "settingsImportPreview" ||
+      purpose.kind === "settingsImportApply" ||
+      purpose.kind === "settingsExport";
+    const libraryPurpose =
+      settingsPurpose ||
+      (portablePurpose &&
+        purpose.kind !== "projectExportPreview" &&
+        purpose.kind !== "projectExportCreate");
+    const libraryRevisionRequired =
+      purpose.kind === "settingsImportApply" ||
+      purpose.kind === "projectImportApply" ||
+      purpose.kind === "projectRestoreApply" ||
+      purpose.kind === "projectBackupCreate";
+    if (
+      (this.#context.kind === "library") !== libraryPurpose ||
+      (this.#context.kind === "scenario" &&
+        (command === "settings_import_nonsecret" || command === "settings_export_nonsecret"))
+    )
+      throw new RangeError("The operation purpose belongs to another context kind");
+    if (
+      this.#context.kind === "library" &&
+      libraryRevisionRequired !== (this.#context.expectedLibraryRevision !== null)
+    )
+      throw new RangeError("The operation requires its exact library revision context");
+    if (
+      settingsPurpose &&
+      command !==
+        (purpose.kind === "settingsExport"
+          ? "settings_export_nonsecret"
+          : "settings_import_nonsecret")
+    )
+      throw new RangeError("The settings operation requires its matching command");
+    if (portablePurpose) {
+      if (
+        !isPortablePurpose(purpose.kind) ||
+        command !== portableCommands[purpose.kind] ||
+        (this.#context.kind === "scenario" && this.#context.expectedRevision === null)
+      )
+        throw new RangeError(
+          "The portable operation requires its matching command and exact context",
+        );
+    } else if (
+      Object.values(portableCommands).some((portableCommand) => portableCommand === command)
+    ) {
+      throw new RangeError("The portable command requires its matching purpose");
+    }
+    const setupRequestMaximumBytes =
+      purpose.kind === "commandPreview" || purpose.kind === "applyReviewedGeneration"
+        ? SETUP_PREVIEW_REQUEST_BYTES
+        : purpose.kind === "setupView"
+          ? SETUP_VIEW_REQUEST_BYTES
+          : purpose.kind === "scenarioSummary" ||
+              purpose.kind === "setupStatus" ||
+              purpose.kind === "fullValidation"
+            ? SETUP_FRAME_BYTES
+            : undefined;
+    const nativeRequestMaximumBytes = portablePurpose
+      ? PORTABLE_COMPACT_BYTES
+      : setupRequestMaximumBytes;
+    if (
+      !boundedJson(
+        payload,
+        nativeRequestMaximumBytes ??
+          (settingsPurpose ? SETTINGS_COMPACT_BYTES : RESPONSE_MAX_BYTES),
+      )
+    )
       throw new RangeError("The operation request exceeds its JSON limits");
     // Capture before the prepare await: later edits to a Vue draft cannot rebind this request.
     const snapshot: unknown = JSON.parse(JSON.stringify(payload));
     if (!isObject(snapshot)) throw new RangeError("The operation request must be a JSON object");
-    const requestId = newRequestId();
+    const requestId = newUuidV7();
     const context = this.context;
     const prepared = call(
       "operation_prepare",
       {
-        requestId: newRequestId(),
+        requestId: newUuidV7(),
         schemaVersion: 1,
         purpose,
         context,
@@ -4035,7 +4569,7 @@ export class SetupOperationScope {
         call(
           "operation_cancel",
           {
-            requestId: newRequestId(),
+            requestId: newUuidV7(),
             schemaVersion: 1,
             operationId: result.operationId,
           },
@@ -4049,7 +4583,7 @@ export class SetupOperationScope {
         call(
           "operation_release",
           {
-            requestId: newRequestId(),
+            requestId: newUuidV7(),
             schemaVersion: 1,
             operationId: result.operationId,
           },
@@ -4066,6 +4600,7 @@ export class SetupOperationScope {
     const owned = {
       dispose: (): void => {
         void release().catch(() => undefined);
+        onAbandon?.();
       },
     };
     this.#running.add(owned);
@@ -4094,8 +4629,7 @@ export class SetupOperationScope {
               value.operationId !== operationId ||
               value.requestId !== requestId ||
               value.windowLabel !== this.#windowLabel ||
-              value.context.scenarioId !== context.scenarioId ||
-              value.context.expectedRevision !== context.expectedRevision ||
+              !sameOperationContext(value.context, context) ||
               value.sequence <= sequence
             )
               return;
@@ -4112,15 +4646,56 @@ export class SetupOperationScope {
         };
         const response = await call(
           command,
-          {
-            ...snapshot,
-            requestId,
-            operationId,
-            scenarioId: context.scenarioId,
-            expectedRevision: context.expectedRevision,
-          },
+          portablePurpose
+            ? {
+                ...snapshot,
+                schemaVersion: 1,
+                requestId,
+                operationId,
+                ...(context.kind === "scenario"
+                  ? {
+                      scenarioId: context.scenarioId,
+                      expectedRevision: context.expectedRevision,
+                    }
+                  : libraryRevisionRequired
+                    ? { expectedLibraryRevision: context.expectedLibraryRevision }
+                    : {}),
+              }
+            : context.kind === "scenario"
+              ? {
+                  ...snapshot,
+                  requestId,
+                  operationId,
+                  scenarioId: context.scenarioId,
+                  expectedRevision: context.expectedRevision,
+                }
+              : purpose.kind === "settingsImportApply"
+                ? {
+                    previewId: snapshot.previewId,
+                    approvalSha256: snapshot.approvalSha256,
+                    action: "apply",
+                    schemaVersion: 1,
+                    requestId,
+                    operationId,
+                    expectedLibraryRevision: context.expectedLibraryRevision,
+                  }
+                : purpose.kind === "settingsImportPreview"
+                  ? {
+                      action: "preview",
+                      schemaVersion: 1,
+                      requestId,
+                      operationId,
+                    }
+                  : { schemaVersion: 1, requestId, operationId },
           guard,
-          { maximumBytes, onProgress: channel, revisionKey },
+          {
+            maximumBytes,
+            onProgress: channel,
+            revisionKey,
+            ...(nativeRequestMaximumBytes === undefined
+              ? {}
+              : { requestMaximumBytes: nativeRequestMaximumBytes }),
+          },
         );
         receivedSuccess = true;
         return response;
@@ -4142,6 +4717,211 @@ export class SetupOperationScope {
       isCurrent,
     };
   }
+}
+
+/** One immutable scenario/revision presentation context; existing setup/CSV callers stay narrow. */
+export class SetupOperationScope extends OperationScope<ScenarioOperationContextV1> {
+  constructor(scenarioId: UuidV7, expectedRevision: Revision | null) {
+    super({ kind: "scenario", scenarioId, expectedRevision });
+  }
+}
+/** Preview/export discover a revision with null; apply owns an exact reviewed library revision. */
+export class LibraryOperationScope extends OperationScope<LibraryOperationContextV1> {
+  constructor(expectedLibraryRevision: Revision | null) {
+    super({ kind: "library", expectedLibraryRevision });
+  }
+}
+
+interface SettingsOwnedPreview {
+  readonly operation: SetupOperation<SettingsImportPreviewV1>;
+  id: UuidV7 | undefined;
+  closing: boolean;
+}
+/** Owns native reviews across library revision scopes, including undelivered creator results. */
+export class SettingsImportFlow {
+  readonly #previews = new Set<SettingsOwnedPreview>();
+  readonly #operations = new Set<SetupOperation<unknown>>();
+  #disposed = false;
+
+  async #cleanup(preview: SettingsOwnedPreview): Promise<void> {
+    preview.closing = true;
+    await preview.operation.release().catch(() => undefined);
+    let operationId: UuidV7;
+    try {
+      operationId = await preview.operation.operationId;
+    } catch {
+      this.#previews.delete(preview);
+      return;
+    }
+    await discardSettingsPreview({
+      kind: "creator",
+      operationId,
+      requestId: preview.operation.requestId,
+    });
+    this.#previews.delete(preview);
+  }
+
+  preview(
+    scope: LibraryOperationScope,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<SettingsImportPreviewV1> {
+    if (this.#disposed) throw inactiveOperation();
+    if (this.#previews.size >= 3)
+      throw new RangeError("Dismiss a settings review before opening another");
+    const operation = scope.run(
+      "settings_import_nonsecret",
+      { kind: "settingsImportPreview" },
+      { action: "preview", schemaVersion: 1 },
+      isSettingsPreview,
+      SETTINGS_WIRE_BYTES,
+      "libraryRevision",
+      onProgress,
+      () => {
+        void this.#cleanup(preview).catch(() => undefined);
+      },
+    );
+    const preview: SettingsOwnedPreview = { operation, id: undefined, closing: false };
+    this.#previews.add(preview);
+    const result = operation.result
+      .then((response) => {
+        preview.id = response.result.previewId;
+        return response;
+      })
+      .finally(async () => {
+        this.#operations.delete(tracked);
+        if (
+          preview.id === undefined ||
+          preview.closing ||
+          this.#disposed ||
+          !operation.isCurrent()
+        ) {
+          // Release can precede native reservation. Repeat creator cleanup after late settlement.
+          await this.#cleanup(preview).catch(() => undefined);
+        }
+      });
+    const tracked: SetupOperation<SettingsImportPreviewV1> = {
+      requestId: operation.requestId,
+      get operationId() {
+        return operation.operationId;
+      },
+      result,
+      cancel: () => operation.cancel(),
+      release: () =>
+        operation.release().finally(async () => {
+          await this.#cleanup(preview).catch(() => undefined);
+        }),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
+
+  apply(
+    scope: LibraryOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly approvalSha256: string;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<SettingsImportAppliedV1> {
+    if (this.#disposed) throw inactiveOperation();
+    const { previewId, approvalSha256 } = input;
+    if (!isUuid(previewId) || !isDigest(approvalSha256))
+      throw new RangeError("A canonical preview identity and approval digest are required");
+    const revision = scope.context.expectedLibraryRevision;
+    if (revision === null) throw new RangeError("Apply requires the reviewed library revision");
+    const guard = (value: unknown): value is SettingsImportAppliedV1 =>
+      isSettingsApplied(value) &&
+      value.previewId === previewId &&
+      value.libraryRevision === revision + (value.changed ? 1 : 0);
+    const operation = scope.run(
+      "settings_import_nonsecret",
+      { kind: "settingsImportApply" },
+      { action: "apply", schemaVersion: 1, previewId, approvalSha256 },
+      guard,
+      SETTINGS_WIRE_BYTES,
+      "libraryRevision",
+      onProgress,
+    );
+    const result = operation.result
+      .then((response) => {
+        for (const preview of this.#previews)
+          if (preview.id === previewId) this.#previews.delete(preview);
+        return response;
+      })
+      .finally(() => this.#operations.delete(tracked));
+    const tracked: SetupOperation<SettingsImportAppliedV1> = {
+      requestId: operation.requestId,
+      get operationId() {
+        return operation.operationId;
+      },
+      result,
+      cancel: () => operation.cancel(),
+      release: () => operation.release(),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
+
+  async discardPreview(previewId: UuidV7): Promise<void> {
+    await discardSettingsPreview({ kind: "preview", previewId });
+    for (const preview of this.#previews)
+      if (preview.id === previewId) this.#previews.delete(preview);
+  }
+
+  /** Signals immediately, then waits for native picker/transaction settlement and final cleanup. */
+  async dispose(): Promise<void> {
+    this.#disposed = true;
+    const operations = [...this.#operations];
+    await Promise.allSettled(operations.map((operation) => operation.release()));
+    await Promise.allSettled([...this.#previews].map((preview) => this.#cleanup(preview)));
+    await Promise.allSettled(operations.map((operation) => operation.result));
+    await Promise.all([...this.#previews].map((preview) => this.#cleanup(preview)));
+  }
+}
+
+export function discardSettingsPreview(
+  target: SettingsPreviewTarget,
+): Promise<ApiResponseDto<SettingsImportDiscardedV1>> {
+  const guard = union<SettingsPreviewTarget>(
+    shape({ kind: literal("preview"), previewId: isUuid }),
+    shape({ kind: literal("creator"), operationId: isUuid, requestId: isUuid }),
+  );
+  if (!guard(target)) throw new RangeError("A canonical settings preview target is required");
+  return call(
+    "settings_import_nonsecret",
+    {
+      action: "discard",
+      schemaVersion: 1,
+      requestId: newUuidV7(),
+      target: { ...target },
+    },
+    isSettingsDiscarded,
+    { maximumBytes: SETTINGS_WIRE_BYTES, revisionKey: null },
+  );
+}
+
+export function exportNonsecretSettings(
+  scope: LibraryOperationScope,
+  onProgress?: (event: OperationProgressV1) => void,
+): SetupOperation<SettingsExportV1> {
+  return scope.run(
+    "settings_export_nonsecret",
+    { kind: "settingsExport" },
+    { schemaVersion: 1 },
+    isSettingsExport,
+    SETTINGS_WIRE_BYTES,
+    "libraryRevision",
+    onProgress,
+  );
+}
+
+export function getLicenseInventory(): Promise<ApiResponseDto<LicenseInventoryV2>> {
+  return call("app_get_license_inventory", { requestId: newUuidV7() }, isLicenseInventory, {
+    maximumBytes: INVENTORY_WIRE_BYTES,
+    revisionKey: null,
+  });
 }
 
 interface CsvOwnedResource {
@@ -4192,7 +4972,7 @@ export class PeopleCsvFlow {
       resource.kind === "source" ? "people_csv_source_close" : "people_csv_preview_discard",
       {
         schemaVersion: 1,
-        requestId: newRequestId(),
+        requestId: newUuidV7(),
         scenarioId: this.#scenarioId,
         target: { kind: "creator", operationId, requestId: resource.operation.requestId },
       },
@@ -4294,6 +5074,34 @@ export class PeopleCsvFlow {
     );
   }
 
+  sample(
+    scope: SetupOperationScope,
+    sourceId: UuidV7,
+    input: { readonly dialect: PeopleCsvDialect; readonly record: number },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PeopleCsvSampleV1> {
+    this.#scope(scope);
+    const { dialect, record } = input;
+    if (!isUuid(sourceId) || !isCsvDialect(dialect) || !isCsvRecord(record))
+      throw new RangeError("CSV inspection requires a valid source, dialect, and logical record");
+    const guard = (value: unknown): value is PeopleCsvSampleV1 =>
+      isCsvSample(value) &&
+      value.sourceId === sourceId &&
+      value.dialect === dialect &&
+      value.record === record;
+    return this.#track(
+      scope.run(
+        "people_csv_record_sample",
+        { kind: "csvSample" },
+        { schemaVersion: 1, sourceId, dialect, record },
+        guard,
+        CSV_SMALL_WIRE_BYTES,
+        null,
+        onProgress,
+      ),
+    );
+  }
+
   preview(
     scope: SetupOperationScope,
     sourceId: UuidV7,
@@ -4373,7 +5181,7 @@ export class PeopleCsvFlow {
       "people_csv_source_close",
       {
         schemaVersion: 1,
-        requestId: newRequestId(),
+        requestId: newUuidV7(),
         scenarioId: this.#scenarioId,
         target: { kind: "source", sourceId },
       },
@@ -4389,7 +5197,7 @@ export class PeopleCsvFlow {
       "people_csv_preview_discard",
       {
         schemaVersion: 1,
-        requestId: newRequestId(),
+        requestId: newUuidV7(),
         scenarioId: this.#scenarioId,
         target: { kind: "preview", previewId },
       },
@@ -4405,7 +5213,7 @@ export class PeopleCsvFlow {
     if (this.#disposed) throw inactiveOperation();
     return call(
       "people_csv_rejected_rows",
-      { schemaVersion: 1, requestId: newRequestId(), scenarioId: this.#scenarioId, previewId },
+      { schemaVersion: 1, requestId: newUuidV7(), scenarioId: this.#scenarioId, previewId },
       (value: unknown): value is PeopleCsvRejectedRowsV1 =>
         isCsvReport(value) && value.previewId === previewId,
       { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null },
@@ -4445,72 +5253,91 @@ export class PeopleCsvFlow {
 }
 
 export function getAppInfo(): Promise<ApiResponseDto<AppInfoDto>> {
-  return call("app_get_info", { requestId: newRequestId() }, isAppInfo);
+  return call("app_get_info", { requestId: newUuidV7() }, isAppInfo);
 }
 
 export function getAppCapabilities(): Promise<ApiResponseDto<AppCapabilitiesDto>> {
-  return call("app_get_capabilities", { requestId: newRequestId() }, isCapabilities);
+  return call("app_get_capabilities", { requestId: newUuidV7() }, isCapabilities);
 }
 
 export function getAppPathsSummary(): Promise<ApiResponseDto<AppPathsSummaryDto>> {
-  return call("app_get_paths_summary", { requestId: newRequestId() }, isPaths);
+  return call("app_get_paths_summary", { requestId: newUuidV7() }, isPaths, {
+    maximumBytes: 136 * 1024,
+    revisionKey: null,
+  });
 }
 
 export function previewSupportBundle(): Promise<ApiResponseDto<SupportPreviewDto>> {
-  return call("app_create_support_bundle_preview", { requestId: newRequestId() }, isSupportPreview);
+  return call("app_create_support_bundle_preview", { requestId: newUuidV7() }, isSupportPreview);
 }
 export function listDomainPacks(): Promise<ApiResponseDto<readonly DomainPackDescriptorDto[]>> {
-  return call("pack_list", { requestId: newRequestId() }, arrayOf(isDomainDescriptor));
+  return call("pack_list", { requestId: newUuidV7() }, arrayOf(isDomainDescriptor));
 }
 
 export function describeDomainPack(packId: string): Promise<ApiResponseDto<DomainPackMetadataDto>> {
-  return call("pack_describe", { requestId: newRequestId(), packId }, isDomainMetadata);
+  return call("pack_describe", { requestId: newUuidV7(), packId }, isDomainMetadata);
 }
 
 export function listSolvers(): Promise<ApiResponseDto<readonly SolverDescriptorDto[]>> {
-  return call("solver_list", { requestId: newRequestId() }, arrayOf(isSolverDescriptor));
+  return call("solver_list", { requestId: newUuidV7() }, arrayOf(isSolverDescriptor));
 }
 
 export function describeSolver(backendId: string): Promise<ApiResponseDto<SolverDescriptorDto>> {
-  return call("solver_describe", { requestId: newRequestId(), backendId }, isSolverDescriptor);
+  return call("solver_describe", { requestId: newUuidV7(), backendId }, isSolverDescriptor);
 }
 
 export function getSolverSupportMatrix(): Promise<ApiResponseDto<SolverSupportMatrixDto>> {
-  return call("solver_get_support_matrix", { requestId: newRequestId() }, isSolverSupportMatrix);
+  return call("solver_get_support_matrix", { requestId: newUuidV7() }, isSolverSupportMatrix);
 }
 
 export function getDeferredSolverGates(): Promise<
   ApiResponseDto<readonly DeferredSolverGateDto[]>
 > {
-  return call("solver_get_deferred_gates", { requestId: newRequestId() }, arrayOf(isDeferredGate));
+  return call("solver_get_deferred_gates", { requestId: newUuidV7() }, arrayOf(isDeferredGate));
 }
 
 export function listProjects(
   scope: ProjectScope = "active",
-): Promise<ApiResponseDto<readonly ProjectSummaryDto[]>> {
-  return call("project_list", { requestId: newRequestId(), scope }, arrayOf(isProjectSummary));
+): Promise<ApiResponseDto<readonly ProjectListItemV1[]>> {
+  return call(
+    "project_list",
+    { requestId: newUuidV7(), schemaVersion: 1, scope },
+    arrayOf(isProjectListItem),
+  );
+}
+
+export function openProject(scenarioId: UuidV7): Promise<ApiResponseDto<ProjectListItemV1>> {
+  const guard = (value: unknown): value is ProjectListItemV1 =>
+    isProjectListItem(value) && value.scenarioId === scenarioId && value.lastOpenedAt !== null;
+  return call("project_open", { requestId: newUuidV7(), schemaVersion: 1, scenarioId }, guard, {
+    maximumBytes: 136 * 1024,
+    revisionKey: "revision",
+  });
 }
 
 export function getProjectMetadata(
   scenarioId: UuidV7,
 ): Promise<ApiResponseDto<ProjectMetadataDto>> {
-  return call(
-    "project_get_metadata",
-    { requestId: newRequestId(), scenarioId },
-    isProjectMetadata,
-    { revisionKey: "revision" },
-  );
+  return call("project_get_metadata", { requestId: newUuidV7(), scenarioId }, isProjectMetadata, {
+    revisionKey: "revision",
+  });
 }
 
 export function createProject(input: {
   readonly title: string;
   readonly description: string;
   readonly domainPack: DomainPackRef;
-  readonly settings: ScenarioSettings;
+  readonly settings: CalendarSettingsV1;
 }): Promise<ApiResponseDto<ProjectMetadataDto>> {
-  return call("project_create", { requestId: newRequestId(), ...input }, isProjectMetadata, {
-    revisionKey: "revision",
-  });
+  return call(
+    "project_create",
+    { requestId: newUuidV7(), schemaVersion: 1, ...input },
+    isProjectMetadata,
+    {
+      maximumBytes: 136 * 1024,
+      revisionKey: "revision",
+    },
+  );
 }
 
 export function duplicateProject(input: {
@@ -4518,7 +5345,7 @@ export function duplicateProject(input: {
   readonly expectedRevision: Revision;
   readonly title: string;
 }): Promise<ApiResponseDto<ProjectMetadataDto>> {
-  return call("project_duplicate", { requestId: newRequestId(), ...input }, isProjectMetadata, {
+  return call("project_duplicate", { requestId: newUuidV7(), ...input }, isProjectMetadata, {
     revisionKey: "revision",
   });
 }
@@ -4532,7 +5359,7 @@ export function setProjectArchived(input: {
   return call(
     command,
     {
-      requestId: newRequestId(),
+      requestId: newUuidV7(),
       scenarioId: input.scenarioId,
       expectedRevision: input.expectedRevision,
     },
@@ -4544,93 +5371,506 @@ export function deleteProject(
   scenarioId: UuidV7,
   expectedRevision: Revision,
 ): Promise<ApiResponseDto<EmptyDto>> {
-  return call(
-    "project_delete",
-    { requestId: newRequestId(), scenarioId, expectedRevision },
-    isEmpty,
-  );
+  return call("project_delete", { requestId: newUuidV7(), scenarioId, expectedRevision }, isEmpty);
 }
 
-export function previewImport(options: ImportOptions): Promise<ApiResponseDto<PortablePreviewDto>> {
-  return call("project_import_preview", { requestId: newRequestId(), options }, isPortablePreview);
+type PortableReviewKind = "import" | "restore" | "unopened" | "export" | "backup";
+interface PortableOwnedReview {
+  readonly kind: PortableReviewKind;
+  readonly operation: SetupOperation<unknown>;
+  readonly scenarioId: UuidV7 | null;
+  readonly scenarioRevision: Revision | null;
+  readonly replaceLibrary: boolean;
+  libraryRevision: Revision | null;
+  id: UuidV7 | undefined;
+  settled: boolean;
+  consuming: boolean;
+  consumer: SetupOperation<unknown> | undefined;
+  closing: boolean;
 }
+const isImportOptions = shape<ImportOptions>({
+  restoreMode: choices("import-scenario", "add-backup", "replace-library"),
+  includeResults: isBoolean,
+  includeAssets: isBoolean,
+});
+const isCollisionPlan = shape<CollisionPlan>({
+  scenarios: recordOf(choices("create-copy", "replace", "skip"), isUuid),
+  supplementalChoices: arrayOf(
+    shape<SupplementalCollisionChoice>({
+      section: choices("results", "shared-records", "preferences", "assets"),
+      key: isText,
+      action: choices("replace", "skip"),
+    }),
+  ),
+});
+const isRestoreOrigin = choices("userSelected", "safetyBackups");
+const isRestoreAuthorization = shape<RestoreAuthorizationDto>({
+  destructiveActionConfirmed: isBoolean,
+  safetyBackupBypassPhrase: nullable(isText),
+});
+const isPortableDiscarded = shape<{ readonly schemaVersion: 1 }>({ schemaVersion: literal(1) });
 
-export function applyImport(input: {
-  readonly previewId: UuidV7;
-  readonly collisionPlan: CollisionPlan;
-}): Promise<ApiResponseDto<PortableAppliedDto>> {
-  return call("project_import_apply", { requestId: newRequestId(), ...input }, isPortableApplied);
-}
+/** Owns finite native reviews and actual operation settlement, not authoritative library data. */
+export class PortableReviewFlow {
+  readonly #reviews = new Set<PortableOwnedReview>();
+  readonly #operations = new Set<SetupOperation<unknown>>();
+  #disposed = false;
+  #disposal: Promise<void> | undefined;
 
-export function previewExport(scenarioId: UuidV7): Promise<ApiResponseDto<PortableFilePreviewDto>> {
-  return call(
-    "project_export_preview",
-    { requestId: newRequestId(), scenarioId },
-    isPortableFilePreview,
-    { revisionKey: "currentRevision" },
-  );
-}
+  #active(): void {
+    if (this.#disposed) throw inactiveOperation();
+  }
 
-export function createExport(
-  scenarioId: UuidV7,
-  previewId: UuidV7,
-): Promise<ApiResponseDto<PortableArtifactDto>> {
-  return call(
-    "project_export_create",
-    { requestId: newRequestId(), scenarioId, previewId },
-    isPortableArtifact,
-  );
-}
+  #capacity(kind: PortableReviewKind): void {
+    this.#active();
+    const prepared = kind === "export" || kind === "backup";
+    let count = 0;
+    for (const review of this.#reviews)
+      if ((review.kind === "export" || review.kind === "backup") === prepared) count += 1;
+    if (count >= 3)
+      throw new RangeError("Dismiss a portable review in this group before opening another");
+  }
 
-export function previewBackup(title: string): Promise<ApiResponseDto<PortableFilePreviewDto>> {
-  return call(
-    "project_backup_preview",
-    { requestId: newRequestId(), title },
-    isPortableFilePreview,
-    { revisionKey: "libraryRevision" },
-  );
-}
+  async #cleanup(review: PortableOwnedReview): Promise<void> {
+    review.closing = true;
+    await review.consumer?.release().catch(() => undefined);
+    await review.operation.release().catch(() => undefined);
+    let operationId: UuidV7;
+    try {
+      operationId = await review.operation.operationId;
+    } catch {
+      if (review.settled && !review.consuming) this.#reviews.delete(review);
+      return;
+    }
+    await call(
+      "project_operation_cancel",
+      {
+        schemaVersion: 1,
+        requestId: newUuidV7(),
+        target: { kind: "creator", operationId, requestId: review.operation.requestId },
+      },
+      isPortableDiscarded,
+      { maximumBytes: PORTABLE_WIRE_BYTES, revisionKey: null },
+    );
+    // An acknowledgement is not settlement; retain the creator to repeat cleanup after a late reply.
+    if (review.settled && !review.consuming) this.#reviews.delete(review);
+  }
 
-export function createBackup(
-  title: string,
-  previewId: UuidV7,
-): Promise<ApiResponseDto<PortableArtifactDto>> {
-  return call(
-    "project_backup_create",
-    { requestId: newRequestId(), title, previewId },
-    isPortableArtifact,
-  );
-}
+  #track<T>(
+    operation: SetupOperation<T>,
+    result: Promise<ApiResponseDto<T>>,
+    onRelease?: () => Promise<void>,
+  ): SetupOperation<T> {
+    const tracked: SetupOperation<T> = {
+      requestId: operation.requestId,
+      get operationId() {
+        return operation.operationId;
+      },
+      result: result.finally(() => this.#operations.delete(tracked)),
+      cancel: () => operation.cancel(),
+      release: () =>
+        operation.release().finally(async () => {
+          await onRelease?.().catch(() => undefined);
+        }),
+      isCurrent: () => !this.#disposed && operation.isCurrent(),
+    };
+    this.#operations.add(tracked);
+    return tracked;
+  }
 
-export function previewRestore(
-  options: ImportOptions,
-): Promise<ApiResponseDto<PortablePreviewDto>> {
-  return call("project_restore_preview", { requestId: newRequestId(), options }, isPortablePreview);
-}
+  #preview<T extends { readonly previewId: UuidV7 }>(
+    scope: LibraryOperationScope | SetupOperationScope,
+    kind: PortableReviewKind,
+    purpose: PortablePurpose,
+    payload: object,
+    guard: Guard<T>,
+    revisionKey: ResponseRevision<T>,
+    libraryRevision: (value: T) => Revision | null,
+    onProgress?: (event: OperationProgressV1) => void,
+    replaceLibrary = false,
+  ): SetupOperation<T> {
+    this.#capacity(kind);
+    const operation = scope.run(
+      portableCommands[purpose],
+      { kind: purpose },
+      payload,
+      portableGuard(guard),
+      PORTABLE_WIRE_BYTES,
+      revisionKey,
+      onProgress,
+      () => {
+        void this.#cleanup(review).catch(() => undefined);
+      },
+    );
+    const review: PortableOwnedReview = {
+      kind,
+      operation,
+      id: undefined,
+      libraryRevision: null,
+      replaceLibrary,
+      scenarioId: scope.context.kind === "scenario" ? scope.context.scenarioId : null,
+      scenarioRevision: scope.context.kind === "scenario" ? scope.context.expectedRevision : null,
+      settled: false,
+      consuming: false,
+      consumer: undefined,
+      closing: false,
+    };
+    this.#reviews.add(review);
+    const result = operation.result
+      .then((response) => {
+        review.id = response.result.previewId;
+        review.libraryRevision = libraryRevision(response.result);
+        return response;
+      })
+      .finally(async () => {
+        review.settled = true;
+        if (review.id === undefined || review.closing || this.#disposed || !operation.isCurrent())
+          await this.#cleanup(review).catch(() => undefined);
+      });
+    return this.#track(operation, result, () => this.#cleanup(review));
+  }
 
-export function applyRestore(input: {
-  readonly previewId: UuidV7;
-  readonly collisionPlan: CollisionPlan;
-  readonly authorization: RestoreAuthorizationDto;
-}): Promise<ApiResponseDto<PortableAppliedDto>> {
-  return call("project_restore_apply", { requestId: newRequestId(), ...input }, isPortableApplied);
-}
+  #owned(
+    scope: LibraryOperationScope | SetupOperationScope,
+    previewId: UuidV7,
+    kind: PortableReviewKind,
+    expectedLibraryRevision?: Revision,
+  ): PortableOwnedReview {
+    this.#active();
+    const review = [...this.#reviews].find((item) => item.id === previewId);
+    if (
+      !isUuid(previewId) ||
+      review === undefined ||
+      review.kind !== kind ||
+      review.closing ||
+      review.consuming ||
+      !review.settled
+    )
+      throw new RangeError("An available review owned by this portable flow is required");
+    const context = scope.context;
+    if (
+      kind === "export"
+        ? context.kind !== "scenario" ||
+          context.scenarioId !== review.scenarioId ||
+          context.expectedRevision !== review.scenarioRevision ||
+          expectedLibraryRevision !== review.libraryRevision
+        : context.kind !== "library" ||
+          context.expectedLibraryRevision !== (kind === "unopened" ? null : review.libraryRevision)
+    )
+      throw new RangeError("The portable review belongs to another revision context");
+    return review;
+  }
 
-export function cancelPortablePreview(previewId: UuidV7): Promise<ApiResponseDto<EmptyDto>> {
-  return call("project_operation_cancel", { requestId: newRequestId(), previewId }, isEmpty);
-}
-export function inspectUnopenedBundle(): Promise<ApiResponseDto<UnopenedBundlePreviewDto>> {
-  return call("project_unopened_bundle_inspect", { requestId: newRequestId() }, isUnopenedPreview);
-}
+  #consume<T>(review: PortableOwnedReview, start: () => SetupOperation<T>): SetupOperation<T> {
+    review.consuming = true;
+    let operation: SetupOperation<T>;
+    try {
+      operation = start();
+    } catch (error) {
+      review.consuming = false;
+      void this.#cleanup(review).catch(() => undefined);
+      throw error;
+    }
+    review.consumer = operation;
+    let retained = false;
+    const result = operation.result
+      .catch((error: unknown) => {
+        const detail = isApiError(error) ? error.details?.portablePreviewRetained : undefined;
+        retained =
+          review.kind === "restore" &&
+          isApiError(error) &&
+          error.code === "restore.safety_backup_failed" &&
+          detail?.type === "boolean" &&
+          detail.value;
+        throw error;
+      })
+      .finally(async () => {
+        review.consuming = false;
+        review.consumer = undefined;
+        if (!retained || review.closing || this.#disposed || !operation.isCurrent())
+          await this.#cleanup(review).catch(() => undefined);
+      });
+    return this.#track(operation, result, () => this.#cleanup(review));
+  }
 
-export function reexportUnopenedBundle(
-  previewId: UuidV7,
-): Promise<ApiResponseDto<PortableArtifactDto>> {
-  return call(
-    "project_unopened_bundle_reexport",
-    { requestId: newRequestId(), previewId },
-    isPortableArtifact,
-  );
+  previewImport(
+    scope: LibraryOperationScope,
+    options: ImportOptions,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortablePreviewDto> {
+    if (!isImportOptions(options))
+      throw new RangeError("Valid portable import options are required");
+    return this.#preview(
+      scope,
+      "import",
+      "projectImportPreview",
+      { options },
+      isPortablePreview,
+      "libraryRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+    );
+  }
+
+  applyImport(
+    scope: LibraryOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly collisionPlan: CollisionPlan;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableAppliedDto> {
+    const review = this.#owned(scope, input.previewId, "import");
+    return this.#consume(review, () => {
+      if (!isCollisionPlan(input.collisionPlan))
+        throw new RangeError("A valid collision plan is required");
+      return scope.run(
+        "project_import_apply",
+        { kind: "projectImportApply" },
+        { previewId: input.previewId, collisionPlan: input.collisionPlan },
+        portableGuard(
+          (value: unknown): value is PortableAppliedDto =>
+            isPortableApplied(value) &&
+            review.libraryRevision !== null &&
+            (value.libraryRevision === review.libraryRevision ||
+              value.libraryRevision === review.libraryRevision + 1) &&
+            value.safetyBackup.kind === "notRequired",
+        ),
+        PORTABLE_WIRE_BYTES,
+        "libraryRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      );
+    });
+  }
+
+  previewExport(
+    scope: SetupOperationScope,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableFilePreviewDto> {
+    const revision = requireSetupRevision(scope);
+    return this.#preview(
+      scope,
+      "export",
+      "projectExportPreview",
+      {},
+      (value: unknown): value is PortableFilePreviewDto =>
+        isPortableFilePreview(value) &&
+        value.currentRevision === revision &&
+        value.backupSummary === null,
+      "currentRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+    );
+  }
+
+  createExport(
+    scope: SetupOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly expectedLibraryRevision: Revision;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableArtifactDto> {
+    const review = this.#owned(scope, input.previewId, "export", input.expectedLibraryRevision);
+    return this.#consume(review, () =>
+      scope.run(
+        "project_export_create",
+        { kind: "projectExportCreate" },
+        { previewId: input.previewId, expectedLibraryRevision: input.expectedLibraryRevision },
+        portableGuard(
+          (value: unknown): value is PortableArtifactDto =>
+            isPortableArtifact(value) &&
+            value.currentRevision === review.scenarioRevision &&
+            value.libraryRevision === review.libraryRevision,
+        ),
+        PORTABLE_WIRE_BYTES,
+        "currentRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      ),
+    );
+  }
+
+  previewBackup(
+    scope: LibraryOperationScope,
+    title: string,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableFilePreviewDto> {
+    if (!isText(title)) throw new RangeError("A portable backup title is required");
+    return this.#preview(
+      scope,
+      "backup",
+      "projectBackupPreview",
+      { title },
+      (value: unknown): value is PortableFilePreviewDto =>
+        isPortableFilePreview(value) &&
+        value.currentRevision === null &&
+        value.backupSummary !== null,
+      "libraryRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+    );
+  }
+
+  createBackup(
+    scope: LibraryOperationScope,
+    previewId: UuidV7,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableArtifactDto> {
+    const review = this.#owned(scope, previewId, "backup");
+    return this.#consume(review, () =>
+      scope.run(
+        "project_backup_create",
+        { kind: "projectBackupCreate" },
+        { previewId },
+        portableGuard(
+          (value: unknown): value is PortableArtifactDto =>
+            isPortableArtifact(value) &&
+            value.currentRevision === null &&
+            value.libraryRevision === review.libraryRevision,
+        ),
+        PORTABLE_WIRE_BYTES,
+        "libraryRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      ),
+    );
+  }
+
+  previewRestore(
+    scope: LibraryOperationScope,
+    options: ImportOptions,
+    origin: "userSelected" | "safetyBackups",
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortablePreviewDto> {
+    if (!isImportOptions(options) || !isRestoreOrigin(origin))
+      throw new RangeError("Valid restore options and native selection origin are required");
+    return this.#preview(
+      scope,
+      "restore",
+      "projectRestorePreview",
+      { options, origin },
+      isPortablePreview,
+      "libraryRevision",
+      (value) => value.libraryRevision,
+      onProgress,
+      options.restoreMode === "replace-library",
+    );
+  }
+
+  applyRestore(
+    scope: LibraryOperationScope,
+    input: {
+      readonly previewId: UuidV7;
+      readonly collisionPlan: CollisionPlan;
+      readonly authorization: RestoreAuthorizationDto;
+    },
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableAppliedDto> {
+    const review = this.#owned(scope, input.previewId, "restore");
+    return this.#consume(review, () => {
+      if (!isCollisionPlan(input.collisionPlan) || !isRestoreAuthorization(input.authorization))
+        throw new RangeError("A valid collision plan and restore authorization are required");
+      return scope.run(
+        "project_restore_apply",
+        { kind: "projectRestoreApply" },
+        {
+          previewId: input.previewId,
+          collisionPlan: input.collisionPlan,
+          authorization: input.authorization,
+        },
+        portableGuard(
+          (value: unknown): value is PortableAppliedDto =>
+            isPortableApplied(value) &&
+            review.libraryRevision !== null &&
+            (value.libraryRevision === review.libraryRevision ||
+              value.libraryRevision === review.libraryRevision + 1) &&
+            (review.replaceLibrary
+              ? value.safetyBackup.kind !== "notRequired"
+              : value.safetyBackup.kind === "notRequired"),
+        ),
+        PORTABLE_WIRE_BYTES,
+        "libraryRevision",
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      );
+    });
+  }
+
+  inspectUnopenedBundle(
+    scope: LibraryOperationScope,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<UnopenedBundlePreviewDto> {
+    return this.#preview(
+      scope,
+      "unopened",
+      "projectUnopenedBundleInspect",
+      {},
+      isUnopenedPreview,
+      null,
+      () => null,
+      onProgress,
+    );
+  }
+
+  reexportUnopenedBundle(
+    scope: LibraryOperationScope,
+    previewId: UuidV7,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<PortableArtifactDto> {
+    const review = this.#owned(scope, previewId, "unopened");
+    return this.#consume(review, () =>
+      scope.run(
+        "project_unopened_bundle_reexport",
+        { kind: "projectUnopenedBundleReexport" },
+        { previewId },
+        portableGuard(
+          (value: unknown): value is PortableArtifactDto =>
+            isPortableArtifact(value) &&
+            value.currentRevision === null &&
+            value.libraryRevision === null,
+        ),
+        PORTABLE_WIRE_BYTES,
+        null,
+        onProgress,
+        () => {
+          void this.#cleanup(review).catch(() => undefined);
+        },
+      ),
+    );
+  }
+
+  async discardPreview(previewId: UuidV7): Promise<void> {
+    const review = [...this.#reviews].find((item) => item.id === previewId);
+    if (!isUuid(previewId) || review === undefined)
+      throw new RangeError("A portable review owned by this flow is required");
+    await this.#cleanup(review);
+  }
+
+  /** Signals first, then awaits real picker/transaction settlement; committed receipts stay intact. */
+  dispose(): Promise<void> {
+    this.#disposed = true;
+    this.#disposal ??= (async () => {
+      const operations = [...this.#operations];
+      await Promise.allSettled(operations.map((operation) => operation.release()));
+      await Promise.allSettled([...this.#reviews].map((review) => this.#cleanup(review)));
+      await Promise.allSettled(operations.map((operation) => operation.result));
+      await Promise.all([...this.#reviews].map((review) => this.#cleanup(review)));
+    })().catch((error: unknown) => {
+      this.#disposal = undefined;
+      throw error;
+    });
+    return this.#disposal;
+  }
 }
 
 function setupWireLimit(dataBytes: number): number {
@@ -4644,7 +5884,7 @@ function requireSetupRevision(scope: SetupOperationScope): Revision {
 }
 function sameSetupContext(
   value: { readonly scenarioId: UuidV7; readonly revision: Revision },
-  context: OperationContextV1,
+  context: ScenarioOperationContextV1,
 ): boolean {
   return (
     value.scenarioId === context.scenarioId &&
@@ -4659,7 +5899,7 @@ const isSetupViewEnvelope = shape({
 });
 function setupViewGuard<K extends SetupViewId>(
   viewId: K,
-  context: OperationContextV1,
+  context: ScenarioOperationContextV1,
 ): Guard<ScenarioSetupViewResultV2<K>> {
   return (value: unknown): value is ScenarioSetupViewResultV2<K> =>
     isSetupViewEnvelope(value) &&
@@ -4816,7 +6056,7 @@ export function applyScenarioCommand(input: {
   readonly command: ScenarioCommand;
   readonly truncateRedo: boolean;
 }): Promise<ApiResponseDto<CommandResultDto>> {
-  return call("scenario_apply_command", { requestId: newRequestId(), ...input }, isCommandResult, {
+  return call("scenario_apply_command", { requestId: newUuidV7(), ...input }, isCommandResult, {
     revisionKey: "newRevision",
   });
 }
@@ -4830,7 +6070,7 @@ export function applyScenarioBatch(input: {
   readonly commands: readonly ScenarioCommand[];
   readonly truncateRedo: boolean;
 }): Promise<ApiResponseDto<CommandResultDto>> {
-  return call("scenario_apply_batch", { requestId: newRequestId(), ...input }, isCommandResult, {
+  return call("scenario_apply_batch", { requestId: newUuidV7(), ...input }, isCommandResult, {
     revisionKey: "newRevision",
   });
 }
@@ -4841,7 +6081,7 @@ export function undoScenario(
 ): Promise<ApiResponseDto<CommandResultDto>> {
   return call(
     "scenario_undo",
-    { requestId: newRequestId(), scenarioId, expectedRevision },
+    { requestId: newUuidV7(), scenarioId, expectedRevision },
     isCommandResult,
     { revisionKey: "newRevision" },
   );
@@ -4853,25 +6093,34 @@ export function redoScenario(
 ): Promise<ApiResponseDto<CommandResultDto>> {
   return call(
     "scenario_redo",
-    { requestId: newRequestId(), scenarioId, expectedRevision },
+    { requestId: newUuidV7(), scenarioId, expectedRevision },
     isCommandResult,
     { revisionKey: "newRevision" },
   );
 }
 
-export function getScenarioHistory(
-  scenarioId: UuidV7,
-): Promise<ApiResponseDto<{ readonly entries: readonly HistoryEntryDto[] }>> {
+export function getScenarioHistoryPage(
+  request: HistoryPageRequestV1,
+): Promise<ApiResponseDto<HistoryPageDtoV1>> {
+  if (!isHistoryRequest(request)) throw new RangeError("The history page request is invalid");
   return call(
-    "scenario_get_history",
-    { requestId: newRequestId(), scenarioId },
-    shape({ entries: arrayOf(isHistoryEntry) }),
+    "scenario_get_history_page",
+    { requestId: newUuidV7(), ...request },
+    (value): value is HistoryPageDtoV1 =>
+      isHistoryPage(value) &&
+      value.revision === request.expectedRevision &&
+      value.entries.length <= request.limit,
+    {
+      requestMaximumBytes: HISTORY_PAGE_LIMITS.requestBytes,
+      maximumBytes: HISTORY_PAGE_LIMITS.responseBytes,
+      revisionKey: "revision",
+    },
   );
 }
 
 export function listSolutions(scenarioId: UuidV7): Promise<ApiResponseDto<SolutionListDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     scenarioId,
   } satisfies SolutionListRequestV1;
@@ -4883,7 +6132,7 @@ export function getSolutionSummary(
   solutionId: SolutionId,
 ): Promise<ApiResponseDto<SolutionDetailDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     scenarioId,
     solutionId,
@@ -4899,7 +6148,7 @@ export function getSolutionView(input: {
   readonly viewId: string;
 }): Promise<ApiResponseDto<SolutionViewDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionViewRequestV1;
@@ -4912,7 +6161,7 @@ export function selectSolution(input: {
   readonly solutionId: SolutionId;
 }): Promise<ApiResponseDto<SolutionSummaryDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionSelectRequestV1;
@@ -4924,7 +6173,7 @@ export function verifySolution(
   solutionId: SolutionId,
 ): Promise<ApiResponseDto<SolutionVerificationDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     scenarioId,
     solutionId,
@@ -4940,7 +6189,7 @@ export function compareSolutions(input: {
   readonly candidateSolutionId: SolutionId;
 }): Promise<ApiResponseDto<SolutionComparisonDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionCompareRequestV1;
@@ -4954,7 +6203,7 @@ export function explainSolution(input: {
   readonly request: ExplanationRequestV1;
 }): Promise<ApiResponseDto<SolutionExplanationDtoV1>> {
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionExplainRequestV1;
@@ -4970,7 +6219,7 @@ export function startCounterfactual(input: {
 }): Promise<ApiResponseDto<SolutionStartCounterfactualDtoV1>> {
   assertAssignmentValue(input.condition.value);
   const request = {
-    requestId: newRequestId(),
+    requestId: newUuidV7(),
     schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionStartCounterfactualRequestV1;
@@ -4985,7 +6234,7 @@ export function cancelCounterfactual(input: {
   readonly jobId: CounterfactualJobId;
 }): Promise<ApiResponseDto<SolutionCancelCounterfactualDtoV1>> {
   const request = {
-    cancelRequestId: newRequestId(),
+    cancelRequestId: newUuidV7(),
     schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
     ...input,
   } satisfies SolutionCancelCounterfactualRequestV1;
@@ -4994,27 +6243,56 @@ export function cancelCounterfactual(input: {
   });
 }
 
-export function getSetting(
-  key: string,
-): Promise<ApiResponseDto<{ readonly setting: SettingEntryDto | null }>> {
+export function getApplicationSettings(): Promise<ApiResponseDto<ApplicationSettingsSnapshotV1>> {
+  return call("settings_get", { requestId: newUuidV7(), schemaVersion: 1 }, isSettingsSnapshot, {
+    maximumBytes: SETTINGS_WIRE_BYTES,
+    revisionKey: "libraryRevision",
+  });
+}
+
+export function updateSetting<K extends ApplicationSettingKey>(
+  key: K,
+  value: ApplicationSettingValues[K],
+  expectedLibraryRevision: Revision,
+): Promise<ApiResponseDto<ApplicationSettingsWriteResultV1>> {
+  if (!isRevision(expectedLibraryRevision) || !applicationSettingGuards[key](value))
+    throw new RangeError("A valid setting and captured library revision are required");
   return call(
-    "settings_get",
-    { requestId: newRequestId(), key },
-    shape({ setting: nullable(isSetting) }),
+    "settings_update",
+    {
+      requestId: newUuidV7(),
+      schemaVersion: 1,
+      key,
+      value,
+      expectedLibraryRevision,
+    },
+    settingsWriteGuard(expectedLibraryRevision),
+    {
+      maximumBytes: SETTINGS_WIRE_BYTES,
+      revisionKey: "libraryRevision",
+    },
   );
 }
 
-export function updateSetting(key: string, value: JsonValue): Promise<ApiResponseDto<EmptyDto>> {
-  return call("settings_update", { requestId: newRequestId(), key, value }, isEmpty);
-}
-
 export function resetSettingsSection(
-  key: string,
-): Promise<ApiResponseDto<{ readonly existed: boolean }>> {
+  key: ApplicationSettingKey,
+  expectedLibraryRevision: Revision,
+): Promise<ApiResponseDto<ApplicationSettingsWriteResultV1>> {
+  if (!isRevision(expectedLibraryRevision))
+    throw new RangeError("A captured library revision is required");
   return call(
     "settings_reset_section",
-    { requestId: newRequestId(), key },
-    shape({ existed: isBoolean }),
+    {
+      requestId: newUuidV7(),
+      schemaVersion: 1,
+      key,
+      expectedLibraryRevision,
+    },
+    settingsWriteGuard(expectedLibraryRevision),
+    {
+      maximumBytes: SETTINGS_WIRE_BYTES,
+      revisionKey: "libraryRevision",
+    },
   );
 }
 

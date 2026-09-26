@@ -109,7 +109,7 @@ pub(crate) fn validate_workforce_full(
             )),
         ) => Err(operation_error(&error)),
         Err(error) => Ok(DomainValidationReport {
-            issues: vec![error.validation_issue()],
+            issues: vec![error.validation_issue(document)],
         }),
     }
 }
@@ -138,7 +138,7 @@ fn render_validation(
             )),
         ) => return Err(operation_error(&error)),
         Err(error) => DomainValidationReport {
-            issues: vec![error.validation_issue()],
+            issues: vec![error.validation_issue(document)],
         },
     };
     let current = report

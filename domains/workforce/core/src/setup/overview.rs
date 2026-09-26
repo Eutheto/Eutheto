@@ -5,10 +5,11 @@ use super::contracts::{
 use super::paging::{ProjectionBudget, Result, invalid};
 use super::{entities, rules};
 use crate::ids::AssignmentTypeId;
-use crate::model::AssignmentLock;
+use crate::model::{AssignmentLock, DateRange, planning_dates};
 use crate::validation::MAX_REFERENCE_ITEMS;
 use eutheto_domain_api::DomainPackError;
 use eutheto_types::ScenarioDocument;
+use jiff::{Span, civil::Time};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -40,9 +41,11 @@ pub(super) fn facts(
             "setup overview does not accept continuation",
         ));
     }
-    budget.visit()?;
+    let (planning_dates, initial_work_window) = date_windows(document, budget)?;
     let mut facts = WorkforceSetupFactsV1 {
         settings: document.settings.clone(),
+        planning_dates,
+        initial_work_window,
         entities: ENTITY_KINDS
             .into_iter()
             .map(|kind| EntityKindCountV1 { kind, count: 0 })
@@ -136,6 +139,46 @@ pub(super) fn facts(
     }
     budget.visit()?;
     Ok(WorkforceSetupViewDataV1::Overview(facts))
+}
+
+fn date_windows(
+    document: &ScenarioDocument,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<(DateRange, DateRange)> {
+    budget.visit()?;
+    let dates = planning_dates(&document.settings)?;
+    let end_date_exclusive = dates
+        .last_date
+        .checked_add(Span::new().days(1))
+        .map_err(|_| {
+            invalid(
+                "/settings/horizon",
+                "planning date boundary exceeds its range",
+            )
+        })?;
+    let planning_dates = DateRange {
+        start_date: dates.first_date,
+        end_date_exclusive,
+    };
+    let days = dates
+        .first_date
+        .to_datetime(Time::MIN)
+        .duration_until(end_date_exclusive.to_datetime(Time::MIN))
+        .as_secs()
+        / 86_400;
+    let initial_work_window = DateRange {
+        start_date: dates.first_date,
+        end_date_exclusive: dates
+            .first_date
+            .checked_add(Span::new().days(days.min(7)))
+            .map_err(|_| {
+                invalid(
+                    "/settings/horizon",
+                    "work window boundary exceeds its range",
+                )
+            })?,
+    };
+    Ok((planning_dates, initial_work_window))
 }
 
 fn increment(count: &mut u32) -> Result<()> {

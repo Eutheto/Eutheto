@@ -608,6 +608,10 @@ async fn redo_branch_truncation_requires_explicit_csv_confirmation() -> TestResu
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps cross-kind capacity, eviction, and discard transitions in one scenario."
+)]
 #[tokio::test]
 async fn shared_preview_count_kind_isolation_and_discard_preserve_other_capabilities() -> TestResult
 {
@@ -615,8 +619,13 @@ async fn shared_preview_count_kind_isolation_and_discard_preserve_other_capabili
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let id = create(&app).await?;
     let csv = preview(&app, id, Revision::INITIAL, SOURCE, vec![add(2)?, add(4)?]).await?;
-    let AppQueryResult::Bundle { bytes, .. } =
-        app.query(AppQuery::ExportScenario(id)).await.boxed()?
+    let AppQueryResult::Bundle { bytes, .. } = app
+        .query(AppQuery::ExportScenario {
+            scenario_id: id,
+            cancellation: app.setup_cancellation(),
+        })
+        .await
+        .boxed()?
     else {
         return Err("export receipt".into());
     };
@@ -625,6 +634,7 @@ async fn shared_preview_count_kind_isolation_and_discard_preserve_other_capabili
         ..
     } = app
         .query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: bytes.clone(),
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -640,7 +650,10 @@ async fn shared_preview_count_kind_isolation_and_discard_preserve_other_capabili
     let AppQueryResult::UnopenedBundlePreview {
         preview_id: opaque, ..
     } = app
-        .query(AppQuery::InspectUnopenedBundle { bytes })
+        .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
+            bytes,
+        })
         .await
         .boxed()?
     else {
@@ -665,6 +678,7 @@ async fn shared_preview_count_kind_isolation_and_discard_preserve_other_capabili
     );
     assert_code(
         app.execute(AppCommand::ApplyImport {
+            cancellation: app.setup_cancellation(),
             request_id: request_id()?,
             preview_id: csv.preview_id,
             collision_plan: CollisionPlan::default(),
@@ -674,6 +688,7 @@ async fn shared_preview_count_kind_isolation_and_discard_preserve_other_capabili
     );
     assert_code(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id: csv.preview_id,
             destination: directory.path().join("wrong.zip"),
         })
@@ -1093,7 +1108,14 @@ async fn shared_byte_budget_evicts_csv_and_portable_before_the_count_limit() -> 
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let id = create(&app).await?;
     let csv = preview(&app, id, Revision::INITIAL, SOURCE, vec![add(2)?, add(4)?]).await?;
-    let bytes = match app.query(AppQuery::ExportScenario(id)).await.boxed()? {
+    let bytes = match app
+        .query(AppQuery::ExportScenario {
+            scenario_id: id,
+            cancellation: app.setup_cancellation(),
+        })
+        .await
+        .boxed()?
+    {
         AppQueryResult::Bundle { bytes, .. } => large_opaque_bundle(&bytes)?,
         _ => return Err("wrong export receipt".into()),
     };
@@ -1101,6 +1123,7 @@ async fn shared_byte_budget_evicts_csv_and_portable_before_the_count_limit() -> 
         preview_id: first, ..
     } = app
         .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             bytes: bytes.clone(),
         })
         .await
@@ -1118,7 +1141,10 @@ async fn shared_byte_budget_evicts_csv_and_portable_before_the_count_limit() -> 
     let AppQueryResult::UnopenedBundlePreview {
         preview_id: second, ..
     } = app
-        .query(AppQuery::InspectUnopenedBundle { bytes })
+        .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
+            bytes,
+        })
         .await
         .boxed()?
     else {
@@ -1371,17 +1397,26 @@ async fn colliding_portable_preview_keeps_csv(opaque: bool) -> TestResult {
     deps.ids = ids.clone();
     let app = EuthetoApp::open(deps).await.boxed()?;
     let id = create(&app).await?;
-    let AppQueryResult::Bundle { bytes, .. } =
-        app.query(AppQuery::ExportScenario(id)).await.boxed()?
+    let AppQueryResult::Bundle { bytes, .. } = app
+        .query(AppQuery::ExportScenario {
+            scenario_id: id,
+            cancellation: app.setup_cancellation(),
+        })
+        .await
+        .boxed()?
     else {
         return Err("expected portable source".into());
     };
     ids.repeat.store(true, std::sync::atomic::Ordering::SeqCst);
     let csv = preview(&app, id, Revision::INITIAL, SOURCE, vec![add(2)?, add(4)?]).await?;
     let query = if opaque {
-        AppQuery::InspectUnopenedBundle { bytes }
+        AppQuery::InspectUnopenedBundle {
+            bytes,
+            cancellation: app.setup_cancellation(),
+        }
     } else {
         AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,

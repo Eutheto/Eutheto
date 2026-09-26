@@ -28,6 +28,8 @@ pub const MAX_CSV_VALIDATION_BYTES: usize = 64 * 1024;
 pub const MAX_CSV_DETECTION_BYTES: usize = 64 * 1024;
 pub const MAX_CSV_SAMPLE_RECORDS: usize = 2;
 pub const MAX_CSV_SAMPLE_CELL_BYTES: usize = 64;
+/// Complete valid identity text for one explicitly selected logical record.
+pub const MAX_CSV_INSPECTED_CELL_BYTES: usize = 256;
 
 /// A reviewed delimiter choice, never an automatically selected fallback.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

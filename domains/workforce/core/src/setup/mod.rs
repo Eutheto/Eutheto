@@ -8,6 +8,7 @@ mod overview;
 mod paging;
 mod people;
 mod rules;
+mod time;
 mod work;
 
 use contracts::{
@@ -162,6 +163,12 @@ fn project(
 ) -> Result<(WorkforceSetupViewDataV1, Option<DomainBatchCommand>)> {
     let result = match query {
         WorkforceSetupQueryV1::Overview(_) => overview::facts(document, position, budget),
+        WorkforceSetupQueryV1::EntitySummary(parameters) => {
+            entities::summary(document, &parameters, position, budget)
+        }
+        WorkforceSetupQueryV1::LocalTimeResolution(parameters) => {
+            time::local_time_resolution(document, &parameters, position, budget)
+        }
         WorkforceSetupQueryV1::SettingsPreparation(parameters) => {
             commands::settings_preparation(parameters, position, budget)
         }
@@ -199,6 +206,12 @@ fn project(
         WorkforceSetupQueryV1::EntityDetail(parameters) => {
             entities::detail(document, &parameters, position, budget)
         }
+        WorkforceSetupQueryV1::PeoplePage(parameters) => {
+            people::people_page(document, &parameters, position, context, budget)
+        }
+        WorkforceSetupQueryV1::AvailabilityRecords(parameters) => {
+            people::availability_records(document, &parameters, position, context, budget)
+        }
         WorkforceSetupQueryV1::CommandChanges(parameters) => {
             let DomainViewInput::CommandPreviewSetup { changes, .. } = input else {
                 return Err(invalid(
@@ -223,6 +236,9 @@ fn project(
         }
         WorkforceSetupQueryV1::RuleScope(parameters) => {
             inspection::rule_scope(document, &parameters, position, context, budget)
+        }
+        WorkforceSetupQueryV1::RuleScopeSummary(parameters) => {
+            inspection::rule_scope_summary(document, &parameters, position, budget)
         }
         WorkforceSetupQueryV1::AssignmentInspection(parameters) => {
             inspection::assignment_inspection(document, &parameters, position, context, budget)

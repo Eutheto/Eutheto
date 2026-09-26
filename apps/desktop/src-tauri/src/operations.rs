@@ -36,9 +36,23 @@ pub(super) enum OperationPurposeV1 {
     ApplyReviewedGeneration,
     CsvSourceOpen,
     CsvDetect,
+    CsvSample,
     CsvPreview,
     CsvApply,
     CsvReportSave,
+    SettingsImportPreview,
+    SettingsImportApply,
+    SettingsExport,
+    ProjectImportPreview,
+    ProjectImportApply,
+    ProjectExportPreview,
+    ProjectExportCreate,
+    ProjectBackupPreview,
+    ProjectBackupCreate,
+    ProjectRestorePreview,
+    ProjectRestoreApply,
+    ProjectUnopenedBundleInspect,
+    ProjectUnopenedBundleReexport,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -52,6 +66,9 @@ pub(super) enum OperationContextV1 {
     Scenario {
         scenario_id: ScenarioId,
         expected_revision: Option<Revision>,
+    },
+    Library {
+        expected_library_revision: Option<Revision>,
     },
 }
 
@@ -120,6 +137,7 @@ pub(super) enum OperationPhaseV1 {
     SelectingFile,
     DetectingFormat,
     PublishingReport,
+    PublishingFile,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -226,20 +244,64 @@ impl OperationRegistry {
         request: &OperationPrepareRequestV1,
     ) -> Result<OperationPreparedV1, ApiError> {
         require_version(request.schema_version)?;
-        let OperationContextV1::Scenario {
-            expected_revision, ..
-        } = request.context;
-        if !matches!(
+        let library_purpose = matches!(
             request.purpose,
-            OperationPurposeV1::ScenarioSummary | OperationPurposeV1::SetupStatus
-        ) && expected_revision.is_none()
-        {
-            return Err(boundary_error(
-                "operation.revision_required",
-                "This operation requires an exact scenario revision.",
-                Some("/context/expectedRevision"),
-            )
-            .into());
+            OperationPurposeV1::SettingsImportPreview
+                | OperationPurposeV1::SettingsImportApply
+                | OperationPurposeV1::SettingsExport
+                | OperationPurposeV1::ProjectImportPreview
+                | OperationPurposeV1::ProjectImportApply
+                | OperationPurposeV1::ProjectBackupPreview
+                | OperationPurposeV1::ProjectBackupCreate
+                | OperationPurposeV1::ProjectRestorePreview
+                | OperationPurposeV1::ProjectRestoreApply
+                | OperationPurposeV1::ProjectUnopenedBundleInspect
+                | OperationPurposeV1::ProjectUnopenedBundleReexport
+        );
+        match request.context {
+            OperationContextV1::Scenario {
+                expected_revision, ..
+            } if !library_purpose => {
+                if !matches!(
+                    request.purpose,
+                    OperationPurposeV1::ScenarioSummary | OperationPurposeV1::SetupStatus
+                ) && expected_revision.is_none()
+                {
+                    return Err(boundary_error(
+                        "operation.revision_required",
+                        "This operation requires an exact scenario revision.",
+                        Some("/context/expectedRevision"),
+                    )
+                    .into());
+                }
+            }
+            OperationContextV1::Library {
+                expected_library_revision,
+            } if library_purpose => {
+                let revision_required = matches!(
+                    request.purpose,
+                    OperationPurposeV1::SettingsImportApply
+                        | OperationPurposeV1::ProjectImportApply
+                        | OperationPurposeV1::ProjectBackupCreate
+                        | OperationPurposeV1::ProjectRestoreApply
+                );
+                if revision_required != expected_library_revision.is_some() {
+                    return Err(boundary_error(
+                        "operation.library_revision_mismatch",
+                        "The library revision context does not match this operation's purpose.",
+                        Some("/context/expectedLibraryRevision"),
+                    )
+                    .into());
+                }
+            }
+            _ => {
+                return Err(boundary_error(
+                    "operation.context_mismatch",
+                    "The operation purpose does not match its revision context.",
+                    Some("/context"),
+                )
+                .into());
+            }
         }
         let source = match &request.purpose {
             OperationPurposeV1::SetupView { view_id } => Some((view_id, SetupQuerySource::Stored)),
@@ -394,7 +456,7 @@ impl OperationRegistry {
         if entry.purpose != claim.purpose || entry.context != claim.context {
             return Err(boundary_error(
                 "operation.claim_mismatch",
-                "The operation purpose or scenario context does not match its reservation.",
+                "The operation purpose or revision context does not match its reservation.",
                 Some("/operationId"),
             )
             .into());
@@ -580,7 +642,7 @@ fn not_active() -> ApiErrorDto {
         Some("/operationId"),
     )
 }
-fn cancelled() -> ApiErrorDto {
+pub(super) fn cancelled() -> ApiErrorDto {
     boundary_error("operation.cancelled", "The operation was cancelled.", None)
 }
 fn resource_limit() -> ApiErrorDto {

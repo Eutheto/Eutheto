@@ -2,6 +2,7 @@
 //! Public results are Rust values, not another stored format or an IPC approval token.
 
 mod calendar;
+pub(crate) mod diagnostics;
 mod generation;
 mod review;
 pub(crate) use calendar::potentially_intersects;
@@ -43,6 +44,9 @@ pub(crate) fn issue(
         kind,
         entity_id,
         local_date,
+        endpoint: None,
+        occurrence_date: None,
+        origin: None,
     })
 }
 
@@ -50,6 +54,7 @@ pub(crate) fn resolve_endpoint(
     local: DateTime,
     settings: &ScenarioSettings,
     entity_id: EntityId,
+    endpoint: TemporalEndpoint,
 ) -> Result<ResolvedLocalTime, TemporalError> {
     eutheto_types::resolve_local_time(
         LocalWallTime::from_datetime(local),
@@ -58,11 +63,14 @@ pub(crate) fn resolve_endpoint(
         settings.overlap_policy,
     )
     .map_err(|error| {
-        issue(
-            TemporalIssueKind::Resolution(error.kind),
-            Some(entity_id),
-            Some(local.date()),
-        )
+        TemporalError::Issue(TemporalIssue {
+            kind: TemporalIssueKind::Resolution(error.kind),
+            entity_id: Some(entity_id),
+            local_date: Some(local.date()),
+            endpoint: Some(endpoint),
+            occurrence_date: None,
+            origin: None,
+        })
     })
 }
 
@@ -88,8 +96,8 @@ pub(crate) fn resolve_interval(
     entity_id: EntityId,
 ) -> Result<ResolvedInterval, TemporalError> {
     checked_interval(
-        resolve_endpoint(start, settings, entity_id)?,
-        resolve_endpoint(end, settings, entity_id)?,
+        resolve_endpoint(start, settings, entity_id, TemporalEndpoint::Start)?,
+        resolve_endpoint(end, settings, entity_id, TemporalEndpoint::End)?,
         entity_id,
     )
 }
@@ -121,7 +129,12 @@ pub(crate) fn resolve_shift_timing(
             start_time,
             duration_minutes,
         } => {
-            let start = resolve_endpoint(date.to_datetime(start_time), settings, entity_id)?;
+            let start = resolve_endpoint(
+                date.to_datetime(start_time),
+                settings,
+                entity_id,
+                TemporalEndpoint::Start,
+            )?;
             // u32 minutes fit in SignedDuration's i64-second representation without narrowing.
             let instant = start
                 .instant

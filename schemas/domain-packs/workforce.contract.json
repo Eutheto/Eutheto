@@ -158,6 +158,33 @@
         }
       }
     },
+    "SetupEntitySummaryParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityId"],
+      "properties": {
+        "entityId": { "$ref": "#/$defs/Uuid" }
+      }
+    },
+    "SetupPeoplePageParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["search"],
+      "properties": {
+        "search": { "type": "string", "minLength": 0, "maxLength": 256 },
+        "qualificationId": { "$ref": "#/$defs/Uuid" },
+        "limit": { "$ref": "#/$defs/SetupPageLimit" }
+      }
+    },
+    "SetupAvailabilityRecordsParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["personId"],
+      "properties": {
+        "personId": { "$ref": "#/$defs/Uuid" },
+        "limit": { "$ref": "#/$defs/SetupPageLimit" }
+      }
+    },
     "SetupRulePageParameters": {
       "type": "object",
       "additionalProperties": false,
@@ -382,6 +409,18 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 64
+    },
+    "SetupLocalTimeResolutionParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local"],
+      "properties": {
+        "local": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
     },
     "SetupSettingsPreparationParameters": {
       "type": "object",
@@ -763,7 +802,9 @@
         "activeRequiredRules",
         "configuredTypeMemberships",
         "entities",
+        "initialWorkWindow",
         "lockedAssignments",
+        "planningDates",
         "preferences",
         "requiredRules",
         "settings"
@@ -771,6 +812,12 @@
       "properties": {
         "settings": {
           "$ref": "#/$defs/SetupScenarioSettings"
+        },
+        "planningDates": {
+          "$ref": "#/$defs/DateRange"
+        },
+        "initialWorkWindow": {
+          "$ref": "#/$defs/DateRange"
         },
         "entities": {
           "type": "array",
@@ -1395,6 +1442,39 @@
         }
       }
     },
+    "SetupRuleScopeSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "population"],
+      "properties": {
+        "rule": { "$ref": "#/$defs/SetupRuleReference" },
+        "population": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "peopleCount", "shiftCount"],
+              "properties": {
+                "kind": { "const": "ordinary" },
+                "peopleCount": { "$ref": "#/$defs/UInt32" },
+                "shiftCount": { "$ref": "#/$defs/UInt32" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "peopleCount", "beforeShiftCount", "afterShiftCount"],
+              "properties": {
+                "kind": { "const": "minimumRest" },
+                "peopleCount": { "$ref": "#/$defs/UInt32" },
+                "beforeShiftCount": { "$ref": "#/$defs/UInt32" },
+                "afterShiftCount": { "$ref": "#/$defs/UInt32" }
+              }
+            }
+          ]
+        }
+      }
+    },
     "SetupShiftScopePage": {
       "type": "object",
       "additionalProperties": false,
@@ -1717,10 +1797,28 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "fieldPath",
         "issue",
+        "message",
         "origin"
       ],
       "properties": {
+        "fieldPath": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "scenario-change-path",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            { "type": "null" }
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
         "origin": {
           "$ref": "#/$defs/SetupShiftOrigin"
         },
@@ -1983,6 +2081,36 @@
             {
               "type": "null"
             }
+          ]
+        }
+      }
+    },
+    "SetupAvailabilityRecordSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["availabilityId", "availabilityKind", "effectiveRange"],
+      "properties": {
+        "availabilityId": { "$ref": "#/$defs/Uuid" },
+        "availabilityKind": { "$ref": "#/$defs/SetupAvailabilityKind" },
+        "effectiveRange": { "$ref": "#/$defs/DateRange" }
+      }
+    },
+    "SetupAvailabilityRecordsPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["totalItems", "items", "continuation"],
+      "properties": {
+        "totalItems": { "$ref": "#/$defs/UInt32" },
+        "items": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/SetupAvailabilityRecordSummary" }
+        },
+        "continuation": {
+          "oneOf": [
+            { "$ref": "#/$defs/SetupEntityContinuation" },
+            { "type": "null" }
           ]
         }
       }
@@ -2329,6 +2457,23 @@
         }
       }
     },
+    "SetupEntitySummaryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "entitySummary" },
+            "data": { "$ref": "#/$defs/SetupEntitySummary" }
+          }
+        }
+      }
+    },
     "SetupEntityPageResult": {
       "type": "object",
       "additionalProperties": false,
@@ -2441,6 +2586,40 @@
             "data": {
               "$ref": "#/$defs/SetupAvailabilityPage"
             }
+          }
+        }
+      }
+    },
+    "SetupAvailabilityRecordsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "availabilityRecords" },
+            "data": { "$ref": "#/$defs/SetupAvailabilityRecordsPage" }
+          }
+        }
+      }
+    },
+    "SetupPeoplePageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "peoplePage" },
+            "data": { "$ref": "#/$defs/SetupPersonScopePage" }
           }
         }
       }
@@ -2615,6 +2794,40 @@
             "data": {
               "$ref": "#/$defs/SetupScopeInspection"
             }
+          }
+        }
+      }
+    },
+    "SetupRuleScopeSummaryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "ruleScopeSummary" },
+            "data": { "$ref": "#/$defs/SetupRuleScopeSummary" }
+          }
+        }
+      }
+    },
+    "SetupLocalTimeResolutionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data", "kind"],
+          "properties": {
+            "kind": { "const": "localTimeResolution" },
+            "data": { "$ref": "#/$defs/ResolvedLocalTime" }
           }
         }
       }
@@ -6353,6 +6566,31 @@
       ]
     },
     {
+      "id": "official.workforce.setup.availability_records",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.availability_records.title",
+        "defaultText": "Authored availability records"
+      },
+      "description": {
+        "key": "official.workforce.setup.availability_records.description",
+        "defaultText": "Read one person's authored availability records in stable identity order, including records outside the displayed dates or without occurrences. This is not a claim of rule enforcement. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupAvailabilityRecordsParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupAvailabilityRecordsResult" },
+      "validExamples": [
+        { "personId": "018f7b40-a000-7000-8000-000000000014" },
+        { "personId": "018f7b40-a000-7000-8000-000000000014", "limit": 200 }
+      ],
+      "invalidExamples": [
+        {},
+        { "personId": "invalid" },
+        { "personId": "018f7b40-a000-7000-8000-000000000014", "limit": 201 },
+        { "personId": "018f7b40-a000-7000-8000-000000000014", "dates": null }
+      ]
+    },
+    {
       "id": "official.workforce.setup.availability_window",
       "sources": ["stored", "commandPreview"],
       "supportsContinuation": true,
@@ -6524,6 +6762,29 @@
       ]
     },
     {
+      "id": "official.workforce.setup.entity_summary",
+      "sources": ["stored"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.entity_summary.title",
+        "defaultText": "Entity identity and kind"
+      },
+      "description": {
+        "key": "official.workforce.setup.entity_summary.description",
+        "defaultText": "Resolve one stored entity's stable identity, native kind and bounded display name at the captured revision. This is a structural header, not validation or a complete record."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupEntitySummaryParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupEntitySummaryResult" },
+      "validExamples": [
+        { "entityId": "018f7b40-a000-7000-8000-000000000014" }
+      ],
+      "invalidExamples": [
+        {},
+        { "entityId": "invalid" },
+        { "entityId": "018f7b40-a000-7000-8000-000000000014", "entityKind": "person" }
+      ]
+    },
+    {
       "id": "official.workforce.setup.generation_review",
       "sources": ["stored", "commandPreview"],
       "supportsContinuation": true,
@@ -6575,6 +6836,34 @@
       ]
     },
     {
+      "id": "official.workforce.setup.local_time_resolution",
+      "sources": ["stored"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.local_time_resolution.title",
+        "defaultText": "Resolve a local time"
+      },
+      "description": {
+        "key": "official.workforce.setup.local_time_resolution.description",
+        "defaultText": "Read-only resolution of one bounded local wall-time input against captured native scenario timezone and gap/overlap policy. Returns the exact instant, original local intent and selected offset. No mutation, continuation, caller-supplied settings or presentation-window restriction is accepted."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupLocalTimeResolutionParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupLocalTimeResolutionResult" },
+      "validExamples": [
+        { "local": "2026-03-08T02:30:00" },
+        { "local": "2026-11-01T01:30:00" }
+      ],
+      "invalidExamples": [
+        {},
+        { "local": "" },
+        { "local": 12 },
+        { "local": "12345678901234567890123456789012345678901234567890123456789012345" },
+        { "local": "2026-11-01T01:30:00", "timeZone": "Etc/UTC" },
+        { "local": "2026-11-01T01:30:00", "offsetSeconds": 0 },
+        { "local": "2026-11-01T01:30:00", "limit": 1 }
+      ]
+    },
+    {
       "id": "official.workforce.setup.overview",
       "sources": ["stored", "commandPreview"],
       "supportsContinuation": false,
@@ -6584,7 +6873,7 @@
       },
       "description": {
         "key": "official.workforce.setup.overview.description",
-        "defaultText": "Read captured scenario settings and exact stored structural counts, including all 13 entity kinds and stored active flags. No completeness, applicability or feasibility judgment is inferred."
+        "defaultText": "Read captured scenario settings, native half-open planning dates, an initial work window of up to seven civil dates, and exact stored structural counts, including all 13 entity kinds and stored active flags. No completeness, applicability or feasibility judgment is inferred."
       },
       "parameterSchema": {
         "$ref": "#/$defs/SetupEmptyParameters"
@@ -6600,6 +6889,31 @@
         {
           "ready": true
         }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.people_page",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": true,
+      "title": {
+        "key": "official.workforce.setup.people_page.title",
+        "defaultText": "People by name and recorded qualification"
+      },
+      "description": {
+        "key": "official.workforce.setup.people_page.description",
+        "defaultText": "Read a stable identity-ordered people page using literal Unicode-lowercase name substring search and an optional existing qualification identity. Qualification filtering means a recorded grant, regardless of its effective or expiry date, not eligibility for a shift. Omitted limit defaults to 50; explicit limits are 1–200."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupPeoplePageParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupPeoplePageResult" },
+      "validExamples": [
+        { "search": "" },
+        { "search": "Alice", "qualificationId": "018f7b40-a000-7000-8000-000000000014", "limit": 200 }
+      ],
+      "invalidExamples": [
+        {},
+        { "search": "", "qualificationId": "invalid" },
+        { "search": "", "qualificationId": null },
+        { "search": "", "limit": 0 }
       ]
     },
     {
@@ -6779,6 +7093,29 @@
           "axis": "people",
           "limit": 0
         }
+      ]
+    },
+    {
+      "id": "official.workforce.setup.rule_scope_summary",
+      "sources": ["stored", "commandPreview"],
+      "supportsContinuation": false,
+      "title": {
+        "key": "official.workforce.setup.rule_scope_summary.title",
+        "defaultText": "Effective rule scope population"
+      },
+      "description": {
+        "key": "official.workforce.setup.rule_scope_summary.description",
+        "defaultText": "Count authored populations for implemented Required rules over the full captured horizon. Minimum rest counts people in main AND before AND after; each shift role intersects main with that role. Counts do not establish feasibility or actual short-rest conflicts. Unsupported rule classes and kinds are rejected. No continuation."
+      },
+      "parameterSchema": { "$ref": "#/$defs/SetupRuleDetailParameters" },
+      "resultSchema": { "$ref": "#/$defs/SetupRuleScopeSummaryResult" },
+      "validExamples": [
+        { "rule": { "class": "required", "ruleId": "018f7b40-a000-7000-8000-000000000020" } }
+      ],
+      "invalidExamples": [
+        {},
+        { "rule": { "class": "required", "ruleId": "invalid" } },
+        { "rule": { "class": "required", "ruleId": "018f7b40-a000-7000-8000-000000000020" }, "part": "main" }
       ]
     },
     {

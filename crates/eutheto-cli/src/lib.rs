@@ -26,9 +26,9 @@ use eutheto_import::{
 };
 use eutheto_types::{
     ActorRef, AppError, BackendId, CancellationToken, CommandBatch, CommandEnvelope, CommandId,
-    CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone, LocaleTag, PackId, RequestId,
-    Revision, ScenarioCommand, ScenarioId, ScenarioSettings, SolutionId, SystemClock,
-    SystemIdGenerator, UnitSystem,
+    CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone, LocaleTag, PackId,
+    ProjectSummaryDto, RequestId, Revision, ScenarioCommand, ScenarioId, ScenarioSettings,
+    SolutionId, SystemClock, SystemIdGenerator, UnitSystem,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
@@ -1448,6 +1448,7 @@ async fn execute_bundle(
                     .await?;
             let result = app
                 .execute(AppCommand::ExactReexportUnopenedBundle {
+                    cancellation: app.setup_cancellation(),
                     preview_id,
                     destination: output,
                 })
@@ -1476,7 +1477,10 @@ async fn inspect_unopened_bundle(
         .await
         .map_err(|error| (command, error))?;
     match app
-        .query(AppQuery::InspectUnopenedBundle { bytes })
+        .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
+            bytes,
+        })
         .await
         .map_err(|error| (command, app_error(error)))?
     {
@@ -1723,6 +1727,8 @@ async fn list_projects(
             })
             .collect()
     };
+    let projects: Vec<ProjectSummaryDto> =
+        projects.into_iter().map(ProjectSummaryDto::from).collect();
     Ok(Outcome::new(
         "projects.list",
         "ok",
@@ -1805,6 +1811,7 @@ async fn export_project(
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let id = scenario_id(input).map_err(|error| ("projects.export", error))?;
     app.execute(AppCommand::ExportScenario {
+        cancellation: app.setup_cancellation(),
         scenario_id: id,
         destination: output,
     })
@@ -1829,9 +1836,16 @@ async fn import_project(
         include_results,
         include_assets,
     };
-    let (preview_id, preview) = portable_preview(app, AppQuery::PreviewImport { bytes, options })
-        .await
-        .map_err(|error| ("projects.import", error))?;
+    let (preview_id, preview) = portable_preview(
+        app,
+        AppQuery::PreviewImport {
+            bytes,
+            options,
+            cancellation: app.setup_cancellation(),
+        },
+    )
+    .await
+    .map_err(|error| ("projects.import", error))?;
     let has_collisions = preview.scenarios.iter().any(|scenario| scenario.collides)
         || !preview.supplemental_collisions.is_empty();
     if collision_plan.is_none() && has_collisions {
@@ -1850,6 +1864,7 @@ async fn import_project(
     let request_id = operation_request_id().map_err(|error| ("projects.import", error))?;
     let result = app
         .execute(AppCommand::ApplyImport {
+            cancellation: app.setup_cancellation(),
             request_id,
             preview_id,
             collision_plan: plan.clone(),
@@ -1955,9 +1970,16 @@ async fn execute_backup(
                 include_results: true,
                 include_assets: true,
             };
-            let (_, preview) = portable_preview(app, AppQuery::PreviewRestore { bytes, options })
-                .await
-                .map_err(|error| ("backup.inspect", error))?;
+            let (_, preview) = portable_preview(
+                app,
+                AppQuery::PreviewRestore {
+                    bytes,
+                    options,
+                    cancellation: app.setup_cancellation(),
+                },
+            )
+            .await
+            .map_err(|error| ("backup.inspect", error))?;
             let result = preview_value(&preview);
             Ok(Outcome::new(
                 "backup.inspect",
@@ -2006,6 +2028,7 @@ async fn execute_backup_create(
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let result = app
         .execute(AppCommand::CreateBackup {
+            cancellation: app.setup_cancellation(),
             title,
             destination: output,
             selection: BackupSelection {
@@ -2086,9 +2109,16 @@ async fn execute_backup_restore(
         include_results: true,
         include_assets: true,
     };
-    let (preview_id, preview) = portable_preview(app, AppQuery::PreviewRestore { bytes, options })
-        .await
-        .map_err(|error| ("backup.restore", error))?;
+    let (preview_id, preview) = portable_preview(
+        app,
+        AppQuery::PreviewRestore {
+            bytes,
+            options,
+            cancellation: app.setup_cancellation(),
+        },
+    )
+    .await
+    .map_err(|error| ("backup.restore", error))?;
     let plan = collision_plan_value(collision_plan.as_deref())
         .and_then(|plan| validated_collision_plan(plan, &preview, restore_mode))
         .map_err(|error| ("backup.restore", error))?;
@@ -2109,6 +2139,7 @@ async fn execute_backup_restore(
     let request_id = operation_request_id().map_err(|error| ("backup.restore", error))?;
     let result = app
         .execute(AppCommand::ApplyRestore {
+            cancellation: app.setup_cancellation(),
             request_id,
             preview_id,
             collision_plan: plan.clone(),
@@ -2337,7 +2368,7 @@ fn portable_applied_outcome(
     mode: RestoreMode,
     result: AppCommandResult,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let AppCommandResult::PortableApplied { scenarios } = result else {
+    let AppCommandResult::PortableApplied { scenarios, .. } = result else {
         return Err((command, unexpected_result()));
     };
     let scenario_count = scenarios.len();
@@ -2912,6 +2943,7 @@ async fn apply_commands(
     };
     let publication_warning = if let Some(output) = args.output {
         app.execute(AppCommand::ExportScenario {
+            cancellation: app.setup_cancellation(),
             scenario_id: id,
             destination: output,
         })
@@ -3093,8 +3125,14 @@ async fn execute_settings(
             let value =
                 parse_strict_json(value.as_bytes()).map_err(|error| ("settings.set", error))?;
             let request_id = operation_request_id().map_err(|error| ("settings.set", error))?;
+            let expected_library_revision = app
+                .application_settings_snapshot()
+                .await
+                .map_err(|error| ("settings.set", app_error(error)))?
+                .library_revision;
             app.execute(AppCommand::SetSetting {
                 request_id,
+                expected_library_revision,
                 key,
                 value,
             })
@@ -3109,13 +3147,23 @@ async fn execute_settings(
         }
         SettingsCommand::Delete { key } => {
             let request_id = operation_request_id().map_err(|error| ("settings.delete", error))?;
+            let expected_library_revision = app
+                .application_settings_snapshot()
+                .await
+                .map_err(|error| ("settings.delete", app_error(error)))?
+                .library_revision;
             let result = app
-                .execute(AppCommand::DeleteSetting { request_id, key })
+                .execute(AppCommand::DeleteSetting {
+                    request_id,
+                    expected_library_revision,
+                    key,
+                })
                 .await
                 .map_err(|error| ("settings.delete", app_error(error)))?;
-            let AppCommandResult::SettingDeleted(deleted) = result else {
+            let AppCommandResult::SettingsWritten(committed) = result else {
                 return Err(("settings.delete", unexpected_result()));
             };
+            let deleted = committed.changed;
             Ok(Outcome::new(
                 "settings.delete",
                 "deleted",

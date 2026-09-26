@@ -129,7 +129,13 @@ impl ShiftSpec<'_> {
                         Some(date),
                     )
                 })?;
-                let interval = resolve_shift_timing(template.timing, date, settings, entity_id)?;
+                let interval = resolve_shift_timing(template.timing, date, settings, entity_id)
+                    .map_err(|mut error| {
+                        if let TemporalError::Issue(issue) = &mut error {
+                            issue.occurrence_date = Some(date);
+                        }
+                        error
+                    })?;
                 // The resolved offset gives the actual local date without another zone lookup.
                 // Generated membership is civil-date based even at repeated midnights.
                 let offset = jiff::tz::Offset::from_seconds(interval.starts_at.offset_seconds)

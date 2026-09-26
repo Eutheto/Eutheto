@@ -8,7 +8,8 @@ pkgs.rustPlatform.buildRustPackage {
   version = "0.1.0";
 
   inherit src;
-  cargoLock.lockFile = src + "/Cargo.lock";
+  # --no-build cannot materialize the filtered source during lockfile evaluation.
+  cargoLock.lockFile = ../Cargo.lock;
 
   cargoBuildFlags = [
     "--package"

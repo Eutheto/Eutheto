@@ -659,7 +659,10 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `@tailwindcss/oxide-win32-arm64-msvc` | `4.3.3` | `NOASSERTION` | `https://registry.npmjs.org/@tailwindcss/oxide-win32-arm64-msvc/-/oxide-win32-arm64-msvc-4.3.3.tgz` |
 | npm | `@tailwindcss/oxide-win32-x64-msvc` | `4.3.3` | `NOASSERTION` | `https://registry.npmjs.org/@tailwindcss/oxide-win32-x64-msvc/-/oxide-win32-x64-msvc-4.3.3.tgz` |
 | npm | `@tailwindcss/vite` | `4.3.3` | `NOASSERTION` | `https://registry.npmjs.org/@tailwindcss/vite/-/vite-4.3.3.tgz` |
+| npm | `@tanstack/store` | `0.11.1` | `NOASSERTION` | `https://registry.npmjs.org/@tanstack/store/-/store-0.11.1.tgz` |
+| npm | `@tanstack/table-core` | `9.2.4` | `NOASSERTION` | `https://registry.npmjs.org/@tanstack/table-core/-/table-core-9.2.4.tgz` |
 | npm | `@tanstack/virtual-core` | `3.17.8` | `NOASSERTION` | `https://registry.npmjs.org/@tanstack/virtual-core/-/virtual-core-3.17.8.tgz` |
+| npm | `@tanstack/vue-table` | `9.2.4` | `NOASSERTION` | `https://registry.npmjs.org/@tanstack/vue-table/-/vue-table-9.2.4.tgz` |
 | npm | `@tanstack/vue-virtual` | `3.13.36` | `NOASSERTION` | `https://registry.npmjs.org/@tanstack/vue-virtual/-/vue-virtual-3.13.36.tgz` |
 | npm | `@tauri-apps/api` | `2.11.1` | `NOASSERTION` | `https://registry.npmjs.org/@tauri-apps/api/-/api-2.11.1.tgz` |
 | npm | `@tauri-apps/cli` | `2.11.4` | `NOASSERTION` | `https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.11.4.tgz` |
@@ -1219,4 +1222,4 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 
 ## Review state
 
-1207 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+1210 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

@@ -22,8 +22,8 @@ use eutheto_import::{
 use eutheto_types::{
     ActorRef, BackendId, BackendSelection, BundleId, CancellationToken, CommandId, CommandSource,
     CounterfactualJobId, IanaTimeZone, MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset,
-    PortableJsonLimits, ProjectMetadataDto, ProjectSummaryDto, RequestId, Revision,
-    Rfc3339Timestamp, SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
+    PortableJsonLimits, ProjectMetadataDto, RequestId, Revision, Rfc3339Timestamp,
+    SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
     ScenarioSnapshotId, ScenarioSnapshotV1, SemanticCapability, SolutionId, SolveOptions,
     SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
     collect_scenario_owned_uuids, collect_self_declared_uuids, extract_result_dependency,
@@ -113,7 +113,12 @@ pub enum StoreError {
     #[error("scenario {0} already exists")]
     ScenarioAlreadyExists(ScenarioId),
     #[error("command application failed ({code}): {message}")]
-    CommandApplication { code: String, message: String },
+    CommandApplication {
+        code: String,
+        message: String,
+        /// A pack-provided single-command payload path; absent for batch or general failures.
+        field_path: Option<String>,
+    },
     #[error("staged library apply is invalid: {0}")]
     InvalidStagedApply(String),
     #[error("scenario identity graph is invalid: {0}")]
@@ -296,6 +301,7 @@ pub enum Failpoint {
     AfterCounterfactualJobInsert,
     AfterCounterfactualTransition,
     AfterCounterfactualCancelWrite,
+    AfterSettingsWrite,
 }
 
 /// The command commit boundary at which a debug-only hook pauses once.
@@ -583,19 +589,6 @@ pub struct ProjectSummary {
     pub updated_at: Rfc3339Timestamp,
     pub last_opened_at: Option<Rfc3339Timestamp>,
     pub archived_at: Option<Rfc3339Timestamp>,
-}
-
-impl From<&ProjectSummary> for ProjectSummaryDto {
-    fn from(summary: &ProjectSummary) -> Self {
-        Self {
-            scenario_id: summary.id,
-            title: summary.title.clone(),
-            domain_pack_id: summary.domain_pack_id.clone(),
-            revision: summary.revision,
-            updated_at: summary.updated_at,
-            archived: summary.archived_at.is_some(),
-        }
-    }
 }
 
 impl From<&ProjectSummary> for ProjectMetadataDto {
@@ -994,6 +987,37 @@ pub struct HistoryEntry {
     pub branch_generation: u64,
     pub applied: bool,
 }
+
+/// Maximum number of entries returned by a metadata history page.
+pub const HISTORY_PAGE_MAX_ENTRIES: u32 = 100;
+/// Maximum UTF-8 bytes returned for one recorded history summary.
+pub const HISTORY_SUMMARY_MAX_BYTES: usize = 4 * 1024;
+
+/// Bounded journal metadata, without command, inverse, or actor payloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryEntrySummary {
+    pub id: CommandId,
+    pub revision_before: Revision,
+    pub revision_after: Revision,
+    pub source: CommandSource,
+    /// `None` means the recorded summary exceeds the display byte limit.
+    pub summary: Option<String>,
+    pub created_at: Rfc3339Timestamp,
+    pub history_sequence: u64,
+    pub branch_generation: u64,
+    pub applied: bool,
+}
+
+/// One revision-consistent metadata page and current journal availability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryPage {
+    pub scenario_id: ScenarioId,
+    pub revision: Revision,
+    pub entries: Vec<HistoryEntrySummary>,
+    pub next_before_sequence: Option<u64>,
+    pub undo_available: bool,
+    pub redo_available: bool,
+}
 /// Live connection settings and installed schema objects, used by startup
 /// diagnostics without exposing `SQLite` access to callers.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1023,6 +1047,21 @@ pub struct HistoryCommand {
 pub struct AppSetting<T> {
     pub value: T,
     pub updated_at: Rfc3339Timestamp,
+}
+
+/// A consistent snapshot of the caller's trusted application-setting scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppSettingsSnapshot {
+    pub library_revision: Revision,
+    pub settings: BTreeMap<String, AppSetting<Value>>,
+}
+
+/// The outcome of an atomic application-settings replacement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingsCommit {
+    pub library_revision: Revision,
+    pub changed: bool,
+    pub settings: BTreeMap<String, AppSetting<Value>>,
 }
 
 type ActorOperation = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
@@ -1379,21 +1418,28 @@ impl SqliteScenarioStore {
     /// Returns an error when the staged input is invalid or stale, a referenced
     /// scenario is missing or already occupied, a document cannot be
     /// serialized, a numeric value is out of range, the storage transaction
-    /// fails, or the database actor is unavailable.
+    /// fails, cancellation wins before commit, or the database actor is unavailable.
+    /// Committed success wins over later cancellation, including no-effect applies.
     pub async fn apply_staged_library(
         &self,
         staged: StagedLibraryApply,
         applied_at: Rfc3339Timestamp,
+        cancellation: CancellationToken,
     ) -> Result<LibraryApplyOutcome, StoreError> {
         #[cfg(debug_assertions)]
         let failpoint = Arc::clone(&self.failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = self.command_commit_test_hook.clone();
         self.call(move |connection| {
             apply_staged_library_transaction(
                 connection,
                 staged,
                 applied_at,
+                &cancellation,
                 #[cfg(debug_assertions)]
                 &failpoint,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook.as_ref(),
             )
         })
         .await
@@ -1964,8 +2010,9 @@ impl SqliteScenarioStore {
                 return Err(StoreError::ScenarioNotFound(scenario_id));
             }
             increment_library_revision(&transaction)?;
+            let project = load_project(&transaction, scenario_id)?;
             transaction.commit()?;
-            load_project(connection, scenario_id)
+            Ok(project)
         })
         .await
     }
@@ -2415,6 +2462,214 @@ impl SqliteScenarioStore {
         .await
     }
 
+    /// Reads bounded journal metadata in descending sequence order in one snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid numeric bounds, missing scenarios, revision conflicts,
+    /// inconsistent persisted history metadata, and actor or database failures.
+    pub async fn history_page(
+        &self,
+        scenario_id: ScenarioId,
+        expected_revision: Revision,
+        limit: u32,
+        before_sequence: Option<u64>,
+    ) -> Result<HistoryPage, StoreError> {
+        if !(1..=HISTORY_PAGE_MAX_ENTRIES).contains(&limit) {
+            return Err(StoreError::NumericRange);
+        }
+        if let Some(sequence) = before_sequence {
+            if sequence == 0 {
+                return Err(StoreError::NumericRange);
+            }
+            checked_revision(sequence)?;
+        }
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let scenario_key = scenario_id.to_string();
+            let revision: Option<i64> = transaction
+                .query_row(
+                    "SELECT revision FROM scenarios WHERE id = ?1",
+                    [&scenario_key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let revision = checked_revision(i64_to_u64(
+                revision.ok_or(StoreError::ScenarioNotFound(scenario_id))?,
+            )?)?;
+            ensure_revision(expected_revision, revision.value())?;
+            let (cursor, generation, max_sequence) = history_state(&transaction, scenario_id)?;
+            if cursor > max_sequence
+                || max_sequence > revision.value()
+                || generation > revision.value()
+                || (max_sequence == 0 && generation != 0)
+            {
+                return Err(StoreError::Integrity("invalid history cursor state".to_owned()));
+            }
+            let (undo_available, redo_available) = history_page_availability(
+                &transaction, &scenario_key, cursor, generation, max_sequence,
+            )?;
+            let mut entries = Vec::with_capacity(limit as usize);
+            let mut next_before_sequence = None;
+            {
+                let mut statement = transaction.prepare(
+                    "SELECT
+                       CASE WHEN length(CAST(id AS BLOB)) <= 36 THEN id ELSE NULL END,
+                       revision_before, revision_after,
+                       CASE WHEN length(CAST(source AS BLOB)) <= 16 THEN source ELSE NULL END,
+                       CASE WHEN length(CAST(summary AS BLOB)) <= ?4 THEN summary ELSE NULL END,
+                       CASE WHEN length(CAST(created_at AS BLOB)) <= 64 THEN created_at ELSE NULL END,
+                       history_sequence, branch_generation
+                     FROM command_journal
+                     WHERE scenario_id = ?1 AND (?2 IS NULL OR history_sequence < ?2)
+                     ORDER BY history_sequence DESC LIMIT ?3",
+                )?;
+                let mut rows = statement.query(params![
+                    &scenario_key,
+                    before_sequence.map(u64_to_i64).transpose()?,
+                    i64::from(limit) + 1,
+                    i64::try_from(HISTORY_SUMMARY_MAX_BYTES).map_err(|_| StoreError::NumericRange)?,
+                ])?;
+                let mut expected_sequence =
+                    before_sequence.map_or(max_sequence, |before| max_sequence.min(before - 1));
+                while let Some(row) = rows.next()? {
+                    let entry = parse_history_summary_row(row, cursor, generation, revision)?;
+                    if entry.history_sequence != expected_sequence {
+                        return Err(StoreError::Integrity(
+                            "history page contains a missing or ambiguous sequence".to_owned(),
+                        ));
+                    }
+                    expected_sequence -= 1;
+                    if entries.len() == limit as usize {
+                        next_before_sequence = entries.last().map(
+                            |entry: &HistoryEntrySummary| entry.history_sequence,
+                        );
+                        break;
+                    }
+                    entries.push(entry);
+                }
+                if next_before_sequence.is_none() && expected_sequence != 0 {
+                    return Err(StoreError::Integrity(
+                        "history page ends before its expected sequence".to_owned(),
+                    ));
+                }
+            }
+            transaction.commit()?;
+            Ok(HistoryPage {
+                scenario_id,
+                revision,
+                entries,
+                next_before_sequence,
+                undo_available,
+                redo_available,
+            })
+        })
+        .await
+    }
+
+    /// Captures only the trusted setting keys and library revision in one read transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or transaction fails, or a requested stored
+    /// setting or the library revision cannot be decoded.
+    pub async fn settings_snapshot(
+        &self,
+        keys: &'static [&'static str],
+    ) -> Result<AppSettingsSnapshot, StoreError> {
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let library_revision = library_revision(&transaction)?;
+            let settings = load_scoped_settings(&transaction, keys)?;
+            transaction.commit()?;
+            Ok(AppSettingsSnapshot {
+                library_revision,
+                settings,
+            })
+        })
+        .await
+    }
+
+    /// Replaces the trusted setting scope after checking its reviewed revision and entries.
+    ///
+    /// Missing keys remove settings only within `keys`. Complete entries, including
+    /// timestamps, determine whether the replacement changes the library. The caller
+    /// remains responsible for validating setting keys and values semantically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for cancellation before commit, a stale library revision or
+    /// before-state, out-of-scope entries, invalid stored data, revision overflow,
+    /// actor or transaction failure, or an injected debug failure. Every failure
+    /// rolls back all writes; committed success wins over later cancellation.
+    pub async fn replace_settings(
+        &self,
+        keys: &'static [&'static str],
+        before: AppSettingsSnapshot,
+        after: BTreeMap<String, AppSetting<Value>>,
+        cancellation: CancellationToken,
+    ) -> Result<SettingsCommit, StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = self.command_commit_test_hook.clone();
+        self.call(move |connection| {
+            Self::check_command_cancelled(&cancellation)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let actual_revision = library_revision(&transaction)?;
+            if before.library_revision != actual_revision {
+                return Err(StoreError::LibraryConflict {
+                    expected: before.library_revision,
+                    actual: actual_revision,
+                });
+            }
+            if before.settings.keys().chain(after.keys()).any(|key| !keys.contains(&key.as_str())) {
+                return Err(StoreError::InvalidStagedApply(
+                    "application settings replacement contains an out-of-scope key".to_owned(),
+                ));
+            }
+            if load_scoped_settings(&transaction, keys)? != before.settings {
+                return Err(StoreError::InvalidStagedApply(
+                    "application settings before-state no longer matches".to_owned(),
+                ));
+            }
+            let changed = before.settings != after;
+            let library_revision = if changed {
+                for key in before.settings.keys().filter(|key| !after.contains_key(*key)) {
+                    transaction.execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
+                }
+                for (key, setting) in &after {
+                    if before.settings.get(key) != Some(setting) {
+                        transaction.execute(
+                            "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+                            params![key, serde_json::to_string(&setting.value)?, setting.updated_at.to_string()],
+                        )?;
+                    }
+                }
+                #[cfg(debug_assertions)]
+                consume_failpoint(&failpoint, Failpoint::AfterSettingsWrite)?;
+                increment_library_revision(&transaction)?
+            } else {
+                actual_revision
+            };
+            Self::commit_command(
+                transaction,
+                &cancellation,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook.as_ref(),
+            )?;
+            Ok(SettingsCommit {
+                library_revision,
+                changed,
+                settings: after,
+            })
+        })
+        .await
+    }
+
     /// Returns a typed application setting, if present.
     ///
     /// # Errors
@@ -2443,52 +2698,6 @@ impl SqliteScenarioStore {
         .await
     }
 
-    /// Creates or replaces a typed application setting.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be serialized, the database actor
-    /// or transaction fails, or the library revision cannot be represented.
-    pub async fn set_setting<T: Serialize + Send + 'static>(
-        &self,
-        key: String,
-        value: T,
-        updated_at: Rfc3339Timestamp,
-    ) -> Result<(), StoreError> {
-        self.call(move |connection| {
-            let value_json = serde_json::to_string(&value)?;
-            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute(
-                "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-                params![key, value_json, updated_at.to_string()],
-            )?;
-            increment_library_revision(&transaction)?;
-            transaction.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// Deletes an application setting and reports whether it existed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database actor or transaction fails, or the
-    /// library revision cannot be represented.
-    pub async fn delete_setting(&self, key: String) -> Result<bool, StoreError> {
-        self.call(move |connection| {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let changed =
-                transaction.execute("DELETE FROM app_settings WHERE key = ?1", [key])? != 0;
-            if changed {
-                increment_library_revision(&transaction)?;
-            }
-            transaction.commit()?;
-            Ok(changed)
-        })
-        .await
-    }
     /// Returns bounded, non-sensitive database diagnostics.
     ///
     /// # Errors
@@ -4996,8 +5205,10 @@ fn ensure_safe_ancestor_directory(
     _metadata: &std::fs::Metadata,
 ) -> Result<(), StoreError> {
     use std::process::{Command, Stdio};
+    // Autoload discovery can dominate each path check; use interpreter-owned manifests.
     let script = r#"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $allowed = [System.Collections.Generic.HashSet[string]]::new()
 $allowed.Add($identity.User.Value) | Out-Null
@@ -5232,6 +5443,7 @@ fn ensure_path_has_no_windows_hard_links(path: &Path) -> Result<(), StoreError> 
     use std::process::{Command, Stdio};
     let script = r#"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
 $item = Get-Item -Force -LiteralPath $env:EUTHETO_PRIVATE_PATH
 if ($item.LinkType -eq 'HardLink') {
   throw 'private storage files may not have additional hard links'
@@ -5327,6 +5539,8 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> Result<(), StoreError> 
     use std::process::{Command, Stdio};
     let script = r#"
 $ErrorActionPreference = 'Stop'
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+Import-Module -Name ($PSHOME + '\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
 $path = $env:EUTHETO_PRIVATE_PATH
 $isDirectory = $env:EUTHETO_PRIVATE_KIND -eq 'directory'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -6718,6 +6932,86 @@ fn load_history_entry(
     parse_history_row(row, cursor)
 }
 
+/// Checks retained-tail/cursor links without loading journal payloads.
+fn history_page_availability(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_key: &str,
+    cursor: u64,
+    generation: u64,
+    max_sequence: u64,
+) -> Result<(bool, bool), StoreError> {
+    let (tail_count, tail_generation): (i64, Option<i64>) = transaction.query_row(
+        "SELECT COUNT(*), MAX(branch_generation) FROM command_journal
+         WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(max_sequence)?],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if tail_count != i64::from(max_sequence > 0)
+        || tail_generation.map(i64_to_u64).transpose()? != (max_sequence > 0).then_some(generation)
+    {
+        return Err(StoreError::Integrity(
+            "history branch does not match its retained tail".to_owned(),
+        ));
+    }
+    let (cursor_count, reversible): (i64, bool) = transaction.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(inverse_json IS NOT NULL), 0)
+         FROM command_journal WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(cursor)?],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let redo_count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM command_journal
+         WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(cursor + 1)?],
+        |row| row.get(0),
+    )?;
+    if cursor_count != i64::from(cursor > 0) || redo_count != i64::from(cursor < max_sequence) {
+        return Err(StoreError::Integrity(
+            "history cursor references missing or ambiguous journal entries".to_owned(),
+        ));
+    }
+    Ok((cursor > 0 && reversible, cursor < max_sequence))
+}
+
+fn parse_history_summary_row(
+    row: &rusqlite::Row<'_>,
+    cursor: u64,
+    generation: u64,
+    revision: Revision,
+) -> Result<HistoryEntrySummary, StoreError> {
+    let sequence = i64_to_u64(row.get(6)?)?;
+    let branch_generation = i64_to_u64(row.get(7)?)?;
+    let revision_before = checked_revision(i64_to_u64(row.get(1)?)?)?;
+    let revision_after = checked_revision(i64_to_u64(row.get(2)?)?)?;
+    if sequence == 0
+        || sequence > revision_after.value()
+        || branch_generation > generation
+        || revision_before >= revision_after
+        || revision_after > revision
+    {
+        return Err(StoreError::Integrity(
+            "invalid history entry numbers".to_owned(),
+        ));
+    }
+    let id_text: String = row.get(0)?;
+    let id = id_text
+        .parse()
+        .map_err(|error| StoreError::Integrity(format!("invalid stored command id: {error}")))?;
+    let source: String = row.get(3)?;
+    let created_at: String = row.get(5)?;
+    Ok(HistoryEntrySummary {
+        id,
+        revision_before,
+        revision_after,
+        source: parse_command_source(&source)?,
+        summary: row.get(4)?,
+        created_at: parse_timestamp(&created_at, "journal created_at")?,
+        history_sequence: sequence,
+        branch_generation,
+        applied: sequence <= cursor,
+    })
+}
+
 fn parse_history_row(row: &rusqlite::Row<'_>, cursor: u64) -> Result<HistoryEntry, StoreError> {
     let sequence = i64_to_u64(row.get(10)?)?;
     let id_text: String = row.get(0)?;
@@ -7563,8 +7857,11 @@ fn apply_staged_library_transaction(
     connection: &mut Connection,
     staged: StagedLibraryApply,
     applied_at: Rfc3339Timestamp,
+    cancellation: &CancellationToken,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+    #[cfg(debug_assertions)] command_commit_test_hook: Option<&CommandCommitTestHook>,
 ) -> Result<LibraryApplyOutcome, StoreError> {
+    SqliteScenarioStore::check_command_cancelled(cancellation)?;
     let StagedApplyParts {
         import,
         remove_scenario_ids,
@@ -7579,38 +7876,31 @@ fn apply_staged_library_transaction(
         authorization.as_ref(),
     )?;
 
-    let StagedImport {
-        binding,
-        mode,
-        scenarios,
-        scenario_revisions,
-        results,
-        shared_records,
-        preferences,
-        manifest_extensions,
-        nonsemantic_extensions,
-        assets,
-        supplemental_replacements,
-        provenance,
-    } = import;
+    let mode = import.mode;
     ensure_supplemental_replacements(
         &transaction,
         mode,
-        &results,
-        &shared_records,
-        &preferences,
-        &assets,
-        &supplemental_replacements,
+        &import.results,
+        &import.shared_records,
+        &import.preferences,
+        &import.assets,
+        &import.supplemental_replacements,
     )?;
     let no_effect = mode != RestoreMode::ReplaceLibrary
         && remove_scenario_ids.is_empty()
-        && scenarios.is_empty()
-        && results.is_empty()
-        && shared_records.is_empty()
-        && preferences.is_empty()
-        && assets.is_empty()
+        && import.scenarios.is_empty()
+        && import.results.is_empty()
+        && import.shared_records.is_empty()
+        && import.preferences.is_empty()
+        && import.assets.is_empty()
         && settings.is_empty();
     if no_effect {
+        SqliteScenarioStore::commit_command(
+            transaction,
+            cancellation,
+            #[cfg(debug_assertions)]
+            command_commit_test_hook,
+        )?;
         return Ok(LibraryApplyOutcome {
             library_revision: actual_revision,
             created: 0,
@@ -7622,42 +7912,51 @@ fn apply_staged_library_transaction(
     let (outcome, retained_candidates) = replace_staged_scenarios(
         &transaction,
         mode,
-        scenarios,
-        scenario_revisions,
+        import.scenarios,
+        import.scenario_revisions,
         &remove_scenario_ids,
     )?;
-    store_opaque_staged_results(&transaction, results, &supplemental_replacements)?;
+    store_opaque_staged_results(
+        &transaction,
+        import.results,
+        &import.supplemental_replacements,
+    )?;
     upsert_portable_section(
         &transaction,
         SupplementalSectionKind::SharedRecords,
-        shared_records,
+        import.shared_records,
     )?;
     upsert_portable_section(
         &transaction,
         SupplementalSectionKind::Preferences,
-        preferences,
+        import.preferences,
     )?;
-    upsert_portable_assets(&transaction, assets)?;
+    upsert_portable_assets(&transaction, import.assets)?;
     synchronize_retained_scenario_revisions(&transaction, retained_candidates)?;
     upsert_settings(&transaction, settings)?;
     persist_portable_library_metadata(
         &transaction,
         mode,
-        manifest_extensions,
-        nonsemantic_extensions,
+        import.manifest_extensions,
+        import.nonsemantic_extensions,
     )?;
     validate_global_identity_ownership(&transaction)?;
     #[cfg(debug_assertions)]
     consume_failpoint(failpoint, Failpoint::AfterSupplementalWrite)?;
     insert_import_provenance(
         &transaction,
-        binding,
-        provenance,
+        import.binding,
+        import.provenance,
         &outcome.sources,
         applied_at,
     )?;
     let library_revision = increment_library_revision(&transaction)?;
-    transaction.commit()?;
+    SqliteScenarioStore::commit_command(
+        transaction,
+        cancellation,
+        #[cfg(debug_assertions)]
+        command_commit_test_hook,
+    )?;
     Ok(LibraryApplyOutcome {
         library_revision,
 
@@ -8387,6 +8686,32 @@ fn persist_portable_library_metadata(
     )?;
     Ok(())
 }
+fn load_scoped_settings(
+    connection: &Connection,
+    keys: &[&str],
+) -> Result<BTreeMap<String, AppSetting<Value>>, StoreError> {
+    let mut statement =
+        connection.prepare("SELECT value_json, updated_at FROM app_settings WHERE key = ?1")?;
+    let mut settings = BTreeMap::new();
+    for key in keys {
+        let row = statement
+            .query_row([key], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()?;
+        if let Some((json, updated_at)) = row {
+            settings.insert(
+                (*key).to_owned(),
+                AppSetting {
+                    value: serde_json::from_str(&json)?,
+                    updated_at: parse_timestamp(&updated_at, "app setting updated_at")?,
+                },
+            );
+        }
+    }
+    Ok(settings)
+}
+
 fn load_all_settings(
     connection: &Connection,
 ) -> Result<BTreeMap<String, AppSetting<Value>>, StoreError> {

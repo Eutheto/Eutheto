@@ -22,6 +22,8 @@
   "dependencies": {
     "@lucide/vue": "1.39.0",
     "@pinia/colada": "1.4.2",
+    "@tanstack/vue-table": "9.2.4",
+    "@tanstack/vue-virtual": "3.13.36",
     "@tauri-apps/api": "2.11.1",
     "@vue/devtools-api": "8.2.1",
     "class-variance-authority": "0.7.1",

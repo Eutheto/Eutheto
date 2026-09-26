@@ -6,7 +6,9 @@ use eutheto_domain_api::{
 use eutheto_types::{CancellationToken, EntityId, OperationControl, Revision, ScenarioDocument};
 use eutheto_workforce::{
     WorkforcePack,
-    setup::contracts::{WorkforceSetupResultV1, WorkforceSetupViewDataV1},
+    setup::contracts::{
+        EffectiveScopePopulationV1, WorkforceSetupResultV1, WorkforceSetupViewDataV1,
+    },
 };
 use serde_json::{Value, json};
 use std::error::Error;
@@ -64,6 +66,219 @@ fn people_fixture() -> Result<ScenarioDocument, Box<dyn Error>> {
             .insert(support::id(index).parse()?, record);
     }
     Ok(document)
+}
+
+#[test]
+fn entity_summary_resolves_kind_without_copying_detail_and_rejects_wrong_identity()
+-> Result<(), Box<dyn Error>> {
+    let mut document = support::fixture()?;
+    let entity_id: EntityId = support::id(1).parse()?;
+    let request = query(
+        "official.workforce.setup.entity_summary",
+        json!({"entityId": entity_id}),
+    );
+    let WorkforceSetupViewDataV1::EntitySummary(summary) = view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(summary.entity_id, entity_id);
+    assert_eq!(
+        summary.kind,
+        eutheto_workforce::setup::contracts::WorkforceEntityKindV1::Person,
+    );
+    assert_eq!(
+        summary.name.as_deref(),
+        document.domain.entities[&entity_id]["name"].as_str(),
+    );
+    document
+        .domain
+        .entities
+        .get_mut(&entity_id)
+        .ok_or("person")?["id"] = json!(support::id(2));
+    assert!(view(&document, &request, context()).is_err());
+    Ok(())
+}
+
+#[test]
+fn people_filter_uses_recorded_grants_and_rejects_a_nonmember_cursor() -> Result<(), Box<dyn Error>>
+{
+    let mut document = people_fixture()?;
+    document
+        .domain
+        .entities
+        .get_mut(&support::id(501).parse()?)
+        .ok_or("person")?["qualificationGrants"][0]["effectiveFrom"] =
+        json!("2027-01-01T00:00:00Z");
+    document
+        .domain
+        .entities
+        .get_mut(&support::id(502).parse()?)
+        .ok_or("person")?["qualificationGrants"][0]["expiresAt"] = json!("2020-01-01T00:00:00Z");
+    document
+        .domain
+        .entities
+        .get_mut(&support::id(503).parse()?)
+        .ok_or("person")?["qualificationGrants"] = json!([]);
+    let mut request = query(
+        "official.workforce.setup.people_page",
+        json!({"search":"éQUIPE /", "qualificationId":support::id(11), "limit":1}),
+    );
+    let WorkforceSetupViewDataV1::PeoplePage(first) = view(&document, &request, context())? else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(first.total_items, 2);
+    assert_eq!(first.items[0].person_id, support::id(501).parse()?);
+    let cursor = first.continuation.ok_or("continuation")?;
+    request.continuation = Some(cursor.clone());
+    let WorkforceSetupViewDataV1::PeoplePage(last) = view(&document, &request, context())? else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(last.total_items, 2);
+    assert_eq!(last.items[0].person_id, support::id(502).parse()?);
+    assert!(last.continuation.is_none());
+    let mut forged = cursor;
+    forged.position = json!({"kind":"person", "personId":support::id(503)});
+    request.continuation = Some(forged);
+    assert!(view(&document, &request, context()).is_err());
+    request.continuation = None;
+    request.parameters["qualificationId"] = json!(support::id(1));
+    assert!(view(&document, &request, context()).is_err());
+    Ok(())
+}
+
+#[test]
+fn availability_records_reach_outside_window_and_never_cross_persons() -> Result<(), Box<dyn Error>>
+{
+    let mut document = people_fixture()?;
+    for (index, owner, start, end) in [
+        (40, 1, "2020-01-01", "2020-01-02"),
+        (41, 501, "2026-11-01", "2026-11-02"),
+        (42, 1, "2030-01-01", "2030-01-02"),
+    ] {
+        document.domain.entities.insert(support::id(index).parse()?, json!({
+            "kind":"availability", "id":support::id(index), "personId":support::id(owner),
+            "availabilityKind":"unavailable", "source":"test", "note":"",
+            "effectiveRange":{"startDate":start,"endDateExclusive":end},
+            "timeWindow":{"kind":"weekly","windows":[{
+                "weekdays":["sunday"],"startTime":"09:00:00","endTime":"10:00:00","endDayOffset":0
+            }]}
+        }));
+    }
+    let mut request = query(
+        "official.workforce.setup.availability_records",
+        json!({"personId":support::id(1),"limit":1}),
+    );
+    let WorkforceSetupViewDataV1::AvailabilityRecords(first) =
+        view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(first.total_items, 2);
+    assert_eq!(first.items[0].availability_id, support::id(40).parse()?);
+    assert_eq!(
+        first.items[0].effective_range.start_date.to_string(),
+        "2020-01-01"
+    );
+    let cursor = first.continuation.ok_or("continuation")?;
+    request.continuation = Some(cursor.clone());
+    let WorkforceSetupViewDataV1::AvailabilityRecords(last) = view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(last.items[0].availability_id, support::id(42).parse()?);
+    assert!(last.continuation.is_none());
+    let mut forged = cursor;
+    forged.position = json!({"kind":"entity","entityId":support::id(41)});
+    request.continuation = Some(forged);
+    assert!(view(&document, &request, context()).is_err());
+    Ok(())
+}
+
+#[test]
+fn minimum_rest_summary_intersects_both_people_roles_without_candidate_pruning()
+-> Result<(), Box<dyn Error>> {
+    let mut document = support::fixture()?;
+    document.settings.overlap_policy = eutheto_types::OverlapPolicy::Earlier;
+    document.domain.locked_assignments.clear();
+    let mut second = document
+        .domain
+        .entities
+        .get(&support::id(1).parse()?)
+        .ok_or("person")?
+        .clone();
+    second["id"] = json!(support::id(12));
+    second["externalId"] = json!("staff-02");
+    second["eligibleAssignmentTypeIds"] = json!([]);
+    document
+        .domain
+        .entities
+        .insert(support::id(12).parse()?, second);
+    document
+        .domain
+        .entities
+        .get_mut(&support::id(1).parse()?)
+        .ok_or("person")?["eligibleAssignmentTypeIds"] = json!([]);
+    document.domain.rules.insert(
+        support::id(20).parse()?,
+        json!({
+            "kind":"minimumRest", "id":support::id(20), "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}},
+            "beforeScope":{"people":{"kind":"selected","personIds":[support::id(1)]}},
+            "afterScope":{"people":{"kind":"selected","personIds":[support::id(12)]}},
+            "minimumMinutes":600
+        }),
+    );
+    let request = query(
+        "official.workforce.setup.rule_scope_summary",
+        json!({"rule":{"class":"required","ruleId":support::id(20)}}),
+    );
+    let WorkforceSetupViewDataV1::RuleScopeSummary(summary) = view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert!(matches!(
+        summary.population,
+        EffectiveScopePopulationV1::MinimumRest {
+            people_count: 0,
+            before_shift_count: 2,
+            after_shift_count: 2,
+        }
+    ));
+    document
+        .domain
+        .rules
+        .get_mut(&support::id(20).parse()?)
+        .ok_or("rule")?["afterScope"]["people"]["personIds"] = json!([support::id(1)]);
+    let WorkforceSetupViewDataV1::RuleScopeSummary(summary) = view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert!(matches!(
+        summary.population,
+        EffectiveScopePopulationV1::MinimumRest {
+            people_count: 1,
+            before_shift_count: 2,
+            after_shift_count: 2,
+        }
+    ));
+    document
+        .domain
+        .rules
+        .get_mut(&support::id(20).parse()?)
+        .ok_or("rule")?["scope"]["categories"] = json!(["absent"]);
+    let WorkforceSetupViewDataV1::RuleScopeSummary(summary) = view(&document, &request, context())?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert!(matches!(
+        summary.population,
+        EffectiveScopePopulationV1::MinimumRest {
+            people_count: 1,
+            before_shift_count: 0,
+            after_shift_count: 0,
+        }
+    ));
+    Ok(())
 }
 
 #[test]
@@ -427,7 +642,9 @@ fn settings_preparation_respects_midnight_boundaries_without_a_display_window_ca
             },
             &control
         ),
-        Err(DomainPackError::InvalidPayload { .. })
+        Err(DomainPackError::SetupValidation(issue))
+            if issue.code == "workforce.time.gap"
+                && issue.field_path.as_deref() == Some("/query/parameters/dates/startDate")
     ));
     request.parameters["gapPolicy"] = json!("moveForward");
     assert!(view(&document, &request, context()).is_err());
@@ -440,6 +657,46 @@ fn settings_preparation_respects_midnight_boundaries_without_a_display_window_ca
     assert_eq!(settings.horizon.start, "2018-11-05T02:00:00Z".parse()?);
     assert_eq!(settings.horizon.end, "2020-11-05T03:00:00Z".parse()?);
     assert_eq!(settings.time_zone.as_str(), "America/Sao_Paulo");
+    Ok(())
+}
+
+#[test]
+fn settings_preparation_rejects_skipped_date_at_either_boundary() -> Result<(), Box<dyn Error>> {
+    let document = support::fixture()?;
+    let control = OperationControl::Cancellation(CancellationToken::new());
+    for (start, end, expected_path) in [
+        (
+            "2011-12-30",
+            "2012-01-02",
+            "/query/parameters/dates/startDate",
+        ),
+        (
+            "2011-12-29",
+            "2011-12-30",
+            "/query/parameters/dates/endDateExclusive",
+        ),
+    ] {
+        let request = query(
+            "official.workforce.setup.settings_preparation",
+            json!({
+                "timeZone":"Pacific/Apia", "locale":"en-US", "units":"metric",
+                "dates":{"startDate":start, "endDateExclusive":end},
+                "gapPolicy":"moveForward", "overlapPolicy":"reject"
+            }),
+        );
+        assert!(matches!(
+            WorkforcePack.build_view(
+                DomainViewInput::StoredSetup {
+                    document: &document,
+                    query: &request,
+                    context: context()
+                },
+                &control
+            ),
+            Err(DomainPackError::SetupValidation(issue))
+                if issue.field_path.as_deref() == Some(expected_path)
+        ));
+    }
     Ok(())
 }
 

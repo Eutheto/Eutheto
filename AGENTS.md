@@ -36,6 +36,8 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 - Rust owns authoritative scenario state, validation, persistence, routing, solving, verification, scoring, explanations, and import/export.
 - Tauri is a client boundary, not the optimizer. Only the desktop API layer may invoke Tauri commands or subscribe to Tauri events.
 - Use the generated desktop API and its operation lifecycle rather than adding a parallel invoke/event wrapper. Bind work to the actual native window and immutable scenario/revision context; keep resource cleanup distinct from cancellation and durable mutation outcomes.
+- Work editors retain raw intent; Rust resolves local endpoints, recurrence and reconciliation. Bind approval to the immutable source, revision and prospective hash. Display windows do not limit command scope, and occurrence ledgers are never editable presentation fields.
+- Validation navigation uses native owner and field provenance through closed editor adapters. Preserve scenario, revision, library epoch, draft ownership and post-await focus checks; wait for initial reads without reopening a handled request on later background refreshes. Never infer an endpoint from a record-level finding or treat a resource reference as a substitute for its explicit owner path.
 - Domain packs depend on the domain API and solver-neutral planning IR. They never construct backend objects or depend on Tauri, SQLite, credentials, network providers, OR-Tools, or Pumpkin.
 - Solver adapters depend on planning IR and solver APIs, never official domain packs.
 - AI may read bounded context and propose typed application commands. It cannot bypass validation, mutate persistence directly, access arbitrary files, execute shell/code, or act as solver/verifier authority.
@@ -60,6 +62,7 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 - Secrets never enter Vue/JavaScript state, logs, SQLite, exports, diagnostics, Nix derivations, repository files, or normal IPC payloads.
 - Credentials are entered through a Rust/native-owned secure surface and stored only in the operating-system credential store; Vue receives opaque references and status.
 - Native-selected CSV paths and raw snapshots stay in Rust. Vue receives opaque source IDs, bounded review DTOs, and explicitly selected inert samples, not filesystem authority or a second CSV parser.
+- Standalone settings import is a library-revision-bound complete replacement of only `appearance`, `locale`, and `units`, including entry timestamps and reviewed removals. Keep picker paths native, excluded device/credential state untouched, and active review custody charged until its owner settles.
 - Use least-privilege Tauri commands, capabilities, CSP, filesystem grants, CI permissions, and release jobs.
 - Do not add telemetry or network access by default. AI and provider integrations remain optional and explicit.
 - Never commit `.env` files, credentials, signing material, local databases, captured user scenarios, or unsanitized support bundles.
@@ -69,6 +72,7 @@ Dependency direction is presentation → thin Tauri adapter → application serv
 
 - Use human domain language before solver terminology: `Required`, `Preference`, `Optimize`, and `Repair plan`.
 - Rust remains authoritative; Pinia and query state are presentation caches only.
+- Full-record editor rebases preserve independent current fields and inactive raw input. Replace a raw field only when adopting different native meaning; resolve collections and nested objects as whole fields, not hidden element merges.
 - Every primary flow is keyboard-complete, has correct focus behavior and screen-reader names/announcements, and does not rely on color alone.
 - Canvas and charts require an equivalent accessible list/table representation.
 - Implement normal, empty, loading, stale, error, cancellation, and offline-capable states as applicable.

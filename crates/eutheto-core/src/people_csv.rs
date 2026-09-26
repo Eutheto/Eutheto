@@ -15,8 +15,9 @@ use eutheto_workforce::people_csv::{
     MAX_CSV_REVIEW_BYTES, PeopleCsvDetection, PeopleImportDisposition, RejectedRow,
 };
 pub use eutheto_workforce::people_csv::{
-    MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_MAPPING_BYTES, MAX_CSV_SOURCE_BYTES,
-    PeopleCsvMapping, PeopleImportPreview, RowDecision,
+    CsvDialect, CsvSampleCell, CsvSampleRecord, MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS,
+    MAX_CSV_LOGICAL_RECORDS, MAX_CSV_MAPPING_BYTES, MAX_CSV_SOURCE_BYTES, PeopleCsvMapping,
+    PeopleImportPreview, RowDecision,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -265,6 +266,26 @@ impl EuthetoApp {
                 bytes.extend_from_slice(&chunk[..count]);
             }
             csv::detect_people_csv(&bytes, &token).map_err(csv_error)
+        })
+        .await
+        .map_err(super::join_error)?
+    }
+
+    /// Reads a selected inert identity sample without loading scenario state.
+    /// The native caller retains source custody and an immutable operation context.
+    ///
+    /// # Errors
+    /// Returns safe CSV input/limit/cancellation codes or a safe task failure.
+    pub async fn sample_people_csv_record<R: Read + Send + 'static>(
+        &self,
+        mut input: R,
+        dialect: CsvDialect,
+        record: u32,
+        operation: PeopleCsvOperation,
+    ) -> Result<Option<CsvSampleRecord>, AppError> {
+        let token = operation.token.clone();
+        tokio::task::spawn_blocking(move || {
+            csv::sample_people_csv_record(&mut input, dialect, record, &token).map_err(csv_error)
         })
         .await
         .map_err(super::join_error)?

@@ -8,6 +8,7 @@ use super::{
         WorkforceSetupViewDataV1,
     },
     paging::{PageBuilder, ProjectionBudget, Result, invalid},
+    time::temporal_error,
 };
 use crate::{
     ids::ShiftId,
@@ -16,7 +17,7 @@ use crate::{
     },
     temporal::{
         self, PriorShift, ResolvedShift, ResolvedShiftOrigin, ShiftChangeKind, TemporalError,
-        TemporalIssueKind,
+        TemporalIssueKind, diagnostics::issue_report,
     },
     validation::validate_document_controlled,
 };
@@ -27,22 +28,6 @@ use jiff::{
     civil::{Date, Time},
 };
 use std::collections::BTreeMap;
-
-pub(super) fn temporal_error(error: TemporalError) -> DomainPackError {
-    match error {
-        TemporalError::InvalidDocument(error) => error,
-        TemporalError::Cancelled => DomainPackError::Cancelled,
-        TemporalError::Issue(issue) => match issue.kind {
-            TemporalIssueKind::OccurrenceLimit
-            | TemporalIssueKind::OutputLimit
-            | TemporalIssueKind::CalendarLimit => DomainPackError::ResourceLimitExceeded,
-            _ => invalid(
-                "/query",
-                &format!("Workforce temporal resolution required: {:?}", issue.kind),
-            ),
-        },
-    }
-}
 
 pub(super) fn check_dates(dates: DateRange) -> Result<()> {
     let days = dates
@@ -94,7 +79,7 @@ pub(super) fn window(
         Some(parameters.dates),
         &mut |_| budget.visit().map_err(TemporalError::from),
     )
-    .map_err(temporal_error)?;
+    .map_err(|error| temporal_error(document, error))?;
     let mut cursor_seen = cursor.is_none();
     for shift in shifts {
         budget.visit()?;
@@ -143,7 +128,7 @@ pub(super) fn detail(
         parameters.shift_id,
         &mut |_| budget.visit().map_err(TemporalError::from),
     )
-    .map_err(temporal_error)?
+    .map_err(|error| temporal_error(document, error))?
     .ok_or_else(|| {
         invalid(
             "/query/parameters/shiftId",
@@ -196,7 +181,7 @@ pub(super) fn generation_review(
         temporal::preview_generation_checked(original, prospective, control, &mut || {
             budget.visit().map_err(TemporalError::from)
         })
-        .map_err(temporal_error)?;
+        .map_err(|error| temporal_error(prospective, error))?;
     budget.visit()?;
     let mut joined: BTreeMap<ShiftId, Joined> = BTreeMap::new();
     for prior in preview.before {
@@ -241,7 +226,7 @@ pub(super) fn generation_review(
         cursor_seen |= cursor == Some(shift_id);
         page.observe(cursor.is_none_or(|cursor| shift_id > cursor), || {
             let before = before
-                .map(|prior| prior_row(&before_domain, prior))
+                .map(|prior| prior_row(original, &before_domain, prior))
                 .transpose()?;
             let after = after
                 .as_ref()
@@ -278,15 +263,22 @@ pub(super) fn generation_review(
     Ok((result, preview.reconciliation))
 }
 
-fn prior_row(domain: &WorkforceDomainV1, prior: PriorShift) -> Result<PriorWorkShiftV1> {
+fn prior_row(
+    document: &ScenarioDocument,
+    domain: &WorkforceDomainV1,
+    prior: PriorShift,
+) -> Result<PriorWorkShiftV1> {
     match prior {
         PriorShift::Resolved(shift) => {
             shift_row(domain, &shift).map(|row| PriorWorkShiftV1::Resolved(Box::new(row)))
         }
         PriorShift::Unresolved { origin, issue, .. } => {
+            let detail = issue_report(document, issue);
             Ok(PriorWorkShiftV1::Unresolved(PriorUnresolvedShiftV1 {
                 origin: origin_row(origin),
-                issue: issue_row(issue),
+                issue: issue_row(issue.kind),
+                field_path: detail.field_path,
+                message: detail.message,
             }))
         }
     }

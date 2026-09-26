@@ -9,7 +9,7 @@ use eutheto_command::official_registry;
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     BackupAssetSelection, BackupSelection, COUNTERFACTUAL_API_SCHEMA_VERSION, DeferredCapability,
-    EuthetoApp, EventSubscription, ProjectScope, SOLUTION_API_SCHEMA_VERSION,
+    EuthetoApp, EventSubscription, ProjectScope, SOLUTION_API_SCHEMA_VERSION, SafetyBackupOutcome,
     SolutionCancelCounterfactualDtoV1, SolutionCancelCounterfactualRequestV1,
     SolutionCompareRequestV1, SolutionExplainRequestV1, SolutionExplanationDtoV1,
     SolutionListRequestV1, SolutionSelectRequestV1, SolutionStartCounterfactualDtoV1,
@@ -42,7 +42,9 @@ use eutheto_planning_ir::{
 };
 use eutheto_solver_api::*;
 #[cfg(debug_assertions)]
-use eutheto_store::Failpoint;
+use eutheto_store::{
+    CommandCommitTestHook, CommandCommitTestPhase, Failpoint, OpenOptions, SnapshotPolicy,
+};
 use eutheto_store::{
     NewSolveRunV1, SqliteScenarioStore, StagedLibraryApply, StoredAcceptedResultV2,
 };
@@ -1219,6 +1221,11 @@ async fn committed_mutations_reach_independent_subscribers_and_lag_is_recoverabl
     for index in 0..300 {
         let notification_request_id = request_id()?;
         app.execute(AppCommand::SetSetting {
+            expected_library_revision: app
+                .application_settings_snapshot()
+                .await
+                .boxed()?
+                .library_revision,
             request_id: notification_request_id,
             key: "appearance".to_owned(),
             value: json!({"theme": if index % 2 == 0 { "dark" } else { "light" }}),
@@ -1439,6 +1446,11 @@ async fn duplicate_archive_delete_and_settings_are_real_lifecycle_operations()
     .boxed()?;
 
     app.execute(AppCommand::SetSetting {
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision,
         request_id: request_id()?,
         key: "appearance".to_owned(),
         value: json!({"theme": "dark"}),
@@ -1454,11 +1466,12 @@ async fn duplicate_archive_delete_and_settings_are_real_lifecycle_operations()
     assert!(matches!(
         app.execute(AppCommand::DeleteSetting {
             request_id: request_id()?,
+            expected_library_revision: app.application_settings_snapshot().await.boxed()?.library_revision,
             key: "appearance".to_owned(),
         })
         .await
         .boxed()?,
-        AppCommandResult::SettingDeleted(true)
+        AppCommandResult::SettingsWritten(result) if result.changed
     ));
 
     app.execute(AppCommand::DeleteProject {
@@ -1475,6 +1488,10 @@ async fn duplicate_archive_delete_and_settings_are_real_lifecycle_operations()
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps the complete stale-review lifecycle in one regression."
+)]
 #[tokio::test]
 async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
@@ -1489,7 +1506,10 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
     .await
     .boxed()?;
     let bytes = match app
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: app.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -1511,6 +1531,7 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
     };
     let fresh_preview_id = match app
         .query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: bytes.clone(),
             options: options.clone(),
         })
@@ -1521,6 +1542,7 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
         other => return Err(format!("unexpected preview result: {other:?}").into()),
     };
     app.execute(AppCommand::ApplyImport {
+        cancellation: app.setup_cancellation(),
         request_id: request_id()?,
         preview_id: fresh_preview_id,
         collision_plan: CollisionPlan {
@@ -1538,7 +1560,11 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
     ));
 
     let preview_id = match app
-        .query(AppQuery::PreviewImport { bytes, options })
+        .query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
+            bytes,
+            options,
+        })
         .await
         .boxed()?
     {
@@ -1555,6 +1581,7 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
     .boxed()?;
     let apply = app
         .execute(AppCommand::ApplyImport {
+            cancellation: app.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan {
@@ -1566,6 +1593,7 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
     assert!(matches!(apply, Err(AppError::Conflict { .. })));
     let retry = app
         .execute(AppCommand::ApplyImport {
+            cancellation: app.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan {
@@ -1580,6 +1608,10 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps byte identity and rejected-publication cases in one fixture."
+)]
 #[tokio::test]
 async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_changed_bytes()
 -> Result<(), Box<dyn Error>> {
@@ -1587,7 +1619,10 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let scenario_id = create_project(&app, "Prepared scenario").await?;
     let (bytes, revision, library_revision) = match app
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: app.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -1601,6 +1636,7 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
     let digest = eutheto_export::sha256_hex(&bytes);
     let destination = directory.path().join("prepared-scenario.eutheto");
     app.execute(AppCommand::PublishPreparedPortable {
+        cancellation: app.setup_cancellation(),
         destination: destination.clone(),
         bytes: bytes.clone(),
         expected_sha256: digest.clone(),
@@ -1620,6 +1656,11 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
 
     let stale_destination = directory.path().join("stale-scenario.eutheto");
     app.execute(AppCommand::SetSetting {
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision,
         request_id: request_id()?,
         key: "appearance".to_owned(),
         value: json!({"theme": "dark"}),
@@ -1628,6 +1669,7 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
     .boxed()?;
     let stale = app
         .execute(AppCommand::PublishPreparedPortable {
+            cancellation: app.setup_cancellation(),
             destination: stale_destination.clone(),
             bytes,
             expected_sha256: digest,
@@ -1642,7 +1684,10 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
     assert!(!stale_destination.exists());
 
     let (current_bytes, current_revision, current_library_revision) = match app
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: app.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -1656,6 +1701,7 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
     let changed_destination = directory.path().join("changed-scenario.eutheto");
     let changed = app
         .execute(AppCommand::PublishPreparedPortable {
+            cancellation: app.setup_cancellation(),
             destination: changed_destination.clone(),
             bytes: current_bytes,
             expected_sha256: "0".repeat(64),
@@ -1681,6 +1727,7 @@ async fn prepared_backup_publication_binds_the_library_revision() -> Result<(), 
     create_project(&app, "Prepared backup").await?;
     let (bytes, library_revision) = match app
         .query(AppQuery::ExportBackup {
+            cancellation: app.setup_cancellation(),
             title: "Prepared backup".to_owned(),
             selection: BackupSelection::default(),
         })
@@ -1695,6 +1742,11 @@ async fn prepared_backup_publication_binds_the_library_revision() -> Result<(), 
         other => return Err(format!("unexpected prepared backup: {other:?}").into()),
     };
     app.execute(AppCommand::SetSetting {
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision,
         request_id: request_id()?,
         key: "locale".to_owned(),
         value: json!("en-GB"),
@@ -1704,6 +1756,7 @@ async fn prepared_backup_publication_binds_the_library_revision() -> Result<(), 
     let destination = directory.path().join("stale-backup.eutheto");
     let result = app
         .execute(AppCommand::PublishPreparedPortable {
+            cancellation: app.setup_cancellation(),
             destination: destination.clone(),
             expected_sha256: eutheto_export::sha256_hex(&bytes),
             bytes,
@@ -1731,6 +1784,7 @@ async fn cancelled_portable_publication_leaves_no_destination_temp_or_storage_mu
     cancellation.cancel();
     let result = app
         .execute(AppCommand::ExportScenario {
+            cancellation: app.setup_cancellation(),
             scenario_id,
             destination: destination.clone(),
         })
@@ -1764,7 +1818,10 @@ async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_s
         .boxed()?;
     let scenario_id = create_project(&source, "Inspection cancellation").await?;
     let bytes = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -1782,6 +1839,7 @@ async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_s
     let target = EuthetoApp::open(target_dependencies).await.boxed()?;
     let result = target
         .query(AppQuery::PreviewImport {
+            cancellation: target.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -1813,7 +1871,10 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
         .boxed()?;
     let scenario_id = create_project(&source, "Cancelled import").await?;
     let bytes = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -1827,6 +1888,7 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
     let target = EuthetoApp::open(target_dependencies).await.boxed()?;
     let preview_id = match target
         .query(AppQuery::PreviewImport {
+            cancellation: target.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -1843,6 +1905,7 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
     cancellation.cancel();
     let result = target
         .execute(AppCommand::ApplyImport {
+            cancellation: target.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -1886,7 +1949,10 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
             .boxed()?;
     }
     let source_revision_two = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -1895,6 +1961,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
     };
     let source_backup = match source
         .query(AppQuery::ExportBackup {
+            cancellation: source.setup_cancellation(),
             title: "ABA overlap".to_owned(),
             selection: BackupSelection::default(),
         })
@@ -1945,6 +2012,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
         .boxed()?;
     let overlap_preview = match target
         .query(AppQuery::PreviewRestore {
+            cancellation: target.setup_cancellation(),
             bytes: source_backup,
             options: ImportOptions {
                 restore_mode: RestoreMode::ReplaceLibrary,
@@ -1970,6 +2038,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
     };
     target
         .execute(AppCommand::ApplyRestore {
+            cancellation: target.setup_cancellation(),
             request_id: request_id()?,
             preview_id: overlap_preview,
             collision_plan: CollisionPlan::default(),
@@ -2002,6 +2071,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
     let _removed = changes.recv().await.boxed()?;
     let tombstone_preview = match target
         .query(AppQuery::PreviewImport {
+            cancellation: target.setup_cancellation(),
             bytes: source_revision_two.clone(),
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -2032,6 +2102,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
     };
     target
         .execute(AppCommand::ApplyImport {
+            cancellation: target.setup_cancellation(),
             request_id: request_id()?,
             preview_id: tombstone_preview,
             collision_plan: CollisionPlan::default(),
@@ -2084,7 +2155,10 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
             .boxed()?;
     }
     let source_revision_five = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2101,6 +2175,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
         .boxed()?;
     let high_preview = match reopened
         .query(AppQuery::PreviewImport {
+            cancellation: reopened.setup_cancellation(),
             bytes: source_revision_five,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -2131,6 +2206,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
     };
     reopened
         .execute(AppCommand::ApplyImport {
+            cancellation: reopened.setup_cancellation(),
             request_id: request_id()?,
             preview_id: high_preview,
             collision_plan: CollisionPlan::default(),
@@ -2200,7 +2276,10 @@ async fn seed_local_identity_closure(
     let source = EuthetoApp::open(dependencies(directory)?).await.boxed()?;
     let scenario_id = create_project(&source, "Identity closure").await?;
     let (seed_bytes, local_library_revision) = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2302,6 +2381,7 @@ async fn seed_local_identity_closure(
         .apply_staged_library(
             StagedLibraryApply::Import(staged),
             timestamp("2026-01-10T12:00:01Z")?,
+            eutheto_types::CancellationToken::new(),
         )
         .await?;
     let revision = store.get_project(scenario_id).await?.summary.revision;
@@ -2356,7 +2436,10 @@ async fn preview_detects_local_nested_semantic_historical_and_result_identities(
         .boxed()?;
     let import_id = create_project(&import_source, "Imported identity").await?;
     let seed_bytes = match import_source
-        .query(AppQuery::ExportScenario(import_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id: import_id,
+            cancellation: import_source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2372,6 +2455,7 @@ async fn preview_detects_local_nested_semantic_historical_and_result_identities(
     for collision_id in collision_ids {
         let result = target
             .query(AppQuery::PreviewImport {
+                cancellation: target.setup_cancellation(),
                 bytes: collision_scenario_bundle(&seed, &collision_id)?,
                 options: ImportOptions {
                     restore_mode: RestoreMode::ImportScenario,
@@ -2439,7 +2523,10 @@ async fn duplicate_uses_injected_ids_for_the_complete_owned_graph() -> Result<()
     };
     assert_eq!(duplicate_id.as_uuid(), replacements[0]);
     let bytes = match app
-        .query(AppQuery::ExportScenario(duplicate_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id: duplicate_id,
+            cancellation: app.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2519,7 +2606,10 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
         .boxed()?;
     let scenario_id = create_project(&source, "Kind-bound export").await.boxed()?;
     let scenario_export = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2535,6 +2625,7 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
     assert!(matches!(
         target
             .query(AppQuery::PreviewRestore {
+                cancellation: target.setup_cancellation(),
                 bytes: scenario_export,
                 options: ImportOptions {
                     restore_mode: RestoreMode::AddBackup,
@@ -2549,6 +2640,7 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
     assert!(matches!(
         target
             .query(AppQuery::PreviewImport {
+                cancellation: target.setup_cancellation(),
                 bytes: full_backup,
                 options: ImportOptions {
                     restore_mode: RestoreMode::ImportScenario,
@@ -2570,7 +2662,10 @@ async fn backup_with_large_preview_titles() -> Result<Vec<u8>, Box<dyn Error>> {
         .boxed()?;
     let scenario_id = create_project(&source, "Preview budget seed").await?;
     let seed_bytes = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2647,6 +2742,7 @@ async fn portable_preview_rejects_derived_titles_exceeding_retained_budget_witho
         .boxed()?;
     let result = target
         .query(AppQuery::PreviewRestore {
+            cancellation: target.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::AddBackup,
@@ -2694,6 +2790,11 @@ async fn create_inspected_backup() -> Result<(Vec<u8>, ScenarioId), Box<dyn Erro
         .boxed()?;
     source
         .execute(AppCommand::SetSetting {
+            expected_library_revision: source
+                .application_settings_snapshot()
+                .await
+                .boxed()?
+                .library_revision,
             request_id: request_id()?,
             key: "appearance".to_owned(),
             value: json!({"theme": "dark", "reducedMotion": true}),
@@ -2702,6 +2803,7 @@ async fn create_inspected_backup() -> Result<(Vec<u8>, ScenarioId), Box<dyn Erro
         .boxed()?;
     let backup = match source
         .query(AppQuery::ExportBackup {
+            cancellation: source.setup_cancellation(),
             title: "Library backup".to_owned(),
             selection: BackupSelection::default(),
         })
@@ -2730,6 +2832,7 @@ async fn create_inspected_backup() -> Result<(Vec<u8>, ScenarioId), Box<dyn Erro
 async fn preview_restore(app: &EuthetoApp, bytes: Vec<u8>) -> Result<RequestId, Box<dyn Error>> {
     match app
         .query(AppQuery::PreviewRestore {
+            cancellation: app.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::ReplaceLibrary,
@@ -2751,6 +2854,7 @@ async fn preview_add_backup(
 ) -> Result<(RequestId, eutheto_import::ImportPreview), Box<dyn Error>> {
     match app
         .query(AppQuery::PreviewRestore {
+            cancellation: app.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::AddBackup,
@@ -2775,6 +2879,7 @@ async fn preview_replace_and_assert_removal(
 ) -> Result<RequestId, Box<dyn Error>> {
     match target
         .query(AppQuery::PreviewRestore {
+            cancellation: target.setup_cancellation(),
             bytes: backup,
             options: ImportOptions {
                 restore_mode: RestoreMode::ReplaceLibrary,
@@ -2819,6 +2924,7 @@ async fn apply_restore_and_assert_events(
     let restore_request_id = request_id()?;
     let applied = target
         .execute(AppCommand::ApplyRestore {
+            cancellation: target.setup_cancellation(),
             request_id: restore_request_id,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -2833,7 +2939,7 @@ async fn apply_restore_and_assert_events(
         .boxed()?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { scenarios }
+        AppCommandResult::PortableApplied { scenarios, .. }
             if scenarios.len() == 1
                 && scenarios[0].source_scenario_id == restored_id
                 && scenarios[0].scenario_id == restored_id
@@ -2896,7 +3002,10 @@ async fn assert_restored_backup(
         AppQueryResult::Setting(None)
     ));
     let restored_export = match target
-        .query(AppQuery::ExportScenario(restored_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id: restored_id,
+            cancellation: target.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -2933,6 +3042,11 @@ async fn restore_backup_and_assert(
         .boxed()?;
     target
         .execute(AppCommand::SetSetting {
+            expected_library_revision: target
+                .application_settings_snapshot()
+                .await
+                .boxed()?
+                .library_revision,
             request_id: request_id()?,
             key: "locale".to_owned(),
             value: json!("en-GB"),
@@ -2962,6 +3076,7 @@ async fn backup_audit_selection_is_explicitly_deferred_and_never_silently_omitte
 
     let bytes = match app
         .query(AppQuery::ExportBackup {
+            cancellation: app.setup_cancellation(),
             title: "No audit".to_owned(),
             selection: BackupSelection {
                 include_results: true,
@@ -3002,6 +3117,7 @@ async fn backup_audit_selection_is_explicitly_deferred_and_never_silently_omitte
     }));
     assert!(matches!(
         app.query(AppQuery::ExportBackup {
+            cancellation: app.setup_cancellation(),
             title: "Audit requested".to_owned(),
             selection: BackupSelection {
                 include_results: true,
@@ -3023,7 +3139,10 @@ async fn restore_large_asset_fixture() -> Result<(EuthetoApp, TempDir, ScenarioI
         .boxed()?;
     let scenario_id = create_project(&source, "Large asset").await.boxed()?;
     let scenario_bundle = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -3086,6 +3205,7 @@ async fn restore_large_asset_fixture() -> Result<(EuthetoApp, TempDir, ScenarioI
     };
     let preview_id = match target
         .query(AppQuery::PreviewRestore {
+            cancellation: target.setup_cancellation(),
             bytes: restore_bundle,
             options,
         })
@@ -3097,6 +3217,7 @@ async fn restore_large_asset_fixture() -> Result<(EuthetoApp, TempDir, ScenarioI
     };
     target
         .execute(AppCommand::ApplyRestore {
+            cancellation: target.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -3126,6 +3247,7 @@ async fn assert_omitted_placeholder_survives_restore(
     }
     let preview_id = match app
         .query(AppQuery::PreviewRestore {
+            cancellation: app.setup_cancellation(),
             bytes: backup.to_vec(),
             options: ImportOptions {
                 restore_mode,
@@ -3162,6 +3284,7 @@ async fn assert_omitted_placeholder_survives_restore(
         other => return Err(format!("unexpected placeholder restore preview: {other:?}").into()),
     };
     app.execute(AppCommand::ApplyRestore {
+        cancellation: app.setup_cancellation(),
         request_id: request_id()?,
         preview_id,
         collision_plan: CollisionPlan::default(),
@@ -3180,6 +3303,7 @@ async fn assert_omitted_placeholder_survives_restore(
     ] {
         let exported = match app
             .query(AppQuery::ExportBackup {
+                cancellation: app.setup_cancellation(),
                 title: "Placeholder retained".to_owned(),
                 selection: BackupSelection {
                     include_results: true,
@@ -3268,6 +3392,7 @@ async fn large_asset_exclusion_is_explicit_and_distinct_from_including_assets()
     let (target, _target_directory, _) = restore_large_asset_fixture().await?;
     let included_bytes = match target
         .query(AppQuery::ExportBackup {
+            cancellation: target.setup_cancellation(),
             title: "Included".to_owned(),
             selection: BackupSelection {
                 include_results: true,
@@ -3298,6 +3423,7 @@ async fn large_asset_exclusion_is_explicit_and_distinct_from_including_assets()
 
     let excluded_bytes = match target
         .query(AppQuery::ExportBackup {
+            cancellation: target.setup_cancellation(),
             title: "Excluded".to_owned(),
             selection: BackupSelection {
                 include_results: true,
@@ -3347,6 +3473,7 @@ async fn exclude_all_assets_emits_reconnection_placeholders_for_referenced_asset
     let (target, _target_directory, _) = restore_large_asset_fixture().await?;
     let bytes = match target
         .query(AppQuery::ExportBackup {
+            cancellation: target.setup_cancellation(),
             title: "Exclude all assets".to_owned(),
             selection: BackupSelection {
                 include_results: true,
@@ -3405,6 +3532,7 @@ async fn backup_selection_metadata_distinguishes_empty_results_from_excluded_res
     for include_results in [true, false] {
         let bytes = match target
             .query(AppQuery::ExportBackup {
+                cancellation: target.setup_cancellation(),
                 title: "Result selection".to_owned(),
                 selection: BackupSelection {
                     include_results,
@@ -3463,12 +3591,17 @@ fn assert_scenario_placeholder_selection(
         .clone())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeps the backup/export/re-import preservation path in one regression."
+)]
 #[tokio::test]
 async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metadata()
 -> Result<(), Box<dyn Error>> {
     let (source, _source_directory, scenario_id) = restore_large_asset_fixture().await?;
     let backup = match source
         .query(AppQuery::ExportBackup {
+            cancellation: source.setup_cancellation(),
             title: "Scenario placeholder source".to_owned(),
             selection: BackupSelection {
                 include_results: true,
@@ -3497,7 +3630,10 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
     .await?
     .boxed()?;
     let scenario_export = match restored
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: restored.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -3518,6 +3654,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
         .boxed()?;
     let preview_id = match imported
         .query(AppQuery::PreviewImport {
+            cancellation: imported.setup_cancellation(),
             bytes: scenario_export,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -3539,6 +3676,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
     };
     imported
         .execute(AppCommand::ApplyImport {
+            cancellation: imported.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -3546,7 +3684,10 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
         .await
         .boxed()?;
     let reexported = match imported
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: imported.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -3574,7 +3715,10 @@ async fn create_historical_closure_backup() -> Result<(ScenarioId, Vec<u8>), Box
         .boxed()?;
     let scenario_id = create_project(&source, "Historical closure").await?;
     let seed_bytes = match source
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: source.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -3653,6 +3797,7 @@ async fn scenario_export_keeps_historical_results_and_historical_only_assets()
     let (preview_id, _) = preview_add_backup(&target, bundle).await?;
     target
         .execute(AppCommand::ApplyRestore {
+            cancellation: target.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -3666,7 +3811,10 @@ async fn scenario_export_keeps_historical_results_and_historical_only_assets()
         .await
         .boxed()?;
     let exported = match target
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: target.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -3721,6 +3869,11 @@ async fn failed_destructive_restore_rolls_back_across_restart_and_keeps_verified
     .await
     .boxed()?;
     app.execute(AppCommand::SetSetting {
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision,
         request_id: request_id()?,
         key: "locale".to_owned(),
         value: json!("en-GB"),
@@ -3740,6 +3893,7 @@ async fn failed_destructive_restore_rolls_back_across_restart_and_keeps_verified
     store.set_failpoint(Failpoint::AfterSupplementalWrite)?;
     assert!(
         app.execute(AppCommand::ApplyRestore {
+            cancellation: app.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -3806,6 +3960,7 @@ async fn apply_restore_with_authorization(
 ) -> Result<Result<AppCommandResult, AppError>, Box<dyn Error>> {
     Ok(app
         .execute(AppCommand::ApplyRestore {
+            cancellation: app.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan,
@@ -3905,6 +4060,7 @@ async fn add_restore_rejects_replace_receipt_fields() -> Result<(), Box<dyn Erro
     let (preview_id, _) = preview_add_backup(&app, backup).await?;
     let result = app
         .execute(AppCommand::ApplyRestore {
+            cancellation: app.setup_cancellation(),
             request_id: request_id()?,
             preview_id,
             collision_plan: CollisionPlan::default(),
@@ -3949,6 +4105,15 @@ async fn first_replace_cannot_bypass_backup_and_same_session_phrase_uses_recorde
     assert_preview_consumed(&app, bypass_preview).await?;
 
     let retained_preview = preview_restore(&app, backup).await?;
+    let reviewed_revision = app
+        .application_settings_snapshot()
+        .await
+        .boxed()?
+        .library_revision;
+    assert!(
+        !app.portable_restore_retry_is_retained(retained_preview, reviewed_revision)
+            .await
+    );
     assert!(matches!(
         apply_restore_with_safety_evidence(
             &app,
@@ -3958,6 +4123,10 @@ async fn first_replace_cannot_bypass_backup_and_same_session_phrase_uses_recorde
         .await?,
         Err(AppError::Protocol(failure)) if failure.code == "restore.safety_backup_failed"
     ));
+    assert!(
+        app.portable_restore_retry_is_retained(retained_preview, reviewed_revision)
+            .await
+    );
     let applied = apply_restore_with_safety_evidence(
         &app,
         retained_preview,
@@ -3967,11 +4136,17 @@ async fn first_replace_cannot_bypass_backup_and_same_session_phrase_uses_recorde
     .boxed()?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { scenarios }
+        AppCommandResult::PortableApplied {
+            scenarios, safety_backup: SafetyBackupOutcome::ConfirmedBypass, ..
+        }
             if scenarios.len() == 1
                 && scenarios[0].source_scenario_id == restored_id
                 && scenarios[0].scenario_id == restored_id
     ));
+    assert!(
+        !app.portable_restore_retry_is_retained(retained_preview, reviewed_revision)
+            .await
+    );
     Ok(())
 }
 
@@ -4001,7 +4176,7 @@ async fn actual_failure_receipt_survives_restart_and_is_consumed_once() -> Resul
             .boxed()?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { scenarios }
+        AppCommandResult::PortableApplied { scenarios, .. }
             if scenarios.len() == 1
                 && scenarios[0].source_scenario_id == restored_id
                 && scenarios[0].scenario_id == restored_id
@@ -4028,6 +4203,11 @@ async fn failure_receipt_rejects_a_stale_preview_binding() -> Result<(), Box<dyn
     )
     .await?;
     app.execute(AppCommand::SetSetting {
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision,
         request_id: request_id()?,
         key: "appearance".to_owned(),
         value: json!({"theme": "dark"}),
@@ -4095,7 +4275,7 @@ async fn verified_safety_backup_does_not_create_a_failure_receipt() -> Result<()
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let prospective_proof = request_id()?.to_string();
     let preview_id = preview_restore(&app, backup.clone()).await?;
-    apply_restore_with_authorization(
+    let applied = apply_restore_with_authorization(
         &app,
         preview_id,
         CollisionPlan::default(),
@@ -4104,6 +4284,34 @@ async fn verified_safety_backup_does_not_create_a_failure_receipt() -> Result<()
     )
     .await?
     .boxed()?;
+    let AppCommandResult::PortableApplied {
+        library_revision,
+        safety_backup: SafetyBackupOutcome::CreatedAndVerified { artifact_name },
+        ..
+    } = applied
+    else {
+        return Err("a committed replacement must report its verified safety artifact".into());
+    };
+    assert_eq!(
+        library_revision,
+        app.application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision
+    );
+    assert_eq!(
+        std::path::Path::new(&artifact_name)
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str),
+        Some(artifact_name.as_str())
+    );
+    let safety_backup = inspect_bundle(
+        &std::fs::read(directory.path().join("backups").join(artifact_name))?,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
+    )?;
+    assert!(safety_backup.scenarios.is_empty());
     disable_safety_backups(&directory)?;
     let fresh_preview = preview_restore(&app, backup).await?;
     assert_receipt_rejected(
@@ -4121,6 +4329,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
     let (initial_preview, _) = preview_add_backup(&first, backup.clone()).await?;
     first
         .execute(AppCommand::ApplyRestore {
+            cancellation: first.setup_cancellation(),
             request_id: request_id()?,
             preview_id: initial_preview,
             collision_plan: CollisionPlan::default(),
@@ -4140,6 +4349,11 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
         .boxed()?;
     let setting_value = json!({"theme": "dark", "reducedMotion": true});
     app.execute(AppCommand::SetSetting {
+        expected_library_revision: app
+            .application_settings_snapshot()
+            .await
+            .boxed()?
+            .library_revision,
         request_id: request_id()?,
         key: "appearance".to_owned(),
         value: setting_value,
@@ -4160,6 +4374,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
     let changed_request_id = request_id()?;
     let changed = app
         .execute(AppCommand::ApplyRestore {
+            cancellation: app.setup_cancellation(),
             request_id: changed_request_id,
             preview_id: changed_preview_id,
             collision_plan: plan.clone(),
@@ -4174,7 +4389,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
         .boxed()?;
     assert!(matches!(
         changed,
-        AppCommandResult::PortableApplied { scenarios } if scenarios.is_empty()
+        AppCommandResult::PortableApplied { scenarios, .. } if scenarios.is_empty()
     ));
     assert!(matches!(
         changed_notifications.recv().await.boxed()?.payload,
@@ -4187,6 +4402,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
     let revision_before = noop_preview.binding.local_library_revision;
     let mut noop_notifications = app.subscribe(EventTopic::AppNotification).await.boxed()?;
     app.execute(AppCommand::ApplyRestore {
+        cancellation: app.setup_cancellation(),
         request_id: request_id()?,
         preview_id: noop_preview_id,
         collision_plan: plan,
@@ -4327,7 +4543,10 @@ async fn unknown_pack_is_rejected_before_invalid_domain_is_materialized()
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let scenario_id = create_project(&app, "Preflight ordering").await?;
     let bytes = match app
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: app.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -4337,6 +4556,7 @@ async fn unknown_pack_is_rejected_before_invalid_domain_is_materialized()
     let bytes = with_unknown_pack_and_invalid_domain(&bytes)?;
     let result = app
         .query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
@@ -4372,7 +4592,10 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let scenario_id = create_project(&app, "Unopened").await?;
     let current = match app
-        .query(AppQuery::ExportScenario(scenario_id))
+        .query(AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: app.setup_cancellation(),
+        })
         .await
         .boxed()?
     {
@@ -4387,6 +4610,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     };
     assert!(matches!(
         app.query(AppQuery::PreviewImport {
+            cancellation: app.setup_cancellation(),
             bytes: newer.clone(),
             options: import_options,
         })
@@ -4397,6 +4621,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
 
     let preview_id = match app
         .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             bytes: newer.clone(),
         })
         .await
@@ -4419,6 +4644,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     let destination = directory.path().join("preserved.eutheto");
     assert!(matches!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id,
             destination: destination.clone(),
         })
@@ -4440,6 +4666,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     }
     assert!(matches!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id,
             destination: directory.path().join("second.eutheto"),
         })
@@ -4449,6 +4676,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
 
     let cancelled = match app
         .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             bytes: current.clone(),
         })
         .await
@@ -4464,6 +4692,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     .boxed()?;
     assert!(matches!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id: cancelled,
             destination: directory.path().join("cancelled.eutheto"),
         })
@@ -4472,7 +4701,10 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     ));
 
     let no_clobber = match app
-        .query(AppQuery::InspectUnopenedBundle { bytes: current })
+        .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
+            bytes: current,
+        })
         .await
         .boxed()?
     {
@@ -4483,6 +4715,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     std::fs::write(&occupied, b"existing")?;
     assert!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id: no_clobber,
             destination: occupied.clone(),
         })
@@ -4492,6 +4725,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     assert_eq!(std::fs::read(&occupied)?, b"existing");
     assert!(matches!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id: no_clobber,
             destination: directory.path().join("retry.eutheto"),
         })
@@ -4500,6 +4734,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     ));
     let invalid_parent = match app
         .query(AppQuery::InspectUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             bytes: newer.clone(),
         })
         .await
@@ -4511,6 +4746,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     let missing_destination = directory.path().join("missing-parent").join("bundle");
     assert!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id: invalid_parent,
             destination: missing_destination.clone(),
         })
@@ -4520,6 +4756,7 @@ async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_
     assert!(!missing_destination.exists());
     assert!(matches!(
         app.execute(AppCommand::ExactReexportUnopenedBundle {
+            cancellation: app.setup_cancellation(),
             preview_id: invalid_parent,
             destination: directory.path().join("invalid-parent-retry"),
         })
@@ -4568,6 +4805,11 @@ async fn application_settings_accept_only_the_documented_nonsecret_schema()
         ("units", json!("us-customary")),
     ] {
         app.execute(AppCommand::SetSetting {
+            expected_library_revision: app
+                .application_settings_snapshot()
+                .await
+                .boxed()?
+                .library_revision,
             request_id: request_id()?,
             key: key.to_owned(),
             value,
@@ -4584,6 +4826,11 @@ async fn application_settings_accept_only_the_documented_nonsecret_schema()
         assert!(matches!(
             app.execute(AppCommand::SetSetting {
                 request_id: request_id()?,
+                expected_library_revision: app
+                    .application_settings_snapshot()
+                    .await
+                    .boxed()?
+                    .library_revision,
                 key: key.to_owned(),
                 value,
             })
@@ -4626,6 +4873,7 @@ fn support_dependencies(directory: &TempDir) -> Result<AppDependencies, Box<dyn 
 async fn seeded_support_app(
     directory: &TempDir,
 ) -> Result<(EuthetoApp, AppDependencies, u32), Box<dyn Error>> {
+    const SECRET_SETTING_KEYS: &[&str] = &["credential.SUPPORT_CREDENTIAL_SENTINEL_DO_NOT_LEAK"];
     let dependencies = support_dependencies(directory)?;
     let (store, mut initialization) =
         SqliteScenarioStore::open(&dependencies.paths.database).await?;
@@ -4647,13 +4895,20 @@ async fn seeded_support_app(
     .await
     .boxed()?;
     store
-        .set_setting(
-            format!("credential.{SECRET_SENTINEL}"),
-            json!({
-                "secret": SECRET_SENTINEL,
-                "environmentValue": ENVIRONMENT_SENTINEL,
-            }),
-            timestamp("2026-01-10T12:00:00Z")?,
+        .replace_settings(
+            SECRET_SETTING_KEYS,
+            store.settings_snapshot(SECRET_SETTING_KEYS).await?,
+            BTreeMap::from([(
+                SECRET_SETTING_KEYS[0].to_owned(),
+                eutheto_store::AppSetting {
+                    value: json!({
+                        "secret": SECRET_SENTINEL,
+                        "environmentValue": ENVIRONMENT_SENTINEL,
+                    }),
+                    updated_at: timestamp("2026-01-10T12:00:00Z")?,
+                },
+            )]),
+            eutheto_types::CancellationToken::new(),
         )
         .await?;
     Ok((app, dependencies, storage_schema_version))
@@ -5655,4 +5910,147 @@ async fn queued_counterfactual_cancel_replay_does_not_republish_terminal_progres
     assert_eq!(replayed.job, first.job);
     assert!(progress.try_recv().boxed()?.is_none());
     Ok(())
+}
+
+#[cfg(debug_assertions)]
+async fn portable_commit_boundary(
+    phase: CommandCommitTestPhase,
+    abandon: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (backup, restored_id) = create_inspected_backup().await?;
+    let directory = private_tempdir()?;
+    let deps = dependencies(&directory)?;
+    let hook = CommandCommitTestHook::new(phase);
+    let (store, initialized) = SqliteScenarioStore::open_with_options(
+        &deps.paths.database,
+        OpenOptions::new(SnapshotPolicy::default()).with_command_commit_test_hook(hook.clone()),
+    )
+    .await?;
+    let store = Arc::new(store);
+    let app = EuthetoApp::from_initialized_store(Arc::clone(&store), initialized, deps.clone())
+        .boxed()?;
+    let (preview_id, _) = preview_add_backup(&app, backup).await?;
+    let mut events = app.subscribe(EventTopic::ScenarioChanged).await.boxed()?;
+    let request_id = request_id()?;
+    let cancellation = app.setup_cancellation();
+    let command = AppCommand::ApplyRestore {
+        cancellation: cancellation.clone(),
+        request_id,
+        preview_id,
+        collision_plan: CollisionPlan::default(),
+        authorization: RestoreAuthorization {
+            destructive_action_confirmed: false,
+            safety_backup: SafetyBackupEvidence::NotRequired,
+            prospective_failure_receipt_token: None,
+            collision_plan_sha256: None,
+        },
+    };
+    let caller_app = app.clone();
+    let caller = tokio::spawn(async move { caller_app.execute(command).await });
+    let reached = hook.clone();
+    tokio::task::spawn_blocking(move || reached.wait_until_reached()).await?;
+    let caller = if abandon {
+        caller.abort();
+        assert!(caller.await.is_err_and(|error| error.is_cancelled()));
+        None
+    } else {
+        cancellation.cancel();
+        Some(caller)
+    };
+    tokio::task::spawn_blocking(move || hook.release()).await?;
+    let committed = phase == CommandCommitTestPhase::AfterFinalCancellationCheck;
+    if let Some(caller) = caller {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), caller).await??;
+        if committed {
+            let revision = app
+                .application_settings_snapshot()
+                .await
+                .boxed()?
+                .library_revision;
+            assert!(matches!(
+                result.boxed()?,
+                AppCommandResult::PortableApplied {
+                    library_revision,
+                    safety_backup: SafetyBackupOutcome::NotRequired,
+                    ..
+                } if library_revision == revision
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(AppError::Protocol(failure)) if failure.code == "operation.cancelled"
+            ));
+        }
+    }
+    if committed {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+            .await?
+            .boxed()?;
+        assert!(matches!(
+            event.payload,
+            EventPayload::ScenarioChanged { context, .. }
+                if context.request_id == Some(request_id)
+                    && context.scenario_id == Some(restored_id)
+        ));
+    }
+    assert_portable_boundary_state(&app, restored_id, committed).await?;
+    drop(app);
+    drop(store);
+    let reopened = EuthetoApp::open(deps).await.boxed()?;
+    assert_portable_boundary_state(&reopened, restored_id, committed).await
+}
+
+#[cfg(debug_assertions)]
+async fn assert_portable_boundary_state(
+    app: &EuthetoApp,
+    restored_id: ScenarioId,
+    committed: bool,
+) -> Result<(), Box<dyn Error>> {
+    match app.query(AppQuery::ProjectMetadata(restored_id)).await {
+        Ok(AppQueryResult::Project(project)) if committed => {
+            assert_eq!(project.scenario_id, restored_id);
+        }
+        Err(AppError::NotFound(_)) if !committed => {}
+        other => return Err(format!("unexpected portable boundary project: {other:?}").into()),
+    }
+    match app
+        .query(AppQuery::Setting("appearance".to_owned()))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::Setting(Some(setting)) if committed => {
+            assert_eq!(
+                setting.value,
+                json!({"theme": "dark", "reducedMotion": true})
+            );
+        }
+        AppQueryResult::Setting(None) if !committed => {}
+        other => return Err(format!("unexpected portable boundary settings: {other:?}").into()),
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn portable_child_cancel_before_final_check_rolls_back() -> Result<(), Box<dyn Error>> {
+    portable_commit_boundary(CommandCommitTestPhase::BeforeFinalCancellationCheck, false).await
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn portable_child_cancel_after_final_check_preserves_commit() -> Result<(), Box<dyn Error>> {
+    portable_commit_boundary(CommandCommitTestPhase::AfterFinalCancellationCheck, false).await
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn portable_abandoned_caller_before_final_check_rolls_back() -> Result<(), Box<dyn Error>> {
+    portable_commit_boundary(CommandCommitTestPhase::BeforeFinalCancellationCheck, true).await
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn portable_abandoned_caller_after_final_check_publishes_commit() -> Result<(), Box<dyn Error>>
+{
+    portable_commit_boundary(CommandCommitTestPhase::AfterFinalCancellationCheck, true).await
 }

@@ -1,9 +1,20 @@
 use super::{
-    common::{Result, require, tags, token, unique},
+    common::{Result, prefix, require, tags, token, unique},
     context::Context,
     time::date_range,
 };
 use crate::model::{PersonSelection, Scope, ShiftScope};
+use eutheto_domain_api::DomainPackError;
+
+fn reference_field<T>(result: Result<T>, field: &str) -> Result<T> {
+    result.map_err(|error| match error {
+        DomainPackError::InvalidPayload { message, .. } => DomainPackError::InvalidPayload {
+            path: field.to_owned(),
+            message,
+        },
+        other => other,
+    })
+}
 
 impl Context<'_> {
     pub(super) fn people(&self, selection: &PersonSelection, active: bool) -> Result {
@@ -12,14 +23,14 @@ impl Context<'_> {
             PersonSelection::Selected { person_ids } => {
                 unique(person_ids, active, "personIds")?;
                 for id in person_ids {
-                    self.person(*id)?;
+                    reference_field(self.person(*id), "personIds")?;
                 }
                 Ok(())
             }
             PersonSelection::Filter { all_tags, any_tags } => {
                 require(
                     !active || !all_tags.is_empty() || !any_tags.is_empty(),
-                    "people",
+                    "",
                     "empty active filter must be explicit all",
                 )?;
                 tags(all_tags, "allTags")?;
@@ -29,23 +40,23 @@ impl Context<'_> {
     }
 
     pub(super) fn scope(&self, scope: &Scope, active: bool) -> Result {
-        self.people(&scope.people, active)?;
+        prefix(self.people(&scope.people, active), "people")?;
         if let Some(ids) = &scope.team_ids {
             unique(ids, active, "teamIds")?;
             for id in ids {
-                self.team(*id)?;
+                reference_field(self.team(*id), "teamIds")?;
             }
         }
         if let Some(ids) = &scope.assignment_type_ids {
             unique(ids, active, "assignmentTypeIds")?;
             for id in ids {
-                self.assignment_type(*id)?;
+                reference_field(self.assignment_type(*id), "assignmentTypeIds")?;
             }
         }
         if let Some(ids) = &scope.location_ids {
             unique(ids, active, "locationIds")?;
             for id in ids {
-                self.location(*id)?;
+                reference_field(self.location(*id), "locationIds")?;
             }
         }
         if let Some(categories) = &scope.categories {
@@ -66,7 +77,7 @@ impl Context<'_> {
             ShiftScope::Selected { shift_ids } => {
                 unique(shift_ids, active, "shiftIds")?;
                 for id in shift_ids {
-                    self.shift(*id)?;
+                    reference_field(self.shift(*id), "shiftIds")?;
                 }
                 Ok(())
             }
@@ -80,22 +91,22 @@ impl Context<'_> {
                         || assignment_type_ids.is_some()
                         || start_date_range.is_some()
                         || location_ids.is_some(),
-                    "scope",
+                    "",
                     "empty active filter must be explicit all",
                 )?;
                 if let Some(range) = start_date_range {
-                    date_range(*range)?;
+                    prefix(date_range(*range), "startDateRange")?;
                 }
                 if let Some(ids) = assignment_type_ids {
                     unique(ids, active, "assignmentTypeIds")?;
                     for id in ids {
-                        self.assignment_type(*id)?;
+                        reference_field(self.assignment_type(*id), "assignmentTypeIds")?;
                     }
                 }
                 if let Some(ids) = location_ids {
                     unique(ids, active, "locationIds")?;
                     for id in ids {
-                        self.location(*id)?;
+                        reference_field(self.location(*id), "locationIds")?;
                     }
                 }
                 Ok(())

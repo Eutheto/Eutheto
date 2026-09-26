@@ -6,7 +6,9 @@ use crate::{
 use eutheto_domain_api::{DomainPackError, DomainValidationReport};
 use eutheto_domain_ir::RuleEvaluation;
 use eutheto_planning_ir::{BoolVariable, ConstraintRecord, PlanningProblem, ProvenanceRecord};
-use eutheto_types::{AssignmentId, Rfc3339Timestamp, RuleId, ValidationIssue, ValidationSeverity};
+use eutheto_types::{
+    AssignmentId, Rfc3339Timestamp, RuleId, ScenarioDocument, ValidationIssue, ValidationSeverity,
+};
 use std::fmt;
 
 /// An operation-local half-open instant interval, not another stored time format.
@@ -257,12 +259,21 @@ impl AssignmentRuleError {
 
     /// Converts operation failure into a blocking finding, never partial validity or infeasibility.
     #[must_use]
-    pub fn validation_issue(&self) -> ValidationIssue {
+    pub fn validation_issue(&self, document: &ScenarioDocument) -> ValidationIssue {
+        if let Self::Temporal(issue) = self {
+            let diagnostic = crate::temporal::diagnostics::issue_report(document, *issue);
+            return ValidationIssue {
+                code: self.code().to_owned(),
+                severity: ValidationSeverity::Error,
+                message: diagnostic.message,
+                field_path: diagnostic.field_path,
+                resource: None,
+            };
+        }
         let field_path = match self {
             Self::InvalidDocument(DomainPackError::InvalidPayload { path, .. }) => {
                 Some(path.clone())
             }
-            Self::Temporal(issue) => issue.entity_id.map(|id| format!("domain.entities.{id}")),
             Self::InvalidSelection { .. } => Some("selectedPairs".to_owned()),
             _ => None,
         };

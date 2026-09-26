@@ -10,9 +10,10 @@ use crate::{
 pub(crate) use custody::CsvCustody;
 use custody::{Creator, PreviewTarget, SourceId, SourceTarget};
 use eutheto_core::{
-    MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_MAPPING_BYTES, MAX_CSV_SOURCE_BYTES,
-    PeopleCsvApplyRequestV1, PeopleCsvMapping, PeopleCsvOperation, PeopleCsvPreviewRequestV1,
-    PeopleCsvRejectedRowsDtoV1, PeopleImportPreview, RowDecision, bounded_json_size,
+    CsvDialect, CsvSampleCell, MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_LOGICAL_RECORDS,
+    MAX_CSV_MAPPING_BYTES, MAX_CSV_SOURCE_BYTES, PeopleCsvApplyRequestV1, PeopleCsvMapping,
+    PeopleCsvOperation, PeopleCsvPreviewRequestV1, PeopleCsvRejectedRowsDtoV1, PeopleImportPreview,
+    RowDecision, bounded_json_size,
 };
 use eutheto_types::{
     ActorRef, ApiErrorDto, CancellationToken, CommandId, CommandSource, OperationControl,
@@ -26,6 +27,7 @@ use tauri_plugin_dialog::DialogExt;
 
 const FRAME_BYTES: usize = 64 * 1024;
 const DETECTION_BYTES: usize = 64 * 1024;
+const SAMPLE_BYTES: usize = 128 * 1024;
 const PREVIEW_BYTES: usize = 16 * 1024 * 1024;
 
 // Tauri has already materialized Value. Bound further typed allocation and queued retention;
@@ -89,6 +91,18 @@ struct SourceWorkRequest {
     scenario_id: ScenarioId,
     expected_revision: Revision,
     source_id: SourceId,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SampleRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    dialect: CsvDialect,
+    record: u32,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -157,6 +171,15 @@ struct SourceOpened {
     schema_version: u32,
     source_id: SourceId,
     byte_count: usize,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SampleResult {
+    schema_version: u32,
+    source_id: SourceId,
+    dialect: CsvDialect,
+    record: u32,
+    cells: Option<Vec<CsvSampleCell>>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -346,6 +369,75 @@ pub(super) async fn people_csv_detect<R: tauri::Runtime>(
                     None,
                     result,
                     DETECTION_BYTES + FRAME_BYTES,
+                    cancellation,
+                )
+                .await;
+                drop(source);
+                result
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub(super) async fn people_csv_record_sample<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: SampleRequest = decode(bounded_request(request, FRAME_BYTES)?)?;
+    require_version(request.schema_version)?;
+    if !(1..=MAX_CSV_LOGICAL_RECORDS).contains(&request.record) {
+        return Err(boundary_error(
+            "people_csv.invalid_record",
+            "Choose a logical record within the CSV record limit.",
+            Some("/record"),
+        )
+        .into());
+    }
+    let owner = window.label().to_owned();
+    let custody = Arc::clone(&state.csv);
+    let app = state.app.clone();
+    state
+        .operations
+        .run(
+            &owner.clone(),
+            claim(
+                request.operation_id,
+                request.request_id,
+                OperationPurposeV1::CsvSample,
+                request.scenario_id,
+                Some(request.expected_revision),
+            ),
+            Some(progress(on_progress)),
+            OperationPhaseV1::BuildingView,
+            (request, None),
+            move |request, mut execution| async move {
+                let source = custody.source(&owner, request.scenario_id, request.source_id)?;
+                let sample = app
+                    .sample_people_csv_record(
+                        source.reader(),
+                        request.dialect,
+                        request.record,
+                        PeopleCsvOperation::child_of(&execution.cancellation()),
+                    )
+                    .await
+                    .map_err(map_app_error)?;
+                let result = SampleResult {
+                    schema_version: 1,
+                    source_id: request.source_id,
+                    dialect: request.dialect,
+                    record: request.record,
+                    cells: sample.map(|sample| sample.cells),
+                };
+                let cancellation = Some(execution.cancellation());
+                let result = finish(
+                    &mut execution,
+                    request.request_id,
+                    None,
+                    result,
+                    SAMPLE_BYTES,
                     cancellation,
                 )
                 .await;
