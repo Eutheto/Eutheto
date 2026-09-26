@@ -4,7 +4,7 @@
 
 The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
-> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope. Development screens now support People/supporting records, people CSV import, Work/shift setup, eligibility/availability, the five Required rule kinds, and explicit full validation; the complete setup experience and its manual checkpoint remain open. Later Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, remains active pending protected-main integration. Development screens support People/supporting records, people CSV import, Work/shift setup, eligibility/availability, the five Required rule kinds, and explicit full validation. The maintainer accepted the applicable Linux native checkpoint on `e2c15f5`; independent solver-naive and spoken native screen-reader QA remain unverified until beta. Later Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
 
 ## Product direction
 
@@ -127,7 +127,8 @@ view with one-step undo/redo, and reviewed portable inspection/import/export and
 backup/restore/recovery screens. Application Settings
 provides separate revision-checked drafts, reviewed nonsecret import/export, and
 persisted appearance preferences. Linux native main-window Ctrl+= and Ctrl+-
-zoom have automated 200%/400% coverage, not manual accessibility acceptance.
+zoom have automated 200%/400% coverage and maintainer light/dark inspection
+across setup routes on the tested host; spoken native screen-reader QA is deferred.
 About renders the bounded offline workspace license inventory and redacted
 configured-location status—not exact installer
 attribution or completed license clearance.
