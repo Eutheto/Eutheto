@@ -13,12 +13,12 @@ export function formatWorkOffset(offsetSeconds: number): string {
 
 export function formatWorkDuration(duration: WorkforceSetupDisplayDuration): string {
   // Keep native wide seconds as text; the separate remainder is exact too.
-  return `${duration.seconds} ${copy.seconds}, ${String(duration.nanoseconds)} ${copy.nanoseconds}`;
+  return copy.durationValue(duration.seconds, String(duration.nanoseconds));
 }
 
 export function formatWorkOrigin(origin: WorkforceSetupShiftOrigin): string {
   if (origin.kind === "manual") return copy.manual;
-  return `${copy[origin.kind]} · ${copy.template} ${origin.templateId} · ${copy.occurrenceDate} ${origin.occurrenceDate}`;
+  return copy.originDetails(copy[origin.kind], origin.templateId, origin.occurrenceDate);
 }
 
 export function formatWorkCoverage(
@@ -29,5 +29,10 @@ export function formatWorkCoverage(
     coverage.preferred === null ? copy.notSpecified : formatNumber(coverage.preferred, locale);
   const maximum =
     coverage.maximum === null ? copy.notSpecified : formatNumber(coverage.maximum, locale);
-  return `${copy.minimum} ${formatNumber(coverage.minimum, locale)} · ${copy.preferred} ${preferred} · ${copy.maximum} ${maximum} · ${copy.qualificationMinimums} ${formatNumber(coverage.qualificationMinimumCount, locale)}`;
+  return copy.coverageSummary(
+    formatNumber(coverage.minimum, locale),
+    preferred,
+    maximum,
+    formatNumber(coverage.qualificationMinimumCount, locale),
+  );
 }

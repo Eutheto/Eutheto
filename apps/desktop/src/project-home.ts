@@ -92,6 +92,7 @@ export interface WorkspaceOperationState {
   phase: OperationPhaseV1 | null;
   cancellationRequested: boolean;
   settled: boolean;
+  refreshingLibrary: boolean;
 }
 
 export interface WorkspaceMutationIdentity {
@@ -143,6 +144,8 @@ export interface ProjectHomeState {
   operation: WorkspaceOperationState | null;
   mutation: WorkspaceMutationState | null;
   libraryEpoch: number;
+  /** Event-scoped invalidation; null scenario means the change may affect any project. */
+  changeSignal: { readonly scenarioId: string | null } | null;
   reviewCleanupError: string | null;
   retryingReviewCleanup: boolean;
   errorMessage: string | null;
@@ -319,6 +322,7 @@ export function createProjectHomeController(
     operation: null,
     mutation: null,
     libraryEpoch: 0,
+    changeSignal: null,
     reviewCleanupError: null,
     retryingReviewCleanup: false,
     errorMessage: null,
@@ -384,14 +388,23 @@ export function createProjectHomeController(
     let registrationFailed = false;
     await Promise.all(
       [
-        () => api.onScenarioChanged(refreshFromEvent),
+        () =>
+          api.onScenarioChanged((event) => {
+            if (isDisposed()) return;
+            state.changeSignal = { scenarioId: event.payload.context.scenarioId };
+            refreshFromEvent(event);
+          }),
         () => api.onScenarioValidationChanged(refreshFromEvent),
         () =>
           api.onAppNotification(() => {
+            if (isDisposed()) return;
+            state.changeSignal = { scenarioId: null };
             void reload(false);
           }),
         () =>
           api.onLibraryRefreshRequired(() => {
+            if (isDisposed()) return;
+            state.changeSignal = { scenarioId: null };
             void reload(false);
           }),
       ].map(async (register) => {
@@ -575,6 +588,7 @@ export function createProjectHomeController(
       phase: null,
       cancellationRequested: false,
       settled: false,
+      refreshingLibrary: false,
     });
     state.busyAction = operation.action;
     state.operation = active;
@@ -592,7 +606,10 @@ export function createProjectHomeController(
           attempt.revision = confirmed.revision;
         }
         state.announcement = operation.success(response.result);
-        if (operation.refreshLibrary !== false) await reload(false);
+        if (operation.refreshLibrary !== false) {
+          active.refreshingLibrary = true;
+          await reload(false);
+        }
       }
       return response;
     } catch (error) {
@@ -606,6 +623,7 @@ export function createProjectHomeController(
           }
         }
         if (isRevisionConflict(error)) {
+          active.refreshingLibrary = true;
           const reloaded = await reload(false);
           if (!isDisposed())
             state.announcement = reloaded

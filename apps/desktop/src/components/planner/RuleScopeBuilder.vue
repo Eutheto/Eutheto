@@ -226,11 +226,60 @@ function nextPreviewPage() {
       requestKey: props.currentRequestKey,
     });
 }
+async function focusField(path: readonly string[], isCurrent: () => boolean): Promise<boolean> {
+  const captured = props.modelValue;
+  if (!isCurrent()) return false;
+  let id: string | null = null;
+  if (path.length === 0) id = fieldId.value;
+  else if (path[0] === "people" && (path.length === 1 || (path.length === 2 && path[1] === "kind")))
+    id = `${fieldId.value}-people-mode`;
+  else if (path[0] === "people" && path[1] === "personIds" && path.length === 2)
+    id = `${fieldId.value}-people-picker`;
+  else if (
+    path.length === 1 &&
+    (path[0] === "teamIds" || path[0] === "assignmentTypeIds" || path[0] === "locationIds")
+  )
+    id = `${fieldId.value}-${path[0]}${captured[path[0]] === undefined ? "-group" : "-picker"}`;
+  else if (path[0] === "weekdays") {
+    if (path.length === 1) id = `${fieldId.value}-weekdays-group`;
+    else if (path.length === 2 && /^\d+$/.test(path[1] ?? "")) {
+      const day = captured.weekdays?.[Number(path[1])];
+      if (day !== undefined) id = `${fieldId.value}-${day}`;
+    }
+  } else {
+    const relative = path[0] === "people" ? path.slice(1) : path;
+    const field = relative[0];
+    if (
+      field === "categories" ||
+      (path[0] === "people" && (field === "allTags" || field === "anyTags"))
+    ) {
+      if (relative.length === 1) id = `${fieldId.value}-${field}-group`;
+      else if (relative.length === 2 && /^\d+$/.test(relative[1] ?? "")) {
+        const index = Number(relative[1]);
+        const key =
+          Number.isSafeInteger(index) && index < values(field).length
+            ? rowKeys[field][index]
+            : undefined;
+        if (key !== undefined) id = `${fieldId.value}-${key}`;
+      }
+    }
+  }
+  if (id === null) return false;
+  await nextTick();
+  if (!isCurrent() || props.modelValue !== captured) return false;
+  const control = document.getElementById(id);
+  if (!(control instanceof HTMLElement) || !host.value?.contains(control)) return false;
+  control.focus();
+  return document.activeElement === control;
+}
+defineExpose({ focusField });
 </script>
 
 <template>
   <fieldset
+    :id="fieldId"
     ref="host"
+    tabindex="-1"
     class="grid min-w-0 gap-4"
     :disabled="disabled"
     :aria-describedby="descriptions"
@@ -293,7 +342,9 @@ function nextPreviewPage() {
 
     <fieldset
       v-for="field in idFilters"
+      :id="`${fieldId}-${field}-group`"
       :key="field"
+      tabindex="-1"
       class="grid min-w-0 gap-2"
       :aria-describedby="links(field)"
     >
@@ -343,6 +394,8 @@ function nextPreviewPage() {
     <template v-for="field in textFields" :key="field">
       <fieldset
         v-if="field === 'categories' || modelValue.people.kind === 'filter'"
+        :id="`${fieldId}-${field}-group`"
+        tabindex="-1"
         class="grid min-w-0 gap-2"
         :aria-describedby="links(field)"
       >
@@ -440,7 +493,12 @@ function nextPreviewPage() {
       </fieldset>
     </template>
 
-    <fieldset class="grid gap-2" :aria-describedby="links('weekdays')">
+    <fieldset
+      :id="`${fieldId}-weekdays-group`"
+      tabindex="-1"
+      class="grid gap-2"
+      :aria-describedby="links('weekdays')"
+    >
       <legend>{{ plannerMessage("scope.weekdays") }}</legend>
       <p :id="`${fieldId}-weekdays-help`" class="field-help">
         {{ plannerMessage(modelValue.weekdays === undefined ? "scope.absent" : "scope.enabled") }}

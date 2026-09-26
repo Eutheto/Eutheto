@@ -190,6 +190,12 @@ async function choose(): Promise<void> {
 async function inspect(record: number): Promise<void> {
   if (dialect.value !== "") await importer.inspect(dialect.value, record);
 }
+function revealInvalidField(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || !form.value?.contains(target)) return;
+  const detail = target.closest("details");
+  if (detail && form.value.contains(detail)) detail.open = true;
+}
 async function preview(): Promise<void> {
   if (busy.value || !editable.value) return;
   clearFeedback();
@@ -215,10 +221,12 @@ async function preview(): Promise<void> {
   ) {
     inputError.value = copy.invalidDraft;
     await nextTick();
-    if (submittedForm.isConnected)
-      (
-        submittedForm.querySelector<HTMLElement>('[aria-invalid="true"]') ?? errorHeading.value
-      )?.focus();
+    if (submittedForm.isConnected) {
+      const invalid = submittedForm.querySelector<HTMLElement>('[aria-invalid="true"]');
+      const detail = invalid?.closest("details");
+      if (detail && submittedForm.contains(detail)) detail.open = true;
+      (invalid ?? errorHeading.value)?.focus();
+    }
     return;
   }
   const accepted = await importer.preview(
@@ -341,7 +349,13 @@ watch(
               </li>
             </template>
           </ul>
-          <form v-if="state.detection" ref="form" class="field-stack" @submit.prevent="preview">
+          <form
+            v-if="state.detection"
+            ref="form"
+            class="field-stack"
+            @invalid.capture="revealInvalidField"
+            @submit.prevent="preview"
+          >
             <fieldset :disabled="busy" class="field-stack">
               <legend>{{ copy.mapping }}</legend>
               <label

@@ -19,6 +19,22 @@ pub(crate) fn require(condition: bool, path: &str, message: &str) -> Result {
     }
 }
 
+pub(super) fn prefix<T>(result: Result<T>, segment: impl Display) -> Result<T> {
+    result.map_err(|error| match error {
+        DomainPackError::InvalidPayload { path, message } if path.is_empty() => {
+            DomainPackError::InvalidPayload {
+                path: segment.to_string(),
+                message,
+            }
+        }
+        DomainPackError::InvalidPayload { path, message } => DomainPackError::InvalidPayload {
+            path: format!("{segment}.{path}"),
+            message,
+        },
+        other => other,
+    })
+}
+
 pub(super) fn record<T>(result: Result<T>, map: &str, id: impl Display) -> Result<T> {
     result.map_err(|error| match error {
         DomainPackError::InvalidPayload { path, message } => DomainPackError::InvalidPayload {

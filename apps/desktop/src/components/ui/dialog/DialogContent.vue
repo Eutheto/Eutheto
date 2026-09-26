@@ -19,6 +19,52 @@ const contentProps = computed(() =>
     ...attrs,
   }),
 );
+
+// Native Linux WebKit can report Shift+Tab as key="Unidentified", code="Tab",
+// which Reka does not wrap. Reka's wraps prevent scrolling to the newly
+// focused control in a tall, magnified dialog.
+function handleDialogTab(event: KeyboardEvent): void {
+  if (
+    event.code !== "Tab" ||
+    (event.key !== "Tab" && event.key !== "Unidentified") ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey
+  )
+    return;
+
+  const dialog = event.currentTarget as HTMLElement;
+  let first: HTMLElement | undefined;
+  let last: HTMLElement | undefined;
+  for (const candidate of dialog.querySelectorAll<HTMLElement>(
+    "a[href], button, input, select, textarea, [tabindex]",
+  )) {
+    if (
+      candidate.tabIndex < 0 ||
+      candidate.matches(":disabled") ||
+      candidate.getClientRects().length === 0 ||
+      getComputedStyle(candidate).visibility === "hidden" ||
+      candidate.closest("[inert]")
+    )
+      continue;
+    first ??= candidate;
+    last = candidate;
+  }
+  if (!first || !last) return;
+  if (event.shiftKey && event.target === first) {
+    if (event.key === "Unidentified" && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+    requestAnimationFrame(() => {
+      if (document.activeElement === last) last.scrollIntoView({ block: "nearest" });
+    });
+  } else if (!event.shiftKey && event.target === last) {
+    requestAnimationFrame(() => {
+      if (document.activeElement === first) first.scrollIntoView({ block: "nearest" });
+    });
+  }
+}
 </script>
 
 <template>
@@ -34,6 +80,7 @@ const contentProps = computed(() =>
           props.class,
         )
       "
+      @keydown="handleDialogTab"
     >
       <slot />
     </DialogContent>

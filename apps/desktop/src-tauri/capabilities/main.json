@@ -4,5 +4,10 @@
   "description": "Local desktop API and read-only event subscriptions for the main window.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-phase-01-api", "core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": [
+    "allow-phase-01-api",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:webview:allow-set-webview-zoom"
+  ]
 }

@@ -112,6 +112,7 @@ pub enum CommandError {
     #[error("invalid payload for domain command {command_type}: {message}")]
     InvalidDomainPayload {
         command_type: String,
+        path: String,
         message: String,
     },
     /// A coalesced domain batch failed without identifying an individual command.
@@ -1207,8 +1208,9 @@ fn domain_command_error(
                 command_type: envelope.command_type.clone(),
             }
         }
-        DomainPackError::InvalidPayload { message, .. } => CommandError::InvalidDomainPayload {
+        DomainPackError::InvalidPayload { path, message } => CommandError::InvalidDomainPayload {
             command_type: envelope.command_type.clone(),
+            path,
             message,
         },
         other => domain_pack_error(&other),

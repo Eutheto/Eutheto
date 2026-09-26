@@ -1,5 +1,5 @@
 use super::{
-    common::{Result, require, token, unique},
+    common::{Result, prefix, require, token, unique},
     context::Context,
 };
 use crate::model::{WindowMembership, WorkWindow, WorkforceRule, WorkloadMeasurement};
@@ -7,7 +7,7 @@ use crate::model::{WindowMembership, WorkWindow, WorkforceRule, WorkloadMeasurem
 impl Context<'_> {
     pub(super) fn rule(&self, rule: &WorkforceRule) -> Result {
         let (_, active, scope) = rule.header();
-        self.scope(scope, active)?;
+        prefix(self.scope(scope, active), "scope")?;
         match rule {
             WorkforceRule::Eligibility { .. }
             | WorkforceRule::Availability { .. }
@@ -18,19 +18,28 @@ impl Context<'_> {
                 ..
             } => {
                 unique(compatible_category_pairs, false, "compatibleCategoryPairs")?;
-                for pair in compatible_category_pairs {
-                    token(&pair.first_category, "firstCategory")?;
-                    token(&pair.second_category, "secondCategory")?;
-                    require(
-                        pair.first_category <= pair.second_category,
-                        "compatibleCategoryPairs",
-                        "symmetric categories must be in lexical order",
+                for (idx, pair) in compatible_category_pairs.iter().enumerate() {
+                    prefix(
+                        token(&pair.first_category, "firstCategory"),
+                        format_args!("compatibleCategoryPairs.{idx}"),
+                    )?;
+                    prefix(
+                        token(&pair.second_category, "secondCategory"),
+                        format_args!("compatibleCategoryPairs.{idx}"),
+                    )?;
+                    prefix(
+                        require(
+                            pair.first_category <= pair.second_category,
+                            "firstCategory",
+                            "symmetric categories must be in lexical order",
+                        ),
+                        format_args!("compatibleCategoryPairs.{idx}"),
                     )?;
                 }
             }
             WorkforceRule::MinimumRest(value) => {
-                self.scope(&value.after_scope, active)?;
-                self.scope(&value.before_scope, active)?;
+                prefix(self.scope(&value.after_scope, active), "afterScope")?;
+                prefix(self.scope(&value.before_scope, active), "beforeScope")?;
             }
             WorkforceRule::MaximumHours {
                 bucket_id, window, ..

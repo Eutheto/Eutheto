@@ -780,8 +780,7 @@ a.intent-card:hover {
 .unavailable-card > span {
   color: var(--muted);
 }
-.action-row,
-.setup-checklist {
+.action-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -874,20 +873,80 @@ a.intent-card:hover {
   font-family: var(--mono);
   overflow-wrap: anywhere;
 }
-.setup-checklist {
-  padding: var(--s4);
-  border: 1px solid var(--line);
-  border-radius: var(--r2);
-  background: var(--surface);
-}
-.setup-checklist a {
-  min-height: var(--control-height);
-  display: inline-flex;
-  align-items: center;
-  padding-inline: var(--s3);
-}
 .operation-panel {
   margin-bottom: var(--s5);
+}
+.project-navigation {
+  min-width: 0;
+}
+.project-heading {
+  gap: var(--s2);
+}
+.desktop-shell main .project-title {
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.project-context {
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+.project-navigation a[aria-current="page"] {
+  font-weight: 800;
+  text-decoration-thickness: 0.15em;
+}
+.project-nav-more > summary {
+  min-height: var(--control-height);
+  display: flex;
+  align-items: center;
+  padding-inline: var(--s3);
+  cursor: pointer;
+}
+.project-nav-more[open] {
+  flex-basis: 100%;
+}
+.project-nav-more > .action-row {
+  padding: var(--s3) 0;
+}
+.project-nav-more:not([open]) > :not(summary),
+.setup-more:not([open]) > :not(summary) {
+  display: none;
+}
+.setup-steps {
+  display: grid;
+  gap: var(--s4);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.setup-step {
+  display: grid;
+  gap: var(--s3);
+  min-height: 0;
+}
+.setup-step > p {
+  margin: 0;
+}
+.setup-more {
+  display: block;
+  min-height: 0;
+  padding: var(--s4);
+}
+.setup-more > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.setup-more[open] > summary {
+  margin-bottom: var(--s4);
+}
+.people-editor {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+}
+.person-option-summary {
+  color: var(--muted);
+  font-size: var(--text-small);
+  font-weight: 400;
 }
 .workspace-outcome:empty {
   display: none;

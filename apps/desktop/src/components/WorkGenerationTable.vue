@@ -60,7 +60,7 @@ function inspect(row: WorkforceSetupGenerationRow, side: "before" | "after"): vo
     </dl>
     <p v-if="noChanges" class="quiet-state">{{ copy.noChanges }}</p>
     <p v-if="review.reconciliationRequired">{{ copy.reconciliationRequired }}</p>
-    <p>{{ copy.matchingRows }} {{ formatNumber(review.page.totalItems, locale) }}</p>
+    <p>{{ copy.matchingRows(formatNumber(review.page.totalItems, locale)) }}</p>
     <p v-if="review.page.items.length === 0" class="quiet-state">{{ copy.empty }}</p>
     <div
       v-else
@@ -78,8 +78,8 @@ function inspect(row: WorkforceSetupGenerationRow, side: "before" | "after"): vo
         <thead>
           <tr>
             <th scope="col" class="w-1/5 p-2">{{ table.shift }}</th>
-            <th scope="col" class="p-2">{{ copy.before }} · {{ beforeTimeZone }}</th>
-            <th scope="col" class="p-2">{{ copy.after }} · {{ timeZone }}</th>
+            <th scope="col" class="p-2">{{ copy.beforeInZone(beforeTimeZone) }}</th>
+            <th scope="col" class="p-2">{{ copy.afterInZone(timeZone) }}</th>
           </tr>
         </thead>
         <tbody>
@@ -127,7 +127,7 @@ function inspect(row: WorkforceSetupGenerationRow, side: "before" | "after"): vo
                     <dd class="m-0">
                       {{ formatWorkOrigin(row.before.data.origin) }}
                       <p v-if="row.before.data.templateName !== null">
-                        {{ table.template }} {{ row.before.data.templateName }}
+                        {{ table.templateValue(row.before.data.templateName) }}
                       </p>
                     </dd>
                   </div>
@@ -225,7 +225,7 @@ function inspect(row: WorkforceSetupGenerationRow, side: "before" | "after"): vo
                     <dd class="m-0">
                       {{ formatWorkOrigin(row.after.origin) }}
                       <p v-if="row.after.templateName !== null">
-                        {{ table.template }} {{ row.after.templateName }}
+                        {{ table.templateValue(row.after.templateName) }}
                       </p>
                     </dd>
                   </div>

@@ -6,6 +6,10 @@ import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import WorkforceSetupOverview from "./components/WorkforceSetupOverview.vue";
 import PeopleSetup from "./components/PeopleSetup.vue";
 import WorkSetup from "./components/WorkSetup.vue";
+import EligibilitySetup from "./components/EligibilitySetup.vue";
+import AvailabilitySetup from "./components/AvailabilitySetup.vue";
+import RuleSetup from "./components/RuleSetup.vue";
+import ValidationSetup from "./components/ValidationSetup.vue";
 import PeopleCsvImport from "./components/PeopleCsvImport.vue";
 import HistoryPage from "./components/HistoryPage.vue";
 import SettingsPage from "./components/SettingsPage.vue";
@@ -41,6 +45,10 @@ export function createAppRouter() {
           { path: "people", name: "project-people", component: PeopleSetup },
           { path: "people/import", name: "project-people-import", component: PeopleCsvImport },
           { path: "work", name: "project-work", component: WorkSetup },
+          { path: "eligibility", name: "project-eligibility", component: EligibilitySetup },
+          { path: "availability", name: "project-availability", component: AvailabilitySetup },
+          { path: "rules", name: "project-rules", component: RuleSetup },
+          { path: "validation", name: "project-validation", component: ValidationSetup },
           { path: "history", name: "project-history", component: HistoryPage },
           {
             path: "export",

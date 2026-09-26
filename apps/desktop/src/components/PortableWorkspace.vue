@@ -252,28 +252,19 @@ onBeforeUnmount(leave);
     <p v-if="mode === 'backup-restore'">{{ messages.portable.recoveryAvailability }}</p>
     <p v-if="state.notice" role="status">{{ state.notice }}</p>
     <p v-if="state.error" class="inline-alert" role="alert">{{ state.error }}</p>
-    <div v-if="state.pending" class="state-panel" role="status">
-      <p>
-        {{
-          home.state.operation?.settled
-            ? messages.operations.refreshing
-            : home.state.operation?.phase
-              ? messages.operations.phases[home.state.operation.phase]
-              : messages.operations.pending
-        }}
-      </p>
-      <p v-if="home.state.operation?.cancel && !home.state.operation.settled">
-        {{ messages.portable.chooserCancellation }}
-      </p>
+    <div
+      v-if="state.pending && home.state.operation?.cancel && !home.state.operation.settled"
+      class="state-panel"
+    >
+      <p>{{ messages.portable.chooserCancellation }}</p>
       <button
-        v-if="home.state.operation?.cancel && !home.state.operation.settled"
         type="button"
         class="button-secondary"
         :disabled="home.state.operation?.cancellationRequested"
         @click="home.cancelOperation()"
       >
         {{
-          home.state.operation?.cancellationRequested
+          home.state.operation.cancellationRequested
             ? messages.operations.cancelling
             : messages.operations.cancel
         }}

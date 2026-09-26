@@ -317,12 +317,23 @@ export function useWorkSetup(home: ProjectHomeController, project: () => Project
   ):
     | { readonly kind: "settings" }
     | { readonly kind: "shiftTemplate" | "shiftInstance"; readonly id: string }
+    | { readonly kind: "coverageRequirement"; readonly id: string }
     | null {
     if (field === "/settings" || field.startsWith("/settings/")) return { kind: "settings" };
-    const match = /^\/domain\/entities\/([^/]+)\/(timing|startsAt|endsAt)(?:\/|$)/u.exec(field);
-    return match?.[1] === undefined
-      ? null
-      : { kind: match[2] === "timing" ? "shiftTemplate" : "shiftInstance", id: match[1] };
+    const timingMatch = /^\/domain\/entities\/([^/]+)\/(timing|startsAt|endsAt)(?:\/|$)/u.exec(
+      field,
+    );
+    if (timingMatch?.[1] !== undefined)
+      return {
+        kind: timingMatch[2] === "timing" ? "shiftTemplate" : "shiftInstance",
+        id: timingMatch[1],
+      };
+    const coverageMatch = /^\/domain\/entities\/([^/]+)\/(coverage|scope|active)(?:\/|$)/u.exec(
+      field,
+    );
+    if (coverageMatch?.[1] !== undefined)
+      return { kind: "coverageRequirement", id: coverageMatch[1] };
+    return null;
   }
   async function repairDiagnostic(issue: FieldErrorDto): Promise<boolean> {
     const target = diagnosticTarget(issue.field);
@@ -872,8 +883,18 @@ export function useWorkSetup(home: ProjectHomeController, project: () => Project
     });
     if (!ready && matches(captured) && draft === state.draftGeneration && state.editor !== null) {
       const editor = state.editor;
-      if (editor.kind === "record")
-        state.errors = relativeErrors(review.state.failure, `/domain/entities/${editor.id}`);
+      if (editor.kind === "record") {
+        // Only a single-record command preview can attribute a payload leaf to this draft.
+        const singleRecord =
+          source.kind === "commandPreview" &&
+          source.command.type === "applyDomainCommand" &&
+          (source.command.payload.commandType === WORKFORCE_ADD_ENTITY_COMMAND_ID ||
+            source.command.payload.commandType === WORKFORCE_UPDATE_ENTITY_COMMAND_ID);
+        state.errors = {
+          ...relativeErrors(review.state.failure, `/domain/entities/${editor.id}`),
+          ...(singleRecord ? relativeErrors(review.state.failure, "/payload/entity") : {}),
+        };
+      }
       if (editor.kind === "preset") {
         for (const entry of editor.entries) {
           const errors = relativeErrors(review.state.failure, `/domain/entities/${entry.id}`);
@@ -1402,7 +1423,8 @@ export function useWorkSetup(home: ProjectHomeController, project: () => Project
         kind !== "calendar" &&
         kind !== "assignmentType" &&
         kind !== "shiftTemplate" &&
-        kind !== "shiftInstance"
+        kind !== "shiftInstance" &&
+        kind !== "coverageRequirement"
       )
         return false;
       target = { kind: "entity", id: match[1], entityKind: kind };

@@ -156,7 +156,7 @@ impl EuthetoApp {
         bounded_json_size(query, QUERY_BYTES).map_err(setup_domain_error)?;
         if let SetupSourceV2::CommandPreview { command } = source {
             preflight_setup_command(command, "/source/command", cancellation)
-                .map_err(|error| store_error(command_store_error(&error)))?;
+                .map_err(|error| store_error(command_store_error(&error, Some(command))))?;
         }
         check_cancelled(cancellation)
     }
@@ -255,7 +255,7 @@ fn build_setup_view(
                     cancellation,
                     |_, _| Ok(Some(reconciliation)),
                 )
-                .map_err(reconciliation_error)?;
+                .map_err(|error| reconciliation_error(error, None))?;
             }
             output.view
         }
@@ -283,7 +283,7 @@ fn build_setup_view(
                     Ok(output.reconciliation)
                 },
             )
-            .map_err(reconciliation_error)?;
+            .map_err(|error| reconciliation_error(error, Some(command)))?;
             retained_view.ok_or_else(|| setup_invalid("/view"))?
         }
     };
@@ -338,9 +338,15 @@ fn check_cancelled(cancellation: &CancellationToken) -> Result<(), AppError> {
         .map_err(operation_interrupted)
 }
 
-fn reconciliation_error(error: ReconciledCommandError) -> AppError {
+fn reconciliation_error(
+    error: ReconciledCommandError,
+    draft: Option<&ScenarioCommand>,
+) -> AppError {
     match error {
-        ReconciledCommandError::Command(error) => store_error(command_store_error(&error)),
+        ReconciledCommandError::DraftCommand(error) => {
+            store_error(command_store_error(&error, draft))
+        }
+        ReconciledCommandError::Command(error) => store_error(command_store_error(&error, None)),
         ReconciledCommandError::Reconciliation(error) => setup_domain_error(error),
     }
 }

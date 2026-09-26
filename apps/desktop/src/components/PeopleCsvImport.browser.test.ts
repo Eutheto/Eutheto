@@ -302,13 +302,14 @@ describe("Routed CSV review transitions", () => {
     vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "rejectedRows").mockResolvedValue(
       response(report),
     );
+    await userEvent.click(screen.getByText(/Workload and targets/u));
     const edits = [
       () =>
         userEvent.selectOptions(
           screen.getByRole("combobox", { name: messages.csvImport.header }),
           "no",
         ),
-      () => userEvent.fill(screen.getByRole("textbox", { name: "Numerator" }), "2"),
+      () => userEvent.fill(screen.getByRole("textbox", { name: "Top number" }), "2"),
       () => userEvent.selectOptions(mappingControl(1, 0, "blank"), "clear"),
     ];
     let previousId = originalId;
@@ -354,7 +355,8 @@ describe("Routed CSV review transitions", () => {
       ),
     );
     await openImport();
-    await userEvent.fill(screen.getByRole("textbox", { name: "Numerator" }), "0002");
+    await userEvent.click(screen.getByText(/Workload and targets/u));
+    await userEvent.fill(screen.getByRole("textbox", { name: "Top number" }), "0002");
     const retainedId = await addRecord(2);
     await userEvent.click(screen.getByRole("button", { name: messages.csvImport.preview }));
     await expect
@@ -384,7 +386,7 @@ describe("Routed CSV review transitions", () => {
         ),
       )
       .toHaveAttribute("aria-pressed", "true");
-    await expect.element(screen.getByRole("textbox", { name: "Numerator" })).toHaveValue("0002");
+    await expect.element(screen.getByRole("textbox", { name: "Top number" })).toHaveValue("0002");
     await expect.element(mappingControl(1, 0, "field")).toHaveValue("externalId");
     await expect.element(mappingControl(2, 1, "field")).toHaveValue("name");
     await expect.element(decisionRegion()).toHaveTextContent(retainedId);

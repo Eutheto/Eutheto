@@ -9,7 +9,7 @@ use super::{
 };
 use eutheto_core::{
     DomainSetupQueryV1, MAX_COMMAND_RESULT_BYTES, ScenarioSetupStatusV2, SetupContinuationV1,
-    SetupSourceV2, WorkforceGenerationApplyRequestV1,
+    SetupSourceV2, WorkforceGenerationApplyRequestV1, bounded_json_size,
 };
 use eutheto_types::{CancellationToken, EntityId, OperationId, RequestId, Revision, ScenarioId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -17,6 +17,9 @@ use serde_json::Value;
 use std::{io::Write, str::FromStr, sync::Arc};
 use tauri::State;
 const FRAME_BYTES: usize = 64 * 1024;
+const VIEW_REQUEST_BYTES: usize = 2 * FRAME_BYTES;
+// The preview command shares the 16 MiB scenario-document limit; the rest is query/framing.
+const PREVIEW_REQUEST_BYTES: usize = 16 * 1024 * 1024 + VIEW_REQUEST_BYTES;
 const SUMMARY_BYTES: usize = 2 * 1024 * 1024;
 const VALIDATION_BYTES: usize = 16 * 1024 * 1024;
 const VIEW_BYTES: usize = 32 * 1024 * 1024;
@@ -107,6 +110,48 @@ pub(super) fn decode<T: DeserializeOwned>(request: Option<Value>) -> Result<T, A
             ))
         })
 }
+fn decode_bounded<T: DeserializeOwned>(
+    request: Option<Value>,
+    maximum_bytes: usize,
+) -> Result<T, ApiError> {
+    if request
+        .as_ref()
+        .is_some_and(|value| bounded_json_size(value, maximum_bytes).is_err())
+    {
+        return Err(request_too_large().into());
+    }
+    decode(request)
+}
+fn request_too_large() -> eutheto_types::ApiErrorDto {
+    boundary_error(
+        "setup.request_too_large",
+        "The setup request exceeds its native admission limit.",
+        None,
+    )
+}
+fn decode_view(request: Option<Value>) -> Result<ScenarioSetupViewRequestV2, ApiError> {
+    let preview = request
+        .as_ref()
+        .and_then(|value| value.get("source"))
+        .and_then(|source| source.get("kind"))
+        .and_then(Value::as_str)
+        == Some("commandPreview");
+    if request
+        .as_ref()
+        .and_then(|value| value.get("query"))
+        .is_some_and(|query| bounded_json_size(query, FRAME_BYTES).is_err())
+    {
+        return Err(request_too_large().into());
+    }
+    decode_bounded(
+        request,
+        if preview {
+            PREVIEW_REQUEST_BYTES
+        } else {
+            VIEW_REQUEST_BYTES
+        },
+    )
+}
 fn version_two(version: u32) -> Result<(), ApiError> {
     if version == 2 {
         Ok(())
@@ -191,7 +236,7 @@ pub(super) fn operation_prepare<R: tauri::Runtime>(
     state: State<'_, DesktopState>,
     request: Option<Value>,
 ) -> ApiResult<OperationPreparedV1> {
-    let request: OperationPrepareRequestV1 = decode(request)?;
+    let request: OperationPrepareRequestV1 = decode_bounded(request, FRAME_BYTES)?;
     let result = state.operations.prepare(window.label(), &request)?;
     Ok(response(request.request_id, None, Vec::new(), result))
 }
@@ -205,7 +250,7 @@ pub(super) fn operation_cancel<R: tauri::Runtime>(
     state: State<'_, DesktopState>,
     request: Option<Value>,
 ) -> ApiResult<OperationCancelledV1> {
-    let request: OperationControlRequestV1 = decode(request)?;
+    let request: OperationControlRequestV1 = decode_bounded(request, FRAME_BYTES)?;
     let result = state.operations.cancel(window.label(), &request)?;
     Ok(response(request.request_id, None, Vec::new(), result))
 }
@@ -219,7 +264,7 @@ pub(super) fn operation_release<R: tauri::Runtime>(
     state: State<'_, DesktopState>,
     request: Option<Value>,
 ) -> ApiResult<OperationReleasedV1> {
-    let request: OperationControlRequestV1 = decode(request)?;
+    let request: OperationControlRequestV1 = decode_bounded(request, FRAME_BYTES)?;
     let result = state.operations.release(window.label(), &request)?;
     Ok(response(request.request_id, None, Vec::new(), result))
 }
@@ -234,7 +279,7 @@ pub(super) async fn scenario_get_summary<R: tauri::Runtime>(
     summary(
         &window,
         &state,
-        decode(request)?,
+        decode_bounded(request, FRAME_BYTES)?,
         OperationPurposeV1::ScenarioSummary,
         progress(on_progress),
     )
@@ -250,7 +295,7 @@ pub(super) async fn scenario_get_setup_status<R: tauri::Runtime>(
     summary(
         &window,
         &state,
-        decode(request)?,
+        decode_bounded(request, FRAME_BYTES)?,
         OperationPurposeV1::SetupStatus,
         progress(on_progress),
     )
@@ -333,7 +378,13 @@ pub(super) async fn scenario_get_view<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    view(&window, &state, decode(request)?, progress(on_progress)).await
+    view(
+        &window,
+        &state,
+        decode_view(request)?,
+        progress(on_progress),
+    )
+    .await
 }
 async fn view<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
@@ -406,7 +457,7 @@ pub(super) async fn scenario_get_entity<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: ScenarioEntityRequestV2 = decode(request)?;
+    let request: ScenarioEntityRequestV2 = decode_bounded(request, FRAME_BYTES)?;
     view(&window, &state, ScenarioSetupViewRequestV2 {
     request_id: request.request_id, schema_version: request.schema_version, scenario_id: request.scenario_id,
     expected_revision: request.expected_revision, operation_id: request.operation_id, source: SetupSourceV2::Stored,
@@ -421,7 +472,7 @@ pub(super) async fn scenario_search_entities<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: ScenarioEntitySearchRequestV2 = decode(request)?;
+    let request: ScenarioEntitySearchRequestV2 = decode_bounded(request, FRAME_BYTES)?;
     view(&window, &state, ScenarioSetupViewRequestV2 {
     request_id: request.request_id, schema_version: request.schema_version, scenario_id: request.scenario_id,
     expected_revision: request.expected_revision, operation_id: request.operation_id, source: SetupSourceV2::Stored,
@@ -436,7 +487,7 @@ pub(super) async fn scenario_get_rule_catalog<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: ScenarioRuleCatalogRequestV2 = decode(request)?;
+    let request: ScenarioRuleCatalogRequestV2 = decode_bounded(request, FRAME_BYTES)?;
     view(
         &window,
         &state,
@@ -466,7 +517,7 @@ pub(super) async fn scenario_validate<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: FullValidationRequestV2 = decode(request)?;
+    let request: FullValidationRequestV2 = decode_bounded(request, FRAME_BYTES)?;
     version_two(request.schema_version)?;
     let operation = claim(
         request.operation_id,
@@ -517,7 +568,8 @@ pub(super) async fn workforce_apply_reviewed_generation<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: WorkforceGenerationApplyRequestV1 = decode(request)?;
+    let request: WorkforceGenerationApplyRequestV1 =
+        decode_bounded(request, PREVIEW_REQUEST_BYTES)?;
     require_version(request.schema_version)?;
     let request_id = request.request_id;
     let operation = claim(

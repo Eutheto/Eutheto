@@ -1,5 +1,5 @@
 use super::{
-    common::{Result, bounded, note, require, tags, text, token, unique, weight},
+    common::{Result, bounded, invalid, note, prefix, require, tags, text, token, unique, weight},
     context::Context,
     time, validate_score_policy_shape,
 };
@@ -45,7 +45,7 @@ impl Context<'_> {
             }
             WorkforceEntity::Calendar(value) => {
                 text(&value.name, "name")?;
-                time::calendar(&value.period)
+                prefix(time::calendar(&value.period), "period")
             }
             WorkforceEntity::AssignmentType(value) => {
                 text(&value.name, "name")?;
@@ -55,7 +55,10 @@ impl Context<'_> {
                     "defaultDurationMinutes",
                     "duration must be positive",
                 )?;
-                self.qualification_expression(&value.qualifications)?;
+                prefix(
+                    self.qualification_expression(&value.qualifications),
+                    "qualifications",
+                )?;
                 if let LocationBehavior::Fixed { location_id } = value.location_behavior {
                     self.location(location_id)?;
                 }
@@ -68,15 +71,15 @@ impl Context<'_> {
             WorkforceEntity::ShiftTemplate(value) => {
                 text(&value.name, "name")?;
                 self.shift_location(value.assignment_type_id, value.location_id)?;
-                time::recurrence(&value.recurrence)?;
-                time::timing(&value.timing)?;
-                self.coverage(&value.coverage)?;
+                prefix(time::recurrence(&value.recurrence), "recurrence")?;
+                prefix(time::timing(&value.timing), "timing")?;
+                prefix(self.coverage(&value.coverage), "coverage")?;
                 tags(&value.tags, "tags")
             }
             WorkforceEntity::ShiftInstance(value) => {
                 self.shift_location(value.assignment_type_id, value.location_id)?;
-                self.resolved_time(&value.starts_at)?;
-                self.resolved_time(&value.ends_at)?;
+                prefix(self.resolved_time(&value.starts_at), "startsAt")?;
+                prefix(self.resolved_time(&value.ends_at), "endsAt")?;
                 require(
                     value.starts_at.instant < value.ends_at.instant,
                     "endsAt",
@@ -85,13 +88,13 @@ impl Context<'_> {
                 if let ShiftOrigin::Detached { template_id, .. } = value.origin {
                     self.template(template_id)?;
                 }
-                self.coverage(&value.coverage)?;
+                prefix(self.coverage(&value.coverage), "coverage")?;
                 tags(&value.tags, "tags")
             }
             WorkforceEntity::Availability(value) => self.availability_record(value),
             WorkforceEntity::CoverageRequirement(value) => {
-                self.shift_scope(&value.scope, value.active)?;
-                self.coverage(&value.coverage)
+                prefix(self.shift_scope(&value.scope, value.active), "scope")?;
+                prefix(self.coverage(&value.coverage), "coverage")
             }
             WorkforceEntity::BaseSchedule(value) => {
                 unique(&value.assignments, false, "assignments")?;
@@ -107,8 +110,8 @@ impl Context<'_> {
 
     fn availability_record(&self, value: &Availability) -> Result {
         self.person(value.person_id)?;
-        time::time_window(&value.time_window)?;
-        time::date_range(value.effective_range)?;
+        prefix(time::time_window(&value.time_window), "timeWindow")?;
+        prefix(time::date_range(value.effective_range), "effectiveRange")?;
         if let Some(ids) = &value.assignment_type_ids {
             unique(ids, true, "assignmentTypeIds")?;
             for id in ids {
@@ -131,7 +134,7 @@ impl Context<'_> {
             text(external, "externalId")?;
         }
         if let ActiveRange::DateRange(range) = &person.active_range {
-            time::date_range(*range)?;
+            prefix(time::date_range(*range), "activeRange")?;
         }
         weight(person.workload_weight.numerator, "workloadWeight.numerator")?;
         weight(
@@ -146,15 +149,23 @@ impl Context<'_> {
         }
         bounded(&person.qualification_grants, false, "qualificationGrants")?;
         let mut grants = BTreeSet::new();
-        for grant in &person.qualification_grants {
-            self.qualification(grant.qualification_id)?;
-            require(
-                grant
-                    .effective_from
-                    .zip(grant.expires_at)
-                    .is_none_or(|(start, end)| start < end),
-                "qualificationGrants",
-                "effective qualification interval must be nonempty",
+        for (idx, grant) in person.qualification_grants.iter().enumerate() {
+            self.qualification(grant.qualification_id).map_err(|_| {
+                invalid(
+                    &format!("qualificationGrants.{idx}.qualificationId"),
+                    "reference does not resolve to the expected entity kind",
+                )
+            })?;
+            prefix(
+                require(
+                    grant
+                        .effective_from
+                        .zip(grant.expires_at)
+                        .is_none_or(|(start, end)| start < end),
+                    "expiresAt",
+                    "effective qualification interval must be nonempty",
+                ),
+                format_args!("qualificationGrants.{idx}"),
             )?;
             require(
                 grants.insert((
@@ -257,13 +268,21 @@ impl Context<'_> {
     fn qualification_match(&self, value: &QualificationMatch) -> Result {
         require(
             !value.all_qualification_ids.is_empty() || !value.any_qualification_ids.is_empty(),
-            "qualifications",
+            "",
             "empty qualification match must be explicit unconstrained",
         )?;
-        for ids in [&value.all_qualification_ids, &value.any_qualification_ids] {
-            unique(ids, false, "qualificationIds")?;
+        for (field, ids) in [
+            ("allQualificationIds", &value.all_qualification_ids),
+            ("anyQualificationIds", &value.any_qualification_ids),
+        ] {
+            unique(ids, false, field)?;
             for id in ids {
-                self.qualification(*id)?;
+                self.qualification(*id).map_err(|_| {
+                    invalid(
+                        field,
+                        "reference does not resolve to the expected entity kind",
+                    )
+                })?;
             }
         }
         Ok(())
@@ -271,8 +290,11 @@ impl Context<'_> {
 
     pub(super) fn qualification_minimums(&self, values: &[QualificationMinimum]) -> Result {
         bounded(values, false, "qualificationMinimums")?;
-        for value in values {
-            self.qualification_match(&value.qualifications)?;
+        for (index, value) in values.iter().enumerate() {
+            prefix(
+                self.qualification_match(&value.qualifications),
+                format_args!("qualificationMinimums.{index}.qualifications"),
+            )?;
         }
         Ok(())
     }
@@ -295,7 +317,7 @@ impl Context<'_> {
                         && preferred_count
                             .zip(*maximum_count)
                             .is_none_or(|(preferred, maximum)| preferred <= maximum),
-                    "coverage",
+                    "",
                     "coverage counts must be ordered minimum, preferred, maximum",
                 )?;
                 self.qualification_minimums(qualification_minimums)

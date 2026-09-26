@@ -4,7 +4,7 @@
 
 The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
-> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope. Development screens now support People/supporting records, people CSV import, and Work/shift setup; the complete setup experience and its manual checkpoint remain open. Remaining Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, is the active implementation scope. Development screens now support People/supporting records, people CSV import, Work/shift setup, eligibility/availability, the five Required rule kinds, and explicit full validation; the complete setup experience and its manual checkpoint remain open. Later Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
 
 ## Product direction
 
@@ -126,8 +126,10 @@ active/archived library, a revision-bound setup overview, a bounded change-histo
 view with one-step undo/redo, and reviewed portable inspection/import/export and
 backup/restore/recovery screens. Application Settings
 provides separate revision-checked drafts, reviewed nonsecret import/export, and
-persisted appearance preferences. About renders the bounded offline workspace
-license inventory and redacted configured-location status—not exact installer
+persisted appearance preferences. Linux native main-window Ctrl+= and Ctrl+-
+zoom have automated 200%/400% coverage, not manual accessibility acceptance.
+About renders the bounded offline workspace license inventory and redacted
+configured-location status—not exact installer
 attribution or completed license clearance.
 
 The People and supporting records route provides native record search/detail and
@@ -150,12 +152,30 @@ The People CSV screen selects a Rust-owned immutable snapshot, requires explicit
 delimiter/header/column mapping and identity decisions, and displays native proposed
 people and draft validation before one atomic apply. Rejected-row reports can be
 saved separately, including after apply; an exact no-change import creates no history
-entry. Names are never used to guess identity. Eligibility/availability and guided
-rule/validation editors remain roadmap work. See
+entry. Names are never used to guess identity.
+
+The Eligibility route edits configured person/type memberships through a bounded,
+keyboard-accessible matrix or equivalent paged table. Explicit row/column choices
+are reviewed and applied as one undoable batch; they are not assignment-feasibility
+results. Availability provides authored records, a calendar and exact interval
+list, instant/weekly windows, effective dates, type/location restrictions and inert
+source/note fields. Rust resolves time and supplies the person–assignment blocking
+inspector. Required-rule editors support the five implemented kinds with native
+scope previews and reviewed commands. Explicit full validation checks the saved
+revision, distinguishes stale, failed and cancelled attempts, and navigates supported
+findings to their owning editor fields; it does not prove plan feasibility. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
 native editing-accelerator, accessibility and packaged-platform gates.
 Use the headless Workforce workflow below for the available end-to-end
 optimization path.
+
+The setup overview offers a read-only **Optimize** handoff only for a current,
+completed, error-free full validation. Quick, Balanced and Deep describe intended
+budgets, not runnable desktop choices or optimality promises. Native capability
+still reports desktop solve start/cancel unavailable; the headless CLI remains the
+working optimization path. General native-operation status uses actual reported
+phases, delays its visible panel for 400 ms, and coalesces assistive announcements.
+Cancellation acknowledgement is not a successful terminal result.
 
 ## Quick start
 
@@ -181,12 +201,15 @@ just desktop-dev
 ```
 
 `just cli` runs the non-final working CLI. `just desktop-dev` runs the persisted
-desktop shell and implemented project, People/supporting-record, portable-file,
-Settings and About workflows; live desktop solving remains unavailable.
+desktop shell and implemented project, People/supporting-record, Work,
+Eligibility/Availability, Required rules, Validation, portable-file, Settings and
+About workflows; live desktop solving remains unavailable.
 On Linux, `just e2e` builds the unbundled Tauri application and exercises native
 settings/portable workflows, People editing and bulk actions with concurrent-change
-recovery, native CSV import/report/no-change behavior and restart-safe undo/redo, safety-backup
-failure/recovery, deletion/history boundaries and persistence with isolated local
+recovery, native CSV import/report/no-change behavior, a 100-person membership batch
+with undo/redo, availability authoring and blocking inspection, Required-rule review,
+full validation and exact-field navigation, restart persistence,
+safety-backup failure/recovery and deletion/history boundaries with isolated local
 data and networking.
 
 Run `just` to list every supported command. In particular,
@@ -225,8 +248,8 @@ manual or detached shift's instants and elapsed duration, re-expressing local
 endpoints when required; recurring templates retain local intent. The command
 uses the same revision checks and atomic history as other edits. Stored undo/redo
 restores exact endpoint representations, including DST-gap intent and timestamp
-spelling; inverse restoration payloads are pack-owned. This command authority
-does not yet provide the Phase-06 Workforce calendar-settings editor.
+spelling; inverse restoration payloads are pack-owned. The Work screen uses the
+same native settings authority.
 
 ```sh
 optimizer scenario validate ./scenario.json

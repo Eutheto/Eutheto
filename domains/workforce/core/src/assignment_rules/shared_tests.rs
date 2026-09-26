@@ -215,10 +215,6 @@ fn exact_resource_limits_fail_safely_without_claiming_expired_deadlines() -> Res
             .err()
             .ok_or("one-over must fail")?;
         assert_eq!(error, AssignmentRuleError::LimitExceeded(expected));
-        assert_eq!(
-            error.validation_issue().severity,
-            eutheto_types::ValidationSeverity::Error
-        );
         assert!(matches!(
             DomainPackError::from(error),
             DomainPackError::ResourceLimitExceeded

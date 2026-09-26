@@ -85,7 +85,7 @@ function discardFeedback(): void {
 
 <template>
   <section class="page-stack" aria-labelledby="project-heading">
-    <header class="page-heading">
+    <header class="page-heading project-heading">
       <p class="eyebrow">
         {{
           project?.domainPackId === "official.workforce"
@@ -93,7 +93,7 @@ function discardFeedback(): void {
             : messages.projects.savedMetadata
         }}
       </p>
-      <h1 id="project-heading" data-route-heading tabindex="-1">
+      <h1 id="project-heading" class="project-title" data-route-heading tabindex="-1">
         {{
           project?.title ??
           (home.state.phase === "loading"
@@ -101,33 +101,51 @@ function discardFeedback(): void {
             : messages.setup.unavailableTitle)
         }}
       </h1>
-      <p v-if="opened && project">{{ messages.library.local }}</p>
-      <div class="action-row">
-        <RouterLink :to="{ name: 'projects' }">{{ messages.setup.manage }}</RouterLink>
-        <template v-if="opened && project">
+      <p v-if="opened && project" class="project-context">{{ messages.library.local }}</p>
+      <nav
+        v-if="opened && project"
+        class="project-navigation"
+        :aria-label="messages.setup.navigation"
+      >
+        <div class="action-row">
           <RouterLink :to="{ name: 'project-setup', params: { scenarioId } }">
-            {{ messages.setup.heading }}
+            {{ messages.setup.nav.setup }}
           </RouterLink>
-          <RouterLink
-            v-if="project.domainPackId === 'official.workforce'"
-            :to="{ name: 'project-people', params: { scenarioId } }"
-          >
-            {{ messages.people.heading }}
-          </RouterLink>
-          <RouterLink
-            v-if="project.domainPackId === 'official.workforce'"
-            :to="{ name: 'project-work', params: { scenarioId } }"
-          >
-            {{ messages.work.heading }}
-          </RouterLink>
-          <RouterLink :to="{ name: 'project-history', params: { scenarioId } }">
-            {{ plannerMessage("history.title") }}
-          </RouterLink>
-          <RouterLink :to="{ name: 'project-export', params: { scenarioId } }">
-            {{ messages.shell.export }}
-          </RouterLink>
-        </template>
-      </div>
+          <template v-if="project.domainPackId === 'official.workforce'">
+            <RouterLink :to="{ name: 'project-people', params: { scenarioId } }">
+              {{ messages.setup.nav.people }}
+            </RouterLink>
+            <RouterLink :to="{ name: 'project-work', params: { scenarioId } }">
+              {{ messages.setup.nav.work }}
+            </RouterLink>
+            <RouterLink :to="{ name: 'project-rules', params: { scenarioId } }">
+              {{ messages.setup.nav.rules }}
+            </RouterLink>
+            <RouterLink :to="{ name: 'project-validation', params: { scenarioId } }">
+              {{ messages.setup.nav.validate }}
+            </RouterLink>
+          </template>
+          <details class="project-nav-more">
+            <summary>{{ messages.setup.moreActions }}</summary>
+            <div class="action-row">
+              <template v-if="project.domainPackId === 'official.workforce'">
+                <RouterLink :to="{ name: 'project-eligibility', params: { scenarioId } }">
+                  {{ messages.setup.eligibility }}
+                </RouterLink>
+                <RouterLink :to="{ name: 'project-availability', params: { scenarioId } }">
+                  {{ messages.setup.availability }}
+                </RouterLink>
+              </template>
+              <RouterLink :to="{ name: 'project-history', params: { scenarioId } }">
+                {{ plannerMessage("history.title") }}
+              </RouterLink>
+              <RouterLink :to="{ name: 'project-export', params: { scenarioId } }">
+                {{ messages.shell.export }}
+              </RouterLink>
+            </div>
+          </details>
+        </div>
+      </nav>
     </header>
     <div v-if="home.state.phase === 'error' || failed" class="state-panel" role="alert">
       <p>{{ home.state.errorMessage ?? messages.projects.requestFailed }}</p>
@@ -150,7 +168,21 @@ function discardFeedback(): void {
       </button>
     </div>
     <template v-else-if="opened">
-      <details class="state-panel">
+      <RouterView v-slot="{ Component }">
+        <component
+          :is="Component"
+          :home="home"
+          :project="project"
+          :locale="locale"
+          :library-revision="libraryRevision"
+          @exported="emit('exported', $event)"
+          @export-cancelled="emit('exportCancelled')"
+          @export-failed="emit('exportFailed')"
+          @undo="emit('undo')"
+          @redo="emit('redo')"
+        />
+      </RouterView>
+      <details class="state-panel setup-more">
         <summary>{{ messages.projects.savedMetadata }}</summary>
         <dl class="metadata-list">
           <div>
@@ -182,20 +214,6 @@ function discardFeedback(): void {
         </dl>
         <p v-if="project.archived">{{ messages.library.archivedHelp }}</p>
       </details>
-      <RouterView v-slot="{ Component }">
-        <component
-          :is="Component"
-          :home="home"
-          :project="project"
-          :locale="locale"
-          :library-revision="libraryRevision"
-          @exported="emit('exported', $event)"
-          @export-cancelled="emit('exportCancelled')"
-          @export-failed="emit('exportFailed')"
-          @undo="emit('undo')"
-          @redo="emit('redo')"
-        />
-      </RouterView>
     </template>
     <RouteLeaveGuard :home="home" :dirty="false" :pending="opening" :discard="discardFeedback" />
   </section>

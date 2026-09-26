@@ -35,11 +35,7 @@ function inspect(shiftId: string): void {
     <table class="w-full min-w-3xl border-collapse text-left text-sm">
       <caption class="p-2 text-left font-medium">
         {{
-          copy.caption
-        }}
-        ·
-        {{
-          timeZone
+          copy.captionForZone(timeZone)
         }}
       </caption>
       <thead>
@@ -59,12 +55,18 @@ function inspect(shiftId: string): void {
         <tr v-for="shift in rows" :key="shift.shiftId" class="border-t border-line align-top">
           <th scope="row" class="p-2 font-normal">
             <code class="break-all">{{ shift.shiftId }}</code>
-            <p>{{ copy.reportingDate }} {{ shift.reportingDate }}</p>
+            <p>{{ copy.reportingDateValue(shift.reportingDate) }}</p>
             <button
               type="button"
               class="button-secondary"
               :disabled="disabled"
-              :aria-label="`${copy.inspect}: ${shift.assignmentTypeName}, ${shift.interval.startsAt.local}, ${shift.shiftId}`"
+              :aria-label="
+                copy.inspectShift(
+                  shift.assignmentTypeName,
+                  shift.interval.startsAt.local,
+                  shift.shiftId,
+                )
+              "
               @click="inspect(shift.shiftId)"
             >
               {{ copy.inspect }}
@@ -76,7 +78,7 @@ function inspect(shiftId: string): void {
           </td>
           <td class="p-2 break-words">
             <p>{{ formatWorkOrigin(shift.origin) }}</p>
-            <p v-if="shift.templateName !== null">{{ copy.template }} {{ shift.templateName }}</p>
+            <p v-if="shift.templateName !== null">{{ copy.templateValue(shift.templateName) }}</p>
           </td>
           <td class="p-2">
             <p>

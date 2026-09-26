@@ -113,7 +113,12 @@ pub enum StoreError {
     #[error("scenario {0} already exists")]
     ScenarioAlreadyExists(ScenarioId),
     #[error("command application failed ({code}): {message}")]
-    CommandApplication { code: String, message: String },
+    CommandApplication {
+        code: String,
+        message: String,
+        /// A pack-provided single-command payload path; absent for batch or general failures.
+        field_path: Option<String>,
+    },
     #[error("staged library apply is invalid: {0}")]
     InvalidStagedApply(String),
     #[error("scenario identity graph is invalid: {0}")]

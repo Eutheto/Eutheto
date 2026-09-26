@@ -52,12 +52,12 @@ use eutheto_types::{
     MonotonicClock, OperationControl, OperationInterruption, PROJECT_LIST_SCHEMA_VERSION, PackId,
     PortableAsset, PortableDomainDocument, PortableProjectMetadata, ProjectListItemV1,
     ProjectMetadataDto, ProtocolFailure, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
-    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument, ScenarioDomain,
-    ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, ScenarioViewDto,
-    SolutionId, SolveRunId, SolveStatus, StorageFailure, SupportApplicationMetadataDto,
-    SupportDirectoryMetadataDto, SupportLibraryMetadataDto, SupportPreviewDto,
-    SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue, ValidationReport,
-    ValidationSeverity, VerificationFailure, collect_scenario_owned_uuids,
+    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioDocument,
+    ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
+    ScenarioViewDto, SolutionId, SolveRunId, SolveStatus, StorageFailure,
+    SupportApplicationMetadataDto, SupportDirectoryMetadataDto, SupportLibraryMetadataDto,
+    SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue,
+    ValidationReport, ValidationSeverity, VerificationFailure, collect_scenario_owned_uuids,
     extract_asset_references, extract_result_dependency, extract_result_id,
     extract_scenario_references,
 };
@@ -2281,7 +2281,7 @@ impl EuthetoApp {
                         &pack_registry,
                         &mutation_cancellation,
                     )
-                    .map_err(|error| command_store_error(&error))?;
+                    .map_err(|error| command_store_error(&error, Some(&envelope.command)))?;
                     applied.document.metadata.updated_at = applied_at;
                     let result = applied.result;
                     let command =
@@ -4613,7 +4613,7 @@ fn history_apply(
         registry,
         cancellation,
     )
-    .map_err(|error| command_store_error(&error))?;
+    .map_err(|error| command_store_error(&error, Some(&envelope.command)))?;
     applied.document.metadata.updated_at = history.target_document_updated_at;
     Ok((applied.document, applied.result))
 }
@@ -4664,6 +4664,7 @@ fn ensure_supported_document(
                 "domain pack {} schema {} is unavailable",
                 document.domain_pack.id, document.domain_pack.schema_version
             ),
+            field_path: None,
         })
     }
 }
@@ -5040,7 +5041,7 @@ fn directory_availability(path: Option<&Path>) -> DirectoryAvailabilityLabel {
     }
 }
 
-fn command_store_error(error: &CommandError) -> StoreError {
+fn command_store_error(error: &CommandError, command: Option<&ScenarioCommand>) -> StoreError {
     if matches!(error, CommandError::Cancelled) {
         return StoreError::OperationCancelled;
     }
@@ -5053,6 +5054,15 @@ fn command_store_error(error: &CommandError) -> StoreError {
     StoreError::CommandApplication {
         code: error.code().to_owned(),
         message: error.to_string(),
+        field_path: match error {
+            CommandError::InvalidDomainPayload { path, .. }
+                if matches!(command, Some(ScenarioCommand::ApplyDomainCommand(_)))
+                    && path.starts_with("/payload/") =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        },
     }
 }
 
@@ -5083,7 +5093,11 @@ fn store_error(error: StoreError) -> AppError {
             "/scenarioId",
             "A project with this scenario identity already exists.",
         ),
-        StoreError::CommandApplication { code, message } => {
+        StoreError::CommandApplication {
+            code,
+            message,
+            field_path,
+        } => {
             if code == "command.unsupported" {
                 AppError::Unsupported(UnsupportedFeature {
                     code,
@@ -5092,7 +5106,7 @@ fn store_error(error: StoreError) -> AppError {
             } else if code == "command.resource_limit" {
                 resource_limit_error()
             } else {
-                validation_error(&code, "/command", &message)
+                validation_error(&code, field_path.as_deref().unwrap_or("/command"), &message)
             }
         }
         StoreError::IdentityCollision(_) | StoreError::InvalidScenarioIdentity(_) => {

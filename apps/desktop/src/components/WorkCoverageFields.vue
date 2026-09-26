@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from "vue";
-import { messages } from "../messages";
+import { formatNumber, messages } from "../messages";
 import type { ProjectSummary } from "../project-home";
 import {
   workRowKey,
@@ -119,10 +119,57 @@ async function remove(key: string): Promise<void> {
     host.value?.querySelector<HTMLElement>(`[data-row-key="${nearby.key}"] input`)?.focus();
   else host.value?.querySelector<HTMLElement>("[data-add-minimum]")?.focus();
 }
+async function focusField(path: readonly string[], isCurrent: () => boolean): Promise<boolean> {
+  const raw = props.modelValue;
+  if (!isCurrent()) return false;
+  const fields: Readonly<Record<string, string>> = {
+    "": "coverage",
+    kind: "coverage.kind",
+    count: "coverage.count",
+    minimum: "coverage.minimum",
+    preferredCount: "coverage.preferredCount",
+    maximumCount: "coverage.maximumCount",
+    qualificationMinimums: "qualification-minima",
+  };
+  const key = path.join(".");
+  const suffix = Object.hasOwn(fields, key) ? fields[key] : undefined;
+  let id = suffix === undefined ? null : `${prefix}-${suffix}`;
+  if (path[0] === "qualificationMinimums" && /^\d+$/.test(path[1] ?? "")) {
+    const index = Number(path[1]);
+    const row = Number.isSafeInteger(index) ? raw.qualificationMinimums[index] : undefined;
+    if (row === undefined) return false;
+    const field = path.slice(2).join(".");
+    const rowFields: Readonly<Record<string, string>> = {
+      "": `${prefix}-${row.key}-minimum-group`,
+      minimum: `${prefix}-coverage.qualificationMinimums.${String(index)}.minimum`,
+      qualifications: `${prefix}-${row.key}-minimum-group`,
+      "qualifications.allQualificationIds": `${prefix}-${row.key}-all`,
+      "qualifications.anyQualificationIds": `${prefix}-${row.key}-any`,
+    };
+    const rowId = Object.hasOwn(rowFields, field) ? rowFields[field] : undefined;
+    if (rowId === undefined) return false;
+    id = rowId;
+    page.value = Math.floor(index / 50);
+  }
+  if (id === null) return false;
+  await nextTick();
+  if (!isCurrent() || props.modelValue !== raw) return false;
+  const element = document.getElementById(id);
+  if (!(element instanceof HTMLElement) || !host.value?.contains(element)) return false;
+  element.focus();
+  return document.activeElement === element;
+}
+defineExpose({ focusField });
 </script>
 
 <template>
-  <fieldset ref="host" class="field-stack" :disabled="disabled">
+  <fieldset
+    :id="`${prefix}-coverage`"
+    ref="host"
+    tabindex="-1"
+    class="field-stack"
+    :disabled="disabled"
+  >
     <legend>{{ copy.coverage }}</legend>
     <div class="field-stack">
       <label :for="`${prefix}-coverage.kind`">{{ copy.coverageMode }}</label>
@@ -215,16 +262,20 @@ async function remove(key: string): Promise<void> {
         </p>
       </div>
     </template>
-    <fieldset class="field-stack">
+    <fieldset :id="`${prefix}-qualification-minima`" tabindex="-1" class="field-stack">
       <legend>{{ copy.qualificationMinimums }}</legend>
       <p class="text-danger" role="status">{{ errors?.["coverage.qualificationMinimums"] }}</p>
       <fieldset
         v-for="(row, index) in rows"
+        :id="`${prefix}-${row.key}-minimum-group`"
         :key="row.key"
         :data-row-key="row.key"
+        tabindex="-1"
         class="field-stack"
       >
-        <legend>{{ copy.qualificationMinimum }} {{ offset + index + 1 }}</legend>
+        <legend>
+          {{ copy.qualificationMinimumNumber(formatNumber(offset + index + 1, locale)) }}
+        </legend>
         <label :for="`${prefix}-coverage.qualificationMinimums.${offset + index}.minimum`">{{
           copy.qualificationMinimum
         }}</label>
@@ -275,13 +326,15 @@ async function remove(key: string): Promise<void> {
         </button>
       </fieldset>
       <nav
-        :aria-label="`${copy.qualificationMinimums}: ${copy.collectionPages}`"
+        :aria-label="copy.collectionPagesFor(copy.qualificationMinimums)"
         class="flex flex-wrap items-center gap-2"
       >
-        <span role="status"
-          >{{ copy.rows }} {{ modelValue.qualificationMinimums.length }} · {{ copy.page }}
-          {{ offset / 50 + 1 }}</span
-        >
+        <span role="status">{{
+          copy.collectionPageStatus(
+            formatNumber(modelValue.qualificationMinimums.length, locale),
+            formatNumber(offset / 50 + 1, locale),
+          )
+        }}</span>
         <button
           type="button"
           class="button-secondary"

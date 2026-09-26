@@ -8,7 +8,7 @@ use super::{
         WorkforceSetupViewDataV1,
     },
     paging::{PageBuilder, ProjectionBudget, Result, invalid},
-    time::{issue_report, temporal_error},
+    time::temporal_error,
 };
 use crate::{
     ids::ShiftId,
@@ -17,7 +17,7 @@ use crate::{
     },
     temporal::{
         self, PriorShift, ResolvedShift, ResolvedShiftOrigin, ShiftChangeKind, TemporalError,
-        TemporalIssueKind,
+        TemporalIssueKind, diagnostics::issue_report,
     },
     validation::validate_document_controlled,
 };

@@ -221,7 +221,7 @@ impl HeadlessService {
             &self.packs,
             cancellation,
         )
-        .map_err(|error| store_error(command_store_error(&error)))?;
+        .map_err(|error| store_error(command_store_error(&error, Some(&envelope.command))))?;
         applied.document.metadata.updated_at = self.clock.now();
         snapshot.document = applied.document;
         snapshot.revision = applied.result.new_revision;
