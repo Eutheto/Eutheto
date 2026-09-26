@@ -126,8 +126,10 @@ active/archived library, a revision-bound setup overview, a bounded change-histo
 view with one-step undo/redo, and reviewed portable inspection/import/export and
 backup/restore/recovery screens. Application Settings
 provides separate revision-checked drafts, reviewed nonsecret import/export, and
-persisted appearance preferences. About renders the bounded offline workspace
-license inventory and redacted configured-location status—not exact installer
+persisted appearance preferences. Linux native main-window Ctrl+= and Ctrl+-
+zoom have automated 200%/400% coverage, not manual accessibility acceptance.
+About renders the bounded offline workspace license inventory and redacted
+configured-location status—not exact installer
 attribution or completed license clearance.
 
 The People and supporting records route provides native record search/detail and

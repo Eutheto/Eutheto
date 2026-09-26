@@ -399,6 +399,12 @@ this candidate or establish that the manual checkpoint passed. Unfamiliar-user
 research and spoken native screen-reader QA remain deferred to beta, not passed.
 Explicit user review and checkpoint acceptance are still required before Phase 07.
 
+The [26 September native zoom/focus follow-up](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#native-zoom-and-focus-follow-up--26-september-2026)
+records real 200%/400% Linux WebKit magnification, selected keyboard route and
+dialog checks, forced reduced-motion persistence and bounded color-token contrast
+calculations. It does not establish the full native validation-admission typing,
+rendered contrast/state matrix, other platforms or checkpoint acceptance.
+
 The first manual pass found setup overwhelming; the second found **Individual
 Person Edit/Update** overwhelming. Its optional groups and the plain-language
 labels across setup require fresh unprompted review at beta before claiming
@@ -496,8 +502,9 @@ without leading someone through individual controls.
     dialogs/menus, focus trapping and restoration, skip navigation,
     informative empty/loading/stale/error/cancelled states, and status
     announcements without repeated callback spam. Inspect light/dark
-    contrast, reduced motion and reflow at 200% and 400% zoom; note any
-    horizontal scrolling outside a bounded data grid. With a native
+    contrast, reduced motion and reflow at 200% and 400% native zoom; on
+    Linux use Ctrl+= to magnify and Ctrl+- to return to the original scale.
+    Note any horizontal scrolling outside a bounded data grid. With a native
     screen reader (for example Orca, NVDA or VoiceOver on its supported
     platform), record actual field names, descriptions, logical headers,
     exact validation navigation and cancellation/completion announcements.
