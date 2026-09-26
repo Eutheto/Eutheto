@@ -12,8 +12,9 @@ use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::AssignmentValue;
 use eutheto_planning_ir::{
     BoolVariableId, CompilerId, Constraint, Literal, ObjectivePlan, PLANNING_IR_SCHEMA_VERSION,
-    PROJECTION_SCHEMA_VERSION, PlanningIrLimitsV1, PlanningMetadata, PlanningProblem, Variable,
-    canonical_ir_hash, feature_usage, project_candidate, summarize,
+    PROJECTION_SCHEMA_VERSION, PlanningIrLimitsV1, PlanningMetadata, PlanningProblem,
+    ProvenanceParameter, ProvenanceSourceKind, Variable, canonical_ir_hash, feature_usage,
+    project_candidate, summarize,
 };
 use eutheto_solver_api::{
     BackendSolveResult, BackendTerminationReason, BoundedBackendOutput, ProgressSink,
@@ -25,7 +26,7 @@ use eutheto_solver_ortools::{
 };
 use eutheto_types::{
     BackendSelection, CancellationToken, DurationMillis, ExplanationMode, ParentSolveBudget,
-    PreservationPolicy, ReproducibilityMode, ResourceLimits, ScenarioDocument, SolveMode,
+    PreservationPolicy, ReproducibilityMode, ResourceLimits, RuleId, ScenarioDocument, SolveMode,
     SolveOptions, SystemMonotonicClock, WorkerThreadPolicy,
 };
 use eutheto_workforce::{
@@ -460,6 +461,104 @@ fn original_rest_evaluator_detects_nonadjacent_and_equal_start_omissions() -> Te
     Ok(())
 }
 
+#[test]
+fn original_evaluator_detects_removed_skill_mix_constraints_without_other_rule_failure()
+-> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(12)] = json!({
+        "kind":"qualification", "id":id(12), "name":"Specialist", "description":""
+    });
+    value["domain"]["entities"][id(20)]["qualificationGrants"]
+        .as_array_mut()
+        .ok_or("grants")?
+        .push(json!({"qualificationId":id(12)}));
+    value["domain"]["entities"][id(21)]["qualificationGrants"] = json!([
+        {"qualificationId":id(11)}, {"qualificationId":id(12)}
+    ]);
+    value["domain"]["rules"][id(34)] = json!({
+        "kind":"requiredSkillMix", "id":id(34), "active":true, "strength":"required",
+        "scope":{"people":{"kind":"all"}},
+        "qualificationMinimums":[{
+            "qualifications":{"allQualificationIds":[id(12)],"anyQualificationIds":[]},
+            "minimum":1
+        }]
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let selected = [pair(1, 8)?, pair(20, 22)?];
+
+    let report = authority::verify_selection(&document, &selected)?;
+    assert!(!report.accepted);
+    for rule in [30, 31, 32, 33] {
+        let rule_id: RuleId = id(rule).parse()?;
+        let evaluation = report
+            .required_rule_results
+            .iter()
+            .find(|evaluation| evaluation.rule_id == rule_id)
+            .ok_or("missing non-skill-mix evaluation")?;
+        assert!(
+            evaluation.satisfied,
+            "selected candidate unexpectedly violates rule {rule}"
+        );
+    }
+    let skill_mix_rule_id: RuleId = id(34).parse()?;
+    let skill_mix_evaluation = report
+        .required_rule_results
+        .iter()
+        .find(|evaluation| evaluation.rule_id == skill_mix_rule_id)
+        .ok_or("missing skill-mix evaluation")?;
+    assert!(!skill_mix_evaluation.satisfied);
+    assert!(!original_accepts(&document, &selected)?);
+
+    let mut skill_mix_provenance = BTreeSet::new();
+    for constraint in &compiled.constraints {
+        let provenance = compiled
+            .provenance
+            .iter()
+            .find(|record| record.id == constraint.provenance)
+            .ok_or("missing constraint provenance")?;
+        if provenance.source_kind != ProvenanceSourceKind::Derived
+            || provenance.source_id != id(34)
+            || provenance.message_key
+                != "official.workforce.required_skill_mix_qualification_minimum"
+        {
+            continue;
+        }
+        assert_eq!(
+            provenance.parameters.get("minimum"),
+            Some(&ProvenanceParameter::Integer(1))
+        );
+        assert_eq!(
+            provenance.parameters.get("source_row"),
+            Some(&ProvenanceParameter::Integer(0))
+        );
+        let parent_id = provenance.parent.as_ref().ok_or("skill-mix parent")?;
+        let parent = compiled
+            .provenance
+            .iter()
+            .find(|record| &record.id == parent_id)
+            .ok_or("skill-mix rule provenance")?;
+        assert_eq!(parent.source_kind, ProvenanceSourceKind::RequiredRule);
+        assert_eq!(parent.source_id, id(34));
+        assert_eq!(parent.message_key, "official.workforce.required_skill_mix");
+        skill_mix_provenance.insert(constraint.provenance.clone());
+    }
+    assert_eq!(skill_mix_provenance.len(), 2);
+
+    assert!(!mathematics_accepts(&compiled, &selected)?);
+    let mut mutant = compiled.clone();
+    mutant
+        .constraints
+        .retain(|constraint| !skill_mix_provenance.contains(&constraint.provenance));
+    assert_eq!(
+        mutant.constraints.len(),
+        compiled.constraints.len() - skill_mix_provenance.len()
+    );
+    assert!(mathematics_accepts(&mutant, &selected)?);
+    assert!(!original_accepts(&document, &selected)?);
+    Ok(())
+}
+
 fn detects_mutation(document: &ScenarioDocument, mutant: &AssignmentRuleCompilation) -> TestResult {
     for selected in selections()? {
         if mathematics_accepts(mutant, &selected)? && !original_accepts(document, &selected)? {
@@ -767,6 +866,135 @@ async fn real_worker_solves_and_rejects_minimum_rest_models() -> TestResult {
         BackendTerminationReason::InfeasibilityClaimed
     );
     assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_required_skill_mix_even_when_other_rules_have_candidates()
+-> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(12)] = json!({
+        "kind":"qualification", "id":id(12), "name":"Specialist", "description":""
+    });
+    for person in [1, 20] {
+        value["domain"]["entities"][id(person)]["qualificationGrants"]
+            .as_array_mut()
+            .ok_or("grants")?
+            .push(json!({"qualificationId":id(12)}));
+    }
+    value["domain"]["rules"][id(34)] = json!({
+        "kind":"requiredSkillMix", "id":id(34), "active":true, "strength":"required",
+        "scope":{"people":{"kind":"all"}},
+        "qualificationMinimums":[{
+            "qualifications":{"allQualificationIds":[id(12)],"anyQualificationIds":[]},
+            "minimum":1
+        }]
+    });
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let result = solve_with_real_worker(problem(&document, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    assert_eq!(result.candidates.len(), 1);
+    let selected = compiled
+        .variables
+        .iter()
+        .filter_map(|item| {
+            result.candidates[0]
+                .values
+                .booleans
+                .get(&item.variable.id)
+                .copied()
+                .filter(|included| *included)
+                .map(|_| item.pair)
+        })
+        .collect::<Vec<_>>();
+    assert!(original_accepts(&document, &selected)?);
+    value["domain"]["entities"][id(1)]["qualificationGrants"] = json!([{"qualificationId":id(11)}]);
+    let impossible: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&impossible, &context())?;
+    let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[test]
+fn skill_mix_command_inverse_and_portable_roundtrip_preserve_verifier_meaning() -> TestResult {
+    use eutheto_domain_api::{
+        DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPack, PortableImportContext,
+    };
+    use eutheto_types::{DomainCommandEnvelope, ScenarioDomain};
+    use eutheto_workforce::{WorkforcePack, commands};
+
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(12)] = json!({
+        "kind":"qualification", "id":id(12), "name":"Specialist", "description":""
+    });
+    value["domain"]["entities"][id(1)]["qualificationGrants"]
+        .as_array_mut()
+        .ok_or("grants")?
+        .push(json!({"qualificationId":id(12)}));
+    value["domain"]["rules"][id(34)] = json!({
+        "kind":"requiredSkillMix", "id":id(34), "active":true, "strength":"required",
+        "scope":{"people":{"kind":"all"}},
+        "qualificationMinimums":[{
+            "qualifications":{"allQualificationIds":[id(12)],"anyQualificationIds":[]},
+            "minimum":1
+        }]
+    });
+    let original: ScenarioDocument = serde_json::from_value(value)?;
+    let selected = [pair(1, 8)?, pair(20, 22)?];
+    assert!(!original_accepts(&original, &selected)?);
+    let mut relaxed = original
+        .domain
+        .rules
+        .get(&id(34).parse()?)
+        .ok_or("skill-mix rule")?
+        .clone();
+    relaxed["qualificationMinimums"][0]["minimum"] = json!(0);
+    let change = WorkforcePack.apply_batch(
+        &original,
+        &DomainBatchCommand {
+            schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
+            pack_id: original.domain_pack.id.clone(),
+            scenario_schema_version: 1,
+            label: None,
+            commands: vec![DomainCommandEnvelope {
+                command_type: commands::UPDATE_RULE.to_owned(),
+                payload: json!({"rule":relaxed}),
+            }],
+        },
+        &CancellationToken::new(),
+    )?;
+    assert!(original_accepts(&change.document, &selected)?);
+    let undone =
+        WorkforcePack.apply_batch(&change.document, &change.inverse, &CancellationToken::new())?;
+    assert_eq!(undone.document, original);
+    let portable = WorkforcePack.export_portable(&original)?;
+    let mut shell = original.clone();
+    shell.domain = ScenarioDomain::default();
+    shell.extensions.clear();
+    let restored = WorkforcePack.import_portable(
+        &serde_json::from_slice(&serde_json::to_vec(&portable)?)?,
+        &PortableImportContext {
+            scenario_shell: shell,
+        },
+    )?;
+    assert_eq!(restored, original);
+    let compiled = compile_assignment_rules(&restored, &context())?;
+    for selection in selections()? {
+        assert_eq!(
+            mathematics_accepts(&compiled, &selection)?,
+            original_accepts(&original, &selection)?
+        );
+    }
     Ok(())
 }
 

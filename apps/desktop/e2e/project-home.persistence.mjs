@@ -4397,11 +4397,61 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   const inactive = await package8Rule(sessionId, scenarioId, inactiveId);
   assert.equal(inactive.record.active, false);
   assert.deepEqual(inactive.record.scope.people.allTags, ["package8-no-person-has-this-tag"]);
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Required qualification mix");
+  const skillMixId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(skillMixId, "A new skill-mix rule needs a stable UUIDv7");
+  const skillMixEditor = '[aria-labelledby="rule-editor-heading"]';
+  const minimumInput = '#rule-qualification-minimums input[inputmode="numeric"]';
+  await choosePeopleReference(
+    sessionId,
+    "Require all selected qualifications",
+    "Native training",
+    skillMixEditor,
+  );
+  await setValue(sessionId, minimumInput, "2e");
+  await activateButton(sessionId, "Review rule changes", skillMixEditor);
+  await waitFor(
+    sessionId,
+    "const input = document.querySelector(arguments[0]); return !document.querySelector('#rule-review-heading') && document.activeElement === input && input?.value === '2e' && document.querySelector('#rule-qualification-minimums [role=\"status\"]')?.textContent.includes('exact whole number');",
+    [minimumInput],
+  );
+  await setValue(sessionId, minimumInput, "1");
+  await activateButton(sessionId, "Review rule changes", skillMixEditor);
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return review?.textContent.includes(arguments[0]) && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+    [expected.qualificationId],
+  );
+  await evaluate(
+    sessionId,
+    "document.querySelector('[aria-labelledby=\"rule-review-heading\"]').scrollIntoView({block:'start'}); return true;",
+  );
+  await screenshot(sessionId, "package8-required-skill-mix-review.png");
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const skillMix = await package8Rule(sessionId, scenarioId, skillMixId);
+  assert.equal(skillMix.record.kind, "requiredSkillMix");
+  assert.equal(skillMix.record.qualificationMinimums[0].minimum, 1);
+  assert.deepEqual(skillMix.record.qualificationMinimums[0].qualifications.allQualificationIds, [
+    expected.qualificationId,
+  ]);
   await navigate(sessionId, `/project/${scenarioId}/validation`);
   await waitForElement(sessionId, "[data-full-validation-stale]");
   await screenshot(sessionId, "package8-stale-validation.png");
   await optimizeHandoffAcceptance(sessionId, scenarioId, false, "stale");
-  return { restId, maximumId, inactiveId, counts, calendarId: expected.calendarId };
+  return {
+    restId,
+    maximumId,
+    inactiveId,
+    skillMixId,
+    counts,
+    calendarId: expected.calendarId,
+    qualificationId: expected.qualificationId,
+  };
 }
 
 async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
@@ -4547,7 +4597,7 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: six native Required kinds including reporting-date maximum assignment count; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
+    "PASS: seven native Required kinds including reporting-date maximum assignment count and qualification mix; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
   );
 }
 
@@ -5444,15 +5494,21 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   const rest = await package8Rule(sessionId, scenarioId, expected.restId);
   const maximum = await package8Rule(sessionId, scenarioId, expected.maximumId);
   const inactive = await package8Rule(sessionId, scenarioId, expected.inactiveId);
+  const skillMix = await package8Rule(sessionId, scenarioId, expected.skillMixId);
   assert.equal(rest.record.minimumMinutes, 600);
   assert.equal(rest.record.active, true);
   assert.equal(maximum.record.kind, "maximumAssignmentCount");
   assert.equal(maximum.record.calendarId, expected.calendarId);
   assert.equal(maximum.record.maximum, 3);
   assert.equal(inactive.record.active, false);
+  assert.equal(skillMix.record.kind, "requiredSkillMix");
+  assert.equal(skillMix.record.qualificationMinimums[0].minimum, 1);
+  assert.deepEqual(skillMix.record.qualificationMinimums[0].qualifications.allQualificationIds, [
+    expected.qualificationId,
+  ]);
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
-  for (let index = 0; index < 2; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     await activateButton(sessionId, "Undo scenario change", '[aria-labelledby="history-heading"]');
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
@@ -5577,6 +5633,7 @@ async function run() {
     const package8Expected = await package8Acceptance(firstSessionId, scenarioId, {
       ...package7Expected,
       calendarId: people.calendarId,
+      qualificationId: people.qualificationId,
     });
     await package8CoverageAcceptance(firstSessionId, scenarioId, package7Expected.shiftInstanceId);
     await package8CancellationAcceptance(firstSessionId, scenarioId, package7Expected.shiftTypeId);

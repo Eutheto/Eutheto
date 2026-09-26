@@ -7,7 +7,7 @@ use crate::{
     ids::QualificationId,
     model::{
         ActiveRange, Availability, CategoryPair, Coverage, Person, PersonSelection,
-        QualificationExpression, Scope, ShiftScope,
+        QualificationExpression, QualificationMinimum, Scope, ShiftScope,
     },
     temporal::{ResolvedShift, weekday},
 };
@@ -169,7 +169,7 @@ fn qualification(
     }
 }
 
-pub(super) fn qualification_match(
+pub(in crate::assignment_rules) fn qualification_match(
     person: &Person,
     all: &[QualificationId],
     any: &[QualificationId],
@@ -320,6 +320,13 @@ pub(super) fn canonical_minima(
             ..
         } => qualification_minimums,
     };
+    canonical_minima_values(values, budget)
+}
+
+pub(in crate::assignment_rules) fn canonical_minima_values(
+    values: &[QualificationMinimum],
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<MinimumKey>, AssignmentRuleError> {
     let mut result = Vec::new();
     for value in values {
         budget.step()?;
@@ -390,6 +397,14 @@ pub(super) fn authored_source_rows(
             ..
         } => qualification_minimums,
     };
+    authored_source_rows_values(values, minima, budget)
+}
+
+pub(in crate::assignment_rules) fn authored_source_rows_values(
+    values: &[QualificationMinimum],
+    minima: &[MinimumKey],
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<usize>, AssignmentRuleError> {
     let retained = count(minima.len())?;
     budget.reserve(
         0,

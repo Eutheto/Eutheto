@@ -353,6 +353,7 @@ pub(super) fn original_obligations(
                 | WorkforceRule::NoOverlap { .. }
                 | WorkforceRule::MinimumRest(_)
                 | WorkforceRule::MaximumAssignmentCount { .. }
+                | WorkforceRule::RequiredSkillMix { .. }
         ) {
             budget
                 .reserve(1, 2, 48)

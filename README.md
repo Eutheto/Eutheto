@@ -161,8 +161,11 @@ are reviewed and applied as one undoable batch; they are not assignment-feasibil
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support six implemented kinds, including Maximum
-Assignment Count with a reporting-date calendar and nonnegative cap; native scope
+inspector. Required-rule editors support seven implemented kinds, including Maximum
+Assignment Count with a reporting-date calendar and nonnegative cap, and Required
+Qualification Mix with per-shift qualification-expression minimums. A clinic shift requiring
+one Specialist and one Nurse may count the same dual-qualified person toward both
+minimums, but each minimum counts distinct assigned people. Native scope
 previews and reviewed commands remain required. Explicit full validation checks the saved
 revision, distinguishes stale, failed and cancelled attempts, and navigates supported
 findings to their owning editor fields; it does not prove plan feasibility. See
@@ -260,6 +263,48 @@ optimizer solutions verify ./scenario.json ./result.json
 optimizer solutions explain ./scenario.json ./result.json --assignment-id "$assignment_id"
 optimizer solutions export ./scenario.json ./result.json --format csv --output ./assignments.csv
 ```
+
+To require one qualified Physician on each scoped shift in the checked-in
+synthetic `clinic-tiny` scenario, save this as `skill-mix-command.json`:
+
+```json
+{
+  "type": "applyDomainCommand",
+  "payload": {
+    "commandType": "official.workforce.add_rule",
+    "payload": {
+      "rule": {
+        "kind": "requiredSkillMix",
+        "id": "01900000-0000-7000-8000-000000000043",
+        "active": true,
+        "strength": "required",
+        "scope": { "people": { "kind": "all" } },
+        "qualificationMinimums": [
+          {
+            "qualifications": {
+              "allQualificationIds": ["01a04a99-f980-7d4f-ba87-36abc52c26e9"],
+              "anyQualificationIds": []
+            },
+            "minimum": 1
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+From the repository root, with the packaged CLI image assembled:
+
+```sh
+target/cli-package/optimizer scenario apply domains/workforce/fixtures/v1/clinic-tiny.json \
+  --commands ./skill-mix-command.json --expected-revision 0 \
+  --output ./clinic-tiny-with-mix.json
+target/cli-package/optimizer scenario validate ./clinic-tiny-with-mix.json
+```
+
+This edits a separate portable file; it does not assert that a clinic-and-call
+workflow, live desktop solving, or practitioner-specific workload policy is complete.
 
 Full validation returns its complete report and exit 3 for errors; an obvious
 coverage contradiction is not itself a solver feasibility result. Solve defaults

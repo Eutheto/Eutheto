@@ -22,7 +22,7 @@ use crate::{
     ids::{ShiftId, WorkCalendarId},
     model::{
         AssignmentLock, AssignmentPair, Availability, AvailabilityKind, CategoryPair, Coverage,
-        LockState, Person, Scope, WorkforceEntity, WorkforceRule,
+        LockState, Person, QualificationMinimum, Scope, WorkforceEntity, WorkforceRule,
     },
     temporal::ResolvedShift,
 };
@@ -35,9 +35,10 @@ use eutheto_types::{
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use support::{
-    MinimumKey, active_interval, authored_source_rows, availability_scope, bounds,
-    canonical_minima, expression, incompatible, interval, invalid, outside, person_scope,
-    qualification_match, requirement_scope, shift_scope, uncovered,
+    MinimumKey, active_interval, authored_source_rows, authored_source_rows_values,
+    availability_scope, bounds, canonical_minima, canonical_minima_values, expression,
+    incompatible, interval, invalid, outside, person_scope, qualification_match, requirement_scope,
+    shift_scope, uncovered,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -64,6 +65,12 @@ pub(super) enum Predicate {
         authored_upper: Option<u64>,
     },
     Qualification {
+        definition: usize,
+        minimum: usize,
+        shift: ShiftId,
+        upper: u64,
+    },
+    SkillMixQualification {
         definition: usize,
         minimum: usize,
         shift: ShiftId,
@@ -459,6 +466,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::NoOverlap { .. }
             | WorkforceRule::MinimumRest(_)
             | WorkforceRule::MaximumAssignmentCount { .. }
+            | WorkforceRule::RequiredSkillMix { .. }
     )
 }
 
@@ -562,6 +570,19 @@ fn plan(
                     by_shift: &by_shift,
                 }
                 .add_rule(id, scope, budget)?;
+            }
+            WorkforceRule::RequiredSkillMix {
+                qualification_minimums,
+                ..
+            } => {
+                SkillMixPlanner {
+                    input,
+                    result,
+                    plan: &mut plan,
+                    definitions: &mut definitions,
+                    by_shift: &by_shift,
+                }
+                .add_rule(id, scope, qualification_minimums, budget)?;
             }
             WorkforceRule::NoOverlap {
                 compatible_category_pairs,
@@ -784,6 +805,109 @@ impl CoveragePlanner<'_> {
                 },
                 budget,
             )?;
+        }
+        Ok(())
+    }
+}
+struct SkillMixPlanner<'a> {
+    input: &'a AssignmentInput,
+    result: &'a mut AssignmentAnalysis,
+    plan: &'a mut Plan,
+    definitions: &'a mut BTreeMap<Owner, usize>,
+    by_shift: &'a BTreeMap<ShiftId, Vec<usize>>,
+}
+
+impl SkillMixPlanner<'_> {
+    fn add_rule(
+        &mut self,
+        rule: RuleId,
+        scope: &Scope,
+        values: &[QualificationMinimum],
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        let owner = Owner {
+            kind: "required_skill_mix",
+            id: EntityId::from_uuid(rule.as_uuid()),
+        };
+        let definition = match self.definitions.entry(owner) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let index = self.plan.definitions.len();
+                let minima = canonical_minima_values(values, budget)?;
+                let source_rows = authored_source_rows_values(values, &minima, budget)?;
+                budget.reserve(2, 2, 64)?;
+                self.plan.definitions.push(Definition {
+                    owner,
+                    minima,
+                    source_rows,
+                });
+                entry.insert(index);
+                index
+            }
+        };
+        let input = self.input;
+        for shift in &input.shifts {
+            budget.step()?;
+            let metadata = input.metadata(shift)?;
+            if !shift_scope(scope, shift, &metadata, budget)? {
+                continue;
+            }
+            let mut population = Vec::new();
+            if let Some(indices) = self.by_shift.get(&shift.id) {
+                for index in indices {
+                    budget.step()?;
+                    let person = input
+                        .person(self.result.candidates[*index].person_id)
+                        .ok_or_else(invalid)?;
+                    if person_scope(scope, person, budget)? {
+                        budget.reserve(0, 1, 8)?;
+                        population.push(*index);
+                    }
+                }
+            }
+            for minimum in 0..self.plan.definitions[definition].minima.len() {
+                budget.step()?;
+                let key = &self.plan.definitions[definition].minima[minimum];
+                let mut qualified = Vec::new();
+                for index in &population {
+                    budget.step()?;
+                    let person = input
+                        .person(self.result.candidates[*index].person_id)
+                        .ok_or_else(invalid)?;
+                    if qualification_match(person, &key.all, &key.any, interval(shift), budget)? {
+                        budget.reserve(0, 1, 8)?;
+                        qualified.push(*index);
+                    }
+                }
+                let qualified_count = count(qualified.len())?;
+                let source_row = self.plan.definitions[definition].source_rows[minimum];
+                if u64::from(key.minimum) > qualified_count {
+                    finding(
+                        &mut self.result.validation,
+                        "qualification_shortage",
+                        rule,
+                        owner,
+                        shift.id,
+                        &format!("domain.rules.{rule}.qualificationMinimums.{source_row}.minimum"),
+                        budget,
+                    )?;
+                }
+                append(
+                    self.plan,
+                    PlannedConstraint {
+                        rule,
+                        predicate: Predicate::SkillMixQualification {
+                            definition,
+                            minimum,
+                            shift: shift.id,
+                            upper: qualified_count,
+                        },
+                        population: qualified,
+                        impossible: u64::from(key.minimum) > qualified_count,
+                    },
+                    budget,
+                )?;
+            }
         }
         Ok(())
     }
@@ -1011,6 +1135,14 @@ pub(super) fn predicate_shape(
             // all/any membership is retained as separately named typed Entity parameters.
             (2, add(1, count(key.all.len() + key.any.len())?)?)
         }
+        Predicate::SkillMixQualification {
+            definition,
+            minimum,
+            ..
+        } => {
+            let key = &plan.definitions[*definition].minima[*minimum];
+            (2, add(2, count(key.all.len() + key.any.len())?)?)
+        }
         Predicate::MaximumAssignmentCount { .. } => (2, 3),
         Predicate::Overlap { .. } => (3, 0),
         Predicate::OverlapClique { .. } => (1, 0),
@@ -1036,6 +1168,7 @@ fn append(
             Predicate::MinimumRest { .. } => "minimum_rest",
             Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
             Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
+            Predicate::SkillMixQualification { .. } => "required_skill_mix",
         });
     }
     budget.reserve(1, 4, 128)?;
@@ -1052,7 +1185,9 @@ fn coverage_bound_findings(
     for constraint in &plan.constraints {
         budget.step()?;
         let shift = match constraint.predicate {
-            Predicate::Headcount { shift, .. } | Predicate::Qualification { shift, .. } => shift,
+            Predicate::Headcount { shift, .. }
+            | Predicate::Qualification { shift, .. }
+            | Predicate::SkillMixQualification { shift, .. } => shift,
             Predicate::MaximumAssignmentCount { .. }
             | Predicate::Overlap { .. }
             | Predicate::OverlapClique { .. }
@@ -1068,6 +1203,11 @@ fn coverage_bound_findings(
                     definition, lower, ..
                 } => (definition, lower, "contradictory_coverage_bounds", None),
                 Predicate::Qualification {
+                    definition,
+                    minimum,
+                    ..
+                }
+                | Predicate::SkillMixQualification {
                     definition,
                     minimum,
                     ..
@@ -1117,12 +1257,16 @@ fn coverage_bound_findings(
                 if subset {
                     let owner = plan.definitions[definition].owner;
                     let other = plan.definitions[upper_definition].owner;
-                    let field_path = match source_row {
-                        Some(row) => format!(
+                    let field_path = match (owner.kind, source_row) {
+                        ("required_skill_mix", Some(row)) => format!(
+                            "domain.rules.{}.qualificationMinimums.{row}.minimum",
+                            owner.id
+                        ),
+                        (_, Some(row)) => format!(
                             "domain.entities.{}.coverage.qualificationMinimums.{row}.minimum",
                             owner.id
                         ),
-                        None => format!("domain.entities.{}.coverage", owner.id),
+                        (_, None) => format!("domain.entities.{}.coverage", owner.id),
                     };
                     budget.reserve(1, 7, 1024)?;
                     report.issues.push(ValidationIssue {
@@ -1150,7 +1294,16 @@ fn finding(
     budget.reserve(1, 5, 768)?;
     report.issues.push(ValidationIssue {
         code: format!("official.workforce.{code}"), severity: ValidationSeverity::Error,
-        message: format!("Required coverage has an obvious contradiction (owner {} {}, shift {shift}). This is not a solver feasibility result.", owner.kind, owner.id),
+        message: format!(
+            "{} has an obvious contradiction (owner {} {}, shift {shift}). This is not a solver feasibility result.",
+            if owner.kind == "required_skill_mix" {
+                "Required skill mix"
+            } else {
+                "Required coverage"
+            },
+            owner.kind,
+            owner.id
+        ),
         field_path: Some(field_path.to_owned()), resource: Some(ResourceRef::Rule(rule)),
     });
     Ok(())

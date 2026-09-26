@@ -58,7 +58,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "requiredSkillMix",
         "official.workforce.rule.required-skill-mix",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "fixedAssignment",

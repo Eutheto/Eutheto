@@ -3,6 +3,7 @@ mod coverage;
 mod maximum_count;
 mod predicates;
 mod rest;
+mod skill_mix;
 
 use super::{
     AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleEvaluation,
@@ -34,7 +35,7 @@ pub(super) const VIOLATIONS: &str = "official.workforce.fact.violation_count";
 pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
-/// Evaluates Eligibility, Availability, Coverage, `NoOverlap`, `MinimumRest` and
+/// Evaluates Eligibility, Availability, Coverage, `RequiredSkillMix`, `NoOverlap`, `MinimumRest` and
 /// `MaximumAssignmentCount`, plus unconditional activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
@@ -199,6 +200,9 @@ fn evaluate_prepared(
             }
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 maximum_count::evaluate(document, input, selected, rule, &mut summary, budget)?;
+            }
+            WorkforceRule::RequiredSkillMix { .. } => {
+                skill_mix::evaluate(input, selected, rule, &mut summary, budget)?;
             }
             _ => {
                 retain_id(&mut obligations.remaining, id, budget)?;

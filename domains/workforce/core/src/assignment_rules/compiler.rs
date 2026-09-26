@@ -26,7 +26,7 @@ pub(super) const BOOL_ID: &str =
 pub(super) const CONSTRAINT_ID: &str = "official.workforce.constraint.0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const PROVENANCE_ID: &str = "official.workforce.provenance.0000000000000000000000000000000000000000000000000000000000000000";
 
-/// Compile only the unregistered six-family mathematical contribution.
+/// Compile only the unregistered supported mathematical contribution.
 ///
 /// # Errors
 /// Returns structural, temporal, cancellation, finite-work and bounded-output failures atomically.
@@ -218,6 +218,12 @@ fn constraint_body(
             minimum,
             upper,
             ..
+        }
+        | Predicate::SkillMixQualification {
+            definition,
+            minimum,
+            upper,
+            ..
         } => Constraint::cardinality(
             literals,
             u64::from(plan.definitions[definition].minima[minimum].minimum),
@@ -266,10 +272,20 @@ fn derive_predicate(
             minimum,
             shift,
             ..
+        }
+        | Predicate::SkillMixQualification {
+            definition,
+            minimum,
+            shift,
+            ..
         } => identities.derive(
             kind,
             &(
-                "qualification_minimum",
+                if matches!(planned.predicate, Predicate::Qualification { .. }) {
+                    "qualification_minimum"
+                } else {
+                    "skill_mix_qualification_minimum"
+                },
                 planned.rule,
                 plan.definitions[definition].owner,
                 shift,
@@ -304,25 +320,7 @@ fn derive_predicate(
             budget,
         ),
         Predicate::OverlapClique { person } => {
-            // Measurement and encoding both visit this borrowed canonical member list.
-            budget.steps(
-                count(planned.population.len())?
-                    .checked_mul(2)
-                    .ok_or_else(invalid)?,
-            )?;
-            identities.derive(
-                kind,
-                &(
-                    "no_overlap_clique",
-                    planned.rule,
-                    person,
-                    CliqueShifts {
-                        population: &planned.population,
-                        variables,
-                    },
-                ),
-                budget,
-            )
+            derive_clique(kind, planned, person, variables, identities, budget)
         }
         Predicate::MinimumRest {
             person,
@@ -342,6 +340,34 @@ fn derive_predicate(
             budget,
         ),
     }
+}
+fn derive_clique(
+    kind: IdentityKind,
+    planned: &PlannedConstraint,
+    person: PersonId,
+    variables: DecisionVariables<'_>,
+    identities: &mut PlanningIdentities,
+    budget: &mut OperationBudget<'_>,
+) -> Result<String, AssignmentRuleError> {
+    // Measurement and encoding both visit this borrowed canonical member list.
+    budget.steps(
+        count(planned.population.len())?
+            .checked_mul(2)
+            .ok_or_else(invalid)?,
+    )?;
+    identities.derive(
+        kind,
+        &(
+            "no_overlap_clique",
+            planned.rule,
+            person,
+            CliqueShifts {
+                population: &planned.population,
+                variables,
+            },
+        ),
+        budget,
+    )
 }
 
 // Population indices are in canonical candidate (person, ShiftId) order. Stream
@@ -472,6 +498,41 @@ fn constraint_fact(
                     entity("shift", shift.as_entity_id())?,
                 ],
                 "official.workforce.coverage_qualification_minimum",
+            )
+        }
+        Predicate::SkillMixQualification {
+            definition,
+            minimum,
+            shift,
+            ..
+        } => {
+            let definition = &plan.definitions[definition];
+            let key = &definition.minima[minimum];
+            parameters.insert(
+                "minimum".to_owned(),
+                ProvenanceParameter::Integer(i64::from(key.minimum)),
+            );
+            parameters.insert(
+                "source_row".to_owned(),
+                integer(count(definition.source_rows[minimum])?)?,
+            );
+            for (prefix, qualifications) in [("all", &key.all), ("any", &key.any)] {
+                for qualification in qualifications {
+                    parameters.insert(
+                        format!("{prefix}.{qualification}"),
+                        ProvenanceParameter::Entity(entity(
+                            "qualification",
+                            qualification.as_entity_id(),
+                        )?),
+                    );
+                }
+            }
+            (
+                vec![
+                    entity(definition.owner.kind, definition.owner.id)?,
+                    entity("shift", shift.as_entity_id())?,
+                ],
+                "official.workforce.required_skill_mix_qualification_minimum",
             )
         }
         Predicate::MaximumAssignmentCount {
@@ -675,8 +736,8 @@ pub(super) fn preflight(
         } else {
             planned.population.len()
         });
-        budget.steps(count(literals.0)?)?;
         let literal_count = count(literals.0)?;
+        budget.steps(literal_count)?;
         let body = if planned.impossible {
             MeasuredBody::BoolOr { literals }
         } else {
@@ -687,6 +748,12 @@ pub(super) fn preflight(
                     max: upper,
                 },
                 Predicate::Qualification {
+                    definition,
+                    minimum,
+                    upper,
+                    ..
+                }
+                | Predicate::SkillMixQualification {
                     definition,
                     minimum,
                     upper,
@@ -717,14 +784,10 @@ pub(super) fn preflight(
         };
         budget.reserve_ir(1, add(literal_count, 1)?, budget.measure_ir(&record)?)?;
         let (entities, parameters) = predicate_shape(&planned.predicate, plan)?;
-        let temporary_bytes = add(
-            1024,
-            add(entities, parameters)?
-                .checked_mul(512)
-                .ok_or_else(invalid)?,
-        )?;
-        budget.reserve(1, add(entities, parameters)?, temporary_bytes)?;
-        budget.steps(add(entities, parameters)?)?;
+        let shape = add(entities, parameters)?;
+        let temporary_bytes = add(1024, shape.checked_mul(512).ok_or_else(invalid)?)?;
+        budget.reserve(1, shape, temporary_bytes)?;
+        budget.steps(shape)?;
         reserve_fact(
             &constraint_fact(
                 planned,

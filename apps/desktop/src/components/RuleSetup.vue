@@ -9,7 +9,7 @@ import type {
 } from "../api/generated-domain-pack-contracts";
 import type { ScopeFieldName } from "./planner/scope-field";
 import { formatNumber, messages } from "../messages";
-import { parseMaximumAssignmentCountDraft } from "../rule-draft";
+import { parseMaximumAssignmentCountDraft, type QualificationMinimumDraft } from "../rule-draft";
 import { useRuleSetup } from "../rule-setup";
 import { useValidationRoute } from "../validation-route";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
@@ -33,6 +33,7 @@ const editorHost = ref<HTMLElement>();
 const scopeFields = new Map<WorkforceSetupScopePart, InstanceType<typeof RuleScopeBuilder>>();
 const pairKeys = ref<string[]>([]);
 const pairPage = ref(0);
+const skillMixPage = ref(0);
 const warningPage = ref(0);
 let rowSequence = 0;
 let focusGeneration = 0;
@@ -60,6 +61,14 @@ const pairRows = computed(
   () =>
     state.editor?.raw.compatibleCategoryPairs.slice(pairOffset.value, pairOffset.value + 50) ?? [],
 );
+const skillMixOffset = computed(() => skillMixPage.value * 50);
+const skillMixRows = computed(
+  () =>
+    state.editor?.raw.qualificationMinimums.slice(
+      skillMixOffset.value,
+      skillMixOffset.value + 50,
+    ) ?? [],
+);
 const warnings = computed(() =>
   review.state.review === null
     ? []
@@ -82,6 +91,17 @@ watch(
     while (pairKeys.value.length < (length ?? 0))
       pairKeys.value.push(`pair-${String(++rowSequence)}`);
     pairPage.value = Math.min(pairPage.value, Math.max(0, Math.ceil((length ?? 0) / 50) - 1));
+  },
+  { immediate: true, flush: "sync" },
+);
+watch(
+  () => [state.editor?.id, state.editor?.raw.qualificationMinimums.length] as const,
+  ([id, length], previous) => {
+    if (id !== previous?.[0]) skillMixPage.value = 0;
+    skillMixPage.value = Math.min(
+      skillMixPage.value,
+      Math.max(0, Math.ceil((length ?? 0) / 50) - 1),
+    );
   },
   { immediate: true, flush: "sync" },
 );
@@ -142,6 +162,13 @@ function pairId(index: number, field: "firstCategory" | "secondCategory"): strin
   const id = state.editor?.id;
   const key = pairKeys.value[index];
   return id === undefined || key === undefined ? undefined : `rule-${id}-${key}-${field}`;
+}
+function qualificationMinimumId(key: string, field: "group" | "minimum" | "all" | "any"): string {
+  if (state.editor === null) throw new Error("No rule selected.");
+  return `rule-${state.editor.id}-qualification-minimum-${key}-${field}`;
+}
+function qualificationIds(ids: readonly string[]): string {
+  return ids.join(", ");
 }
 function scopeErrors(
   part: WorkforceSetupScopePart,
@@ -204,6 +231,7 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       maximum: "rule-maximum",
       minimumMinutes: "rule-minimum-rest",
       compatibleCategoryPairs: "rule-category-pairs",
+      qualificationMinimums: "rule-qualification-minimums",
     } as const;
     const field = path[0];
     if (field !== undefined && Object.hasOwn(fields, field))
@@ -220,6 +248,25 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       return false;
     pairPage.value = Math.floor(index / 50);
     id = pairId(index, path[2]) ?? null;
+  }
+  if (
+    path[0] === "qualificationMinimums" &&
+    /^\d+$/.test(path[1] ?? "") &&
+    (path.length === 2 || path.length === 3 || path.length === 4)
+  ) {
+    const index = Number(path[1]);
+    const row = Number.isSafeInteger(index) ? editor.raw.qualificationMinimums[index] : undefined;
+    if (row === undefined) return false;
+    const field = path.slice(2).join(".");
+    const rowFields: Readonly<Record<string, string | undefined>> = {
+      "": qualificationMinimumId(row.key, "group"),
+      minimum: qualificationMinimumId(row.key, "minimum"),
+      qualifications: qualificationMinimumId(row.key, "group"),
+      "qualifications.allQualificationIds": qualificationMinimumId(row.key, "all"),
+      "qualifications.anyQualificationIds": qualificationMinimumId(row.key, "any"),
+    };
+    id = rowFields[field] ?? null;
+    skillMixPage.value = Math.floor(index / 50);
   }
   if (id === null) return false;
   await nextTick();
@@ -326,6 +373,54 @@ async function removePair(index: number): Promise<void> {
     next < 0
       ? ["compatibleCategoryPairs"]
       : ["compatibleCategoryPairs", String(next), "firstCategory"],
+    ownership(),
+  );
+}
+function updateQualificationMinimum<K extends keyof Omit<QualificationMinimumDraft, "key">>(
+  key: string,
+  field: K,
+  value: QualificationMinimumDraft[K],
+): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value) return;
+  vm.updateRaw({
+    ...raw,
+    qualificationMinimums: raw.qualificationMinimums.map((row) =>
+      row.key === key ? { ...row, [field]: value } : row,
+    ),
+  });
+}
+async function addQualificationMinimum(): Promise<void> {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value) return;
+  const index = raw.qualificationMinimums.length;
+  const key = `qualification-minimum-new-${String(++rowSequence)}`;
+  vm.updateRaw({
+    ...raw,
+    qualificationMinimums: [
+      ...raw.qualificationMinimums,
+      { key, minimum: "", allQualificationIds: [], anyQualificationIds: [] },
+    ],
+  });
+  skillMixPage.value = Math.floor(index / 50);
+  await focusField(["qualificationMinimums", String(index), "minimum"], ownership());
+}
+async function removeQualificationMinimum(index: number): Promise<void> {
+  const editor = state.editor;
+  const raw = editor?.raw;
+  if (
+    raw === undefined ||
+    locked.value ||
+    (editor !== null && editor.base === null && raw.qualificationMinimums.length === 1)
+  )
+    return;
+  vm.updateRaw({
+    ...raw,
+    qualificationMinimums: raw.qualificationMinimums.filter((_, at) => at !== index),
+  });
+  const next = Math.min(index, raw.qualificationMinimums.length - 2);
+  await focusField(
+    next < 0 ? ["qualificationMinimums"] : ["qualificationMinimums", String(next), "minimum"],
     ownership(),
   );
 }
@@ -718,6 +813,178 @@ const navigationError = useValidationRoute(
                 </p>
               </div>
             </template>
+            <fieldset
+              v-if="state.editor.kind === 'requiredSkillMix'"
+              id="rule-qualification-minimums"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ copy.fields.qualificationMinimums }}</legend>
+              <p class="field-help">{{ copy.fields.qualificationMinimumHelp }}</p>
+              <p v-if="state.editor.raw.qualificationMinimums.length === 0" role="status">
+                {{
+                  state.editor.raw.active
+                    ? copy.fields.requiredSkillMixEmpty
+                    : copy.fields.requiredSkillMixInactiveEmpty
+                }}
+              </p>
+              <p class="text-danger" role="alert">
+                {{ state.errors.qualificationMinimums }}
+              </p>
+              <fieldset
+                v-for="(row, index) in skillMixRows"
+                :id="qualificationMinimumId(row.key, 'group')"
+                :key="row.key"
+                :data-row-key="row.key"
+                tabindex="-1"
+                class="field-stack"
+              >
+                <legend>
+                  {{
+                    copy.fields.qualificationMinimumNumber(
+                      formatNumber(skillMixOffset + index + 1, locale),
+                    )
+                  }}
+                </legend>
+                <label :for="qualificationMinimumId(row.key, 'minimum')">
+                  {{ copy.fields.qualificationMinimum }}
+                </label>
+                <input
+                  :id="qualificationMinimumId(row.key, 'minimum')"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="row.minimum"
+                  :aria-invalid="
+                    Boolean(
+                      state.errors[`qualificationMinimums.${skillMixOffset + index}.minimum`],
+                    ) || undefined
+                  "
+                  :aria-describedby="`rule-qualification-minimum-${row.key}-minimum-error`"
+                  @input="updateQualificationMinimum(row.key, 'minimum', text($event))"
+                />
+                <p
+                  :id="`rule-qualification-minimum-${row.key}-minimum-error`"
+                  class="text-danger"
+                  role="status"
+                >
+                  {{ state.errors[`qualificationMinimums.${skillMixOffset + index}.minimum`] }}
+                </p>
+                <WorkforceEntityPicker
+                  :id="qualificationMinimumId(row.key, 'all')"
+                  :project="project"
+                  :library-epoch="home.state.libraryEpoch"
+                  kind="qualification"
+                  multiple
+                  :label="copy.fields.allQualifications"
+                  :model-value="row.allQualificationIds"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :read-only="!state.editor.editing"
+                  :error="
+                    state.errors[
+                      `qualificationMinimums.${skillMixOffset + index}.qualifications.allQualificationIds`
+                    ]
+                  "
+                  v-bind="{
+                    ...(locale === undefined ? {} : { locale }),
+                  }"
+                  @update:model-value="
+                    updateQualificationMinimum(row.key, 'allQualificationIds', $event)
+                  "
+                />
+                <WorkforceEntityPicker
+                  :id="qualificationMinimumId(row.key, 'any')"
+                  :project="project"
+                  :library-epoch="home.state.libraryEpoch"
+                  kind="qualification"
+                  multiple
+                  :label="copy.fields.anyQualifications"
+                  :model-value="row.anyQualificationIds"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :read-only="!state.editor.editing"
+                  :error="
+                    state.errors[
+                      `qualificationMinimums.${skillMixOffset + index}.qualifications.anyQualificationIds`
+                    ]
+                  "
+                  v-bind="{
+                    ...(locale === undefined ? {} : { locale }),
+                  }"
+                  @update:model-value="
+                    updateQualificationMinimum(row.key, 'anyQualificationIds', $event)
+                  "
+                />
+                <button
+                  v-if="state.editor.editing"
+                  type="button"
+                  class="button-secondary"
+                  :disabled="
+                    locked ||
+                    (state.editor.base === null &&
+                      state.editor.raw.qualificationMinimums.length === 1)
+                  "
+                  :aria-label="
+                    copy.fields.removeQualificationMinimumNumber(
+                      formatNumber(skillMixOffset + index + 1, locale),
+                    )
+                  "
+                  @click="removeQualificationMinimum(skillMixOffset + index)"
+                >
+                  {{ copy.fields.removeQualificationMinimum }}
+                  {{ formatNumber(skillMixOffset + index + 1, locale) }}
+                </button>
+              </fieldset>
+              <nav
+                v-if="state.editor.raw.qualificationMinimums.length > 0"
+                class="action-row"
+                :aria-label="copy.fields.qualificationMinimums"
+              >
+                <span role="status">{{
+                  copy.fields.qualificationMinimumPageStatus(
+                    formatNumber(state.editor.raw.qualificationMinimums.length, locale),
+                    formatNumber(skillMixOffset / 50 + 1, locale),
+                  )
+                }}</span>
+                <button
+                  type="button"
+                  class="button-secondary"
+                  :disabled="skillMixPage === 0"
+                  @click="skillMixPage = 0"
+                >
+                  {{ recordsCopy.first }}
+                </button>
+                <button
+                  type="button"
+                  class="button-secondary"
+                  :disabled="skillMixPage === 0"
+                  @click="skillMixPage -= 1"
+                >
+                  {{ recordsCopy.previous }}
+                </button>
+                <button
+                  type="button"
+                  class="button-secondary"
+                  :disabled="
+                    (skillMixPage + 1) * 50 >= state.editor.raw.qualificationMinimums.length
+                  "
+                  @click="skillMixPage += 1"
+                >
+                  {{ recordsCopy.next }}
+                </button>
+              </nav>
+              <button
+                v-if="state.editor.editing"
+                type="button"
+                class="button-secondary"
+                data-add-qualification-minimum
+                :disabled="locked"
+                @click="addQualificationMinimum"
+              >
+                {{ copy.fields.addQualificationMinimum }}
+              </button>
+            </fieldset>
             <DurationField
               v-if="state.editor.kind === 'minimumRest'"
               id="rule-minimum-rest"
@@ -902,6 +1169,29 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
+          <template v-if="state.reviewed.after?.kind === 'requiredSkillMix'">
+            <p>
+              {{
+                copy.requiredSkillMixSentence(
+                  formatNumber(state.reviewed.after.qualificationMinimums.length, locale),
+                )
+              }}
+            </p>
+            <ul class="field-stack">
+              <li
+                v-for="(minimum, index) in state.reviewed.after.qualificationMinimums"
+                :key="index"
+              >
+                {{
+                  copy.requiredSkillMixMinimumSentence(
+                    formatNumber(minimum.minimum, locale),
+                    qualificationIds(minimum.qualifications.allQualificationIds),
+                    qualificationIds(minimum.qualifications.anyQualificationIds),
+                  )
+                }}
+              </li>
+            </ul>
+          </template>
           <p>{{ copy.previewHelp }}</p>
           <dl v-if="state.reviewed.summary">
             <div>

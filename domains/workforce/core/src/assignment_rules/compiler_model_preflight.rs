@@ -206,6 +206,7 @@ fn validate_shape(
             match planned.predicate {
                 Predicate::Headcount { .. }
                 | Predicate::Qualification { .. }
+                | Predicate::SkillMixQualification { .. }
                 | Predicate::MaximumAssignmentCount { .. } => Capability::CardinalityRange,
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }

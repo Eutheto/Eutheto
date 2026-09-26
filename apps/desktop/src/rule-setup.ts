@@ -99,7 +99,30 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.no-overlap": "noOverlap",
   "official.workforce.rule.minimum-rest": "minimumRest",
   "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
+  "official.workforce.rule.required-skill-mix": "requiredSkillMix",
 };
+function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
+  return (
+    left.active === right.active &&
+    sameField(left.scope, right.scope) &&
+    sameField(left.beforeScope, right.beforeScope) &&
+    sameField(left.afterScope, right.afterScope) &&
+    left.calendarId === right.calendarId &&
+    sameField(left.maximum, right.maximum) &&
+    sameField(left.minimumRest, right.minimumRest) &&
+    sameField(left.compatibleCategoryPairs, right.compatibleCategoryPairs) &&
+    left.qualificationMinimums.length === right.qualificationMinimums.length &&
+    left.qualificationMinimums.every((row, index) => {
+      const other = right.qualificationMinimums[index];
+      return (
+        other !== undefined &&
+        row.minimum === other.minimum &&
+        sameField(row.allQualificationIds, other.allQualificationIds) &&
+        sameField(row.anyQualificationIds, other.anyQualificationIds)
+      );
+    })
+  );
+}
 const scopeParts = ["main", "minimumRestBefore", "minimumRestAfter"] as const;
 const entityFields = ["people", "teamIds", "assignmentTypeIds", "locationIds"] as const;
 type PickerKey = `${WorkforceSetupScopePart}:${ScopeEntityField}`;
@@ -202,7 +225,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     () =>
       state.editor !== null &&
       (state.editor.base === null ||
-        !sameField(state.editor.raw, createRuleDraft(state.editor.base))),
+        !sameRuleDraft(state.editor.raw, createRuleDraft(state.editor.base))),
   );
   const stale = computed(() => state.editor !== null && !matches(state.editor.context));
   const canReplace = computed(
@@ -414,12 +437,22 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     )
       return false;
     discard();
+    const raw = createRuleDraft("new");
+    const initialRaw =
+      kind === "requiredSkillMix"
+        ? {
+            ...raw,
+            qualificationMinimums: [
+              { key: newUuidV7(), minimum: "", allQualificationIds: [], anyQualificationIds: [] },
+            ],
+          }
+        : raw;
     state.editor = {
       context: context(),
       id: newUuidV7(),
       kind,
       base: null,
-      raw: createRuleDraft("new"),
+      raw: initialRaw,
       editing: true,
       rebase: null,
       rebaseContext: null,
@@ -726,7 +759,15 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               ...editor,
               raw: { ...editor.raw, maximum: createRuleDraft(merged.value).maximum },
             }
-          : editor;
+          : field === "qualificationMinimums" && choice === "current"
+            ? {
+                ...editor,
+                raw: {
+                  ...editor.raw,
+                  qualificationMinimums: createRuleDraft(merged.value).qualificationMinimums,
+                },
+              }
+            : editor;
     acceptRebase(retained, merged, editor.rebaseContext, local);
   }
 

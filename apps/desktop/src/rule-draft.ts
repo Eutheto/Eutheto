@@ -1,8 +1,50 @@
-import type { WorkforceRule, WorkforceScope } from "./api/generated-domain-pack-contracts";
+import type {
+  WorkforceQualificationMinimum,
+  WorkforceRequiredSkillMixRule,
+  WorkforceRule,
+  WorkforceScope,
+} from "./api/generated-domain-pack-contracts";
 import type { DurationDraft } from "./components/planner/field-contracts";
 import { parseDurationDraft } from "./components/planner/duration-field";
 import { sameField } from "./entity-draft";
 import { messages } from "./messages";
+
+export type QualificationMinimumDraft = {
+  readonly key: string;
+  readonly minimum: string;
+  readonly allQualificationIds: readonly string[];
+  readonly anyQualificationIds: readonly string[];
+};
+
+export type RequiredSkillMixMinimumDraft = {
+  readonly raw: string;
+} & (
+  | { readonly status: "empty" }
+  | { readonly status: "invalid"; readonly error: "syntax" | "range" }
+  | { readonly status: "valid"; readonly minimum: number }
+);
+
+const requiredSkillMixMinimumLimit = 65_535n;
+let qualificationMinimumSequence = 0;
+function qualificationMinimumKey(index: number): string {
+  return `qualification-minimum-${String(index)}`;
+}
+function qualificationMinimumNewKey(): string {
+  qualificationMinimumSequence += 1;
+  return `qualification-minimum-rebased-${String(qualificationMinimumSequence)}`;
+}
+
+/** Keep the editable text separate from its native u16 meaning. */
+export function parseRequiredSkillMixMinimumDraft(raw: string): RequiredSkillMixMinimumDraft {
+  if (raw === "") return { raw, status: "empty" };
+  if (raw.length > 32) return { raw, status: "invalid", error: "range" };
+  if (!/^[0-9]+$/u.test(raw)) return { raw, status: "invalid", error: "syntax" };
+  const normalized = raw.replace(/^0+/u, "") || "0";
+  if (normalized.length > 5) return { raw, status: "invalid", error: "range" };
+  const minimum = BigInt(normalized);
+  if (minimum > requiredSkillMixMinimumLimit) return { raw, status: "invalid", error: "range" };
+  return { raw, status: "valid", minimum: Number(minimum) };
+}
 
 export type EditableRule = Extract<
   WorkforceRule,
@@ -13,7 +55,8 @@ export type EditableRule = Extract<
       | "coverage"
       | "noOverlap"
       | "minimumRest"
-      | "maximumAssignmentCount";
+      | "maximumAssignmentCount"
+      | "requiredSkillMix";
   }
 >;
 export type EditableRuleKind = EditableRule["kind"];
@@ -52,6 +95,7 @@ export interface RuleDraft {
     readonly firstCategory: string;
     readonly secondCategory: string;
   }[];
+  readonly qualificationMinimums: readonly QualificationMinimumDraft[];
 }
 
 export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
@@ -61,8 +105,118 @@ export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
     rule.kind === "coverage" ||
     rule.kind === "noOverlap" ||
     rule.kind === "minimumRest" ||
-    rule.kind === "maximumAssignmentCount"
+    rule.kind === "maximumAssignmentCount" ||
+    rule.kind === "requiredSkillMix"
   );
+}
+
+function qualificationIdentity(
+  allQualificationIds: readonly string[],
+  anyQualificationIds: readonly string[],
+): string {
+  return JSON.stringify([[...allQualificationIds].sort(), [...anyQualificationIds].sort()]);
+}
+
+function nativeQualificationIdentity(value: WorkforceQualificationMinimum): string {
+  return qualificationIdentity(
+    value.qualifications.allQualificationIds,
+    value.qualifications.anyQualificationIds,
+  );
+}
+
+function draftQualificationIdentity(value: QualificationMinimumDraft): string {
+  return qualificationIdentity(value.allQualificationIds, value.anyQualificationIds);
+}
+
+function requiredSkillMixDraft(
+  value: WorkforceRequiredSkillMixRule,
+  before: WorkforceRequiredSkillMixRule | undefined,
+  raw: readonly QualificationMinimumDraft[] | undefined,
+): readonly QualificationMinimumDraft[] {
+  const values = value.qualificationMinimums;
+  if (raw !== undefined && sameField(values, before?.qualificationMinimums)) return raw;
+  if (before === undefined || raw === undefined || before.qualificationMinimums.length === 0)
+    return values.map((row, index) => ({
+      key: qualificationMinimumKey(index),
+      minimum: String(row.minimum),
+      allQualificationIds: row.qualifications.allQualificationIds,
+      anyQualificationIds: row.qualifications.anyQualificationIds,
+    }));
+
+  const matches = new Map<string, { indices: number[]; next: number }>();
+  before.qualificationMinimums.forEach((row, index) => {
+    const key = nativeQualificationIdentity(row);
+    const match = matches.get(key);
+    if (match) match.indices.push(index);
+    else matches.set(key, { indices: [index], next: 0 });
+  });
+  const sameLength =
+    values.length === before.qualificationMinimums.length && values.length === raw.length;
+  return values.map((row, index) => {
+    const match = matches.get(nativeQualificationIdentity(row));
+    const beforeIndex = match?.indices[match.next++];
+    const beforeRow =
+      beforeIndex === undefined
+        ? sameLength
+          ? before.qualificationMinimums[index]
+          : undefined
+        : before.qualificationMinimums[beforeIndex];
+    const retained =
+      beforeIndex === undefined ? (sameLength ? raw[index] : undefined) : raw[beforeIndex];
+    const parsed =
+      retained === undefined ? undefined : parseRequiredSkillMixMinimumDraft(retained.minimum);
+    const minimum =
+      retained !== undefined && (parsed?.status !== "valid" || beforeRow?.minimum === row.minimum)
+        ? retained.minimum
+        : String(row.minimum);
+    return {
+      key: retained?.key ?? qualificationMinimumNewKey(),
+      minimum,
+      allQualificationIds: row.qualifications.allQualificationIds,
+      anyQualificationIds: row.qualifications.anyQualificationIds,
+    };
+  });
+}
+
+function qualificationMinimumsForRebase(
+  base: WorkforceRequiredSkillMixRule,
+  raw: readonly QualificationMinimumDraft[],
+): readonly WorkforceQualificationMinimum[] {
+  const used = new Set<number>();
+  const matches = new Map<string, { indices: number[]; next: number }>();
+  base.qualificationMinimums.forEach((value, index) => {
+    const key = nativeQualificationIdentity(value);
+    const match = matches.get(key);
+    if (match) match.indices.push(index);
+    else matches.set(key, { indices: [index], next: 0 });
+  });
+  return raw.map((row, index) => {
+    const match = matches.get(draftQualificationIdentity(row));
+    let baseIndex = -1;
+    if (match) {
+      while (match.next < match.indices.length) {
+        const candidate = match.indices[match.next];
+        if (candidate === undefined) break;
+        match.next += 1;
+        if (!used.has(candidate)) {
+          baseIndex = candidate;
+          break;
+        }
+      }
+    }
+    if (baseIndex < 0 && index < base.qualificationMinimums.length && !used.has(index))
+      baseIndex = index;
+    if (baseIndex >= 0) used.add(baseIndex);
+    const baseRow = baseIndex >= 0 ? base.qualificationMinimums[baseIndex] : undefined;
+    const parsed = parseRequiredSkillMixMinimumDraft(row.minimum);
+    return {
+      minimum: parsed.status === "valid" ? parsed.minimum : (baseRow?.minimum ?? 0),
+      qualifications: {
+        allQualificationIds: row.allQualificationIds,
+        anyQualificationIds: row.anyQualificationIds,
+      },
+    };
+  });
 }
 
 /** Unsubmitted inactive fields remain raw intent, never extra fields in the native rule. */
@@ -84,6 +238,10 @@ export function createRuleDraft(
     record?.kind === "maximumAssignmentCount" &&
     previous?.value.kind === "maximumAssignmentCount" &&
     (previous.raw.maximum.status !== "valid" || sameField(record.maximum, previous.value.maximum));
+  const previousSkillMix =
+    record?.kind === "requiredSkillMix" && previous?.value.kind === "requiredSkillMix"
+      ? previous.value
+      : undefined;
   return {
     active: record?.active ?? true,
     scope: record?.scope ?? { people: { kind: "all" } },
@@ -113,6 +271,10 @@ export function createRuleDraft(
       record?.kind === "noOverlap"
         ? record.compatibleCategoryPairs
         : (previous?.raw.compatibleCategoryPairs ?? []),
+    qualificationMinimums:
+      record?.kind === "requiredSkillMix"
+        ? requiredSkillMixDraft(record, previousSkillMix, previous?.raw.qualificationMinimums)
+        : (previous?.raw.qualificationMinimums ?? []),
   };
 }
 
@@ -137,6 +299,28 @@ export function ruleDraftValue(
           calendarId: draft.calendarId,
           maximum: maximum.maximum,
         },
+        errors: {},
+      };
+    }
+    case "requiredSkillMix": {
+      const errors: Record<string, string> = {};
+      const qualificationMinimums: WorkforceQualificationMinimum[] =
+        draft.qualificationMinimums.map((row, index) => {
+          const minimum = parseRequiredSkillMixMinimumDraft(row.minimum);
+          if (minimum.status !== "valid")
+            errors[`qualificationMinimums.${String(index)}.minimum`] =
+              messages.ruleSetup.qualificationMinimumInvalid;
+          return {
+            minimum: minimum.status === "valid" ? minimum.minimum : 0,
+            qualifications: {
+              allQualificationIds: row.allQualificationIds,
+              anyQualificationIds: row.anyQualificationIds,
+            },
+          };
+        });
+      if (Object.keys(errors).length > 0) return { value: null, errors };
+      return {
+        value: { ...common, kind, qualificationMinimums },
         errors: {},
       };
     }
@@ -176,6 +360,13 @@ export function ruleRebaseValue(base: EditableRule, draft: RuleDraft): EditableR
       scope: draft.scope,
       calendarId: draft.calendarId,
       maximum: draft.maximum.status === "valid" ? draft.maximum.maximum : base.maximum,
+    };
+  if (base.kind === "requiredSkillMix")
+    return {
+      ...base,
+      active: draft.active,
+      scope: draft.scope,
+      qualificationMinimums: qualificationMinimumsForRebase(base, draft.qualificationMinimums),
     };
   if (base.kind !== "minimumRest") return null;
   return {

@@ -106,7 +106,8 @@ export const messages = {
     diagnostics: "Rule diagnostics",
     diagnosticsHelp: "Native validation findings for this exact draft.",
     maximumInvalid: "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
-    calendarRequired: "Choose an existing reporting-date calendar.",
+    calendarRequired: "Choose a reporting-date calendar.",
+    qualificationMinimumInvalid: "Enter an exact whole number from 0 to 65,535.",
     repairField: "Open field",
     fields: {
       name: "Name",
@@ -118,6 +119,23 @@ export const messages = {
       maximum: "Total assignment cap per reporting-date period",
       maximumHelp:
         "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
+      qualificationMinimums: "Qualification minimums per matching shift",
+      qualificationMinimumHelp:
+        "Each row requires a minimum number of distinct assigned people whose qualifications match the selected all and any expressions.",
+      qualificationMinimum: "Minimum qualifying people",
+      allQualifications: "Require all selected qualifications",
+      anyQualifications: "Require at least one selected qualification",
+      qualificationMinimumNumber: (number: string) => `Qualification minimum ${number}`,
+      qualificationMinimumPageStatus: (rows: string, page: string) =>
+        `Total qualification minimum rows: ${rows} · Page: ${page}.`,
+      addQualificationMinimum: "Add a qualification minimum",
+      removeQualificationMinimum: "Remove this qualification minimum",
+      removeQualificationMinimumNumber: (number: string) =>
+        `Remove qualification minimum ${number}`,
+      requiredSkillMixEmpty:
+        "No qualification minima are configured. This rule currently imposes no qualification requirement; add a minimum to enforce a skill mix.",
+      requiredSkillMixInactiveEmpty:
+        "This inactive rule has no qualification minima. It is retained but imposes no qualification requirement.",
       beforeScope: "Before scope",
       afterScope: "After scope",
       minimumMinutes: "Minimum rest duration",
@@ -191,6 +209,17 @@ export const messages = {
       `Allow at most ${maximum} matching assignments for each person in each reporting-date calendar period. A total cap of zero forbids any matching assignment.`,
     minimumRestSentence: (minutes: string) =>
       `Require at least ${minutes} minutes of rest between the before and after assignments.`,
+    requiredSkillMixSentence: (count: string) =>
+      `For each matching shift, the proposed rule has ${count} independent qualification minimums; each row counts distinct assigned people.`,
+    requiredSkillMixMinimumSentence: (minimum: string, all: string, any: string) => {
+      const expressions = [
+        all === "" ? "" : `all of [${all}]`,
+        any === "" ? "" : `at least one of [${any}]`,
+      ]
+        .filter(Boolean)
+        .join(" and ");
+      return `At least ${minimum} distinct assigned people per matching shift must match ${expressions || "the selected qualification expression"}.`;
+    },
     reviewActions: {
       create: "Create Required rule",
       update: "Update Required rule",

@@ -603,6 +603,15 @@ fn overview_counts_configured_facts_and_catalog_labels_actual_support() -> Resul
         catalog
             .required
             .iter()
+            .find(|row| row.descriptor.id == "official.workforce.rule.required-skill-mix")
+            .ok_or("missing skill-mix descriptor")?
+            .support,
+        RuleSupportV1::Implemented
+    ));
+    assert!(matches!(
+        catalog
+            .required
+            .iter()
             .find(|row| row.descriptor.id == "official.workforce.rule.maximum-hours")
             .ok_or("missing hours descriptor")?
             .support,
