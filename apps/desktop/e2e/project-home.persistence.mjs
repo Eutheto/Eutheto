@@ -5265,6 +5265,56 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId,
           document.activeElement?.id === 'command-search' &&
           heading?.tagName === 'H2' && heading.getClientRects().length > 0;`,
       );
+      const commandCount = await evaluate(
+        sessionId,
+        "return document.querySelectorAll('[role=\"dialog\"] button:not(:disabled)').length;",
+      );
+      assert(commandCount > 1, "The native command dialog must have multiple keyboard choices");
+      for (let index = 0; index < commandCount; index += 1) {
+        await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+          actions: [
+            {
+              type: "key",
+              id: "native-modal-item-tab",
+              actions: [
+                { type: "keyDown", value: "\uE004" },
+                { type: "keyUp", value: "\uE004" },
+              ],
+            },
+          ],
+        });
+        await waitFor(
+          sessionId,
+          `const dialog = document.querySelector('[role="dialog"]');
+          const button = dialog?.querySelectorAll('button:not(:disabled)')[arguments[0]];
+          const field = button?.getBoundingClientRect();
+          const panel = dialog?.getBoundingClientRect();
+          return document.activeElement === button && field.top >= Math.max(0, panel.top) &&
+            field.bottom <= Math.min(window.innerHeight, panel.bottom);`,
+          [index],
+        );
+      }
+      await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+        actions: [
+          {
+            type: "key",
+            id: "native-modal-forward-wrap",
+            actions: [
+              { type: "keyDown", value: "\uE004" },
+              { type: "keyUp", value: "\uE004" },
+            ],
+          },
+        ],
+      });
+      await waitFor(
+        sessionId,
+        `const search = document.querySelector('#command-search');
+        const dialog = search?.closest('[role="dialog"]');
+        const field = search?.getBoundingClientRect();
+        const panel = dialog?.getBoundingClientRect();
+        return document.activeElement === search && field.top >= Math.max(0, panel.top) &&
+          field.bottom <= Math.min(window.innerHeight, panel.bottom);`,
+      );
       await executeFile(xdotoolExecutable, ["key", "--clearmodifiers", "shift+Tab"]);
       await waitFor(
         sessionId,
