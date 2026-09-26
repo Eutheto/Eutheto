@@ -2620,7 +2620,7 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
   await save();
   await activateButton(sessionId, `Recovered team · ${recoveredTeamId}`, listRoot);
   await activateButton(sessionId, "Close record", editorRoot);
-  return { personId, qualificationId, teamId, assignmentTypeId };
+  return { personId, qualificationId, teamId, assignmentTypeId, calendarId };
 }
 
 async function peopleBulkAcceptance(sessionId, scenarioId, support) {
@@ -4291,6 +4291,67 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   const rest = await package8Rule(sessionId, scenarioId, restId);
   assert.equal(rest.record.minimumMinutes, 600);
   assert.equal(rest.record.active, true);
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Maximum assignment count");
+  const maximumId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(maximumId, "A new maximum-count rule needs a real stable UUIDv7");
+  const maximumEditor = '[aria-labelledby="rule-editor-heading"]';
+  await choosePeopleReference(
+    sessionId,
+    "Reporting-date calendar",
+    "Existing daily target",
+    maximumEditor,
+  );
+  const overlongMaximum = `${"0".repeat(32)}1`;
+  await setValue(sessionId, "#rule-maximum", overlongMaximum);
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "return !document.querySelector('#rule-review-heading') && document.activeElement?.id === 'rule-maximum' && document.activeElement.value === arguments[0] && !!document.querySelector('#rule-maximum-error')?.textContent.trim();",
+    [overlongMaximum],
+  );
+  await setValue(sessionId, "#rule-maximum", "2e");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "return !document.querySelector('#rule-review-heading') && document.activeElement?.id === 'rule-maximum' && document.activeElement.value === '2e';",
+  );
+  await setValue(sessionId, "#rule-maximum", "2");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return review?.textContent.includes('Allow at most 2 matching assignments') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+  );
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  let maximum = await package8Rule(sessionId, scenarioId, maximumId);
+  assert.equal(maximum.record.kind, "maximumAssignmentCount");
+  assert.equal(maximum.record.calendarId, expected.calendarId);
+  assert.equal(maximum.record.maximum, 2);
+
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  const maximumRow = await waitFor(
+    sessionId,
+    "return [...document.querySelectorAll('button')].find(button => button.textContent.includes(arguments[0]) && button.closest('[aria-labelledby=\"rule-list-heading\"]')) ?? null;",
+    [maximumId],
+  );
+  await activateElement(sessionId, maximumRow);
+  await waitForElement(sessionId, "#rule-editor-heading");
+  await activateButton(sessionId, "Edit");
+  await setValue(sessionId, "#rule-maximum", "3");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return review?.textContent.includes('Allow at most 3 matching assignments') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+  );
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  maximum = await package8Rule(sessionId, scenarioId, maximumId);
+  assert.equal(maximum.record.calendarId, expected.calendarId);
+  assert.equal(maximum.record.maximum, 3);
 
   await navigate(sessionId, `/project/${scenarioId}/validation`);
   await waitForElement(sessionId, "#validation-heading");
@@ -4340,7 +4401,7 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   await waitForElement(sessionId, "[data-full-validation-stale]");
   await screenshot(sessionId, "package8-stale-validation.png");
   await optimizeHandoffAcceptance(sessionId, scenarioId, false, "stale");
-  return { restId, inactiveId, counts };
+  return { restId, maximumId, inactiveId, counts, calendarId: expected.calendarId };
 }
 
 async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
@@ -4377,14 +4438,6 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
         { firstCategory: "call", secondCategory: "clinic" },
       ]);
   }
-  assert.equal(
-    await evaluate(
-      sessionId,
-      "return [...document.querySelectorAll('#rule-catalog-heading ~ ul button')].length;",
-    ),
-    5,
-    "Only the five implemented Required kinds may offer creation",
-  );
   await selectValue(sessionId, "#rule-class-filter", "preference");
   await waitFor(
     sessionId,
@@ -4494,7 +4547,7 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: all five native Required kinds; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
+    "PASS: six native Required kinds including reporting-date maximum assignment count; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
   );
 }
 
@@ -5389,9 +5442,13 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId,
 
 async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   const rest = await package8Rule(sessionId, scenarioId, expected.restId);
+  const maximum = await package8Rule(sessionId, scenarioId, expected.maximumId);
   const inactive = await package8Rule(sessionId, scenarioId, expected.inactiveId);
   assert.equal(rest.record.minimumMinutes, 600);
   assert.equal(rest.record.active, true);
+  assert.equal(maximum.record.kind, "maximumAssignmentCount");
+  assert.equal(maximum.record.calendarId, expected.calendarId);
+  assert.equal(maximum.record.maximum, 3);
   assert.equal(inactive.record.active, false);
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
@@ -5400,7 +5457,7 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: native ten-hour Required rest review/save/restart; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
+    "PASS: native ten-hour Required rest and reporting-date maximum-count review/save/restart; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
   );
 }
 
@@ -5517,7 +5574,10 @@ async function run() {
       directory,
       importedPeople,
     );
-    const package8Expected = await package8Acceptance(firstSessionId, scenarioId, package7Expected);
+    const package8Expected = await package8Acceptance(firstSessionId, scenarioId, {
+      ...package7Expected,
+      calendarId: people.calendarId,
+    });
     await package8CoverageAcceptance(firstSessionId, scenarioId, package7Expected.shiftInstanceId);
     await package8CancellationAcceptance(firstSessionId, scenarioId, package7Expected.shiftTypeId);
     await package8TemporalAcceptance(firstSessionId, scenarioId);

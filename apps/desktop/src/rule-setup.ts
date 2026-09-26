@@ -98,6 +98,7 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.coverage": "coverage",
   "official.workforce.rule.no-overlap": "noOverlap",
   "official.workforce.rule.minimum-rest": "minimumRest",
+  "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
 };
 const scopeParts = ["main", "minimumRestBefore", "minimumRestAfter"] as const;
 const entityFields = ["people", "teamIds", "assignmentTypeIds", "locationIds"] as const;
@@ -720,7 +721,12 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
             ...editor,
             raw: { ...editor.raw, minimumRest: createRuleDraft(merged.value).minimumRest },
           }
-        : editor;
+        : field === "maximum" && choice === "current"
+          ? {
+              ...editor,
+              raw: { ...editor.raw, maximum: createRuleDraft(merged.value).maximum },
+            }
+          : editor;
     acceptRebase(retained, merged, editor.rebaseContext, local);
   }
 

@@ -253,7 +253,7 @@ fn assess_prepared(
     }
     // Canonical assignment IDs and exact pair decoding establish uniqueness for both values.
     let (evaluations, partition) =
-        evaluate_validated_selection(&input, &selected, &document.settings, budget)
+        evaluate_validated_selection(document, &input, &selected, &document.settings, budget)
             .map_err(|error| operation_error(&error))?;
     if !partition.remaining.is_empty()
         || evaluations.len() != obligations.len()
@@ -352,6 +352,7 @@ pub(super) fn original_obligations(
                 | WorkforceRule::Coverage { .. }
                 | WorkforceRule::NoOverlap { .. }
                 | WorkforceRule::MinimumRest(_)
+                | WorkforceRule::MaximumAssignmentCount { .. }
         ) {
             budget
                 .reserve(1, 2, 48)

@@ -4,7 +4,7 @@
 
 The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
-> **Project status:** [Phases 00–05](docs/roadmap/README.md) have established reproducible tooling, transactional local persistence, domain-pack and solver-neutral Planning IR contracts, the isolated OR-Tools worker, independent verification, and the registered Workforce core. The bounded Workforce slice includes its initial five Required rules, the headless people CSV service, and verified CLI solving and JSON/CSV export. Automated acceptance and the maintainer's manual-testing pass are complete. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md), desktop design system and Workforce setup, remains active pending protected-main integration. Development screens support People/supporting records, people CSV import, Work/shift setup, eligibility/availability, the five Required rule kinds, and explicit full validation. The maintainer accepted the applicable Linux native checkpoint on `e2c15f5`; independent solver-naive and spoken native screen-reader QA remain unverified until beta. Later Workforce rules and result/repair screens, Seating, AI, and signed releases remain roadmap work.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) established the reproducible core, the isolated OR-Tools worker, independent verification, the registered Workforce domain, and headless solving and JSON/CSV export. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) Workforce setup passed its applicable native checkpoint and protected-main checks and integrated through [PR #59](https://github.com/Eutheto/Eutheto/pull/59). Development screens provide People, Work, eligibility, availability, six Required rule kinds, and explicit full validation. Phase 07 has added Maximum Assignment Count, including a reviewed calendar/cap editor and headless compile–solve–verify support; live desktop solves, results and repair remain unavailable. Independent solver-naive and spoken native screen-reader QA are deferred and unverified. [Phase 07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) is active; Seating, AI and signed releases remain roadmap work.
 
 ## Product direction
 
@@ -161,8 +161,9 @@ are reviewed and applied as one undoable batch; they are not assignment-feasibil
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support the five implemented kinds with native
-scope previews and reviewed commands. Explicit full validation checks the saved
+inspector. Required-rule editors support six implemented kinds, including Maximum
+Assignment Count with a reporting-date calendar and nonnegative cap; native scope
+previews and reviewed commands remain required. Explicit full validation checks the saved
 revision, distinguishes stale, failed and cancelled attempts, and navigates supported
 findings to their owning editor fields; it does not prove plan feasibility. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
@@ -290,7 +291,7 @@ remain explicitly unavailable.
 
 Read [`AGENTS.md`](AGENTS.md) before changing the repository. It defines source authority, phase discipline, architecture boundaries, generated-code rules, security and privacy constraints, and verification expectations for human and automated contributors.
 
-Implementation now proceeds through Phase 06. Changes must preserve the
+Implementation now proceeds through Phase 07. Changes must preserve the
 applicable roadmap issue IDs and exit gates and avoid claiming later-phase
 production behavior. Contributions should prefer complete vertical paths over
 mocks, stubs, or speculative infrastructure.

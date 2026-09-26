@@ -15,6 +15,7 @@ pub(crate) mod input;
 pub(crate) mod intervals;
 mod ir_cost;
 mod projection;
+mod reporting;
 mod sharing;
 mod types;
 pub use analysis::analyze_assignments;

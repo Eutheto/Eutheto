@@ -220,6 +220,7 @@ fn check(
         upper: requirement.upper,
         actual: Some(actual),
         interval: None,
+        period: None,
         rest: None,
     };
     summary.predicate(

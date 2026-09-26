@@ -204,9 +204,9 @@ fn validate_shape(
         } else {
             edges = add(edges, count(planned.population.len())?.saturating_sub(1))?;
             match planned.predicate {
-                Predicate::Headcount { .. } | Predicate::Qualification { .. } => {
-                    Capability::CardinalityRange
-                }
+                Predicate::Headcount { .. }
+                | Predicate::Qualification { .. }
+                | Predicate::MaximumAssignmentCount { .. } => Capability::CardinalityRange,
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MinimumRest { .. } => Capability::AtMostOne,

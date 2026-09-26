@@ -105,11 +105,19 @@ export const messages = {
     confirmApply: "Confirm save",
     diagnostics: "Rule diagnostics",
     diagnosticsHelp: "Native validation findings for this exact draft.",
+    maximumInvalid: "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
+    calendarRequired: "Choose an existing reporting-date calendar.",
     repairField: "Open field",
     fields: {
       name: "Name",
       kind: "Rule kind",
       scope: "People and assignments",
+      calendar: "Reporting-date calendar",
+      calendarHelp:
+        "Choose an existing calendar. Each matching assignment is assigned by its reporting date to one period owned by this calendar; assignments without an owning period count in no period.",
+      maximum: "Total assignment cap per reporting-date period",
+      maximumHelp:
+        "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
       beforeScope: "Before scope",
       afterScope: "After scope",
       minimumMinutes: "Minimum rest duration",
@@ -176,6 +184,11 @@ export const messages = {
     inactiveHelp: "This rule is retained but not enforced.",
     activeScopeRequired:
       "An active rule needs a successful preview with at least one person and assignment. Minimum rest needs people, before assignments and after assignments. Correct the scope or explicitly choose Inactive, then preview again.",
+    noCalendars:
+      "No calendars are configured. Create a calendar in Work before authoring this rule.",
+    manageCalendars: "Go to Work to create a calendar",
+    maximumAssignmentCountSentence: (maximum: string) =>
+      `Allow at most ${maximum} matching assignments for each person in each reporting-date calendar period. A total cap of zero forbids any matching assignment.`,
     minimumRestSentence: (minutes: string) =>
       `Require at least ${minutes} minutes of rest between the before and after assignments.`,
     reviewActions: {

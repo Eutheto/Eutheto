@@ -569,6 +569,79 @@ fn coverage_requirement_dates_use_start_date_not_reporting_date() -> Result {
 }
 
 #[test]
+fn maximum_assignment_count_uses_scope_period_cap_and_zero_boundary() -> Result {
+    let mut value = base()?;
+    another_shift(&mut value, 30, "2026-11-01T12:00:00", "2026-11-01T13:00:00");
+    rule(&mut value, 20, "maximumAssignmentCount");
+    value["domain"]["rules"][id(20)]["calendarId"] = json!(id(2));
+    value["domain"]["rules"][id(20)]["maximum"] = json!(1);
+    let result = run(&value, &[(1, 8), (1, 30)])?;
+    assert_eq!(totals(&result, 20)?, (1, 1));
+    let record = evaluation(&result, 20)?;
+    assert_eq!(
+        record.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_reason"
+        )?),
+        Some(&VerificationValue::Text(
+            "maximum_assignment_count".to_owned()
+        ))
+    );
+    assert_eq!(
+        record.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_maximum"
+        )?),
+        Some(&VerificationValue::Integer(1))
+    );
+    assert_eq!(
+        record.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_count"
+        )?),
+        Some(&VerificationValue::Integer(2))
+    );
+    assert!(
+        record
+            .affected_entities
+            .iter()
+            .any(|entity| entity.kind.as_str() == "official.workforce.calendar")
+    );
+    value["domain"]["rules"][id(20)]["scope"]["categories"] = json!(["other"]);
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (0, 0));
+    value["domain"]["rules"][id(20)]["scope"]
+        .as_object_mut()
+        .ok_or("scope")?
+        .remove("categories");
+    value["domain"]["rules"][id(20)]["maximum"] = json!(0);
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 1));
+    assert_eq!(totals(&run(&value, &[])?, 20)?, (0, 0));
+    Ok(())
+}
+
+#[test]
+fn maximum_assignment_count_uses_end_reporting_date_and_skips_unowned_custom_dates() -> Result {
+    let mut value = base()?;
+    value["settings"]["horizon"]["end"] = json!("2026-11-03T00:00:00Z");
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "2026-11-01T23:00:00",
+        "2026-11-02T01:00:00",
+    );
+    value["domain"]["entities"][id(8)]["reportingAttribution"] = json!("endLocalDate");
+    value["domain"]["entities"][id(2)]["period"] = json!({
+        "kind":"custom",
+        "intervals":[{
+            "startsAt":"2026-11-01T00:00:00",
+            "endsAt":"2026-11-01T12:00:00"
+        }]
+    });
+    rule(&mut value, 20, "maximumAssignmentCount");
+    value["domain"]["rules"][id(20)]["calendarId"] = json!(id(2));
+    value["domain"]["rules"][id(20)]["maximum"] = json!(0);
+    let result = run(&value, &[(1, 8)])?;
+    assert_eq!(totals(&result, 20)?, (0, 0));
+    Ok(())
+}
+
+#[test]
 fn overlap_checks_both_scopes_and_half_open_boundaries() -> Result {
     let mut value = base()?;
     rule(&mut value, 20, "noOverlap");

@@ -114,35 +114,30 @@ pub fn reporting_window(
     cancellation: &CancellationToken,
 ) -> Result<Option<CalendarWindow>, TemporalError> {
     let calendar = validated_calendar(document, calendar_id, cancellation)?;
+    reporting_window_for_calendar(document, calendar_id, &calendar, date, cancellation)
+}
+
+/// Finds the window owning a reporting date after the caller has validated and retained
+/// the typed calendar. Assignment-rule operations use this to avoid revalidating the
+/// complete source document for every distinct reporting date.
+pub(crate) fn reporting_window_for_calendar(
+    document: &ScenarioDocument,
+    calendar_id: WorkCalendarId,
+    calendar: &WorkCalendar,
+    date: Date,
+    cancellation: &CancellationToken,
+) -> Result<Option<CalendarWindow>, TemporalError> {
+    check_cancelled(cancellation)?;
     if let CalendarPeriod::Custom { intervals } = &calendar.period {
-        let windows = custom_windows(
+        return custom_reporting_window(
             intervals,
             calendar_id,
             &document.settings,
-            None,
+            date,
             cancellation,
-        )?;
-        let mut owner = None;
-        for window in windows {
-            check_cancelled(cancellation)?;
-            let start = window.interval.starts_at.local.as_datetime();
-            let end = window.interval.ends_at.local.as_datetime();
-            if start.date() <= date
-                && (date < end.date() || (date == end.date() && end.time() != Time::MIN))
-            {
-                if owner.is_some() {
-                    return Err(issue(
-                        TemporalIssueKind::AmbiguousReportingDate,
-                        Some(calendar_id.into()),
-                        Some(date),
-                    ));
-                }
-                owner = Some(window);
-            }
-        }
-        return Ok(owner);
+        );
     }
-    let period = RegularPeriod::from_calendar(&calendar);
+    let period = RegularPeriod::from_calendar(calendar);
     let start = period.start_date(date, calendar_id)?;
     let end = add_days(start, period.days, calendar_id)?;
     let interval = resolve_interval(
@@ -277,6 +272,63 @@ fn push_window(
     }
     windows.push(window);
     Ok(())
+}
+
+fn custom_reporting_window(
+    intervals: &[LocalInterval],
+    calendar_id: WorkCalendarId,
+    settings: &ScenarioSettings,
+    date: Date,
+    cancellation: &CancellationToken,
+) -> Result<Option<CalendarWindow>, TemporalError> {
+    let mut previous: Option<ResolvedInterval> = None;
+    let mut owner = None;
+    for local in intervals {
+        check_cancelled(cancellation)?;
+        let interval = resolve_interval(
+            local.starts_at.as_datetime(),
+            local.ends_at.as_datetime(),
+            settings,
+            calendar_id.into(),
+        )?;
+        if let Some(previous) = previous {
+            if previous.overlaps(interval) {
+                return Err(issue(
+                    TemporalIssueKind::CalendarOverlap,
+                    Some(calendar_id.into()),
+                    None,
+                ));
+            }
+            if previous.starts_at.instant > interval.starts_at.instant {
+                return Err(issue(
+                    TemporalIssueKind::CalendarOrder,
+                    Some(calendar_id.into()),
+                    None,
+                ));
+            }
+        }
+        previous = Some(interval);
+        let window = CalendarWindow {
+            calendar_id,
+            interval,
+        };
+        let start = interval.starts_at.local.as_datetime();
+        let end = interval.ends_at.local.as_datetime();
+        if start.date() <= date
+            && (date < end.date() || (date == end.date() && end.time() != Time::MIN))
+        {
+            if owner.is_some() {
+                return Err(issue(
+                    TemporalIssueKind::AmbiguousReportingDate,
+                    Some(calendar_id.into()),
+                    Some(date),
+                ));
+            }
+            owner = Some(window);
+        }
+    }
+    check_cancelled(cancellation)?;
+    Ok(owner)
 }
 
 fn custom_windows(

@@ -1,5 +1,6 @@
 //! Independent original-domain predicates. This module never consumes candidate or IR decisions.
 mod coverage;
+mod maximum_count;
 mod predicates;
 mod rest;
 
@@ -23,7 +24,8 @@ use eutheto_domain_ir::{
     VerificationValue,
 };
 use eutheto_types::{
-    CancellationToken, EntityId, PersonId, RuleId, ScenarioDocument, ScenarioSettings,
+    CancellationToken, EntityId, PersonId, Rfc3339Timestamp, RuleId, ScenarioDocument,
+    ScenarioSettings,
 };
 use jiff::SignedDuration;
 use std::collections::BTreeMap;
@@ -32,8 +34,8 @@ pub(super) const VIOLATIONS: &str = "official.workforce.fact.violation_count";
 pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
-/// Evaluates Eligibility, Availability, Coverage, `NoOverlap` and `MinimumRest`, plus unconditional
-/// activity/approved-leave facts.
+/// Evaluates Eligibility, Availability, Coverage, `NoOverlap`, `MinimumRest` and
+/// `MaximumAssignmentCount`, plus unconditional activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
 /// but inadmissible selections remain in the population and yield original-domain violations.
@@ -58,8 +60,13 @@ pub fn evaluate_assignment_rules(
     )?;
     let input = AssignmentInput::new(document, &mut budget)?;
     input.validate_selection(selected_pairs, &mut budget)?;
-    let (evaluations, obligations) =
-        evaluate_validated_selection(&input, selected_pairs, &document.settings, &mut budget)?;
+    let (evaluations, obligations) = evaluate_validated_selection(
+        document,
+        &input,
+        selected_pairs,
+        &document.settings,
+        &mut budget,
+    )?;
     Ok(AssignmentRuleEvaluation {
         source_document_hash: input.source_document_hash,
         evaluations,
@@ -69,16 +76,18 @@ pub fn evaluate_assignment_rules(
 
 /// Reuses prepared source data after the caller has checked pair identities, uniqueness and bounds.
 pub(super) fn evaluate_validated_selection(
+    document: &ScenarioDocument,
     input: &AssignmentInput,
     selected_pairs: &[AssignmentPair],
     settings: &ScenarioSettings,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(Vec<RuleEvaluation>, RequiredRulePartition), AssignmentRuleError> {
     let selected = Selected::new(input, selected_pairs, budget)?;
-    evaluate_prepared(input, &selected, settings, budget)
+    evaluate_prepared(document, input, &selected, settings, budget)
 }
 
-/// Rechecks this recorded decision only; never certifies aggregate coverage, overlap, or rest.
+/// Rechecks this recorded decision only; never certifies aggregate coverage, overlap, rest or
+/// maximum-count summaries.
 pub(super) fn evaluate_pair(
     input: &AssignmentInput,
     pair: AssignmentPair,
@@ -139,6 +148,7 @@ pub(super) fn evaluate_pair(
 // The semantic phase takes only validated original data and the same operation budget. Keeping
 // preparation separate also lets private tests target cancellation after decode/indexing completes.
 fn evaluate_prepared(
+    document: &ScenarioDocument,
     input: &AssignmentInput,
     selected: &Selected<'_>,
     settings: &ScenarioSettings,
@@ -186,6 +196,9 @@ fn evaluate_prepared(
             }
             WorkforceRule::MinimumRest(rule) => {
                 rest::evaluate(input, selected, rule, &mut summary, budget)?;
+            }
+            WorkforceRule::MaximumAssignmentCount { .. } => {
+                maximum_count::evaluate(document, input, selected, rule, &mut summary, budget)?;
             }
             _ => {
                 retain_id(&mut obligations.remaining, id, budget)?;
@@ -546,6 +559,7 @@ struct Witness {
     upper: Option<u64>,
     actual: Option<u64>,
     interval: Option<InstantInterval>,
+    period: Option<(Rfc3339Timestamp, Rfc3339Timestamp)>,
     rest: Option<RestWitness>,
 }
 
@@ -575,6 +589,7 @@ impl Witness {
             upper: None,
             actual: None,
             interval: None,
+            period: None,
             rest: None,
         }
     }
@@ -582,6 +597,7 @@ impl Witness {
     fn precedes(&self, other: &Self) -> bool {
         (
             self.person,
+            self.period,
             self.shift,
             self.owner,
             self.reason,
@@ -589,6 +605,7 @@ impl Witness {
             self.other_shift,
         ) < (
             other.person,
+            other.period,
             other.shift,
             other.owner,
             other.reason,
@@ -1249,7 +1266,13 @@ mod tests {
             input.validate_selection(&pairs, &mut budget)?;
             let selected = Selected::new(&input, &pairs, &mut budget)?;
             leave_output(&mut budget, left)?;
-            let result = evaluate_prepared(&input, &selected, &document.settings, &mut budget);
+            let result = evaluate_prepared(
+                &document,
+                &input,
+                &selected,
+                &document.settings,
+                &mut budget,
+            );
             if let Some(limit) = expected {
                 assert_eq!(result, Err(AssignmentRuleError::LimitExceeded(limit)));
             } else {
@@ -1368,7 +1391,13 @@ mod tests {
             let selected = Selected::new(&input, &[], &mut budget)?;
             // The same cumulative operation budget continues through semantic output.
             leave_output(&mut budget, left)?;
-            let result = evaluate_prepared(&input, &selected, &document.settings, &mut budget);
+            let result = evaluate_prepared(
+                &document,
+                &input,
+                &selected,
+                &document.settings,
+                &mut budget,
+            );
             if let Some(limit) = expected {
                 assert_eq!(result, Err(AssignmentRuleError::LimitExceeded(limit)));
             } else {

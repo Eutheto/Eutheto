@@ -5,7 +5,7 @@ mod calendar;
 pub(crate) mod diagnostics;
 mod generation;
 mod review;
-pub(crate) use calendar::potentially_intersects;
+pub(crate) use calendar::{potentially_intersects, reporting_window_for_calendar};
 pub use calendar::{reporting_window, resolve_calendar};
 pub use generation::resolve_shifts;
 pub(crate) use generation::{ResolutionStep, resolve_validated_shifts, weekday};

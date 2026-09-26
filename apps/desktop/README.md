@@ -198,13 +198,15 @@ The shared person–assignment inspector reads applied native blockers and ident
 Required rules not covered by its analysis. It does not establish whole-plan
 feasibility.
 
-**Required rules** exposes the five implemented kinds: eligibility, availability,
-coverage, no overlap and minimum rest. Commands retain stable identities across
-draft edits, require native before/after review, and show native affected counts.
-Independent bounded people/assignment scope previews use the captured revision.
-An active rule with an empty evaluated scope cannot be applied; explicitly inactive
-rules remain supported. Preferences and later rule kinds are not presented as
-implemented policies.
+**Required rules** exposes six implemented kinds: eligibility, availability,
+coverage, no overlap, minimum rest and Maximum Assignment Count. The count cap
+applies to matching person–shift assignments by the shift's reporting date in a
+selected calendar period; zero forbids any matching assignment. Commands retain
+stable identities across draft edits, require native before/after review, and show
+native affected counts. Independent bounded people/assignment scope previews use
+the captured revision. An active rule with an empty evaluated scope cannot be
+applied; explicitly inactive rules remain supported. Preferences and later rule
+kinds are not presented as implemented policies.
 
 **Validation** separates saved-input fast feedback from an explicit full check of
 the saved revision. Completed, stale, failed and cancelled outcomes remain distinct;
