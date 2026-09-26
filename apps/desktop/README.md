@@ -394,10 +394,11 @@ passed.
 An [agent-operated native walkthrough](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#assisted-native-walkthrough--24-september-2026)
 records the checks actually exercised. The 25 September native runner on source
 `d1470e0` covered the corrected invalid-time field focus and seven keyboard
-route-to-heading transitions. Approval of `cbfb6c7` does not accept
-this candidate or establish that the manual checkpoint passed. Unfamiliar-user
-research and spoken native screen-reader QA remain deferred to beta, not passed.
-Explicit user review and checkpoint acceptance are still required before Phase 07.
+route-to-heading transitions. That `cbfb6c7` approval did not record manual
+test results or accept the later candidate; the maintainer's subsequent
+checkpoint report and conditional acceptance for `e2c15f5` are below.
+Unfamiliar-user research and spoken native screen-reader QA remain deferred to
+beta, not passed.
 
 The [26 September native zoom/focus follow-up](../../docs/roadmap/06-desktop-design-system-and-workforce-setup.md#native-zoom-and-focus-follow-up--26-september-2026)
 records real 200%/400% Linux WebKit magnification, selected keyboard route and
@@ -409,6 +410,40 @@ The first manual pass found setup overwhelming; the second found **Individual
 Person Edit/Update** overwhelming. Its optional groups and the plain-language
 labels across setup require fresh unprompted review at beta before claiming
 unfamiliar-user acceptance; automation cannot measure comprehension.
+
+**Maintainer-reported native checkpoint — 25 September 2026 (local).** The
+maintainer reports running the applicable portions of all ten steps below on
+local source `e2c15f5738bf0bf7bca3a08b75a2525c8930d68c` in the native
+Linux Tauri/WebKitGTK application, with no failures reported. These are
+maintainer observations, not additional agent-runner assertions:
+
+1. **Pass** — offline project creation, four-day New York horizon and DST/locale settings.
+2. **Pass** — People and Work edits, disclosures, draft/review/focus and repeated-hour shift.
+3. **Pass** — eligibility matrix, equivalent table, keyboard selection and reviewed apply.
+4. **Pass** — availability calendar/list, weekly restriction, approved time off and inspector.
+5. **Pass** — scoped ten-hour Required rest rule and rejected empty scope.
+6. **Pass** — full validation, finding navigation, cancellation, stale result and command-search typing with focus retained **after native validation was admitted**.
+7. **Pass** — truthful Optimize status before validation, after validation and after an edit.
+8. **Pass** — native CSV review, identity decisions, rejected rows, apply and one-step undo.
+9. **Pass** — project export/import review, collision and stale cases, full-backup restore, and **safely observed safety-backup failure and recovery** in a disposable profile.
+10. **Pass** — applicable route/editor keyboard and focus checks, Linux shortcuts, states, reduced motion, and light/dark inspection on every setup route at both 200% and 400% **native** zoom.
+
+The maintainer used this host. Metadata collected **after** the report: Fedora
+Linux 44 Workstation x86_64, shell locale `en_US.UTF-8`, GNOME automatic
+display-scaling setting (`0`) and text scale `1.0`. The Nix development
+`webkit2gtk-4.1` pkg-config version is `2.52.4`; the installed Fedora
+`webkit2gtk4.1` package is `2.54.0`. Neither package query identifies the
+exact library loaded during the maintainer's test. The tested display-scale
+multiplier and executable digest were not supplied; do not substitute the
+earlier automated runner's executable digest. The maintainer explicitly did
+**not** run an independent solver-naive participant or a spoken native screen
+reader. Their comprehension and spoken names/announcements within steps 2,
+3, 5, 6, 8–10 remain **unverified** under the beta deferral, not Pass. This
+report covers one native Linux host, not other platforms. The maintainer
+explicitly accepted this Phase 06 checkpoint for `e2c15f5` and authorized
+Phase 07 **only after** the remaining Phase 06 hosted, verification and
+protected-main integration gates pass. This neither asserts Phase 06 exit now
+nor authorizes a push, PR, merge, signing or public publication.
 
 Run the actual `just desktop-dev` Tauri application on a supported platform
 with a disposable local data profile and test files. The Vite-only page has
