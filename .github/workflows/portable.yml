@@ -215,9 +215,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    # ARM64's full checks and isolated core/CLI tests consumed 72 minutes in PR50,
-    # before release compilation and native WebDriver acceptance could finish.
-    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04-arm' && 90 || 75 }}
+    # The full Phase06 Linux checks and WebDriver acceptance reached the final
+    # launch smoke at the former 75/90-minute limits in PR58. Keep a bounded
+    # margin for the complete native matrix; other targets retain 75 minutes.
+    timeout-minutes: ${{ (matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm') && 120 || 75 }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
