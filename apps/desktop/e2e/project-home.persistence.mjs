@@ -1572,10 +1572,15 @@ async function settingsAcceptance(sessionId, directory) {
   await waitForOutcome(sessionId, "committed");
   await selectValue(sessionId, "#settings-units", "metric");
   await selectValue(sessionId, "#settings-theme", "dark");
+  await activate(sessionId, "#settings-motion");
   await submitForm(sessionId, "#settings-theme");
   await waitFor(
     sessionId,
-    "return document.documentElement.dataset.theme === 'dark' && document.querySelector('main[data-operation-active=\"false\"]') !== null;",
+    `return document.documentElement.dataset.theme === 'dark' &&
+      document.documentElement.dataset.reducedMotion === 'true' &&
+      getComputedStyle(document.querySelector('button')).transitionDuration
+        .split(',').every(duration => Number.parseFloat(duration) <= 0.001) &&
+      document.querySelector('main[data-operation-active="false"]') !== null;`,
   );
   assert.equal(
     await evaluate(sessionId, "return document.querySelector('#settings-units').value;"),
@@ -1593,6 +1598,7 @@ async function settingsAcceptance(sessionId, directory) {
   await waitForOutcome(sessionId, "committed");
   const saved = await settingsSnapshot(sessionId);
   assert.equal(saved.settings.appearance.value.theme, "dark");
+  assert.equal(saved.settings.appearance.value.reducedMotion, true);
   assert.equal(saved.settings.locale.value, "fr-CA");
   assert.equal(saved.settings.units.value, "metric");
   const settingsPath = join(directory, "nonsecret-settings.json");
@@ -1609,6 +1615,7 @@ async function settingsAcceptance(sessionId, directory) {
   await activateButton(sessionId, "Apply reviewed settings changes");
   await waitForOutcome(sessionId, "settings import committed");
   assert.equal((await settingsSnapshot(sessionId)).settings.appearance.value.theme, "dark");
+  assert.equal((await settingsSnapshot(sessionId)).settings.appearance.value.reducedMotion, true);
   await screenshot(sessionId, "settings.png");
 }
 
@@ -1964,6 +1971,32 @@ async function deletionAndHistoryAcceptance(sessionId, scenarioId, copyId, windo
     ),
     true,
     "A changed revision must invalidate the earlier deletion confirmation",
+  );
+  await evaluate(
+    sessionId,
+    `const dialog = document.querySelector('[role="dialog"]');
+    const first = dialog.querySelector('button:not(:disabled)');
+    first.focus();
+    return document.activeElement === first;`,
+  );
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+    actions: [
+      {
+        type: "key",
+        id: "disabled-delete-reverse-tab",
+        actions: [
+          { type: "keyDown", value: "\uE008" },
+          { type: "keyDown", value: "\uE004" },
+          { type: "keyUp", value: "\uE004" },
+          { type: "keyUp", value: "\uE008" },
+        ],
+      },
+    ],
+  });
+  await waitFor(
+    sessionId,
+    `const buttons = [...document.querySelectorAll('[role="dialog"] button:not(:disabled)')];
+    return buttons.length > 1 && document.activeElement === buttons.at(-1);`,
   );
   await activateButton(sessionId, "Review current saved project", '[role="dialog"]');
   await activateButton(sessionId, "Keep project", '[role="dialog"]');
@@ -4836,7 +4869,7 @@ async function package8TemporalAcceptance(sessionId, originalScenarioId) {
   );
 }
 
-async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId) {
+async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId, windowTitle) {
   await navigate(sessionId, "/projects");
   await navigate(sessionId, "/projects/new");
   await setValue(sessionId, "#create-title", "Native four-day recurring duty");
@@ -5008,41 +5041,7 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
     'return !document.querySelector(\'[aria-labelledby="work-window-heading"] > p[role="status"]\');',
   );
   await idle(sessionId);
-  const originalRect = await command(
-    "GET",
-    `/session/${encodeURIComponent(sessionId)}/window/rect`,
-  );
-  const enlargedRect = await command(
-    "POST",
-    `/session/${encodeURIComponent(sessionId)}/window/rect`,
-    {
-      width: 1360,
-      height: 1000,
-    },
-  );
-  assert(enlargedRect.width >= 1280, "400% reflow needs at least 320 CSS pixels");
-  for (const factor of [2, 4]) {
-    const width = await evaluate(
-      sessionId,
-      `document.documentElement.style.zoom = arguments[0];
-      return {
-        viewport: document.documentElement.clientWidth,
-        content: document.documentElement.scrollWidth
-      };`,
-      [String(factor)],
-    );
-    await screenshot(sessionId, `package8-work-css-zoom-${factor}x.png`);
-    assert(
-      width.content <= width.viewport + 1,
-      `Work view must not require page-wide horizontal scrolling at CSS zoom ${factor}x: ${JSON.stringify(width)}`,
-    );
-  }
-  await evaluate(sessionId, "document.documentElement.style.zoom = '';");
-  await command("POST", `/session/${encodeURIComponent(sessionId)}/window/rect`, {
-    width: originalRect.width,
-    height: originalRect.height,
-  });
-  for (const [route, heading] of [
+  const setupRoutes = [
     ["people", "people-heading"],
     ["work", "work-heading"],
     ["rules", "rules-heading"],
@@ -5050,7 +5049,24 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
     ["eligibility", "eligibility-setup-heading"],
     ["availability", "availability-heading"],
     ["setup", "setup-heading"],
-  ]) {
+  ];
+  async function loadedRoute(route) {
+    const selector = {
+      work: 'section[aria-labelledby="work-heading"] details.state-panel.setup-more',
+      people: 'section[aria-labelledby="people-list-heading"] ul > li',
+      rules: 'section[aria-labelledby="rule-list-heading"] nav.action-row',
+      validation: 'section[aria-labelledby="validation-heading"] select[id$="-group"]',
+      eligibility: '[data-matrix-scroll] input[type="checkbox"]',
+      availability: "#availability-person:not(:disabled)",
+      setup: "#setup-calendar",
+    }[route];
+    assert(selector, `Unknown setup route ${route}`);
+    await waitForElement(sessionId, selector);
+    await idle(sessionId);
+  }
+  async function keyboardRoute(route, heading) {
+    const href = `#/project/${scenarioId}/${route}`;
+    if ((await evaluate(sessionId, "return window.location.hash;")) === href) return;
     if (route === "eligibility" || route === "availability") {
       const more = 'nav[aria-label="Saved setup sections"] details.project-nav-more';
       if (
@@ -5074,9 +5090,8 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
         await waitFor(sessionId, "return document.querySelector(arguments[0])?.open;", [more]);
       }
     }
-    const link = `nav[aria-label="Saved setup sections"] a[href="#/project/${scenarioId}/${route}"]`;
-    let arrived = false;
-    for (let attempt = 0; attempt < 2 && !arrived; attempt += 1) {
+    const link = `nav[aria-label="Saved setup sections"] a[href="${href}"]`;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       await evaluate(sessionId, "document.querySelector(arguments[0]).focus();", [link]);
       await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
         actions: [
@@ -5092,13 +5107,10 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
       });
       const outcome = await waitFor(
         sessionId,
-        "return document.activeElement?.id === arguments[0] ? 'arrived' : document.querySelector('[role=\"dialog\"]')?.textContent ?? null;",
-        [heading],
+        "return window.location.hash === arguments[1] && document.activeElement?.id === arguments[0] ? 'arrived' : document.querySelector('[role=\"dialog\"]')?.textContent ?? null;",
+        [heading, href],
       );
-      if (outcome === "arrived") {
-        arrived = true;
-        break;
-      }
+      if (outcome === "arrived") return;
       assert(
         !outcome.includes("Your unsubmitted changes"),
         `Keyboard navigation must not discard a dirty Work draft: ${outcome}`,
@@ -5109,13 +5121,205 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId)
         "Only a native operation may defer a clean route transition",
       );
       await activateButton(sessionId, "Stay here", '[role="dialog"]');
+      await waitFor(sessionId, "return !document.querySelector('[role=\"dialog\"]');");
+      const previous = await evaluate(sessionId, "return window.location.hash.split('/').at(-1);");
+      await loadedRoute(previous);
+    }
+    assert.fail(`Keyboard navigation to ${route} did not settle after native work`);
+  }
+  async function tabRoute(heading) {
+    assert.equal(
+      await evaluate(sessionId, "return document.activeElement?.id;"),
+      heading,
+      "A loaded route must retain its heading focus before keyboard traversal",
+    );
+    let previousFocus = await evaluate(sessionId, "return document.activeElement;");
+    for (const reverse of [false, true]) {
+      await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+        actions: [
+          {
+            type: "key",
+            id: "native-route-tab",
+            actions: reverse
+              ? [
+                  { type: "keyDown", value: "\uE008" },
+                  { type: "keyDown", value: "\uE004" },
+                  { type: "keyUp", value: "\uE004" },
+                  { type: "keyUp", value: "\uE008" },
+                ]
+              : [
+                  { type: "keyDown", value: "\uE004" },
+                  { type: "keyUp", value: "\uE004" },
+                ],
+          },
+        ],
+      });
+      const focus = await evaluate(
+        sessionId,
+        `const node = document.activeElement;
+        const rect = node.getBoundingClientRect();
+        return {
+          element: node,
+          tag: node.tagName,
+          changed: node !== arguments[0],
+          tabbable: node.tabIndex >= 0,
+          visible: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
+          outline: parseFloat(getComputedStyle(node).outlineWidth)
+        };`,
+        [previousFocus],
+      );
+      assert(focus.changed, `Tab must move focus to another control: ${JSON.stringify(focus)}`);
+      assert(focus.tabbable, `Tab must reach a tabbable control: ${JSON.stringify(focus)}`);
+      assert(
+        focus.visible,
+        `Focused control must remain visible at native zoom: ${JSON.stringify(focus)}`,
+      );
+      assert(
+        focus.outline > 0,
+        `Focused control needs a visible outline: ${JSON.stringify(focus)}`,
+      );
+      previousFocus = focus.element;
+    }
+  }
+  const originalRect = await command(
+    "GET",
+    `/session/${encodeURIComponent(sessionId)}/window/rect`,
+  );
+  const enlargedRect = await command(
+    "POST",
+    `/session/${encodeURIComponent(sessionId)}/window/rect`,
+    {
+      width: 1360,
+      height: 1000,
+    },
+  );
+  assert(enlargedRect.width >= 1280, "400% native zoom needs at least 320 CSS pixels");
+  const nativeWindow = await executeFile(xdotoolExecutable, [
+    "search",
+    "--onlyvisible",
+    "--name",
+    windowTitle,
+  ]);
+  await executeFile(xdotoolExecutable, [
+    "windowfocus",
+    "--sync",
+    nativeWindow.stdout.trim().split(/\s+/u)[0],
+  ]);
+  const initialZoom = await evaluate(
+    sessionId,
+    "return { ratio: window.devicePixelRatio, width: window.innerWidth };",
+  );
+  let ratio = initialZoom.ratio;
+  let zoomSteps = 0;
+  for (const factor of [2, 4]) {
+    while (ratio < initialZoom.ratio * (factor - 0.01)) {
+      assert(zoomSteps++ < 25, `Native zoom did not reach ${factor}x`);
+      await executeFile(xdotoolExecutable, ["key", "--clearmodifiers", "ctrl+equal"]);
+      ratio = await waitFor(
+        sessionId,
+        "return window.devicePixelRatio > arguments[0] ? window.devicePixelRatio : false;",
+        [ratio + initialZoom.ratio * 0.1],
+      );
+    }
+    assert(ratio <= initialZoom.ratio * (factor + 0.05), `Native zoom passed ${factor}x`);
+    for (const [route, heading] of setupRoutes) {
+      await keyboardRoute(route, heading);
+      await loadedRoute(route);
+      await tabRoute(heading);
+      if (route === "work") {
+        await activateButton(sessionId, "Shifts starting in these dates");
+        await waitFor(
+          sessionId,
+          "return document.querySelector('[aria-labelledby=\"work-window-heading\"] table tbody tr')?.textContent.includes('Sunday repeated-hour duty');",
+        );
+      } else if (route === "availability") {
+        await package7SelectPerson(sessionId, "Native Alice");
+        await waitForElement(sessionId, '[aria-labelledby="availability-records-heading"] ul');
+      }
+      const width = await evaluate(
+        sessionId,
+        `return {
+          viewport: document.documentElement.clientWidth,
+          content: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth
+        };`,
+      );
+      assert(
+        width.content <= width.viewport + 1,
+        `${route} requires page-wide horizontal scrolling at native ${factor}x zoom: ${JSON.stringify(width)}`,
+      );
+      assert(
+        width.innerWidth <= initialZoom.width / (factor - 0.1),
+        `Native zoom did not shrink the actual WebKit viewport: ${JSON.stringify(width)}`,
+      );
+      await screenshot(sessionId, `package8-${route}-native-zoom-${factor}x.png`);
+    }
+    if (factor === 4) {
+      const returnFocus = await evaluate(sessionId, "return document.activeElement;");
+      await executeFile(xdotoolExecutable, ["key", "--clearmodifiers", "ctrl+k"]);
       await waitFor(
         sessionId,
-        'return !document.querySelector(\'[role="dialog"]\') && !document.querySelector(\'[aria-labelledby="work-window-heading"] > p[role="status"]\');',
+        `const dialog = document.querySelector('[role="dialog"]');
+        const heading = document.getElementById(dialog?.getAttribute('aria-labelledby') ?? '');
+        return dialog?.contains(document.activeElement) &&
+          document.activeElement?.id === 'command-search' &&
+          heading?.tagName === 'H2' && heading.getClientRects().length > 0;`,
       );
-      await idle(sessionId);
+      await executeFile(xdotoolExecutable, ["key", "--clearmodifiers", "shift+Tab"]);
+      await waitFor(
+        sessionId,
+        "const dialog = document.querySelector('[role=\"dialog\"]'); return dialog?.contains(document.activeElement) && document.activeElement === [...dialog.querySelectorAll('button')].at(-1);",
+      );
+      await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+        actions: [
+          {
+            type: "key",
+            id: "native-modal-tab",
+            actions: [
+              { type: "keyDown", value: "\uE004" },
+              { type: "keyUp", value: "\uE004" },
+            ],
+          },
+        ],
+      });
+      await waitFor(
+        sessionId,
+        `const search = document.querySelector('#command-search');
+        const dialog = search?.closest('[role="dialog"]');
+        const field = search?.getBoundingClientRect();
+        const panel = dialog?.getBoundingClientRect();
+        return document.activeElement === search && field.top >= Math.max(0, panel.top) &&
+          field.bottom <= Math.min(window.innerHeight, panel.bottom);`,
+      );
+      await screenshot(sessionId, "package8-native-modal-zoom-4x.png");
+      await executeFile(xdotoolExecutable, ["key", "--clearmodifiers", "Escape"]);
+      await waitFor(
+        sessionId,
+        "return !document.querySelector('[role=\"dialog\"]') && document.activeElement === arguments[0];",
+        [returnFocus],
+      );
     }
-    assert(arrived, `Keyboard navigation to ${route} did not settle after native work`);
+  }
+  while (ratio > initialZoom.ratio * 1.05) {
+    assert(zoomSteps-- > 0, "Native zoom did not restore the starting scale");
+    await executeFile(xdotoolExecutable, ["key", "--clearmodifiers", "ctrl+minus"]);
+    ratio = await waitFor(
+      sessionId,
+      "return window.devicePixelRatio < arguments[0] ? window.devicePixelRatio : false;",
+      [ratio - initialZoom.ratio * 0.1],
+    );
+  }
+  assert(Math.abs(ratio - initialZoom.ratio) < 0.05, "Native zoom did not restore 100%");
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/window/rect`, {
+    width: originalRect.width,
+    height: originalRect.height,
+  });
+  console.log(
+    "PASS: native 200%/400% WebKit zoom and seven loaded keyboard setup-route reflow checks",
+  );
+  for (const [route, heading] of setupRoutes) {
+    await keyboardRoute(route, heading);
+    await loadedRoute(route);
   }
   await navigate(sessionId, "/projects");
   await navigate(sessionId, `/projects?project=${scenarioId}`);
@@ -5267,7 +5471,11 @@ async function run() {
     await package8CoverageAcceptance(firstSessionId, scenarioId, package7Expected.shiftInstanceId);
     await package8CancellationAcceptance(firstSessionId, scenarioId, package7Expected.shiftTypeId);
     await package8TemporalAcceptance(firstSessionId, scenarioId);
-    await package8FirstTimeDstWorkAcceptance(firstSessionId, scenarioId);
+    await package8FirstTimeDstWorkAcceptance(
+      firstSessionId,
+      scenarioId,
+      configuration.app.windows[0].title,
+    );
     await navigate(firstSessionId, "/about/licenses");
     await waitForElement(firstSessionId, "#about-inventory-title");
     await waitFor(

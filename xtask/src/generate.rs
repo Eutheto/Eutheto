@@ -5728,7 +5728,8 @@ mod tests {
             serde_json::json!([
                 "allow-phase-01-api",
                 "core:event:allow-listen",
-                "core:event:allow-unlisten"
+                "core:event:allow-unlisten",
+                "core:webview:allow-set-webview-zoom"
             ])
         );
         Ok(())
