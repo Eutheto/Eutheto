@@ -2,18 +2,51 @@ import type { WorkforceRule, WorkforceScope } from "./api/generated-domain-pack-
 import type { DurationDraft } from "./components/planner/field-contracts";
 import { parseDurationDraft } from "./components/planner/duration-field";
 import { sameField } from "./entity-draft";
+import { messages } from "./messages";
 
 export type EditableRule = Extract<
   WorkforceRule,
-  { readonly kind: "eligibility" | "availability" | "coverage" | "noOverlap" | "minimumRest" }
+  {
+    readonly kind:
+      | "eligibility"
+      | "availability"
+      | "coverage"
+      | "noOverlap"
+      | "minimumRest"
+      | "maximumAssignmentCount";
+  }
 >;
 export type EditableRuleKind = EditableRule["kind"];
+
+export type MaximumAssignmentCountDraft = {
+  readonly raw: string;
+} & (
+  | { readonly status: "empty" }
+  | { readonly status: "invalid"; readonly error: "syntax" | "range" }
+  | { readonly status: "valid"; readonly maximum: number }
+);
+
+const maximumAssignmentCountLimit = 4_294_967_295n;
+
+/** Keep the editable text separate from its native u32 meaning. */
+export function parseMaximumAssignmentCountDraft(raw: string): MaximumAssignmentCountDraft {
+  if (raw === "") return { raw, status: "empty" };
+  if (raw.length > 32) return { raw, status: "invalid", error: "range" };
+  if (!/^[0-9]+$/u.test(raw)) return { raw, status: "invalid", error: "syntax" };
+  const normalized = raw.replace(/^0+/u, "") || "0";
+  if (normalized.length > 10) return { raw, status: "invalid", error: "range" };
+  const maximum = BigInt(normalized);
+  if (maximum > maximumAssignmentCountLimit) return { raw, status: "invalid", error: "range" };
+  return { raw, status: "valid", maximum: Number(maximum) };
+}
 
 export interface RuleDraft {
   readonly active: boolean;
   readonly scope: WorkforceScope;
   readonly beforeScope: WorkforceScope;
   readonly afterScope: WorkforceScope;
+  readonly calendarId: string;
+  readonly maximum: MaximumAssignmentCountDraft;
   readonly minimumRest: DurationDraft;
   readonly compatibleCategoryPairs: readonly {
     readonly firstCategory: string;
@@ -27,7 +60,8 @@ export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
     rule.kind === "availability" ||
     rule.kind === "coverage" ||
     rule.kind === "noOverlap" ||
-    rule.kind === "minimumRest"
+    rule.kind === "minimumRest" ||
+    rule.kind === "maximumAssignmentCount"
   );
 }
 
@@ -46,9 +80,22 @@ export function createRuleDraft(
     previous?.value.kind === "minimumRest" &&
     (previous.raw.minimumRest.status !== "valid" ||
       sameField(record.minimumMinutes, previous.value.minimumMinutes));
+  const keepMaximum =
+    record?.kind === "maximumAssignmentCount" &&
+    previous?.value.kind === "maximumAssignmentCount" &&
+    (previous.raw.maximum.status !== "valid" || sameField(record.maximum, previous.value.maximum));
   return {
     active: record?.active ?? true,
     scope: record?.scope ?? { people: { kind: "all" } },
+    calendarId:
+      record?.kind === "maximumAssignmentCount"
+        ? record.calendarId
+        : (previous?.raw.calendarId ?? ""),
+    maximum: keepMaximum
+      ? previous.raw.maximum
+      : record?.kind === "maximumAssignmentCount"
+        ? parseMaximumAssignmentCountDraft(String(record.maximum))
+        : (previous?.raw.maximum ?? parseMaximumAssignmentCountDraft("")),
     beforeScope:
       record?.kind === "minimumRest"
         ? record.beforeScope
@@ -77,6 +124,22 @@ export function ruleDraftValue(
 ): { readonly value: EditableRule | null; readonly errors: Readonly<Record<string, string>> } {
   const common = { id, active: draft.active, strength: "required" as const, scope: draft.scope };
   switch (kind) {
+    case "maximumAssignmentCount": {
+      const maximum = parseMaximumAssignmentCountDraft(draft.maximum.raw);
+      const errors: Record<string, string> = {};
+      if (draft.calendarId === "") errors.calendarId = messages.ruleSetup.calendarRequired;
+      if (maximum.status !== "valid") errors.maximum = messages.ruleSetup.maximumInvalid;
+      if (maximum.status !== "valid" || draft.calendarId === "") return { value: null, errors };
+      return {
+        value: {
+          ...common,
+          kind,
+          calendarId: draft.calendarId,
+          maximum: maximum.maximum,
+        },
+        errors: {},
+      };
+    }
     case "minimumRest": {
       if (draft.minimumRest.status !== "valid") {
         return { value: null, errors: { minimumMinutes: "Enter an exact whole-minute duration." } };
@@ -106,6 +169,14 @@ export function ruleDraftValue(
 export function ruleRebaseValue(base: EditableRule, draft: RuleDraft): EditableRule | null {
   const parsed = ruleDraftValue(base.id, base.kind, draft).value;
   if (parsed !== null) return parsed;
+  if (base.kind === "maximumAssignmentCount")
+    return {
+      ...base,
+      active: draft.active,
+      scope: draft.scope,
+      calendarId: draft.calendarId,
+      maximum: draft.maximum.status === "valid" ? draft.maximum.maximum : base.maximum,
+    };
   if (base.kind !== "minimumRest") return null;
   return {
     ...base,

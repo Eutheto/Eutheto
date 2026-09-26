@@ -5,6 +5,7 @@ use super::{
     budget::{OperationBudget, add, count, within},
     identity::{IdentityKind, PlanningIdentities},
     input::AssignmentInput,
+    reporting::ReportingPeriod,
 };
 use crate::{ids::ShiftId, model::AssignmentPair};
 use eutheto_domain_api::CompileContext;
@@ -25,7 +26,7 @@ pub(super) const BOOL_ID: &str =
 pub(super) const CONSTRAINT_ID: &str = "official.workforce.constraint.0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const PROVENANCE_ID: &str = "official.workforce.provenance.0000000000000000000000000000000000000000000000000000000000000000";
 
-/// Compile only the unregistered five-family mathematical contribution.
+/// Compile only the unregistered six-family mathematical contribution.
 ///
 /// # Errors
 /// Returns structural, temporal, cancellation, finite-work and bounded-output failures atomically.
@@ -223,6 +224,10 @@ fn constraint_body(
             upper,
         )
         .map_err(|_| invalid()),
+        Predicate::MaximumAssignmentCount { maximum, .. } => {
+            let upper = u64::from(maximum).min(count(literals.len())?);
+            Constraint::cardinality(literals, 0, upper).map_err(|_| invalid())
+        }
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
         | Predicate::MinimumRest { .. } => Ok(Constraint::at_most_one(literals)),
@@ -269,6 +274,23 @@ fn derive_predicate(
                 plan.definitions[definition].owner,
                 shift,
                 &plan.definitions[definition].minima[minimum].identity,
+            ),
+            budget,
+        ),
+        Predicate::MaximumAssignmentCount {
+            person,
+            calendar_id,
+            period,
+            maximum,
+        } => identities.derive(
+            kind,
+            &(
+                "maximum_assignment_count",
+                planned.rule,
+                person,
+                calendar_id,
+                period,
+                maximum,
             ),
             budget,
         ),
@@ -385,6 +407,8 @@ pub(super) fn rule_fact(rule: RuleId, kind: &str, id: ProvenanceId) -> Provenanc
     }
 }
 
+// Keep each predicate's source identities and parameters adjacent in one auditable match.
+#[allow(clippy::too_many_lines)]
 fn constraint_fact(
     planned: &PlannedConstraint,
     plan: &Plan,
@@ -450,6 +474,15 @@ fn constraint_fact(
                 "official.workforce.coverage_qualification_minimum",
             )
         }
+        Predicate::MaximumAssignmentCount {
+            person,
+            period,
+            maximum,
+            ..
+        } => (
+            maximum_count_payload(person, period, maximum, &mut parameters, budget)?,
+            "official.workforce.maximum_assignment_count",
+        ),
         Predicate::Overlap {
             person,
             first,
@@ -487,6 +520,32 @@ fn constraint_fact(
         parameters,
         parent: Some(parent),
     })
+}
+
+fn maximum_count_payload(
+    person: PersonId,
+    period: ReportingPeriod,
+    maximum: u32,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    budget.reserve(0, 3, 192)?;
+    parameters.insert(
+        "maximum".to_owned(),
+        ProvenanceParameter::Integer(i64::from(maximum)),
+    );
+    parameters.insert(
+        "period_start".to_owned(),
+        ProvenanceParameter::Text(period.start.to_string()),
+    );
+    parameters.insert(
+        "period_end".to_owned(),
+        ProvenanceParameter::Text(period.end.to_string()),
+    );
+    Ok(vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        entity("calendar", period.calendar_id.as_entity_id())?,
+    ])
 }
 
 fn minimum_rest_payload(
@@ -637,6 +696,13 @@ pub(super) fn preflight(
                     min: u64::from(plan.definitions[definition].minima[minimum].minimum),
                     max: upper,
                 },
+                Predicate::MaximumAssignmentCount { maximum, .. } => {
+                    MeasuredBody::CardinalityRange {
+                        literals,
+                        min: 0,
+                        max: u64::from(maximum).min(literal_count),
+                    }
+                }
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MinimumRest { .. } => MeasuredBody::AtMostOne { literals },

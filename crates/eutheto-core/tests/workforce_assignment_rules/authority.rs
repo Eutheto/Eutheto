@@ -745,10 +745,6 @@ fn editable_reserved_data_never_silently_becomes_supported_execution() -> TestRe
     let baseline = small_document()?;
     for (collection, record) in [
         (
-            "rules",
-            json!({"kind":"maximumAssignmentCount","id":id(40),"active":true,"strength":"required","scope":{"people":{"kind":"all"}},"calendarId":id(2),"maximum":2}),
-        ),
-        (
             "preferences",
             json!({"kind":"assignmentType","id":id(40),"active":true,"scope":{"people":{"kind":"all"}},"priority":"normal","weight":1,"direction":"prefer","assignmentTypeIds":[id(4)]}),
         ),

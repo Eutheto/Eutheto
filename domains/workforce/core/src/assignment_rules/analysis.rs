@@ -4,6 +4,9 @@ pub(crate) mod support;
 #[path = "compiler_rest.rs"]
 mod rest;
 
+#[path = "compiler_count.rs"]
+mod count;
+
 #[path = "compiler_overlap.rs"]
 mod overlap;
 
@@ -13,9 +16,10 @@ use super::{
     budget::{MAX_INSPECTED_PAIRS, OperationBudget, add, count, within},
     input::{AssignmentInput, ShiftDefinition, ShiftMetadata},
     intervals::availability_intervals,
+    reporting::ReportingPeriod,
 };
 use crate::{
-    ids::ShiftId,
+    ids::{ShiftId, WorkCalendarId},
     model::{
         AssignmentLock, AssignmentPair, Availability, AvailabilityKind, CategoryPair, Coverage,
         LockState, Person, Scope, WorkforceEntity, WorkforceRule,
@@ -64,6 +68,12 @@ pub(super) enum Predicate {
         minimum: usize,
         shift: ShiftId,
         upper: u64,
+    },
+    MaximumAssignmentCount {
+        person: PersonId,
+        calendar_id: WorkCalendarId,
+        period: ReportingPeriod,
+        maximum: u32,
     },
     Overlap {
         person: PersonId,
@@ -176,8 +186,8 @@ pub(super) fn prepare(
     result.estimate.after_availability_pruning = count(result.candidates.len())?;
     result.estimate.variables = count(result.candidates.len())?;
     result.estimate.rejection_facts = count(result.rejections.len())?;
-    let plan = plan(input, &mut result, budget, limits)?;
-    hard_lock_findings(input, &mut result, &plan, budget)?;
+    let plan = plan(document, input, &mut result, budget, limits)?;
+    hard_lock_findings(document, input, &mut result, &plan, budget)?;
     budget.sort_work(result.validation.issues.len())?;
     result.validation.issues.sort_by(|a, b| {
         (&a.code, &a.field_path, &a.message).cmp(&(&b.code, &b.field_path, &b.message))
@@ -448,6 +458,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::Coverage { .. }
             | WorkforceRule::NoOverlap { .. }
             | WorkforceRule::MinimumRest(_)
+            | WorkforceRule::MaximumAssignmentCount { .. }
     )
 }
 
@@ -517,6 +528,7 @@ fn definition_owner(definition: ShiftDefinition) -> Owner {
 }
 
 fn plan(
+    document: &ScenarioDocument,
     input: &AssignmentInput,
     result: &mut AssignmentAnalysis,
     budget: &mut OperationBudget<'_>,
@@ -573,6 +585,9 @@ fn plan(
                 minimum_minutes: rest.minimum_minutes,
             }
             .plan(input, &result.candidates, &mut plan, budget)?,
+            WorkforceRule::MaximumAssignmentCount { .. } => {
+                count::plan(document, input, &result.candidates, rule, &mut plan, budget)?;
+            }
             _ => {}
         }
     }
@@ -996,6 +1011,7 @@ pub(super) fn predicate_shape(
             // all/any membership is retained as separately named typed Entity parameters.
             (2, add(1, count(key.all.len() + key.any.len())?)?)
         }
+        Predicate::MaximumAssignmentCount { .. } => (2, 3),
         Predicate::Overlap { .. } => (3, 0),
         Predicate::OverlapClique { .. } => (1, 0),
         Predicate::MinimumRest { .. } => (3, 3),
@@ -1018,6 +1034,7 @@ fn append(
         entry.insert(match constraint.predicate {
             Predicate::Overlap { .. } | Predicate::OverlapClique { .. } => "no_overlap",
             Predicate::MinimumRest { .. } => "minimum_rest",
+            Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
             Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
         });
     }
@@ -1036,7 +1053,8 @@ fn coverage_bound_findings(
         budget.step()?;
         let shift = match constraint.predicate {
             Predicate::Headcount { shift, .. } | Predicate::Qualification { shift, .. } => shift,
-            Predicate::Overlap { .. }
+            Predicate::MaximumAssignmentCount { .. }
+            | Predicate::Overlap { .. }
             | Predicate::OverlapClique { .. }
             | Predicate::MinimumRest { .. } => continue,
         };
@@ -1062,7 +1080,8 @@ fn coverage_bound_findings(
                         Some(sr),
                     )
                 }
-                Predicate::Overlap { .. }
+                Predicate::MaximumAssignmentCount { .. }
+                | Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MinimumRest { .. } => continue,
             };
@@ -1170,6 +1189,7 @@ fn lock_finding(
 }
 
 fn hard_lock_findings(
+    document: &ScenarioDocument,
     input: &AssignmentInput,
     result: &mut AssignmentAnalysis,
     plan: &Plan,
@@ -1220,6 +1240,7 @@ fn hard_lock_findings(
     });
     locked_overlap_findings(input, &locks, &mut result.validation, budget)?;
     rest::locked_rest_findings(input, &locks, &mut result.validation, budget)?;
+    count::locked_findings(document, input, &locks, &mut result.validation, budget)?;
     locked_coverage_findings(input, &pairs, plan, &mut result.validation, budget)
 }
 

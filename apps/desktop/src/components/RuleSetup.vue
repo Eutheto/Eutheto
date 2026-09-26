@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
 import type {
   WorkforceSetupRuleCatalogEntry,
@@ -8,11 +9,13 @@ import type {
 } from "../api/generated-domain-pack-contracts";
 import type { ScopeFieldName } from "./planner/scope-field";
 import { formatNumber, messages } from "../messages";
+import { parseMaximumAssignmentCountDraft } from "../rule-draft";
 import { useRuleSetup } from "../rule-setup";
 import { useValidationRoute } from "../validation-route";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
 import RuleScopeBuilder from "./planner/RuleScopeBuilder.vue";
 import DurationField from "./planner/DurationField.vue";
+import WorkforceEntityPicker from "./planner/WorkforceEntityPicker.vue";
 
 const props = defineProps<{
   readonly home: ProjectHomeController;
@@ -64,6 +67,9 @@ const warnings = computed(() =>
 );
 const catalogEntries = computed(
   () => state.catalog?.[state.classFilter === "required" ? "required" : "preferences"] ?? [],
+);
+const calendarCount = computed(
+  () => state.facts?.entities.find((item) => item.kind === "calendar")?.count ?? 0,
 );
 watch(
   () => [state.editor?.id, state.editor?.raw.compatibleCategoryPairs.length] as const,
@@ -194,6 +200,8 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       kind: "rule-kind",
       strength: "rule-strength",
       active: "rule-active",
+      calendarId: "rule-calendar",
+      maximum: "rule-maximum",
       minimumMinutes: "rule-minimum-rest",
       compatibleCategoryPairs: "rule-category-pairs",
     } as const;
@@ -654,6 +662,62 @@ const navigationError = useValidationRoute(
               "
               @preview="vm.inspectScope(part, $event)"
             />
+            <template v-if="state.editor.kind === 'maximumAssignmentCount'">
+              <WorkforceEntityPicker
+                id="rule-calendar"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="calendar"
+                :label="copy.fields.calendar"
+                :description="copy.fields.calendarHelp"
+                :model-value="
+                  state.editor.raw.calendarId === '' ? [] : [state.editor.raw.calendarId]
+                "
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.calendarId === undefined
+                    ? {}
+                    : { error: state.errors.calendarId }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, calendarId: $event[0] ?? '' })
+                "
+              />
+              <p v-if="calendarCount === 0" role="status">{{ copy.noCalendars }}</p>
+              <RouterLink
+                v-if="calendarCount === 0"
+                :to="{ name: 'project-work', params: { scenarioId: project.scenarioId } }"
+              >
+                {{ copy.manageCalendars }}
+              </RouterLink>
+              <div class="field-stack">
+                <label for="rule-maximum">{{ copy.fields.maximum }}</label>
+                <p id="rule-maximum-help" class="field-help">{{ copy.fields.maximumHelp }}</p>
+                <input
+                  id="rule-maximum"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.maximum.raw"
+                  :aria-invalid="Boolean(state.errors.maximum) || undefined"
+                  aria-describedby="rule-maximum-help rule-maximum-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      maximum: parseMaximumAssignmentCountDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-maximum-error" class="text-danger" role="status">
+                  {{ state.errors.maximum }}
+                </p>
+              </div>
+            </template>
             <DurationField
               v-if="state.editor.kind === 'minimumRest'"
               id="rule-minimum-rest"
@@ -829,6 +893,13 @@ const navigationError = useValidationRoute(
           <p v-if="state.reviewed.after?.kind === 'minimumRest'">
             {{
               copy.minimumRestSentence(formatNumber(state.reviewed.after.minimumMinutes, locale))
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'maximumAssignmentCount'">
+            {{
+              copy.maximumAssignmentCountSentence(
+                formatNumber(state.reviewed.after.maximum, locale),
+              )
             }}
           </p>
           <p>{{ copy.previewHelp }}</p>

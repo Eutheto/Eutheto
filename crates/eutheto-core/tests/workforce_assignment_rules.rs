@@ -882,7 +882,9 @@ async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> T
     let result = solve_with_real_worker(compiled.problem.clone()).await?;
     assert_eq!(
         result.outcome.termination,
-        BackendTerminationReason::OptimalityClaimed
+        BackendTerminationReason::OptimalityClaimed,
+        "unexpected real-worker outcome: {:?}",
+        result.outcome
     );
     assert_eq!(result.candidates.len(), 1);
     let candidate = &result.candidates[0];

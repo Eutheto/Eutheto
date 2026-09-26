@@ -171,9 +171,9 @@ fn active_unsupported_obligations_cannot_disappear_from_complete_compilation() -
     document.domain.rules.insert(
         rule_id,
         json!({
-            "kind":"maximumAssignmentCount", "id":id(30), "active":true,
+            "kind":"maximumConsecutive", "id":id(30), "active":true,
             "strength":"required", "scope":{"people":{"kind":"all"}},
-            "calendarId":id(2), "maximum":2
+            "mode":{"kind":"workedDays"}, "maximum":2
         }),
     );
     document.domain.preferences.insert(

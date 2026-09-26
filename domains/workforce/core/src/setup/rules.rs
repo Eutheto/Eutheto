@@ -53,7 +53,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "maximumAssignmentCount",
         "official.workforce.rule.maximum-assignment-count",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "requiredSkillMix",
