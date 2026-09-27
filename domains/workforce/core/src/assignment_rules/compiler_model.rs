@@ -1,7 +1,7 @@
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     UnsupportedWorkforceObligation, WorkforceCompilation,
-    analysis::{Plan, prepare, supported_rule},
+    analysis::{Plan, hours, prepare, supported_rule},
     budget::{OperationBudget, count, effective_limits},
     compiler::{
         DecisionVariables, compile_constraint, materialize_hard_lock_parents,
@@ -231,6 +231,8 @@ pub(super) fn level_fact(policy: EntityId, id: ProvenanceId) -> ProvenanceRecord
     }
 }
 
+// Keep the model's objective, projections and source-bound constraint wiring in one construction.
+#[allow(clippy::too_many_lines)]
 fn construct(
     input: &ModelInput<'_>,
     header: preflight::Header,
@@ -311,6 +313,26 @@ fn construct(
         constraints.push(record);
         provenance.push(fact);
     }
+    let pair_ints = (0..analysis.candidates.len())
+        .map(|index| {
+            let position = index.checked_mul(2).and_then(|value| value.checked_add(1));
+            match position.and_then(|value| variables.get(value)) {
+                Some(Variable::Integer(variable)) => Ok((index, variable.id.clone())),
+                _ => Err(invalid()),
+            }
+        })
+        .collect::<Result<BTreeMap<_, _>, AssignmentRuleError>>()?;
+    hours::compile(
+        plan,
+        &pair_ints,
+        &parents,
+        &mut identities,
+        &mut variables,
+        &mut constraints,
+        &mut provenance,
+        budget,
+        limits,
+    )?;
     Ok(PlanningProblem {
         schema_version: PLANNING_IR_SCHEMA_VERSION,
         variables,

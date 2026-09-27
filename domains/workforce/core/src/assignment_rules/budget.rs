@@ -7,6 +7,9 @@ use std::io::{self, Write};
 
 pub const MAX_INSPECTED_PAIRS: u64 = 1_000_000;
 pub const MAX_WORK_STEPS: u64 = 20_000_000;
+// Projection repeats generic model validation before decoding the candidate. The reviewed
+// rolling-hours model exceeds the compilation allowance in this distinct, bounded phase.
+const MAX_PROJECTION_WORK_STEPS: u64 = 30_000_000;
 pub const MAX_EXPANDED_INTERVALS: u64 = 32_768;
 pub const MAX_SELECTED_PAIRS: u64 = 100_000;
 const MAX_EVALUATION_RECORDS: u64 = 100_000;
@@ -24,6 +27,7 @@ pub(crate) struct OperationBudget<'a> {
     control: Option<&'a OperationControl>,
     limits: PlanningIrLimitsV1,
     steps: u64,
+    max_work_steps: u64,
     expanded_intervals: u64,
     retained: Usage,
     ir: Usage,
@@ -40,6 +44,7 @@ impl<'a> OperationBudget<'a> {
             control,
             limits,
             steps: 0,
+            max_work_steps: MAX_WORK_STEPS,
             expanded_intervals: 0,
             retained: Usage::default(),
             ir: Usage::default(),
@@ -55,6 +60,12 @@ impl<'a> OperationBudget<'a> {
             #[cfg(test)]
             cancel_at_step: None,
         }
+    }
+
+    pub fn projection(control: Option<&'a OperationControl>, limits: PlanningIrLimitsV1) -> Self {
+        let mut budget = Self::analysis(control, limits);
+        budget.max_work_steps = MAX_PROJECTION_WORK_STEPS;
+        budget
     }
 
     pub fn evaluation(control: Option<&'a OperationControl>) -> Self {
@@ -88,7 +99,7 @@ impl<'a> OperationBudget<'a> {
             }
             self.check()?;
         }
-        within(next, MAX_WORK_STEPS, AssignmentRuleLimit::WorkSteps)?;
+        within(next, self.max_work_steps, AssignmentRuleLimit::WorkSteps)?;
         self.steps = next;
         Ok(())
     }

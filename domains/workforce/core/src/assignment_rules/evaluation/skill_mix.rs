@@ -126,6 +126,7 @@ pub(super) fn evaluate(
                 period: None,
                 rest: None,
                 transition: None,
+                hours: None,
             };
             summary.predicate(matching < u64::from(minimum.required), &witness, budget)?;
         }

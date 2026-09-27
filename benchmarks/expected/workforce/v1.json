@@ -2,7 +2,7 @@
   "format": "eutheto/workforce-corpus-expectations",
   "schemaVersion": 1,
   "corpusVersion": 1,
-  "generatorSourceSha256": "50f46e25db4d742fa705c814a4c301c697e6faa4595b47a70bf16abc935cec46",
+  "generatorSourceSha256": "89cc26d7e7978c8e44e7e91c9693e7ce58cf662eaabcc490a460fc26335c6989",
   "cases": [
     {
       "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
@@ -16,11 +16,6 @@
         "score": null,
         "modelEnvelope": null,
         "deferredObligations": [
-          {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-701b-801e-739766e14e8b",
-            "ruleKind": "maximumHours"
-          },
           {
             "kind": "rule",
             "ruleId": "01a04a99-f980-7d09-9a27-6ea768a298f9",
@@ -149,24 +144,22 @@
       "inputSha256": "1eaba8574541d3ac335ec30838d8c3651ca85705adfc750c2b5dfd4d1da5a452",
       "expected": {
         "id": "rolling-hours",
-        "disposition": "compileRejected",
+        "disposition": "accepted",
         "people": 8,
         "horizonDays": 28,
         "resolvedShifts": 20,
-        "selectedAssignments": null,
-        "score": null,
-        "modelEnvelope": null,
+        "selectedAssignments": 40,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 6400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
         "deferredObligations": [
-          {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-7d27-b33f-00154d9992c3",
-            "ruleKind": "maximumHours"
-          },
-          {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-7371-8e25-0ec1eb2fbe6b",
-            "ruleKind": "maximumHours"
-          },
           {
             "kind": "lock",
             "assignmentId": "01a04a99-f980-718a-a9ec-92b833bd0246"

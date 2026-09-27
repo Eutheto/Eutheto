@@ -8,9 +8,14 @@ import type {
   WorkforceSetupRuleReference,
   WorkforceSetupScopePart,
 } from "../api/generated-domain-pack-contracts";
-import type { ScopeFieldName } from "./planner/scope-field";
 import { formatNumber, messages } from "../messages";
-import { parseMaximumAssignmentCountDraft, type QualificationMinimumDraft } from "../rule-draft";
+import {
+  parseMaximumAssignmentCountDraft,
+  parseMaximumHoursDurationDraft,
+  parseMaximumHoursMaximumMinutesDraft,
+  type QualificationMinimumDraft,
+} from "../rule-draft";
+import type { ScopeFieldName } from "./planner/scope-field";
 import { useRuleSetup } from "../rule-setup";
 import { useValidationRoute } from "../validation-route";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
@@ -82,6 +87,9 @@ const catalogEntries = computed(
 );
 const calendarCount = computed(
   () => state.facts?.entities.find((item) => item.kind === "calendar")?.count ?? 0,
+);
+const workloadBucketCount = computed(
+  () => state.facts?.entities.find((item) => item.kind === "workloadBucket")?.count ?? 0,
 );
 watch(
   () => [state.editor?.id, state.editor?.raw.compatibleCategoryPairs.length] as const,
@@ -168,6 +176,45 @@ function fieldValue(value: object, field: string): unknown {
 function text(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
 }
+function updateMaximumHoursWindowKind(kind: string): void {
+  const raw = state.editor?.raw;
+  if (
+    raw === undefined ||
+    locked.value ||
+    state.editor?.kind !== "maximumHours" ||
+    (kind !== "calendar" && kind !== "rolling")
+  )
+    return;
+  const membership = raw.window.membership;
+  vm.updateRaw({
+    ...raw,
+    window:
+      kind === "calendar"
+        ? { kind: "calendar", calendarId: "", membership }
+        : { kind: "rolling", durationMinutes: parseMaximumHoursDurationDraft(""), membership },
+  });
+}
+function updateMaximumHoursMembership(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "maximumHours") return;
+  const membership =
+    value === "startInstant"
+      ? "startInstant"
+      : value === "intersection"
+        ? "intersection"
+        : "reportingDate";
+  vm.updateRaw({ ...raw, window: { ...raw.window, membership } });
+}
+function maximumHoursWindowLabel(kind: "calendar" | "rolling", membership: string): string {
+  const window = kind === "calendar" ? copy.fields.calendarWindow : copy.fields.rollingWindow;
+  const member =
+    membership === "startInstant"
+      ? copy.fields.startInstantMembership
+      : membership === "intersection"
+        ? copy.fields.intersectionMembership
+        : copy.fields.reportingDateMembership;
+  return `${window} (${member})`;
+}
 function pairId(index: number, field: "firstCategory" | "secondCategory"): string | undefined {
   const id = state.editor?.id;
   const key = pairKeys.value[index];
@@ -237,8 +284,11 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       kind: "rule-kind",
       strength: "rule-strength",
       active: "rule-active",
+      bucketId: "rule-workload-bucket",
       calendarId: "rule-calendar",
       maximum: "rule-maximum",
+      maximumMinutes: "rule-maximum-minutes",
+      window: "rule-window",
       minimumMinutes: "rule-minimum-rest",
       compatibleCategoryPairs: "rule-category-pairs",
       personId: "rule-fixed-person",
@@ -251,6 +301,15 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
     const field = path[0];
     if (field !== undefined && Object.hasOwn(fields, field))
       id = fields[field as keyof typeof fields];
+  }
+  if (path.length === 2 && path[0] === "window") {
+    const windowFields: Readonly<Record<string, string>> = {
+      calendarId: "rule-calendar",
+      durationMinutes: "rule-window-duration",
+      membership: "rule-window-membership",
+      kind: "rule-window-kind",
+    };
+    id = windowFields[path[1] ?? ""] ?? null;
   }
   if (
     path[0] === "compatibleCategoryPairs" &&
@@ -1002,6 +1061,171 @@ const navigationError = useValidationRoute(
                 </p>
               </div>
             </template>
+            <template v-if="state.editor.kind === 'maximumHours'">
+              <WorkforceEntityPicker
+                id="rule-workload-bucket"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="workloadBucket"
+                :label="copy.fields.workloadBucket"
+                :description="copy.fields.workloadBucketHelp"
+                :model-value="state.editor.raw.bucketId === '' ? [] : [state.editor.raw.bucketId]"
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.bucketId === undefined ? {} : { error: state.errors.bucketId }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, bucketId: $event[0] ?? '' })
+                "
+              />
+              <p v-if="workloadBucketCount === 0" role="status">
+                {{ copy.fields.noWorkloadBuckets }}
+              </p>
+              <fieldset id="rule-window" tabindex="-1" class="field-stack">
+                <legend>{{ copy.fields.window }}</legend>
+                <p id="rule-window-help" class="field-help">{{ copy.fields.windowHelp }}</p>
+                <div class="field-stack">
+                  <label for="rule-window-kind">{{ copy.fields.windowKind }}</label>
+                  <select
+                    id="rule-window-kind"
+                    :value="state.editor.raw.window.kind"
+                    :disabled="
+                      busy || stale || !state.editor.editing || state.editor.rebase !== null
+                    "
+                    aria-describedby="rule-window-help rule-window-kind-error"
+                    :aria-invalid="Boolean(state.errors['window.kind']) || undefined"
+                    @change="updateMaximumHoursWindowKind(text($event))"
+                  >
+                    <option value="calendar">{{ copy.fields.calendarWindow }}</option>
+                    <option value="rolling">{{ copy.fields.rollingWindow }}</option>
+                  </select>
+                  <p id="rule-window-kind-error" class="text-danger" role="status">
+                    {{ state.errors["window.kind"] }}
+                  </p>
+                </div>
+                <div class="field-stack">
+                  <label for="rule-window-membership">{{ copy.fields.membership }}</label>
+                  <select
+                    id="rule-window-membership"
+                    :value="state.editor.raw.window.membership"
+                    :disabled="
+                      busy || stale || !state.editor.editing || state.editor.rebase !== null
+                    "
+                    aria-describedby="rule-window-help rule-window-membership-error"
+                    :aria-invalid="Boolean(state.errors['window.membership']) || undefined"
+                    @change="updateMaximumHoursMembership(text($event))"
+                  >
+                    <option value="reportingDate">
+                      {{ copy.fields.reportingDateMembership }}
+                    </option>
+                    <option value="startInstant">
+                      {{ copy.fields.startInstantMembership }}
+                    </option>
+                    <option value="intersection">
+                      {{ copy.fields.intersectionMembership }}
+                    </option>
+                  </select>
+                  <p id="rule-window-membership-error" class="text-danger" role="status">
+                    {{ state.errors["window.membership"] }}
+                  </p>
+                </div>
+                <template v-if="state.editor.raw.window.kind === 'calendar'">
+                  <WorkforceEntityPicker
+                    id="rule-calendar"
+                    :project="project"
+                    :library-epoch="home.state.libraryEpoch"
+                    kind="calendar"
+                    :label="copy.fields.calendar"
+                    :description="copy.fields.calendarHelp"
+                    :model-value="
+                      state.editor.raw.window.calendarId === ''
+                        ? []
+                        : [state.editor.raw.window.calendarId]
+                    "
+                    required
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :read-only="!state.editor.editing"
+                    v-bind="{
+                      ...(locale === undefined ? {} : { locale }),
+                      ...(state.errors['window.calendarId'] === undefined
+                        ? {}
+                        : { error: state.errors['window.calendarId'] }),
+                    }"
+                    @update:model-value="
+                      vm.updateRaw({
+                        ...state.editor.raw,
+                        window: { ...state.editor.raw.window, calendarId: $event[0] ?? '' },
+                      })
+                    "
+                  />
+                  <p v-if="calendarCount === 0" role="status">{{ copy.noCalendars }}</p>
+                  <RouterLink
+                    v-if="calendarCount === 0"
+                    :to="{ name: 'project-work', params: { scenarioId: project.scenarioId } }"
+                  >
+                    {{ copy.manageCalendars }}
+                  </RouterLink>
+                </template>
+                <div v-else class="field-stack">
+                  <label for="rule-window-duration">{{ copy.fields.rollingDuration }}</label>
+                  <p id="rule-window-duration-help" class="field-help">
+                    {{ copy.fields.rollingDurationHelp }}
+                  </p>
+                  <input
+                    id="rule-window-duration"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="state.editor.raw.window.durationMinutes.raw"
+                    :aria-invalid="Boolean(state.errors['window.durationMinutes']) || undefined"
+                    aria-describedby="rule-window-duration-help rule-window-duration-error"
+                    @input="
+                      vm.updateRaw({
+                        ...state.editor.raw,
+                        window: {
+                          ...state.editor.raw.window,
+                          durationMinutes: parseMaximumHoursDurationDraft(text($event)),
+                        },
+                      })
+                    "
+                  />
+                  <p id="rule-window-duration-error" class="text-danger" role="status">
+                    {{ state.errors["window.durationMinutes"] }}
+                  </p>
+                </div>
+              </fieldset>
+              <div class="field-stack">
+                <label for="rule-maximum-minutes">{{ copy.fields.maximumMinutes }}</label>
+                <p id="rule-maximum-minutes-help" class="field-help">
+                  {{ copy.fields.maximumMinutesHelp }}
+                </p>
+                <input
+                  id="rule-maximum-minutes"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.maximumMinutes.raw"
+                  :aria-invalid="Boolean(state.errors.maximumMinutes) || undefined"
+                  aria-describedby="rule-maximum-minutes-help rule-maximum-minutes-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      maximumMinutes: parseMaximumHoursMaximumMinutesDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-maximum-minutes-error" class="text-danger" role="status">
+                  {{ state.errors.maximumMinutes }}
+                </p>
+              </div>
+            </template>
             <fieldset
               v-if="state.editor.kind === 'requiredSkillMix'"
               id="rule-qualification-minimums"
@@ -1358,6 +1582,17 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
+          <p v-if="state.reviewed.after?.kind === 'maximumHours'">
+            {{
+              copy.maximumHoursSentence(
+                formatNumber(state.reviewed.after.maximumMinutes, locale),
+                maximumHoursWindowLabel(
+                  state.reviewed.after.window.kind,
+                  state.reviewed.after.window.membership,
+                ),
+              )
+            }}
+          </p>
           <template v-if="state.reviewed.after?.kind === 'requiredSkillMix'">
             <p>
               {{
@@ -1404,7 +1639,10 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
-          <p>{{ copy.previewHelp }}</p>
+          <p v-if="state.reviewed.after?.kind === 'maximumHours'">
+            {{ copy.maximumHoursPreviewHelp }}
+          </p>
+          <p v-else>{{ copy.previewHelp }}</p>
           <dl v-if="state.reviewed.summary">
             <div>
               <dt>{{ copy.previewPeople }}</dt>

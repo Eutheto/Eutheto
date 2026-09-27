@@ -106,6 +106,11 @@ export const messages = {
     diagnostics: "Rule diagnostics",
     diagnosticsHelp: "Native validation findings for this exact draft.",
     maximumInvalid: "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
+    maximumHoursInvalid:
+      "Enter at most 32 digits for an exact whole number of minutes from 0 to 4,294,967,295.",
+    rollingDurationInvalid:
+      "Enter at most 32 digits for a positive whole number of minutes from 1 to 4,294,967,295.",
+    workloadBucketRequired: "Choose a workload bucket.",
     calendarRequired: "Choose a reporting-date calendar.",
     qualificationMinimumInvalid: "Enter an exact whole number from 0 to 65,535.",
     fixedAssignmentPersonRequired: "Choose a person for this active fixed assignment.",
@@ -140,12 +145,32 @@ export const messages = {
       name: "Name",
       kind: "Rule kind",
       scope: "People and assignments",
+      workloadBucket: "Workload bucket",
+      noWorkloadBuckets:
+        "No workload buckets are configured. Create one in Work before authoring this rule.",
+      workloadBucketHelp:
+        "Choose the named workload bucket whose minute measurement this rule limits. Native validation checks the bucket and its contributions.",
+      window: "Work window",
+      windowKind: "Window type",
+      calendarWindow: "Calendar periods",
+      rollingWindow: "Rolling window",
+      membership: "Window membership",
+      reportingDateMembership: "Reporting date",
+      startInstantMembership: "Shift start instant",
+      intersectionMembership: "Shift intersection",
+      windowHelp:
+        "Calendar periods use the selected calendar. Rolling windows use a positive duration measured backward from each selected shift start. Native validation checks membership compatibility with the selected bucket and window.",
+      rollingDuration: "Rolling window duration in minutes",
+      rollingDurationHelp: "Enter a positive whole number of minutes.",
       calendar: "Reporting-date calendar",
       calendarHelp:
         "Choose an existing calendar. Each matching assignment is assigned by its reporting date to one period owned by this calendar; assignments without an owning period count in no period.",
       maximum: "Total assignment cap per reporting-date period",
       maximumHelp:
         "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
+      maximumMinutes: "Maximum minutes",
+      maximumMinutesHelp:
+        "Limit the selected bucket's minute measurement for each person in each selected window. Enter zero to forbid any matching contribution.",
       fixedAssignmentPerson: "Named person",
       fixedAssignmentShift: "Named shift",
       mutualPeople: "People to keep apart",
@@ -244,11 +269,15 @@ export const messages = {
     inactiveHelp: "This rule is retained but not enforced.",
     activeScopeRequired:
       "An active rule needs a successful preview with at least one person and assignment. Minimum rest needs people, before assignments and after assignments. Correct the scope or explicitly choose Inactive, then preview again.",
+    maximumHoursPreviewHelp:
+      "The counts below are scope-only counts. Membership in the selected workload bucket is enforced by Rust for the reviewed rule and is not proved by this scope preview.",
     noCalendars:
       "No calendars are configured. Create a calendar in Work before authoring this rule.",
     manageCalendars: "Go to Work to create a calendar",
     maximumAssignmentCountSentence: (maximum: string) =>
       `Allow at most ${maximum} matching assignments for each person in each reporting-date calendar period. A total cap of zero forbids any matching assignment.`,
+    maximumHoursSentence: (maximum: string, window: string) =>
+      `Limit each person's selected workload bucket to at most ${maximum} minutes in each ${window}.`,
     minimumRestSentence: (minutes: string) =>
       `Require at least ${minutes} minutes of rest between the before and after assignments.`,
     requiredSkillMixSentence: (count: string) =>

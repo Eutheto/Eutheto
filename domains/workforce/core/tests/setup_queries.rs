@@ -615,7 +615,7 @@ fn overview_counts_configured_facts_and_catalog_labels_actual_support() -> Resul
             .find(|row| row.descriptor.id == "official.workforce.rule.maximum-hours")
             .ok_or("missing hours descriptor")?
             .support,
-        RuleSupportV1::NotImplemented
+        RuleSupportV1::Implemented
     ));
     assert!(matches!(
         catalog

@@ -1,7 +1,7 @@
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentRuleCompilation,
     AssignmentRuleError, AssignmentRuleLimit, AssignmentVariable,
-    analysis::{Plan, PlannedConstraint, Predicate, predicate_shape, prepare},
+    analysis::{Plan, PlannedConstraint, Predicate, hours, predicate_shape, prepare},
     budget::{OperationBudget, add, count, within},
     identity::{IdentityKind, PlanningIdentities},
     input::AssignmentInput,
@@ -44,7 +44,7 @@ pub fn compile_assignment_rules(
     // Counts, per-record bounds, references and exact serialized contribution bytes are all
     // reserved before the first IR variable is allocated. The dry pass streams literal lists.
     preflight(&analysis.candidates, &plan, &mut budget, limits)?;
-    construct(analysis, &plan, &mut budget)
+    construct(analysis, &plan, &mut budget, limits)
 }
 
 /// Borrow either actual output representation without allocating an intermediate contribution.
@@ -82,12 +82,15 @@ fn construct(
     analysis: AssignmentAnalysis,
     plan: &Plan,
     budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
 ) -> Result<AssignmentRuleCompilation, AssignmentRuleError> {
     let mut identities = PlanningIdentities::default();
     let mut variables = Vec::new();
+    let mut auxiliary_variables = Vec::new();
     let mut provenance = Vec::new();
     let mut constraints = Vec::new();
-    for pair in analysis.candidates {
+    let pairs = analysis.candidates;
+    for pair in &pairs {
         budget.step()?;
         let key = ("assignment", pair.person_id, pair.shift_id);
         let id = BoolVariableId::new(identities.derive(IdentityKind::Boolean, &key, budget)?)
@@ -95,9 +98,9 @@ fn construct(
         let fact_id =
             ProvenanceId::new(identities.derive(IdentityKind::Provenance, &key, budget)?)
                 .map_err(|_| invalid_id())?;
-        provenance.push(variable_fact(pair, fact_id.clone(), budget)?);
+        provenance.push(variable_fact(*pair, fact_id.clone(), budget)?);
         variables.push(AssignmentVariable {
-            pair,
+            pair: *pair,
             variable: BoolVariable {
                 id,
                 provenance: fact_id,
@@ -126,8 +129,27 @@ fn construct(
         constraints.push(record);
         provenance.push(fact);
     }
+    let hour_auxiliaries =
+        hours::prepare_contribution(plan, &pairs, &variables, &mut identities, budget)?;
+    auxiliary_variables.extend(hour_auxiliaries.variables);
+    constraints.extend(hour_auxiliaries.constraints);
+    provenance.extend(hour_auxiliaries.provenance);
+    hours::compile(
+        plan,
+        &hour_auxiliaries.pair_ints,
+        &parents,
+        &mut identities,
+        &mut auxiliary_variables,
+        &mut constraints,
+        &mut provenance,
+        budget,
+        limits,
+    )?;
     budget.sort_work(variables.len())?;
     variables.sort_unstable_by(|a, b| a.variable.id.cmp(&b.variable.id));
+    budget.sort_work(auxiliary_variables.len())?;
+    auxiliary_variables
+        .sort_unstable_by(|left, right| left.canonical_id().cmp(right.canonical_id()));
     budget.sort_work(constraints.len())?;
     constraints.sort_unstable_by(|a, b| a.id.cmp(&b.id));
     budget.sort_work(provenance.len())?;
@@ -136,8 +158,9 @@ fn construct(
     Ok(AssignmentRuleCompilation {
         source_document_hash: analysis.source_document_hash,
         variables,
-        constraints,
+        auxiliary_variables,
         provenance,
+        constraints,
         rejections: analysis.rejections,
         estimate: analysis.estimate,
         validation: analysis.validation,
@@ -959,6 +982,7 @@ pub(super) fn preflight(
     }
     let placeholder = ProvenanceId::new(PROVENANCE_ID).map_err(|_| invalid_id())?;
     preflight_variable_facts(pairs, &placeholder, budget, limits)?;
+    hours::preflight_contribution(plan, budget, limits)?;
     for (rule, kind) in &plan.parents {
         budget.step()?;
         budget.reserve(1, 0, 512)?;
@@ -1103,6 +1127,20 @@ pub(super) fn reserve_fact(
 ) -> Result<(), AssignmentRuleError> {
     budget.step()?;
     let defaults = PlanningIrLimitsV1::DEFAULT;
+    within(
+        count(record.entity_refs.len())?,
+        limits
+            .max_entity_refs_per_record
+            .min(defaults.max_entity_refs_per_record),
+        AssignmentRuleLimit::PerRecord,
+    )?;
+    within(
+        count(record.parameters.len())?,
+        limits
+            .max_parameters_per_record
+            .min(defaults.max_parameters_per_record),
+        AssignmentRuleLimit::PerRecord,
+    )?;
     for text in [&record.source_id, &record.message_key] {
         within(
             count(text.len())?,
@@ -1130,18 +1168,21 @@ pub(super) fn reserve_fact(
                 AssignmentRuleLimit::PerRecord,
             )?;
         }
-        if let ProvenanceParameter::Integer(value) = parameter
-            && *value > limits.max_abs_value.min(defaults.max_abs_value)
-        {
-            return Err(AssignmentRuleError::LimitExceeded(
-                AssignmentRuleLimit::PerRecord,
-            ));
+        if let ProvenanceParameter::Integer(value) = parameter {
+            let maximum = limits.max_abs_value.min(defaults.max_abs_value);
+            if maximum < 0 || value.unsigned_abs() > maximum.cast_unsigned() {
+                return Err(AssignmentRuleError::LimitExceeded(
+                    AssignmentRuleLimit::PerRecord,
+                ));
+            }
         }
     }
-    let refs = add(
-        count(record.entity_refs.len() + record.parameters.len())?,
-        u64::from(record.parent.is_some()),
-    )?;
+    let field_refs = record
+        .entity_refs
+        .len()
+        .checked_add(record.parameters.len())
+        .ok_or_else(invalid)?;
+    let refs = add(count(field_refs)?, u64::from(record.parent.is_some()))?;
     budget.reserve_ir(1, refs, budget.measure_ir(record)?)
 }
 
@@ -1192,7 +1233,7 @@ mod tests {
         // Genuine construction after completed resource preflight, not a pre-cancelled call.
         budget.cancel_after_steps(100)?;
         assert_eq!(
-            construct(analysis, &plan, &mut budget),
+            construct(analysis, &plan, &mut budget, limits),
             Err(AssignmentRuleError::Cancelled)
         );
         assert!(token.is_cancelled());
@@ -1221,7 +1262,7 @@ mod tests {
         let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
         preflight(&analysis.candidates, &plan, &mut budget, limits)?;
         let pairs = analysis.candidates.clone();
-        let complete = construct(analysis, &plan, &mut budget)?;
+        let complete = construct(analysis, &plan, &mut budget, limits)?;
         let variables = pairs
             .iter()
             .map(|pair| {

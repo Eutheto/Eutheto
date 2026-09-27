@@ -198,14 +198,21 @@ The shared person–assignment inspector reads applied native blockers and ident
 Required rules not covered by its analysis. It does not establish whole-plan
 feasibility.
 
-**Required rules** exposes ten implemented kinds: eligibility, availability,
-coverage, no overlap, minimum rest, Maximum Assignment Count, Required
-Qualification Mix, Fixed Assignment, Mutual Assignment Restriction and
-Transition Time. The count cap applies to matching person–shift assignments
-by the shift's reporting date in a selected calendar period; zero forbids
-any matching assignment. A clinic shift requiring one Specialist and one
-Nurse can count the same dual-qualified person toward both minimums, but
-each minimum counts distinct assigned people on that shift.
+**Required rules** exposes eleven implemented kinds: eligibility, availability,
+coverage, no overlap, minimum rest, Maximum Assignment Count, Maximum Hours,
+Required Qualification Mix, Fixed Assignment, Mutual Assignment Restriction
+and Transition Time. The count cap applies to matching person–shift assignments
+by the shift's reporting date in a selected calendar period; zero forbids any
+matching assignment. Maximum Hours caps a named workload bucket for each
+matching person in a fixed calendar period or every rolling window; Reporting
+Date belongs to calendar periods only, while Start Instant and Intersection
+select by native instants. Elapsed intersections are clipped to the window;
+`sum` adds overlapping work and `union` counts elapsed overlaps once.
+A Scheduled Minutes bucket counts signed whole-shift local duration and
+cannot use Intersection.
+A clinic shift requiring one Specialist and one Nurse can count the same
+dual-qualified person toward both minimums, but each minimum counts distinct
+assigned people on that shift.
 Qualification mix uses whole-shift qualification grants and does not prorate
 partial shifts. Fixed Assignment chooses a native person and shift, allows
 browsing a bounded date window, and requires the exact named pair to belong
@@ -635,12 +642,15 @@ on an actual shift. Matrix DOM-retention and WebDriver round-trip measurements a
 written to `.cache/e2e/package7-matrix-measurements.json`; these are not heap-memory,
 INP, release-build or cross-platform benchmarks.
 
-The rule/validation scenario reviews and persists a ten-hour Required rest rule
-and directed Transition Time between two native-located shifts. It refuses a
-newly active singleton location selection without mutation, saves the
-two-location rule after native shift-scope review, and verifies the same
-location IDs after process restart. It checks stable draft identity, live
-scope pages, empty-active-scope refusal and explicit inactivity, and
+The rule/validation scenario reviews and persists a ten-hour Required rest rule,
+fixed-period and rolling Maximum Hours rules, and directed Transition Time
+between two native-located shifts. Maximum Hours uses native workload-bucket
+and calendar picks; an invalid rolling duration preserves the draft and focuses
+the field before correction, with both windows restored after process restart.
+The scenario refuses a newly active singleton location selection without
+mutation, saves the two-location rule after native shift-scope review, and
+verifies the same location IDs after restart. It checks stable draft identity,
+live scope pages, empty-active-scope refusal and explicit inactivity, and
 distinguishes completed, stale, failed and cancelled validation attempts.
 It follows an authoritative standalone-coverage shortage to the exact count
 field and reviews a manual repair. An America/New_York repeated-time fixture

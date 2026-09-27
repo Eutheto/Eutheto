@@ -43,7 +43,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "maximumHours",
         "official.workforce.rule.maximum-hours",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "maximumConsecutive",

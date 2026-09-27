@@ -161,13 +161,15 @@ are reviewed and applied as one undoable batch; they are not assignment-feasibil
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support ten implemented kinds, including
+inspector. Required-rule editors support eleven implemented kinds, including
 Maximum Assignment Count with a reporting-date calendar and nonnegative cap,
-Required Qualification Mix with per-shift qualification-expression minimums,
-Fixed Assignment with an exact named person and shift whose active scope must
-include both targets, Mutual Assignment Restriction for selected people on the
-same shift or on any overlapping shifts, and directed Transition Time between
-distinct named locations with an authored location-pair duration. A clinic shift
+Maximum Hours with a native workload bucket, fixed calendar or rolling window,
+membership policy and nonnegative minute cap, Required Qualification Mix with
+per-shift qualification-expression minimums, Fixed Assignment with an exact
+named person and shift whose active scope must include both targets, Mutual
+Assignment Restriction for selected people on the same shift or on any
+overlapping shifts, and directed Transition Time between distinct named
+locations with an authored location-pair duration. A clinic shift
 requiring one Specialist and one Nurse may count the same dual-qualified person
 toward both minimums, but each minimum counts distinct assigned people. Native
 scope previews and reviewed commands remain required.
@@ -422,6 +424,47 @@ target's start. A missing or reverse-only entry does not infer a gap; No
 overlap remains a separate rule. The desktop editor proves two effective
 selected locations against native shift scope before newly activating this
 rule. Previously saved active singleton selections are loadable no-ops.
+
+To limit each clinician's elapsed work to 16 hours in any seven-day window,
+save this as `hours-command.json` for the synthetic `clinic-tiny` bucket:
+
+```json
+{
+  "type": "applyDomainCommand",
+  "payload": {
+    "commandType": "official.workforce.add_rule",
+    "payload": {
+      "rule": {
+        "kind": "maximumHours",
+        "id": "01900000-0000-7000-8000-000000000047",
+        "active": true,
+        "strength": "required",
+        "scope": { "people": { "kind": "all" } },
+        "bucketId": "01a04a99-f980-752b-aa27-15f8bfbe18bb",
+        "window": {
+          "kind": "rolling",
+          "durationMinutes": 10080,
+          "membership": "intersection"
+        },
+        "maximumMinutes": 960
+      }
+    }
+  }
+}
+```
+
+```sh
+target/cli-package/optimizer scenario apply domains/workforce/fixtures/v1/clinic-tiny.json \
+  --commands ./hours-command.json --expected-revision 0 \
+  --output ./clinic-tiny-with-hours.json
+target/cli-package/optimizer scenario validate ./clinic-tiny-with-hours.json
+target/cli-package/optimizer solve ./clinic-tiny-with-hours.json \
+  --output ./clinic-tiny-with-hours-result.json
+```
+
+The cap is a configured scheduling constraint, not a regulatory hours
+assessment. The CLI accepts worker candidates only after independent
+verification.
 
 Full validation returns its complete report and exit 3 for errors; an obvious
 coverage contradiction is not itself a solver feasibility result. Solve defaults

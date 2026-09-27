@@ -15,6 +15,9 @@ mod overlap;
 #[path = "compiler_transition.rs"]
 mod transition;
 
+#[path = "compiler_hours.rs"]
+pub(super) mod hours;
+
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     AssignmentRuleLimit, InstantInterval, PairRejection, RejectionCause, RequiredRulePartition,
@@ -141,6 +144,7 @@ pub(super) struct PlannedConstraint {
 pub(super) struct Plan {
     pub definitions: Vec<Definition>,
     pub constraints: Vec<PlannedConstraint>,
+    hours: Vec<hours::HoursPlan>,
     pub parents: BTreeMap<RuleId, &'static str>,
 }
 
@@ -498,6 +502,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::NoOverlap { .. }
             | WorkforceRule::MinimumRest(_)
             | WorkforceRule::MaximumAssignmentCount { .. }
+            | WorkforceRule::MaximumHours { .. }
             | WorkforceRule::RequiredSkillMix { .. }
             | WorkforceRule::FixedAssignment { .. }
             | WorkforceRule::MutualAssignmentRestriction { .. }
@@ -570,6 +575,8 @@ fn definition_owner(definition: ShiftDefinition) -> Owner {
     }
 }
 
+// One candidate graph and its ordered rule plans share the same bounded source analysis.
+#[allow(clippy::too_many_lines)]
 fn plan(
     document: &ScenarioDocument,
     input: &AssignmentInput,
@@ -580,6 +587,7 @@ fn plan(
     let mut plan = Plan {
         definitions: Vec::new(),
         constraints: Vec::new(),
+        hours: Vec::new(),
         parents: BTreeMap::new(),
     };
     let mut definitions = BTreeMap::new();
@@ -655,6 +663,17 @@ fn plan(
             }
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 count::plan(document, input, &result.candidates, rule, &mut plan, budget)?;
+            }
+            WorkforceRule::MaximumHours { .. } => {
+                hours::plan(
+                    document,
+                    input,
+                    &result.candidates,
+                    rule,
+                    &mut plan,
+                    budget,
+                    limits,
+                )?;
             }
             WorkforceRule::FixedAssignment { .. } => plan_fixed(
                 input,
@@ -1264,14 +1283,16 @@ fn plan_overlap(
     Ok(())
 }
 
+// Retain every contribution's counter update in the same auditable estimate.
+#[allow(clippy::too_many_lines)]
 fn estimate_contribution(
     result: &mut AssignmentAnalysis,
     plan: &Plan,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,
 ) -> Result<(), AssignmentRuleError> {
-    let variables = result.estimate.variables;
-    let constraints = count(plan.constraints.len())?;
+    let base_variables = result.estimate.variables;
+    let base_constraints = count(plan.constraints.len())?;
     let mut hard_lock_parents = 0;
     for constraint in &plan.constraints {
         budget.step()?;
@@ -1279,20 +1300,15 @@ fn estimate_contribution(
             hard_lock_parents = add(hard_lock_parents, 1)?;
         }
     }
-    let provenance = add(
-        add(variables, constraints)?,
+    let base_provenance = add(
+        add(base_variables, base_constraints)?,
         add(count(plan.parents.len())?, hard_lock_parents)?,
-    )?;
-    within(
-        provenance,
-        budget.provenance_limit(),
-        AssignmentRuleLimit::ProvenanceRecords,
     )?;
     let defaults = PlanningIrLimitsV1::DEFAULT;
     // variable -> fact; fact -> person/shift
-    let mut references = variables.checked_mul(3).ok_or_else(invalid)?;
-    references = add(
-        references,
+    let mut base_references = base_variables.checked_mul(3).ok_or_else(invalid)?;
+    base_references = add(
+        base_references,
         hard_lock_parents.checked_mul(3).ok_or_else(invalid)?,
     )?;
     for constraint in &plan.constraints {
@@ -1322,11 +1338,36 @@ fn estimate_contribution(
                 .min(defaults.max_parameters_per_record),
             AssignmentRuleLimit::PerRecord,
         )?;
-        references = add(
-            references,
+        base_references = add(
+            base_references,
             add(literals, add(2, add(entities, parameters)?)?)?,
         )?;
     }
+    let hour_shape = hours::checked_shape(plan, limits)?;
+    let variables = add(
+        add(base_variables, hour_shape.pair_indices)?,
+        hour_shape.helper_variables,
+    )?;
+    let constraints = add(base_constraints, hour_shape.constraints)?;
+    let provenance = add(base_provenance, hour_shape.provenance)?;
+    let references = add(base_references, hour_shape.references)?;
+    within(
+        variables,
+        limits.max_variables.min(defaults.max_variables),
+        AssignmentRuleLimit::Variables,
+    )?;
+    within(
+        constraints,
+        limits.max_constraints.min(defaults.max_constraints),
+        AssignmentRuleLimit::Constraints,
+    )?;
+    within(
+        provenance,
+        limits
+            .max_provenance_records
+            .min(defaults.max_provenance_records),
+        AssignmentRuleLimit::ProvenanceRecords,
+    )?;
     within(
         references,
         limits.max_total_refs.min(defaults.max_total_refs),
@@ -1360,6 +1401,7 @@ fn estimate_contribution(
             AssignmentRuleLimit::PerRecord,
         )?;
     }
+    result.estimate.variables = variables;
     result.estimate.constraints = constraints;
     result.estimate.provenance_records = provenance;
     result.estimate.references = references;
@@ -1697,6 +1739,7 @@ fn hard_lock_findings(
     rest::locked_rest_findings(input, &locks, &mut result.validation, budget)?;
     transition::locked_findings(input, &locks, &mut result.validation, budget)?;
     count::locked_findings(document, input, &locks, &mut result.validation, budget)?;
+    hours::locked_findings(document, input, &locks, &mut result.validation, budget)?;
     locked_coverage_findings(input, &pairs, plan, &mut result.validation, budget)
 }
 

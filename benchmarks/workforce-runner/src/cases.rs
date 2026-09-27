@@ -1064,8 +1064,8 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
     let (people, horizon_days, resolved_shifts, selected_assignments, disposition) = match case {
         CaseId::AppendixF => (3, 30, 52, None, CompileRejected),
         CaseId::ClinicTiny => (3, 7, 5, Some(10), Accepted),
-        CaseId::ClinicInitial => (8, 28, 20, Some(40), Accepted),
-        CaseId::ClinicFull | CaseId::RollingHours => (8, 28, 20, None, CompileRejected),
+        CaseId::ClinicInitial | CaseId::RollingHours => (8, 28, 20, Some(40), Accepted),
+        CaseId::ClinicFull => (8, 28, 20, None, CompileRejected),
         CaseId::ClinicOvernight => (12, 28, 48, Some(68), Accepted),
         CaseId::SpecialistCoverage => (6, 7, 5, Some(10), Accepted),
         CaseId::RepairBefore => (4, 7, 5, Some(10), Accepted),
@@ -1076,14 +1076,7 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
     };
     let mut deferred_obligations = vec![];
     let later_rules: &[(&str, &str)] = match case {
-        CaseId::AppendixF => &[
-            ("rule-max-hours-rolling", "maximumHours"),
-            ("rule-max-consecutive-nights", "maximumConsecutive"),
-        ],
-        CaseId::RollingHours => &[
-            ("rule-hours-seven-days", "maximumHours"),
-            ("rule-hours-fourteen-days", "maximumHours"),
-        ],
+        CaseId::AppendixF => &[("rule-max-consecutive-nights", "maximumConsecutive")],
         _ => &[],
     };
     for (role, kind) in later_rules {

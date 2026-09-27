@@ -2,6 +2,7 @@
 mod coverage;
 mod fixed;
 mod maximum_count;
+mod maximum_hours;
 mod mutual;
 mod predicates;
 mod rest;
@@ -15,7 +16,7 @@ use super::{
     intervals::date_range,
 };
 use crate::{
-    ids::ShiftId,
+    ids::{ShiftId, WorkCalendarId, WorkloadBucketId},
     model::{
         ActiveRange, AssignmentPair, Availability, AvailabilityKind, CategoryPair, LockState,
         Person, Scope, WorkforceEntity, WorkforceRule,
@@ -215,6 +216,9 @@ fn evaluate_prepared(
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 maximum_count::evaluate(document, input, selected, rule, &mut summary, budget)?;
             }
+            WorkforceRule::MaximumHours { .. } => {
+                maximum_hours::evaluate(document, input, selected, rule, &mut summary, budget)?;
+            }
             WorkforceRule::RequiredSkillMix { .. } => {
                 skill_mix::evaluate(input, selected, rule, &mut summary, budget)?;
             }
@@ -224,7 +228,7 @@ fn evaluate_prepared(
             WorkforceRule::TransitionTime { .. } => {
                 transition::evaluate(input, selected, rule, &mut summary, budget)?;
             }
-            _ => {
+            WorkforceRule::MaximumConsecutive { .. } => {
                 retain_id(&mut obligations.remaining, id, budget)?;
                 continue;
             }
@@ -621,6 +625,15 @@ struct Witness {
     period: Option<(Rfc3339Timestamp, Rfc3339Timestamp)>,
     rest: Option<RestWitness>,
     transition: Option<TransitionWitness>,
+    hours: Option<HoursWitness>,
+}
+
+#[derive(Clone, Copy)]
+struct HoursWitness {
+    maximum_minutes: u32,
+    actual: SignedDuration,
+    bucket: WorkloadBucketId,
+    calendar: Option<WorkCalendarId>,
 }
 
 #[derive(Clone, Copy)]
@@ -661,6 +674,7 @@ impl Witness {
             period: None,
             rest: None,
             transition: None,
+            hours: None,
         }
     }
 
@@ -823,6 +837,9 @@ fn witness_evidence(
     if let Some(transition) = witness.transition {
         transition_evidence(witness, transition, result, budget)?;
     }
+    if let Some(hours) = witness.hours {
+        hours_evidence(hours, result, budget)?;
+    }
     if witness.other_person.is_some() {
         mutual_pair_evidence(witness, result, budget)?;
     }
@@ -861,6 +878,46 @@ fn witness_evidence(
             &mut result.observed,
             "official.workforce.fact.witness_end",
             &interval.end.to_string(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn hours_evidence(
+    hours: HoursWitness,
+    result: &mut RuleEvaluation,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    fact(
+        &mut result.expected,
+        "official.workforce.fact.maximum_hours_minutes",
+        VerificationValue::Integer(i64::from(hours.maximum_minutes)),
+        budget,
+    )?;
+    fact(
+        &mut result.observed,
+        "official.workforce.fact.actual_hours_seconds",
+        VerificationValue::Integer(hours.actual.as_secs()),
+        budget,
+    )?;
+    fact(
+        &mut result.observed,
+        "official.workforce.fact.actual_hours_subsecond_nanoseconds",
+        VerificationValue::Integer(i64::from(hours.actual.subsec_nanos())),
+        budget,
+    )?;
+    entity(
+        &mut result.affected_entities,
+        "workload_bucket",
+        hours.bucket.as_entity_id(),
+        budget,
+    )?;
+    if let Some(calendar) = hours.calendar {
+        entity(
+            &mut result.affected_entities,
+            "calendar",
+            calendar.as_entity_id(),
             budget,
         )?;
     }

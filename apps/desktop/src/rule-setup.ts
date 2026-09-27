@@ -142,6 +142,7 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.coverage": "coverage",
   "official.workforce.rule.no-overlap": "noOverlap",
   "official.workforce.rule.minimum-rest": "minimumRest",
+  "official.workforce.rule.maximum-hours": "maximumHours",
   "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
   "official.workforce.rule.required-skill-mix": "requiredSkillMix",
   "official.workforce.rule.fixed-assignment": "fixedAssignment",
@@ -155,6 +156,9 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     sameField(left.beforeScope, right.beforeScope) &&
     sameField(left.afterScope, right.afterScope) &&
     left.calendarId === right.calendarId &&
+    left.bucketId === right.bucketId &&
+    sameField(left.maximumMinutes, right.maximumMinutes) &&
+    sameField(left.window, right.window) &&
     sameField(left.maximum, right.maximum) &&
     sameField(left.minimumRest, right.minimumRest) &&
     left.personId === right.personId &&
@@ -1111,15 +1115,28 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               ...editor,
               raw: { ...editor.raw, maximum: createRuleDraft(merged.value).maximum },
             }
-          : field === "qualificationMinimums" && choice === "current"
+          : field === "maximumMinutes" && choice === "current"
             ? {
                 ...editor,
                 raw: {
                   ...editor.raw,
-                  qualificationMinimums: createRuleDraft(merged.value).qualificationMinimums,
+                  maximumMinutes: createRuleDraft(merged.value).maximumMinutes,
                 },
               }
-            : editor;
+            : field === "window" && choice === "current"
+              ? {
+                  ...editor,
+                  raw: { ...editor.raw, window: createRuleDraft(merged.value).window },
+                }
+              : field === "qualificationMinimums" && choice === "current"
+                ? {
+                    ...editor,
+                    raw: {
+                      ...editor.raw,
+                      qualificationMinimums: createRuleDraft(merged.value).qualificationMinimums,
+                    },
+                  }
+                : editor;
     acceptRebase(retained, merged, editor.rebaseContext, local);
   }
 

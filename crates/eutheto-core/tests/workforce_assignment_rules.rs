@@ -31,8 +31,8 @@ use eutheto_types::{
 };
 use eutheto_workforce::{
     assignment_rules::{
-        AssignmentRuleCompilation, compile_assignment_rules, compile_workforce,
-        evaluate_assignment_rules,
+        AssignmentRuleCompilation, analyze_assignments, compile_assignment_rules,
+        compile_workforce, evaluate_assignment_rules,
     },
     model::AssignmentPair,
 };
@@ -1636,6 +1636,366 @@ async fn real_worker_enforces_directed_transition_boundaries() -> TestResult {
                 .iter()
                 .find(|item| item.rule_id == rule_id)
                 .ok_or("missing directed transition verification result")?
+                .satisfied
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn maximum_hours_contribution_estimate_counts_every_sum_and_union_helper() -> TestResult {
+    for contribution in ["sum", "union"] {
+        let mut value = fixture_value()?;
+        value["domain"]["entities"][id(3)]["overlappingContribution"] = json!(contribution);
+        value["domain"]["rules"][id(35)] = json!({
+            "kind":"maximumHours","id":id(35),"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}},"bucketId":id(3),
+            "window":{"kind":"calendar","calendarId":id(2),"membership":"reportingDate"},
+            "maximumMinutes":240,
+        });
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let analysis = analyze_assignments(&document, None, PlanningIrLimitsV1::DEFAULT)?;
+        let compilation = compile_assignment_rules(&document, &context())?;
+        assert_eq!(analysis.estimate, compilation.estimate, "{contribution}");
+        assert_eq!(
+            compilation.estimate.variables,
+            u64::try_from(compilation.variables.len() + compilation.auxiliary_variables.len())?,
+            "{contribution}"
+        );
+        assert_eq!(
+            compilation.estimate.constraints,
+            u64::try_from(compilation.constraints.len())?,
+            "{contribution}"
+        );
+        assert_eq!(
+            compilation.estimate.provenance_records,
+            u64::try_from(compilation.provenance.len())?,
+            "{contribution}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn maximum_hours_preflight_rejects_tight_provenance_and_per_record_limits() -> TestResult {
+    use eutheto_workforce::assignment_rules::{AssignmentRuleError, AssignmentRuleLimit};
+
+    let mut value = fixture_value()?;
+    value["domain"]["rules"] = json!({});
+    value["domain"]["rules"][id(35)] = json!({
+        "kind":"maximumHours","id":id(35),"active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},"bucketId":id(3),
+        "window":{"kind":"calendar","calendarId":id(2),"membership":"reportingDate"},
+        "maximumMinutes":120,
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let contribution = compile_assignment_rules(&document, &context())?;
+    let mut restricted = context();
+    restricted.planning_limits.max_provenance_records =
+        u64::try_from(contribution.provenance.len())? - 1;
+    for result in [
+        compile_assignment_rules(&document, &restricted).map(|_| ()),
+        compile_workforce(&document, &restricted).map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::Records | AssignmentRuleLimit::ProvenanceRecords
+            ))
+        ));
+    }
+    for tighten in [
+        (2_u64, PlanningIrLimitsV1::DEFAULT.max_parameters_per_record),
+        (PlanningIrLimitsV1::DEFAULT.max_entity_refs_per_record, 6),
+    ] {
+        restricted = context();
+        restricted.planning_limits.max_entity_refs_per_record = tighten.0;
+        restricted.planning_limits.max_parameters_per_record = tighten.1;
+        for result in [
+            compile_assignment_rules(&document, &restricted).map(|_| ()),
+            compile_workforce(&document, &restricted).map(|_| ()),
+        ] {
+            assert_eq!(
+                result,
+                Err(AssignmentRuleError::LimitExceeded(
+                    AssignmentRuleLimit::PerRecord
+                ))
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn maximum_hours_calendar_evaluates_only_periods_touched_by_sparse_selected_shifts() -> TestResult {
+    let mut value = fixture_value()?;
+    value["settings"]["horizon"] =
+        json!({"start":"2000-01-01T00:00:00Z","end":"2090-01-02T00:00:00Z"});
+    let endpoint =
+        |local: &str| json!({"instant":format!("{local}Z"),"local":local,"offsetSeconds":0});
+    value["domain"]["entities"][id(8)]["startsAt"] = endpoint("2000-01-01T00:00:00");
+    value["domain"]["entities"][id(8)]["endsAt"] = endpoint("2000-01-01T01:00:00");
+    let mut later = value["domain"]["entities"][id(8)].clone();
+    later["id"] = json!(id(15));
+    later["startsAt"] = endpoint("2090-01-01T00:00:00");
+    later["endsAt"] = endpoint("2090-01-01T01:00:00");
+    value["domain"]["entities"][id(15)] = later;
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(22));
+    value["domain"]["rules"][id(35)] = json!({
+        "kind":"maximumHours","id":id(35),"active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},"bucketId":id(3),
+        "window":{"kind":"calendar","calendarId":id(2),"membership":"startInstant"},
+        "maximumMinutes":60,
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    compile_workforce(&document, &context())?;
+    let selected = [pair(1, 8)?, pair(1, 15)?];
+    assert!(original_accepts(&document, &selected)?);
+    let evaluated = evaluate_assignment_rules(&document, &selected, None)?;
+    let rule_id: RuleId = id(35).parse()?;
+    assert!(
+        evaluated
+            .evaluations
+            .iter()
+            .find(|evaluation| evaluation.rule_id == rule_id)
+            .ok_or("maximum hours summary missing")?
+            .satisfied
+    );
+    Ok(())
+}
+
+#[test]
+fn maximum_hours_calendar_start_ignores_ambiguous_period_after_shift_start() -> TestResult {
+    let mut value = fixture_value()?;
+    value["settings"]["timeZone"] = json!("America/New_York");
+    value["settings"]["horizon"] =
+        json!({"start":"2026-10-30T04:00:00Z","end":"2026-11-03T05:00:00Z"});
+    value["domain"]["entities"][id(2)]["period"] = json!({"kind":"day","startTime":"01:30:00"});
+    value["domain"]["entities"][id(8)]["startsAt"] = json!({
+        "instant":"2026-10-30T06:00:00Z","local":"2026-10-30T02:00:00",
+        "offsetSeconds":-14400
+    });
+    value["domain"]["entities"][id(8)]["endsAt"] = json!({
+        "instant":"2026-11-02T08:00:00Z","local":"2026-11-02T03:00:00",
+        "offsetSeconds":-18000
+    });
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(22));
+    value["domain"]["rules"][id(35)] = json!({
+        "kind":"maximumHours","id":id(35),"active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},"bucketId":id(3),
+        "window":{"kind":"calendar","calendarId":id(2),"membership":"startInstant"},
+        "maximumMinutes":5000,
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    compile_assignment_rules(&document, &context())?;
+    compile_workforce(&document, &context())?;
+    assert!(original_accepts(&document, &[pair(1, 8)?])?);
+    Ok(())
+}
+
+// Keep the calendar, rolling and nanosecond worker cases in one acceptance matrix.
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+#[allow(clippy::too_many_lines)]
+async fn real_worker_enforces_calendar_and_rolling_maximum_hours() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint("12:00:00");
+    let rule_id: RuleId = id(35).parse()?;
+    for (name, window, maximum, feasible, fractional) in [
+        (
+            "calendar under cap",
+            json!({"kind":"calendar","calendarId":id(2),"membership":"reportingDate"}),
+            239,
+            false,
+            false,
+        ),
+        (
+            "calendar exact cap",
+            json!({"kind":"calendar","calendarId":id(2),"membership":"reportingDate"}),
+            240,
+            true,
+            false,
+        ),
+        (
+            "calendar one nanosecond over exact cap",
+            json!({"kind":"calendar","calendarId":id(2),"membership":"reportingDate"}),
+            240,
+            false,
+            true,
+        ),
+        (
+            "rolling start under cap",
+            json!({"kind":"rolling","durationMinutes":240,"membership":"startInstant"}),
+            239,
+            false,
+            false,
+        ),
+        (
+            "rolling start exact cap",
+            json!({"kind":"rolling","durationMinutes":240,"membership":"startInstant"}),
+            240,
+            true,
+            false,
+        ),
+        (
+            "rolling intersection under cap",
+            json!({"kind":"rolling","durationMinutes":120,"membership":"intersection"}),
+            119,
+            false,
+            false,
+        ),
+        (
+            "rolling intersection exact cap",
+            json!({"kind":"rolling","durationMinutes":120,"membership":"intersection"}),
+            120,
+            true,
+            false,
+        ),
+    ] {
+        let mut candidate = value.clone();
+        if fractional {
+            candidate["domain"]["entities"][id(22)]["endsAt"] = endpoint("12:00:00.000000001");
+        }
+        candidate["domain"]["rules"][id(35)] = json!({
+            "kind":"maximumHours","id":id(35),"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}},"bucketId":id(3),
+            "window":window,"maximumMinutes":maximum,
+        });
+        let document: ScenarioDocument = serde_json::from_value(candidate)?;
+        compile_assignment_rules(&document, &context())
+            .map_err(|error| format!("{name}: contribution: {error:?}"))?;
+        let compiled = compile_workforce(&document, &context())
+            .map_err(|error| format!("{name}: complete model: {error:?}"))?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        if !feasible {
+            assert_eq!(
+                result.outcome.termination,
+                BackendTerminationReason::InfeasibilityClaimed,
+                "{name}"
+            );
+            assert!(result.candidates.is_empty(), "{name}");
+            continue;
+        }
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed,
+            "{name}"
+        );
+        let candidate = result
+            .candidates
+            .first()
+            .ok_or("missing real worker maximum-hours candidate")?;
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let decision = reviewer.review(candidate, id(503).parse()?, &context().control);
+        let eutheto_verify::AcceptanceDecision::Accepted { result, .. } = decision else {
+            return Err(
+                format!("{name}: maximum-hours candidate was not accepted: {decision:?}").into(),
+            );
+        };
+        assert_eq!(result.verification.score.feasibility, 0, "{name}");
+        assert!(
+            result
+                .verification
+                .required_rule_results
+                .iter()
+                .find(|item| item.rule_id == rule_id)
+                .ok_or("missing maximum-hours verification result")?
+                .satisfied,
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_signed_scheduled_rolling_credit_exit() -> TestResult {
+    let mut value = fixture_value()?;
+    value["settings"]["timeZone"] = json!("America/New_York");
+    value["settings"]["horizon"] =
+        json!({"start":"2026-11-01T04:00:00Z","end":"2026-11-02T05:00:00Z"});
+    value["domain"]["entities"][id(3)]["measurement"] = json!("scheduledMinutes");
+    value["domain"]["entities"][id(3)]["overlappingContribution"] = json!("sum");
+    value["domain"]["entities"][id(8)]["startsAt"] = json!({
+        "instant":"2026-11-01T05:45:00Z","local":"2026-11-01T01:45:00",
+        "offsetSeconds":-14400
+    });
+    value["domain"]["entities"][id(8)]["endsAt"] = json!({
+        "instant":"2026-11-01T06:15:00Z","local":"2026-11-01T01:15:00",
+        "offsetSeconds":-18000
+    });
+    value["domain"]["entities"][id(22)]["startsAt"] = json!({
+        "instant":"2026-11-01T06:20:00Z","local":"2026-11-01T01:20:00",
+        "offsetSeconds":-18000
+    });
+    value["domain"]["entities"][id(22)]["endsAt"] = json!({
+        "instant":"2026-11-01T07:20:00Z","local":"2026-11-01T02:20:00",
+        "offsetSeconds":-18000
+    });
+    let rule_id: RuleId = id(35).parse()?;
+    for (maximum, feasible) in [(40, false), (60, true)] {
+        value["domain"]["rules"][id(35)] = json!({
+            "kind":"maximumHours","id":id(35),"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}},"bucketId":id(3),
+            "window":{"kind":"rolling","durationMinutes":60,"membership":"startInstant"},
+            "maximumMinutes":maximum,
+        });
+        let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+        let compiled = compile_workforce(&document, &context())?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        if !feasible {
+            assert_eq!(
+                result.outcome.termination,
+                BackendTerminationReason::InfeasibilityClaimed,
+                "signed negative credit must not mask a later positive-only window"
+            );
+            assert!(result.candidates.is_empty());
+            continue;
+        }
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed
+        );
+        let candidate = result
+            .candidates
+            .first()
+            .ok_or("missing signed hours candidate")?;
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let decision = reviewer.review(candidate, id(504).parse()?, &context().control);
+        let eutheto_verify::AcceptanceDecision::Accepted { result, .. } = decision else {
+            return Err(format!("signed rolling candidate was not accepted: {decision:?}").into());
+        };
+        assert_eq!(result.verification.score.feasibility, 0);
+        assert!(
+            result
+                .verification
+                .required_rule_results
+                .iter()
+                .find(|item| item.rule_id == rule_id)
+                .ok_or("missing signed hours verification result")?
                 .satisfied
         );
     }

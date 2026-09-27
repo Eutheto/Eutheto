@@ -1,6 +1,6 @@
 use super::super::{
     AssignmentRuleLimit,
-    analysis::{PlannedConstraint, Predicate},
+    analysis::{Plan, PlannedConstraint, Predicate, hours},
     budget::{add, count, within},
     compiler::{BOOL_ID, CONSTRAINT_ID, PROVENANCE_ID, preflight, reserve_fact},
     compiler_rank::{RankIds, RankIndex, emit_rank},
@@ -37,11 +37,8 @@ pub(super) fn prepare(
         ranks,
         limits,
     } = *input;
-    let capabilities = validate_shape(input, budget)?;
+    let (capabilities, variables, constraints, provenance) = validate_shape(input, budget)?;
     let pairs = count(analysis.candidates.len())?;
-    let variables = mul(pairs, 2)?;
-    let constraints = add(count(plan.constraints.len())?, variables)?;
-    let provenance = add(add(analysis.estimate.provenance_records, pairs)?, 1)?;
     // This set predicts serialized size only. Shared canonicalization derives the actual
     // declaration from the finished model; the compiler never declares backend support.
     let mut upper_bound = 0_i64;
@@ -110,6 +107,8 @@ pub(super) fn prepare(
         limits,
     )?;
     preflight_ranks(analysis, ranks, limits, budget)?;
+    hours::preflight_complete_ir(plan, budget, limits)?;
+
     budget.reserve_ir_retention()?;
     budget.check()?;
     Ok(Header {
@@ -118,10 +117,40 @@ pub(super) fn prepare(
     })
 }
 
+fn complete_shape(
+    analysis: &AssignmentAnalysis,
+    plan: &Plan,
+    pairs: u64,
+    limits: PlanningIrLimitsV1,
+) -> Result<(hours::HoursShape, u64, u64, u64), AssignmentRuleError> {
+    let hour_shape = hours::checked_shape(plan, limits)?;
+    let variables = add(mul(pairs, 2)?, hour_shape.helper_variables)?;
+    let hour_channel_constraints = hour_shape.pair_indices.checked_mul(2).ok_or_else(invalid)?;
+    let hour_constraints = hour_shape
+        .constraints
+        .checked_sub(hour_channel_constraints)
+        .ok_or_else(invalid)?;
+    let hour_provenance = hour_shape
+        .provenance
+        .checked_sub(hour_shape.pair_indices)
+        .ok_or_else(invalid)?;
+    let constraints = add(
+        add(count(plan.constraints.len())?, mul(pairs, 2)?)?,
+        hour_constraints,
+    )?;
+    let base_provenance = analysis
+        .estimate
+        .provenance_records
+        .checked_sub(hour_shape.provenance)
+        .ok_or_else(invalid)?;
+    let provenance = add(add(base_provenance, pairs)?, add(1, hour_provenance)?)?;
+    Ok((hour_shape, variables, constraints, provenance))
+}
+
 fn validate_shape(
     input: &ModelInput<'_>,
     budget: &mut OperationBudget<'_>,
-) -> Result<BTreeSet<Capability>, AssignmentRuleError> {
+) -> Result<(BTreeSet<Capability>, u64, u64, u64), AssignmentRuleError> {
     let ModelInput {
         analysis,
         plan,
@@ -144,9 +173,8 @@ fn validate_shape(
         AssignmentRuleLimit::PerRecord,
     )?;
     let pairs = count(analysis.candidates.len())?;
-    let variables = mul(pairs, 2)?;
-    let constraints = add(count(plan.constraints.len())?, variables)?;
-    let provenance = add(add(analysis.estimate.provenance_records, pairs)?, 1)?;
+    let (hour_shape, variables, constraints, provenance) =
+        complete_shape(analysis, plan, pairs, limits)?;
     within(
         variables,
         limits.max_variables,
@@ -187,7 +215,10 @@ fn validate_shape(
             within(value, limit, AssignmentRuleLimit::PerRecord)?;
         }
     }
-    let mut edges = add(variables, pairs.saturating_sub(1))?;
+    let mut edges = add(
+        add(variables, pairs.saturating_sub(1))?,
+        hour_shape.component_edges,
+    )?;
     budget.reserve(0, 6, 512)?;
     let mut capabilities = BTreeSet::new();
     if pairs > 0 {
@@ -209,7 +240,7 @@ fn validate_shape(
         limits.max_component_edges,
         AssignmentRuleLimit::PerRecord,
     )?;
-    Ok(capabilities)
+    Ok((capabilities, variables, constraints, provenance))
 }
 
 fn constraint_capability(planned: &PlannedConstraint) -> Capability {

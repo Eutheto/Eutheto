@@ -31,6 +31,21 @@ pub fn resolve_calendar(
     cancellation: &CancellationToken,
 ) -> Result<Vec<CalendarWindow>, TemporalError> {
     let calendar = validated_calendar(document, calendar_id, cancellation)?;
+    resolve_calendar_for_calendar(document, calendar_id, &calendar, range, cancellation)
+}
+
+/// Resolves calendar windows after the caller has validated and retained the typed calendar.
+///
+/// Assignment-rule operations use this to avoid revalidating the complete source document for
+/// every selected interval.
+pub(crate) fn resolve_calendar_for_calendar(
+    document: &ScenarioDocument,
+    calendar_id: WorkCalendarId,
+    calendar: &WorkCalendar,
+    range: Horizon,
+    cancellation: &CancellationToken,
+) -> Result<Vec<CalendarWindow>, TemporalError> {
+    check_cancelled(cancellation)?;
     if range.start >= range.end {
         return Err(issue(
             TemporalIssueKind::InvalidQuery,
@@ -47,7 +62,7 @@ pub fn resolve_calendar(
             cancellation,
         );
     }
-    let period = RegularPeriod::from_calendar(&calendar);
+    let period = RegularPeriod::from_calendar(calendar);
     let zone = TimeZone::get(document.settings.time_zone.as_str()).map_err(|_| {
         issue(
             TemporalIssueKind::Resolution(TimeResolutionFailureKind::InvalidTimeZone),

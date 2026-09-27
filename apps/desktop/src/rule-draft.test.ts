@@ -3,6 +3,8 @@ import { parseDurationDraft } from "./components/planner/duration-field";
 import {
   createRuleDraft,
   parseMaximumAssignmentCountDraft,
+  parseMaximumHoursDurationDraft,
+  parseMaximumHoursMaximumMinutesDraft,
   parseRequiredSkillMixMinimumDraft,
   ruleDraftValue,
   ruleRebaseValue,
@@ -28,6 +30,20 @@ const count: EditableRule & { readonly kind: "maximumAssignmentCount" } = {
   scope: { people: { kind: "all" } },
   calendarId: "01900000-0000-7000-8000-000000000042",
   maximum: 2,
+};
+const hours: EditableRule & { readonly kind: "maximumHours" } = {
+  id: "01900000-0000-7000-8000-000000000049",
+  kind: "maximumHours",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  bucketId: "01900000-0000-7000-8000-000000000050",
+  maximumMinutes: 480,
+  window: {
+    kind: "calendar",
+    calendarId: "01900000-0000-7000-8000-000000000051",
+    membership: "reportingDate",
+  },
 };
 const skillMix: EditableRule & { readonly kind: "requiredSkillMix" } = {
   id: "01900000-0000-7000-8000-000000000043",
@@ -176,6 +192,95 @@ describe("Maximum assignment count raw custody", () => {
         maximum: parseMaximumAssignmentCountDraft("0"),
       }).value,
     ).toEqual({ ...current, maximum: 0 });
+  });
+});
+describe("Maximum hours raw window and cap custody", () => {
+  it("parses unsigned maximum minutes and positive rolling duration without rounding", () => {
+    expect(parseMaximumHoursMaximumMinutesDraft("0004294967295")).toEqual({
+      raw: "0004294967295",
+      status: "valid",
+      maximumMinutes: 4_294_967_295,
+    });
+    expect(parseMaximumHoursMaximumMinutesDraft("4294967296")).toMatchObject({
+      status: "invalid",
+      error: "range",
+    });
+    expect(parseMaximumHoursDurationDraft("0")).toMatchObject({
+      status: "invalid",
+      error: "range",
+    });
+    expect(parseMaximumHoursDurationDraft("1.5")).toMatchObject({
+      status: "invalid",
+      error: "syntax",
+    });
+    expect(parseMaximumHoursDurationDraft("20160")).toEqual({
+      raw: "20160",
+      status: "valid",
+      durationMinutes: 20160,
+    });
+  });
+
+  it("prepares both calendar and rolling windows while leaving membership semantics native", () => {
+    expect(ruleDraftValue(hours.id, hours.kind, createRuleDraft(hours)).value).toEqual(hours);
+    const rolling = {
+      ...createRuleDraft(hours),
+      bucketId: hours.bucketId,
+      maximumMinutes: parseMaximumHoursMaximumMinutesDraft("0"),
+      window: {
+        kind: "rolling" as const,
+        durationMinutes: parseMaximumHoursDurationDraft("20160"),
+        membership: "startInstant" as const,
+      },
+    };
+    expect(ruleDraftValue(hours.id, hours.kind, rolling).value).toEqual({
+      ...hours,
+      maximumMinutes: 0,
+      window: { kind: "rolling", durationMinutes: 20160, membership: "startInstant" },
+    });
+  });
+
+  it("keeps invalid cap and rolling duration raw through a concurrent rebase", () => {
+    const raw = {
+      ...createRuleDraft(hours),
+      bucketId: "",
+      maximumMinutes: parseMaximumHoursMaximumMinutesDraft("2e"),
+      window: {
+        kind: "rolling" as const,
+        durationMinutes: parseMaximumHoursDurationDraft("0"),
+        membership: "startInstant" as const,
+      },
+    };
+    const local = ruleRebaseValue(hours, raw);
+    expect(local).not.toBeNull();
+    if (local === null) throw new Error("Invalid hours fields must not block rebasing");
+    const current = { ...hours, active: false, maximumMinutes: 600 };
+    const merged = rebaseEntityDraft(hours, local, current);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.bucketId).toBe("");
+    expect(rebased.maximumMinutes).toEqual(raw.maximumMinutes);
+    expect(rebased.window).toEqual(raw.window);
+    const invalid = ruleDraftValue(hours.id, hours.kind, rebased);
+    expect(invalid.value).toBeNull();
+    expect(invalid.errors.bucketId).toBeDefined();
+    expect(invalid.errors.maximumMinutes).toBeDefined();
+    expect(invalid.errors["window.durationMinutes"]).toBeDefined();
+    expect(
+      ruleDraftValue(hours.id, hours.kind, {
+        ...rebased,
+        bucketId: hours.bucketId,
+        maximumMinutes: parseMaximumHoursMaximumMinutesDraft("0"),
+        window: {
+          kind: "rolling",
+          durationMinutes: parseMaximumHoursDurationDraft("1"),
+          membership: "startInstant",
+        },
+      }).value,
+    ).toEqual({
+      ...current,
+      maximumMinutes: 0,
+      window: { kind: "rolling", durationMinutes: 1, membership: "startInstant" },
+    });
   });
 });
 

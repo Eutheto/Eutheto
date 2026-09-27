@@ -2620,7 +2620,7 @@ async function peopleEditorAcceptance(sessionId, scenarioId) {
   await save();
   await activateButton(sessionId, `Recovered team · ${recoveredTeamId}`, listRoot);
   await activateButton(sessionId, "Close record", editorRoot);
-  return { personId, qualificationId, teamId, assignmentTypeId, calendarId };
+  return { personId, qualificationId, teamId, assignmentTypeId, bucketId, calendarId };
 }
 
 async function peopleBulkAcceptance(sessionId, scenarioId, support) {
@@ -4124,7 +4124,7 @@ async function package7RestartAcceptance(sessionId, scenarioId, expected) {
 
   // ── undo all package7 additions back to CSV command head ───────────────────
   const csvCommandId = expected.csvCommandId;
-  const maxUndos = 30;
+  const maxUndos = 32;
   for (let i = 0; i < maxUndos; i++) {
     const proj = (await projects(sessionId)).find((p) => p.scenarioId === scenarioId);
     const page = (
@@ -4352,6 +4352,71 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   maximum = await package8Rule(sessionId, scenarioId, maximumId);
   assert.equal(maximum.record.calendarId, expected.calendarId);
   assert.equal(maximum.record.maximum, 3);
+
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Maximum hours");
+  const calendarHoursId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(calendarHoursId, "Calendar maximum hours needs a stable native rule identity");
+  await choosePeopleReference(
+    sessionId,
+    "Workload bucket",
+    "Existing scheduled minutes",
+    maximumEditor,
+  );
+  await choosePeopleReference(
+    sessionId,
+    "Reporting-date calendar",
+    "Existing daily target",
+    maximumEditor,
+  );
+  await setValue(sessionId, "#rule-maximum-minutes", "480");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const calendarHours = await package8Rule(sessionId, scenarioId, calendarHoursId);
+  assert.equal(calendarHours.record.kind, "maximumHours");
+  assert.equal(calendarHours.record.bucketId, expected.bucketId);
+  assert.equal(calendarHours.record.window.kind, "calendar");
+  assert.equal(calendarHours.record.window.calendarId, expected.calendarId);
+  assert.equal(calendarHours.record.window.membership, "reportingDate");
+  assert.equal(calendarHours.record.maximumMinutes, 480);
+
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Maximum hours");
+  const rollingHoursId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(rollingHoursId, "Rolling maximum hours needs a stable native rule identity");
+  await choosePeopleReference(
+    sessionId,
+    "Workload bucket",
+    "Existing scheduled minutes",
+    maximumEditor,
+  );
+  await selectValue(sessionId, "#rule-window-kind", "rolling");
+  await selectValue(sessionId, "#rule-window-membership", "startInstant");
+  await setValue(sessionId, "#rule-maximum-minutes", "960");
+  await setValue(sessionId, "#rule-window-duration", "0");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "return !document.querySelector('#rule-review-heading') && document.activeElement?.id === 'rule-window-duration' && document.activeElement.value === '0';",
+  );
+  await setValue(sessionId, "#rule-window-duration", "1440");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const rollingHours = await package8Rule(sessionId, scenarioId, rollingHoursId);
+  assert.equal(rollingHours.record.kind, "maximumHours");
+  assert.equal(rollingHours.record.bucketId, expected.bucketId);
+  assert.equal(rollingHours.record.window.kind, "rolling");
+  assert.equal(rollingHours.record.window.membership, "startInstant");
+  assert.equal(rollingHours.record.window.durationMinutes, 1440);
+  assert.equal(rollingHours.record.maximumMinutes, 960);
 
   await navigate(sessionId, `/project/${scenarioId}/validation`);
   await waitForElement(sessionId, "#validation-heading");
@@ -4697,6 +4762,9 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   return {
     restId,
     maximumId,
+    calendarHoursId,
+    rollingHoursId,
+    bucketId: expected.bucketId,
     inactiveId,
     skillMixId,
     fixedId,
@@ -4855,7 +4923,7 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: ten native Required kinds including reporting-date maximum assignment count, qualification mix, named fixed assignment, mutual restriction and directed travel time; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
+    "PASS: native Required kinds including reporting-date maximum assignment count, qualification mix, named fixed assignment, mutual restriction and directed travel time; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
   );
 }
 
@@ -5758,6 +5826,16 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   assert.equal(maximum.record.kind, "maximumAssignmentCount");
   assert.equal(maximum.record.calendarId, expected.calendarId);
   assert.equal(maximum.record.maximum, 3);
+  const calendarHours = await package8Rule(sessionId, scenarioId, expected.calendarHoursId);
+  const rollingHours = await package8Rule(sessionId, scenarioId, expected.rollingHoursId);
+  assert.equal(calendarHours.record.kind, "maximumHours");
+  assert.equal(calendarHours.record.bucketId, expected.bucketId);
+  assert.equal(calendarHours.record.window.calendarId, expected.calendarId);
+  assert.equal(calendarHours.record.maximumMinutes, 480);
+  assert.equal(rollingHours.record.kind, "maximumHours");
+  assert.equal(rollingHours.record.bucketId, expected.bucketId);
+  assert.equal(rollingHours.record.window.kind, "rolling");
+  assert.equal(rollingHours.record.window.durationMinutes, 1440);
   assert.equal(inactive.record.active, false);
   assert.equal(skillMix.record.kind, "requiredSkillMix");
   assert.equal(skillMix.record.qualificationMinimums[0].minimum, 1);
@@ -5781,12 +5859,12 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   );
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
-  for (let index = 0; index < 6; index += 1) {
+  for (let index = 0; index < 8; index += 1) {
     await activateButton(sessionId, "Undo scenario change", '[aria-labelledby="history-heading"]');
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: native ten-hour Required rest, reporting-date maximum count, qualification mix, fixed named assignment, mutual restriction and directed travel time review/save/restart; new active singleton travel rule blocked by native shift-scope proof; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
+    "PASS: native ten-hour Required rest, reporting-date maximum count, fixed-period and rolling maximum hours, qualification mix, fixed named assignment, mutual restriction and directed travel time review/save/restart; invalid rolling duration preserved and focused; new active singleton travel rule blocked by native shift-scope proof; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
   );
 }
 
@@ -5906,6 +5984,7 @@ async function run() {
     const package8Expected = await package8Acceptance(firstSessionId, scenarioId, {
       ...package7Expected,
       calendarId: people.calendarId,
+      bucketId: people.bucketId,
       qualificationId: people.qualificationId,
     });
     await package8CoverageAcceptance(firstSessionId, scenarioId, package7Expected.shiftInstanceId);

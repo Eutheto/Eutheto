@@ -40,7 +40,7 @@ pub fn project_workforce_candidate(
         return Err(contract("official.workforce.projection.version"));
     }
     let limits = effective_limits(limits)?;
-    let mut budget = OperationBudget::analysis(Some(control), limits);
+    let mut budget = OperationBudget::projection(Some(control), limits);
     let raw_text_bytes = precharge_text(problem, limits, &mut budget)?;
     // Generic validate does not enforce whole-model bytes. Measure the borrowed model before
     // its indexes, candidate processing, or output allocations; never serialize into a Vec.

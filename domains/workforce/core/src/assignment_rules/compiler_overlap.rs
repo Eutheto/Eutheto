@@ -215,6 +215,7 @@ mod tests {
             let mut plan = Plan {
                 definitions: Vec::new(),
                 constraints: Vec::new(),
+                hours: Vec::new(),
                 parents: std::collections::BTreeMap::default(),
             };
             let (_, remaining_items, remaining_bytes) = budget.remaining_output();

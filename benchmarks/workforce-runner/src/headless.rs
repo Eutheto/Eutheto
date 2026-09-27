@@ -249,7 +249,12 @@ fn measured_outcome(
             );
             None
         }
-        _ => anyhow::bail!("unexpected final acceptance disposition"),
+        _ => anyhow::bail!(
+            "unexpected final acceptance disposition: case={}, status={status:?}, portable={}, termination={}",
+            fixture.manifest.id.slug(),
+            portable.is_some(),
+            backend.termination
+        ),
     };
     let timings = phase_measurements(manifest, acceptance.is_some())?;
     Ok(BenchmarkSample {

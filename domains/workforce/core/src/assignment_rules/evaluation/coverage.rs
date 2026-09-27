@@ -224,6 +224,7 @@ fn check(
         period: None,
         rest: None,
         transition: None,
+        hours: None,
     };
     summary.predicate(
         actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper),

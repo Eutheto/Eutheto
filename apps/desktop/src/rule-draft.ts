@@ -4,6 +4,8 @@ import type {
   WorkforceRequiredSkillMixRule,
   WorkforceRule,
   WorkforceScope,
+  WorkforceWindowMembership,
+  WorkforceWorkWindow,
 } from "./api/generated-domain-pack-contracts";
 import type { DurationDraft } from "./components/planner/field-contracts";
 import { parseDurationDraft } from "./components/planner/duration-field";
@@ -56,6 +58,7 @@ export type EditableRule = Extract<
       | "coverage"
       | "noOverlap"
       | "minimumRest"
+      | "maximumHours"
       | "maximumAssignmentCount"
       | "requiredSkillMix"
       | "fixedAssignment"
@@ -86,6 +89,81 @@ export function parseMaximumAssignmentCountDraft(raw: string): MaximumAssignment
   if (maximum > maximumAssignmentCountLimit) return { raw, status: "invalid", error: "range" };
   return { raw, status: "valid", maximum: Number(maximum) };
 }
+type UnsignedIntegerDraft = {
+  readonly raw: string;
+} & (
+  | { readonly status: "empty" }
+  | { readonly status: "invalid"; readonly error: "syntax" | "range" }
+  | { readonly status: "valid"; readonly value: number }
+);
+
+const unsignedIntegerLimit = 4_294_967_295n;
+
+function parseUnsignedIntegerDraft(raw: string, positive: boolean): UnsignedIntegerDraft {
+  if (raw === "") return { raw, status: "empty" };
+  if (raw.length > 32) return { raw, status: "invalid", error: "range" };
+  if (!/^[0-9]+$/u.test(raw)) return { raw, status: "invalid", error: "syntax" };
+  const normalized = raw.replace(/^0+/u, "") || "0";
+  if (normalized.length > 10) return { raw, status: "invalid", error: "range" };
+  const value = BigInt(normalized);
+  if (value > unsignedIntegerLimit || (positive && value === 0n))
+    return { raw, status: "invalid", error: "range" };
+  return { raw, status: "valid", value: Number(value) };
+}
+
+export type MaximumHoursMaximumMinutesDraft = {
+  readonly raw: string;
+} & (
+  | { readonly status: "empty" }
+  | { readonly status: "invalid"; readonly error: "syntax" | "range" }
+  | { readonly status: "valid"; readonly maximumMinutes: number }
+);
+
+/** Keep editable maximum minutes separate from its native u32 meaning. */
+export function parseMaximumHoursMaximumMinutesDraft(raw: string): MaximumHoursMaximumMinutesDraft {
+  const parsed = parseUnsignedIntegerDraft(raw, false);
+  return parsed.status === "valid"
+    ? { raw, status: "valid", maximumMinutes: parsed.value }
+    : parsed;
+}
+
+export type MaximumHoursDurationDraft = {
+  readonly raw: string;
+} & (
+  | { readonly status: "empty" }
+  | { readonly status: "invalid"; readonly error: "syntax" | "range" }
+  | { readonly status: "valid"; readonly durationMinutes: number }
+);
+
+/** Keep editable positive rolling duration separate from its native u32 meaning. */
+export function parseMaximumHoursDurationDraft(raw: string): MaximumHoursDurationDraft {
+  const parsed = parseUnsignedIntegerDraft(raw, true);
+  return parsed.status === "valid"
+    ? { raw, status: "valid", durationMinutes: parsed.value }
+    : parsed;
+}
+
+export type MaximumHoursWindowDraft =
+  | {
+      readonly kind: "calendar";
+      readonly calendarId: string;
+      readonly membership: WorkforceWindowMembership;
+    }
+  | {
+      readonly kind: "rolling";
+      readonly durationMinutes: MaximumHoursDurationDraft;
+      readonly membership: WorkforceWindowMembership;
+    };
+
+function maximumHoursWindowDraft(value: WorkforceWorkWindow): MaximumHoursWindowDraft {
+  return value.kind === "calendar"
+    ? { kind: value.kind, calendarId: value.calendarId, membership: value.membership }
+    : {
+        kind: value.kind,
+        durationMinutes: parseMaximumHoursDurationDraft(String(value.durationMinutes)),
+        membership: value.membership,
+      };
+}
 
 export interface RuleDraft {
   readonly active: boolean;
@@ -93,6 +171,9 @@ export interface RuleDraft {
   readonly beforeScope: WorkforceScope;
   readonly afterScope: WorkforceScope;
   readonly calendarId: string;
+  readonly bucketId: string;
+  readonly maximumMinutes: MaximumHoursMaximumMinutesDraft;
+  readonly window: MaximumHoursWindowDraft;
   readonly maximum: MaximumAssignmentCountDraft;
   readonly minimumRest: DurationDraft;
   readonly compatibleCategoryPairs: readonly {
@@ -114,6 +195,7 @@ export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
     rule.kind === "coverage" ||
     rule.kind === "noOverlap" ||
     rule.kind === "minimumRest" ||
+    rule.kind === "maximumHours" ||
     rule.kind === "maximumAssignmentCount" ||
     rule.kind === "requiredSkillMix" ||
     rule.kind === "fixedAssignment" ||
@@ -250,6 +332,18 @@ export function createRuleDraft(
     record?.kind === "maximumAssignmentCount" &&
     previous?.value.kind === "maximumAssignmentCount" &&
     (previous.raw.maximum.status !== "valid" || sameField(record.maximum, previous.value.maximum));
+  const keepMaximumHours =
+    record?.kind === "maximumHours" &&
+    previous?.value.kind === "maximumHours" &&
+    (previous.raw.maximumMinutes.status !== "valid" ||
+      sameField(record.maximumMinutes, previous.value.maximumMinutes));
+  const keepMaximumHoursWindow =
+    record?.kind === "maximumHours" &&
+    previous?.value.kind === "maximumHours" &&
+    ((previous.raw.window.kind === "calendar" && previous.raw.window.calendarId === "") ||
+      (previous.raw.window.kind === "rolling" &&
+        previous.raw.window.durationMinutes.status !== "valid") ||
+      sameField(record.window, previous.value.window));
   const previousSkillMix =
     record?.kind === "requiredSkillMix" && previous?.value.kind === "requiredSkillMix"
       ? previous.value
@@ -274,6 +368,21 @@ export function createRuleDraft(
       record?.kind === "maximumAssignmentCount"
         ? record.calendarId
         : (previous?.raw.calendarId ?? ""),
+    bucketId: record?.kind === "maximumHours" ? record.bucketId : (previous?.raw.bucketId ?? ""),
+    maximumMinutes: keepMaximumHours
+      ? previous.raw.maximumMinutes
+      : record?.kind === "maximumHours"
+        ? parseMaximumHoursMaximumMinutesDraft(String(record.maximumMinutes))
+        : (previous?.raw.maximumMinutes ?? parseMaximumHoursMaximumMinutesDraft("")),
+    window: keepMaximumHoursWindow
+      ? previous.raw.window
+      : record?.kind === "maximumHours"
+        ? maximumHoursWindowDraft(record.window)
+        : (previous?.raw.window ?? {
+            kind: "calendar",
+            calendarId: "",
+            membership: "reportingDate",
+          }),
     maximum: keepMaximum
       ? previous.raw.maximum
       : record?.kind === "maximumAssignmentCount"
@@ -371,6 +480,50 @@ export function ruleDraftValue(
         errors: {},
       };
     }
+    case "maximumHours": {
+      const maximumMinutes = parseMaximumHoursMaximumMinutesDraft(draft.maximumMinutes.raw);
+      const window = draft.window;
+      const errors: Record<string, string> = {};
+      if (draft.bucketId === "") errors.bucketId = messages.ruleSetup.workloadBucketRequired;
+      if (maximumMinutes.status !== "valid")
+        errors.maximumMinutes = messages.ruleSetup.maximumHoursInvalid;
+      if (window.kind === "calendar") {
+        if (window.calendarId === "")
+          errors["window.calendarId"] = messages.ruleSetup.calendarRequired;
+      } else if (window.durationMinutes.status !== "valid") {
+        errors["window.durationMinutes"] = messages.ruleSetup.rollingDurationInvalid;
+      }
+      const resolvedWindow =
+        window.kind === "calendar"
+          ? {
+              kind: window.kind,
+              calendarId: window.calendarId,
+              membership: window.membership,
+            }
+          : window.durationMinutes.status === "valid"
+            ? {
+                kind: window.kind,
+                durationMinutes: window.durationMinutes.durationMinutes,
+                membership: window.membership,
+              }
+            : null;
+      if (
+        Object.keys(errors).length > 0 ||
+        maximumMinutes.status !== "valid" ||
+        resolvedWindow === null
+      )
+        return { value: null, errors };
+      return {
+        value: {
+          ...common,
+          kind,
+          bucketId: draft.bucketId,
+          maximumMinutes: maximumMinutes.maximumMinutes,
+          window: resolvedWindow,
+        },
+        errors: {},
+      };
+    }
     case "requiredSkillMix": {
       const errors: Record<string, string> = {};
       const qualificationMinimums: WorkforceQualificationMinimum[] =
@@ -448,6 +601,36 @@ export function ruleRebaseValue(base: EditableRule, draft: RuleDraft): EditableR
       calendarId: draft.calendarId,
       maximum: draft.maximum.status === "valid" ? draft.maximum.maximum : base.maximum,
     };
+  if (base.kind === "maximumHours") {
+    const window =
+      draft.window.kind === "calendar"
+        ? {
+            kind: draft.window.kind,
+            calendarId: draft.window.calendarId,
+            membership: draft.window.membership,
+          }
+        : {
+            kind: draft.window.kind,
+            durationMinutes:
+              draft.window.durationMinutes.status === "valid"
+                ? draft.window.durationMinutes.durationMinutes
+                : base.window.kind === "rolling"
+                  ? base.window.durationMinutes
+                  : 1,
+            membership: draft.window.membership,
+          };
+    return {
+      ...base,
+      active: draft.active,
+      scope: draft.scope,
+      bucketId: draft.bucketId,
+      maximumMinutes:
+        draft.maximumMinutes.status === "valid"
+          ? draft.maximumMinutes.maximumMinutes
+          : base.maximumMinutes,
+      window,
+    };
+  }
   if (base.kind === "requiredSkillMix")
     return {
       ...base,

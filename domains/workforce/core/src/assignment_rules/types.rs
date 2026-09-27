@@ -108,6 +108,9 @@ pub struct AssignmentVariable {
 pub struct AssignmentRuleCompilation {
     pub source_document_hash: String,
     pub variables: Vec<AssignmentVariable>,
+    /// Integer/Boolean helper variables used by contribution constraints. Pair variables remain
+    /// explicitly associated through `variables`; these helpers have no domain assignment.
+    pub auxiliary_variables: Vec<eutheto_planning_ir::Variable>,
     pub constraints: Vec<ConstraintRecord>,
     pub provenance: Vec<ProvenanceRecord>,
     pub rejections: Vec<PairRejection>,
