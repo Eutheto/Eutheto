@@ -7,7 +7,10 @@ use super::{
     input::AssignmentInput,
     reporting::ReportingPeriod,
 };
-use crate::{ids::ShiftId, model::AssignmentPair};
+use crate::{
+    ids::{LocationId, ShiftId},
+    model::AssignmentPair,
+};
 use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::{DomainEntityId, DomainEntityKindId, DomainEntityRef};
 use eutheto_planning_ir::{
@@ -234,7 +237,8 @@ fn constraint_body(
         | Predicate::OverlapClique { .. }
         | Predicate::MutualSameShift { .. }
         | Predicate::MutualOverlap { .. }
-        | Predicate::MinimumRest { .. } => Ok(Constraint::at_most_one(literals)),
+        | Predicate::MinimumRest { .. }
+        | Predicate::TransitionTime { .. } => Ok(Constraint::at_most_one(literals)),
         Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
             Ok(Constraint::bool_or(literals))
         }
@@ -360,6 +364,27 @@ fn derive_predicate(
             );
             identities.derive(kind, &key, budget)
         }
+        Predicate::TransitionTime {
+            person,
+            source_location,
+            target_location,
+            source,
+            target,
+            required_minutes,
+        } => identities.derive(
+            kind,
+            &(
+                "transition_time",
+                planned.rule,
+                person,
+                source_location,
+                target_location,
+                source,
+                target,
+                required_minutes,
+            ),
+            budget,
+        ),
         Predicate::FixedAssignment { person, shift } => identities.derive(
             kind,
             &("fixed_assignment", planned.rule, person, shift),
@@ -702,6 +727,25 @@ fn constraint_fact(
             minimum_rest_payload(person, source, target, minimum_minutes, &mut parameters)?,
             "official.workforce.minimum_rest",
         ),
+        Predicate::TransitionTime {
+            person,
+            source_location,
+            target_location,
+            source,
+            target,
+            required_minutes,
+        } => (
+            transition_time_payload(
+                person,
+                source_location,
+                target_location,
+                source,
+                target,
+                required_minutes,
+                &mut parameters,
+            )?,
+            "official.workforce.transition_time",
+        ),
         Predicate::FixedAssignment { person, shift } => (
             vec![
                 entity("person", EntityId::from_uuid(person.as_uuid()))?,
@@ -793,6 +837,47 @@ fn minimum_rest_payload(
     );
     Ok(vec![
         entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        source,
+        target,
+    ])
+}
+fn transition_time_payload(
+    person: PersonId,
+    source_location: LocationId,
+    target_location: LocationId,
+    source: ShiftId,
+    target: ShiftId,
+    required_minutes: u32,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    let source_location = entity("location", source_location.as_entity_id())?;
+    let target_location = entity("location", target_location.as_entity_id())?;
+    let source = entity("shift", source.as_entity_id())?;
+    let target = entity("shift", target.as_entity_id())?;
+    parameters.insert(
+        "source_location".to_owned(),
+        ProvenanceParameter::Entity(source_location.clone()),
+    );
+    parameters.insert(
+        "target_location".to_owned(),
+        ProvenanceParameter::Entity(target_location.clone()),
+    );
+    parameters.insert(
+        "source_shift".to_owned(),
+        ProvenanceParameter::Entity(source.clone()),
+    );
+    parameters.insert(
+        "target_shift".to_owned(),
+        ProvenanceParameter::Entity(target.clone()),
+    );
+    parameters.insert(
+        "required_minutes".to_owned(),
+        ProvenanceParameter::Integer(i64::from(required_minutes)),
+    );
+    Ok(vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        source_location,
+        target_location,
         source,
         target,
     ])
@@ -925,7 +1010,8 @@ pub(super) fn preflight(
                 | Predicate::OverlapClique { .. }
                 | Predicate::MutualSameShift { .. }
                 | Predicate::MutualOverlap { .. }
-                | Predicate::MinimumRest { .. } => MeasuredBody::AtMostOne { literals },
+                | Predicate::MinimumRest { .. }
+                | Predicate::TransitionTime { .. } => MeasuredBody::AtMostOne { literals },
                 Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
                     MeasuredBody::BoolOr { literals }
                 }

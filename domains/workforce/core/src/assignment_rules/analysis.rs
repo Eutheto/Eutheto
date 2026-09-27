@@ -12,6 +12,9 @@ mod mutual;
 #[path = "compiler_overlap.rs"]
 mod overlap;
 
+#[path = "compiler_transition.rs"]
+mod transition;
+
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     AssignmentRuleLimit, InstantInterval, PairRejection, RejectionCause, RequiredRulePartition,
@@ -21,7 +24,7 @@ use super::{
     reporting::ReportingPeriod,
 };
 use crate::{
-    ids::{ShiftId, WorkCalendarId},
+    ids::{LocationId, ShiftId, WorkCalendarId},
     model::{
         AssignmentLock, AssignmentPair, Availability, AvailabilityKind, CategoryPair, Coverage,
         LockState, PairingMode, Person, QualificationMinimum, Scope, WorkforceEntity,
@@ -107,6 +110,14 @@ pub(super) enum Predicate {
         source: ShiftId,
         target: ShiftId,
         minimum_minutes: u32,
+    },
+    TransitionTime {
+        person: PersonId,
+        source_location: LocationId,
+        target_location: LocationId,
+        source: ShiftId,
+        target: ShiftId,
+        required_minutes: u32,
     },
     FixedAssignment {
         person: PersonId,
@@ -490,6 +501,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::RequiredSkillMix { .. }
             | WorkforceRule::FixedAssignment { .. }
             | WorkforceRule::MutualAssignmentRestriction { .. }
+            | WorkforceRule::TransitionTime { .. }
     )
 }
 
@@ -638,6 +650,9 @@ fn plan(
                 minimum_minutes: rest.minimum_minutes,
             }
             .plan(input, &result.candidates, &mut plan, budget)?,
+            WorkforceRule::TransitionTime { .. } => {
+                transition::plan(input, &result.candidates, &mut plan, rule, budget)?;
+            }
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 count::plan(document, input, &result.candidates, rule, &mut plan, budget)?;
             }
@@ -1383,6 +1398,7 @@ pub(super) fn predicate_shape(
             ..
         } => (3 + u64::from(first_shift != second_shift), 0),
         Predicate::MinimumRest { .. } => (3, 3),
+        Predicate::TransitionTime { .. } => (5, 5),
         Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => (2, 0),
     })
 }
@@ -1427,6 +1443,7 @@ pub(super) fn commit_append(
                     "mutual_assignment_restriction"
                 }
                 Predicate::MinimumRest { .. } => "minimum_rest",
+                Predicate::TransitionTime { .. } => "transition_time",
                 Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
                 Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
                 Predicate::SkillMixQualification { .. } => "required_skill_mix",
@@ -1468,6 +1485,7 @@ fn coverage_bound_findings(
             | Predicate::MutualSameShift { .. }
             | Predicate::MutualOverlap { .. }
             | Predicate::MinimumRest { .. }
+            | Predicate::TransitionTime { .. }
             | Predicate::FixedAssignment { .. }
             | Predicate::HardLock { .. } => continue,
         };
@@ -1504,6 +1522,7 @@ fn coverage_bound_findings(
                 | Predicate::MutualSameShift { .. }
                 | Predicate::MutualOverlap { .. }
                 | Predicate::MinimumRest { .. }
+                | Predicate::TransitionTime { .. }
                 | Predicate::FixedAssignment { .. }
                 | Predicate::HardLock { .. } => continue,
             };
@@ -1676,6 +1695,7 @@ fn hard_lock_findings(
     locked_overlap_findings(input, &locks, &mut result.validation, budget)?;
     mutual::locked_findings(input, &locks, &mut result.validation, budget)?;
     rest::locked_rest_findings(input, &locks, &mut result.validation, budget)?;
+    transition::locked_findings(input, &locks, &mut result.validation, budget)?;
     count::locked_findings(document, input, &locks, &mut result.validation, budget)?;
     locked_coverage_findings(input, &pairs, plan, &mut result.validation, budget)
 }

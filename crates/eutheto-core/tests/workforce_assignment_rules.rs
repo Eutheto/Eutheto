@@ -630,6 +630,340 @@ fn mutual_fixture(mode: &str) -> Result<Value, Box<dyn Error>> {
     Ok(value)
 }
 
+fn transition_fixture() -> Result<Value, Box<dyn Error>> {
+    let mut value = fixture_value()?;
+    value["domain"]["rules"][id(32)]["active"] = json!(false);
+    value["domain"]["rules"][id(33)]["active"] = json!(false);
+    value["domain"]["entities"][id(40)] =
+        json!({"kind":"location","id":id(40),"name":"South","transitions":[]});
+    value["domain"]["entities"][id(5)]["transitions"] = json!([{"locationId":id(40),"minutes":30}]);
+    value["domain"]["entities"][id(22)]["locationId"] = json!(id(40));
+    value["domain"]["rules"][id(34)] = json!({
+        "kind":"transitionTime","id":id(34),"active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},"locationIds":[id(5),id(40)]
+    });
+    Ok(value)
+}
+
+#[test]
+fn transition_admission_rejects_empty_active_or_unknown_locations_but_keeps_inactive_raw()
+-> TestResult {
+    let mut empty = transition_fixture()?;
+    empty["domain"]["rules"][id(34)]["locationIds"] = json!([]);
+    let active: ScenarioDocument = serde_json::from_value(empty.clone())?;
+    assert!(eutheto_workforce::validation::validate_document(&active).is_err());
+    empty["domain"]["rules"][id(34)]["active"] = json!(false);
+    let inactive: ScenarioDocument = serde_json::from_value(empty)?;
+    eutheto_workforce::validation::validate_document(&inactive)?;
+    let mut unknown = transition_fixture()?;
+    unknown["domain"]["rules"][id(34)]["locationIds"] = json!([id(5), id(999)]);
+    let missing: ScenarioDocument = serde_json::from_value(unknown)?;
+    assert!(eutheto_workforce::validation::validate_document(&missing).is_err());
+    Ok(())
+}
+
+#[test]
+fn directed_transition_ir_and_original_verifier_agree_over_every_small_selection() -> TestResult {
+    let short = transition_fixture()?;
+    let mut exact = short.clone();
+    exact["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:30:00");
+    exact["domain"]["entities"][id(22)]["endsAt"] = endpoint("11:30:00");
+    let mut touching_zero = short.clone();
+    touching_zero["domain"]["entities"][id(5)]["transitions"][0]["minutes"] = json!(0);
+    touching_zero["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    let mut missing = short.clone();
+    missing["domain"]["entities"][id(5)]["transitions"] = json!([]);
+    let mut reverse_only = missing.clone();
+    reverse_only["domain"]["entities"][id(40)]["transitions"] =
+        json!([{"locationId":id(5),"minutes":30}]);
+    let mut tied_starts = reverse_only.clone();
+    tied_starts["domain"]["entities"][id(22)]["startsAt"] = endpoint("08:00:00");
+    let mut one_person_scoped = short.clone();
+    one_person_scoped["domain"]["rules"][id(34)]["scope"]["people"] =
+        json!({"kind":"selected","personIds":[id(20)]});
+    let mut one_shift_scoped = short.clone();
+    one_shift_scoped["domain"]["rules"][id(34)]["scope"]["locationIds"] = json!([id(5)]);
+    let mut legacy_singleton = short.clone();
+    legacy_singleton["domain"]["rules"][id(34)]["locationIds"] = json!([id(5)]);
+    let mut fall_fold = short.clone();
+    let original: Value = serde_json::to_value(workforce_fixture::fixture()?)?;
+    fall_fold["settings"] = original["settings"].clone();
+    fall_fold["domain"]["entities"][id(8)]["startsAt"] =
+        original["domain"]["entities"][id(8)]["startsAt"].clone();
+    fall_fold["domain"]["entities"][id(8)]["endsAt"] =
+        original["domain"]["entities"][id(8)]["endsAt"].clone();
+    fall_fold["domain"]["entities"][id(22)]["startsAt"] = json!({
+        "instant":"2026-11-01T07:45:00Z","local":"2026-11-01T02:45:00","offsetSeconds":-18000
+    });
+    fall_fold["domain"]["entities"][id(22)]["endsAt"] = json!({
+        "instant":"2026-11-01T08:45:00Z","local":"2026-11-01T03:45:00","offsetSeconds":-18000
+    });
+    let same_person = [pair(1, 8)?, pair(1, 22)?];
+    let rule_id: RuleId = id(34).parse()?;
+    for (name, value, accepted) in [
+        ("short directed gap", short, false),
+        ("exact directed gap", exact, true),
+        ("touching zero-minute edge", touching_zero, true),
+        ("missing edge", missing, true),
+        ("reverse-only edge", reverse_only, true),
+        ("equal starts inspect reverse direction", tied_starts, false),
+        ("person scope intersection", one_person_scoped, true),
+        ("shift scope intersection", one_shift_scoped, true),
+        ("legacy singleton", legacy_singleton, true),
+        ("fall fold uses instants", fall_fold, false),
+    ] {
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_assignment_rules(&document, &context())?;
+        assert!(compiled.obligations.handled.contains(&rule_id), "{name}");
+        assert!(compiled.obligations.remaining.is_empty(), "{name}");
+        summarize(&problem(&document, &compiled)?, PlanningIrLimitsV1::DEFAULT)?;
+        assert_eq!(
+            original_accepts(&document, &same_person)?,
+            accepted,
+            "{name}"
+        );
+        for selected in selections()? {
+            assert_eq!(
+                mathematics_accepts(&compiled, &selected)?,
+                original_accepts(&document, &selected)?,
+                "{name}: {selected:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn directed_transition_constraint_names_both_configured_locations_in_provenance() -> TestResult {
+    let document: ScenarioDocument = serde_json::from_value(transition_fixture()?)?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let provenance = compiled
+        .provenance
+        .iter()
+        .find(|record| {
+            record.source_kind == ProvenanceSourceKind::Derived
+                && record.message_key == "official.workforce.transition_time"
+        })
+        .ok_or("missing directed travel constraint provenance")?;
+    assert_eq!(provenance.source_kind, ProvenanceSourceKind::Derived);
+    assert_eq!(provenance.source_id, id(34));
+    for (key, kind, identity) in [
+        ("source_location", "location", id(5)),
+        ("target_location", "location", id(40)),
+        ("source_shift", "shift", id(8)),
+        ("target_shift", "shift", id(22)),
+    ] {
+        let Some(ProvenanceParameter::Entity(reference)) = provenance.parameters.get(key) else {
+            return Err(format!("missing typed {key} provenance").into());
+        };
+        assert_eq!(
+            reference.kind.as_str(),
+            format!("official.workforce.{kind}")
+        );
+        assert_eq!(
+            reference.id.as_str(),
+            format!("official.workforce.{identity}")
+        );
+        assert!(
+            provenance.entity_refs.contains(reference),
+            "{key} must also be an affected entity"
+        );
+    }
+    assert_eq!(
+        provenance.parameters.get("required_minutes"),
+        Some(&ProvenanceParameter::Integer(30))
+    );
+    let parent = compiled
+        .provenance
+        .iter()
+        .find(|record| Some(&record.id) == provenance.parent.as_ref())
+        .ok_or("missing travel rule provenance parent")?;
+    assert_eq!(parent.source_kind, ProvenanceSourceKind::RequiredRule);
+    assert_eq!(parent.source_id, id(34));
+    Ok(())
+}
+
+#[test]
+fn transition_command_inverse_and_portable_roundtrip_preserve_directed_matrix_meaning() -> TestResult
+{
+    use eutheto_domain_api::{
+        DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPack, PortableImportContext,
+    };
+    use eutheto_types::{DomainCommandEnvelope, ScenarioDomain};
+    use eutheto_workforce::{WorkforcePack, commands};
+
+    let original: ScenarioDocument = serde_json::from_value(transition_fixture()?)?;
+    let selected = [pair(1, 8)?, pair(1, 22)?];
+    assert!(!original_accepts(&original, &selected)?);
+    let mut relaxed = original
+        .domain
+        .rules
+        .get(&id(34).parse()?)
+        .ok_or("missing transition rule")?
+        .clone();
+    relaxed["locationIds"] = json!([id(5)]);
+    let change = WorkforcePack.apply_batch(
+        &original,
+        &DomainBatchCommand {
+            schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
+            pack_id: original.domain_pack.id.clone(),
+            scenario_schema_version: 1,
+            label: None,
+            commands: vec![DomainCommandEnvelope {
+                command_type: commands::UPDATE_RULE.to_owned(),
+                payload: json!({"rule":relaxed}),
+            }],
+        },
+        &CancellationToken::new(),
+    )?;
+    assert!(original_accepts(&change.document, &selected)?);
+    let undone =
+        WorkforcePack.apply_batch(&change.document, &change.inverse, &CancellationToken::new())?;
+    assert_eq!(undone.document, original);
+    let portable = WorkforcePack.export_portable(&original)?;
+    let mut shell = original.clone();
+    shell.domain = ScenarioDomain::default();
+    shell.extensions.clear();
+    let restored = WorkforcePack.import_portable(
+        &serde_json::from_slice(&serde_json::to_vec(&portable)?)?,
+        &PortableImportContext {
+            scenario_shell: shell,
+        },
+    )?;
+    assert_eq!(restored, original);
+    assert!(!original_accepts(&restored, &selected)?);
+    Ok(())
+}
+
+#[test]
+fn transition_reports_original_hard_lock_conflicts_even_when_candidate_pruned() -> TestResult {
+    let mut value = transition_fixture()?;
+    value["domain"]["lockedAssignments"] = json!({
+        (id(35)):{"id":id(35),"personId":id(1),"shiftId":id(8),"state":{"kind":"hard"}},
+        (id(36)):{"id":id(36),"personId":id(1),"shiftId":id(22),"state":{"kind":"hard"}}
+    });
+    value["domain"]["entities"][id(41)] = json!({
+        "kind":"availability","id":id(41),"personId":id(1),
+        "availabilityKind":"unavailable",
+        "timeWindow":{"kind":"instant","startsAt":"2026-11-01T08:15:00Z","endsAt":"2026-11-01T08:30:00Z"},
+        "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+        "source":"manual","note":""
+    });
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let unavailable = pair(1, 8)?;
+    assert!(
+        !compiled
+            .variables
+            .iter()
+            .any(|candidate| candidate.pair == unavailable)
+    );
+    let first_lock_id = id(35).parse()?;
+    assert!(
+        compiled.validation.issues.iter().any(|issue| {
+            issue.code == "official.workforce.hard_lock_transition_conflict"
+                && issue.field_path.as_deref()
+                    == Some(format!("domain.lockedAssignments.{}", id(35)).as_str())
+                && issue.resource == Some(eutheto_types::ResourceRef::Assignment(first_lock_id))
+        }),
+        "pruning must not hide the locked directed transition"
+    );
+    value["domain"]["rules"][id(34)]["locationIds"] = json!([id(5)]);
+    let no_pair: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&no_pair, &context())?;
+    assert!(
+        compiled
+            .validation
+            .issues
+            .iter()
+            .all(|issue| issue.code != "official.workforce.hard_lock_transition_conflict")
+    );
+    Ok(())
+}
+
+#[test]
+fn dense_directed_transition_conflicts_stop_at_constraint_budget() -> TestResult {
+    let mut value = transition_fixture()?;
+    let source = value["domain"]["entities"][id(8)].clone();
+    let target = value["domain"]["entities"][id(22)].clone();
+    for index in 1000..1016 {
+        let mut shift = source.clone();
+        shift["id"] = json!(id(index));
+        value["domain"]["entities"][id(index)] = shift;
+    }
+    for index in 1100..1116 {
+        let mut shift = target.clone();
+        shift["id"] = json!(id(index));
+        value["domain"]["entities"][id(index)] = shift;
+    }
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let mut limited = context();
+    limited.planning_limits.max_constraints = 32;
+    let outcome = compile_assignment_rules(&document, &limited);
+    assert!(
+        matches!(
+            outcome,
+            Err(
+                eutheto_workforce::assignment_rules::AssignmentRuleError::LimitExceeded(
+                    eutheto_workforce::assignment_rules::AssignmentRuleLimit::Constraints
+                )
+            )
+        ),
+        "{outcome:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn directed_transition_verification_quarantines_missing_constraint_mutant() -> TestResult {
+    let document: ScenarioDocument = serde_json::from_value(transition_fixture()?)?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let same_person = [pair(1, 8)?, pair(1, 22)?];
+    let different_people = [pair(1, 8)?, pair(20, 22)?];
+    assert!(!mathematics_accepts(&compiled, &same_person)?);
+    assert!(!original_accepts(&document, &same_person)?);
+    assert!(mathematics_accepts(&compiled, &different_people)?);
+    assert!(original_accepts(&document, &different_people)?);
+    let report = authority::verify_selection(&document, &same_person)?;
+    let rule_id: RuleId = id(34).parse()?;
+    let rule = report
+        .required_rule_results
+        .iter()
+        .find(|entry| entry.rule_id == rule_id)
+        .ok_or("missing transition evaluation")?;
+    assert!(!rule.satisfied);
+    for (kind, entity_id) in [
+        ("person", id(1)),
+        ("shift", id(8)),
+        ("shift", id(22)),
+        ("location", id(5)),
+        ("location", id(40)),
+    ] {
+        assert!(
+            rule.affected_entities.iter().any(|entity| {
+                entity.kind.as_str() == format!("official.workforce.{kind}")
+                    && entity.id.as_str() == format!("official.workforce.{entity_id}")
+            }),
+            "missing affected {kind}: {entity_id}"
+        );
+    }
+    assert_eq!(
+        rule.expected
+            .get(&"official.workforce.fact.required_transition_minutes".parse()?),
+        Some(&eutheto_domain_ir::VerificationValue::Integer(30))
+    );
+    assert_eq!(
+        rule.observed
+            .get(&"official.workforce.fact.actual_transition_seconds".parse()?),
+        Some(&eutheto_domain_ir::VerificationValue::Integer(-3600))
+    );
+    let mut mutant = compiled.clone();
+    mutant.constraints.clear();
+    assert!(mathematics_accepts(&mutant, &same_person)?);
+    assert!(!original_accepts(&document, &same_person)?);
+    Ok(())
+}
+
 #[test]
 fn mutual_modes_match_original_verifier_over_every_small_selection() -> TestResult {
     let same = mutual_fixture("sameShift")?;
@@ -1224,6 +1558,84 @@ async fn real_worker_enforces_mutual_modes_and_half_open_endpoint() -> TestResul
                 .iter()
                 .find(|item| item.rule_id == mutual_rule_id)
                 .ok_or("missing mutual verification result")?
+                .satisfied
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_directed_transition_boundaries() -> TestResult {
+    let short = transition_fixture()?;
+    let mut exact = short.clone();
+    exact["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:30:00");
+    exact["domain"]["entities"][id(22)]["endsAt"] = endpoint("11:30:00");
+    let mut touching_zero = short.clone();
+    touching_zero["domain"]["entities"][id(5)]["transitions"][0]["minutes"] = json!(0);
+    touching_zero["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    let mut absent_edge = short.clone();
+    absent_edge["domain"]["entities"][id(5)]["transitions"] = json!([]);
+    let rule_id: RuleId = id(34).parse()?;
+    for (name, mut value, feasible) in [
+        ("under thirty minutes", short, false),
+        ("exactly thirty minutes", exact, true),
+        ("touching with zero minutes", touching_zero, true),
+        ("no configured directed edge", absent_edge, true),
+    ] {
+        value["domain"]["rules"][id(32)]["active"] = json!(true);
+        // Person 20 cannot cover either shift; Person 1 must cover both, making
+        // only the directed travel constraint decisive.
+        value["domain"]["entities"][id(41)] = json!({
+            "kind":"availability","id":id(41),"personId":id(20),
+            "availabilityKind":"unavailable",
+            "timeWindow":{"kind":"instant","startsAt":"2026-11-01T09:00:00Z","endsAt":"2026-11-01T12:00:00Z"},
+            "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+            "source":"manual","note":""
+        });
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_workforce(&document, &context())?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        if !feasible {
+            assert_eq!(
+                result.outcome.termination,
+                BackendTerminationReason::InfeasibilityClaimed,
+                "{name}"
+            );
+            assert!(result.candidates.is_empty(), "{name}");
+            continue;
+        }
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed,
+            "{name}"
+        );
+        let candidate = result
+            .candidates
+            .first()
+            .ok_or("missing real worker transition candidate")?;
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let eutheto_verify::AcceptanceDecision::Accepted { result, .. } =
+            reviewer.review(candidate, id(502).parse()?, &context().control)
+        else {
+            return Err(format!("{name}: travel-constrained candidate was not accepted").into());
+        };
+        assert_eq!(result.verification.score.feasibility, 0, "{name}");
+        assert!(
+            result
+                .verification
+                .required_rule_results
+                .iter()
+                .find(|item| item.rule_id == rule_id)
+                .ok_or("missing directed transition verification result")?
                 .satisfied
         );
     }

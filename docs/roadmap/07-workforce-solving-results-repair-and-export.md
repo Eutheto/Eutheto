@@ -72,6 +72,19 @@ Each rule below requires a stable schema/ID, migration handling, command DTO, va
 12. **Mutual assignment restriction:** keep configured people apart on the same shift or on overlapping matching shifts where this is a legitimate operational rule.
 13. **Transition/travel time:** require configured setup/travel duration between assignments at distinct locations using the MVP location-pair duration matrix; no map service is needed.
 
+For rule 13, `locationIds` names eligible endpoint locations, not directed
+pairs. The native `Location.transitions` entry from the source to the target
+supplies the only gap for two different matching shifts assigned to the same
+person at two distinct named locations. Both assignments must match the rule
+scope; an absent entry imposes no travel predicate, and no reverse entry is
+inferred. Evaluate the source assignment's end to the target's start using
+signed instants (including subsecond and daylight-saving boundaries), and
+check both authored directions when starts tie. The independent No overlap
+rule still governs overlaps. Existing active singleton selections remain
+loadable no-ops; the desktop editor requires two effective named locations
+for newly active selections, proved by the prospective native shift-scope
+review. Inactive raw selections retain their authored intent.
+
 Empty or default scopes must be safe. An empty scope cannot be saved accidentally; an intentional inactive state is explicit and never compiles as a surprising global rule.
 
 ### Exhaustive preference catalog

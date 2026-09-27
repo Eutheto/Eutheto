@@ -59,7 +59,8 @@ export type EditableRule = Extract<
       | "maximumAssignmentCount"
       | "requiredSkillMix"
       | "fixedAssignment"
-      | "mutualAssignmentRestriction";
+      | "mutualAssignmentRestriction"
+      | "transitionTime";
   }
 >;
 export type EditableRuleKind = EditableRule["kind"];
@@ -101,6 +102,7 @@ export interface RuleDraft {
   readonly personId: string;
   readonly shiftId: string;
   readonly personIds: readonly string[];
+  readonly locationIds: readonly string[];
   readonly mode: WorkforcePairingMode;
   readonly qualificationMinimums: readonly QualificationMinimumDraft[];
 }
@@ -115,7 +117,8 @@ export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
     rule.kind === "maximumAssignmentCount" ||
     rule.kind === "requiredSkillMix" ||
     rule.kind === "fixedAssignment" ||
-    rule.kind === "mutualAssignmentRestriction"
+    rule.kind === "mutualAssignmentRestriction" ||
+    rule.kind === "transitionTime"
   );
 }
 
@@ -255,6 +258,10 @@ export function createRuleDraft(
     record?.kind === "mutualAssignmentRestriction" &&
     previous?.value.kind === "mutualAssignmentRestriction" &&
     sameField(record.personIds, previous.value.personIds);
+  const keepTransitionLocations =
+    record?.kind === "transitionTime" &&
+    previous?.value.kind === "transitionTime" &&
+    sameField(record.locationIds, previous.value.locationIds);
   const keepMutualMode =
     record?.kind === "mutualAssignmentRestriction" &&
     previous?.value.kind === "mutualAssignmentRestriction" &&
@@ -309,6 +316,12 @@ export function createRuleDraft(
           ? previous.raw.personIds
           : record.personIds
         : (previous?.raw.personIds ?? []),
+    locationIds:
+      record?.kind === "transitionTime"
+        ? keepTransitionLocations
+          ? previous.raw.locationIds
+          : record.locationIds
+        : (previous?.raw.locationIds ?? []),
     mode:
       record?.kind === "mutualAssignmentRestriction"
         ? keepMutualMode
@@ -400,6 +413,11 @@ export function ruleDraftValue(
         value: { ...common, kind, personIds: draft.personIds, mode: draft.mode },
         errors: {},
       };
+    case "transitionTime":
+      return {
+        value: { ...common, kind, locationIds: draft.locationIds },
+        errors: {},
+      };
     case "noOverlap":
       return {
         value: { ...common, kind, compatibleCategoryPairs: draft.compatibleCategoryPairs },
@@ -436,6 +454,13 @@ export function ruleRebaseValue(base: EditableRule, draft: RuleDraft): EditableR
       active: draft.active,
       scope: draft.scope,
       qualificationMinimums: qualificationMinimumsForRebase(base, draft.qualificationMinimums),
+    };
+  if (base.kind === "transitionTime")
+    return {
+      ...base,
+      active: draft.active,
+      scope: draft.scope,
+      locationIds: draft.locationIds,
     };
   if (base.kind !== "minimumRest") return null;
   return {

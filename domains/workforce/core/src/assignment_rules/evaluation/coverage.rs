@@ -223,6 +223,7 @@ fn check(
         interval: None,
         period: None,
         rest: None,
+        transition: None,
     };
     summary.predicate(
         actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper),

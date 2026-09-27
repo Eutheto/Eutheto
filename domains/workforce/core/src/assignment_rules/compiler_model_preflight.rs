@@ -225,7 +225,8 @@ fn constraint_capability(planned: &PlannedConstraint) -> Capability {
         | Predicate::OverlapClique { .. }
         | Predicate::MutualSameShift { .. }
         | Predicate::MutualOverlap { .. }
-        | Predicate::MinimumRest { .. } => Capability::AtMostOne,
+        | Predicate::MinimumRest { .. }
+        | Predicate::TransitionTime { .. } => Capability::AtMostOne,
         Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => Capability::BoolOr,
     }
 }

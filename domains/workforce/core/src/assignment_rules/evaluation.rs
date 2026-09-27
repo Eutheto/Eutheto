@@ -6,6 +6,7 @@ mod mutual;
 mod predicates;
 mod rest;
 mod skill_mix;
+mod transition;
 use super::{
     AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleEvaluation,
     AssignmentRuleLimit, InstantInterval, RequiredRulePartition,
@@ -37,8 +38,8 @@ pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_coun
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
 /// Evaluates Eligibility, Availability, Coverage, `RequiredSkillMix`, `FixedAssignment`, authored
-/// Hard locks, `NoOverlap`, `MinimumRest` and `MaximumAssignmentCount`, plus unconditional
-/// activity/approved-leave facts.
+/// Hard locks, `NoOverlap`, `MinimumRest`, `TransitionTime` and `MaximumAssignmentCount`, plus
+/// unconditional activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
 /// but inadmissible selections remain in the population and yield original-domain violations.
@@ -220,6 +221,9 @@ fn evaluate_prepared(
             WorkforceRule::MutualAssignmentRestriction { .. } => {
                 mutual::evaluate(input, selected, rule, &mut summary, budget)?;
             }
+            WorkforceRule::TransitionTime { .. } => {
+                transition::evaluate(input, selected, rule, &mut summary, budget)?;
+            }
             _ => {
                 retain_id(&mut obligations.remaining, id, budget)?;
                 continue;
@@ -228,6 +232,24 @@ fn evaluate_prepared(
         retain_id(&mut obligations.handled, id, budget)?;
         evaluations.push(summary.finish(id, budget)?);
     }
+    append_lock_evaluations(input, selected, &mut evaluations, &mut obligations, budget)?;
+    budget.sort_work(obligations.handled.len())?;
+    budget.sort_work(obligations.remaining.len())?;
+    budget.sort_work(evaluations.len())?;
+    obligations.handled.sort_unstable();
+    obligations.remaining.sort_unstable();
+    evaluations.sort_unstable_by_key(|evaluation| evaluation.rule_id);
+    budget.check()?;
+    Ok((evaluations, obligations))
+}
+
+fn append_lock_evaluations(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    evaluations: &mut Vec<RuleEvaluation>,
+    obligations: &mut RequiredRulePartition,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
     for lock in input.domain.locked_assignments.values() {
         budget.step()?;
         let lock_id = RuleId::from_uuid(lock.id.as_uuid());
@@ -248,14 +270,7 @@ fn evaluate_prepared(
             LockState::Unlocked {} => {}
         }
     }
-    budget.sort_work(obligations.handled.len())?;
-    budget.sort_work(obligations.remaining.len())?;
-    budget.sort_work(evaluations.len())?;
-    obligations.handled.sort_unstable();
-    obligations.remaining.sort_unstable();
-    evaluations.sort_unstable_by_key(|evaluation| evaluation.rule_id);
-    budget.check()?;
-    Ok((evaluations, obligations))
+    Ok(())
 }
 
 fn fact_evaluations(
@@ -605,11 +620,20 @@ struct Witness {
     interval: Option<InstantInterval>,
     period: Option<(Rfc3339Timestamp, Rfc3339Timestamp)>,
     rest: Option<RestWitness>,
+    transition: Option<TransitionWitness>,
 }
 
 #[derive(Clone, Copy)]
 struct RestWitness {
     minimum_minutes: u32,
+    actual: SignedDuration,
+}
+
+#[derive(Clone, Copy)]
+struct TransitionWitness {
+    source_location: crate::ids::LocationId,
+    target_location: crate::ids::LocationId,
+    required_minutes: u32,
     actual: SignedDuration,
 }
 
@@ -636,6 +660,7 @@ impl Witness {
             interval: None,
             period: None,
             rest: None,
+            transition: None,
         }
     }
 
@@ -795,6 +820,9 @@ fn witness_evidence(
         witness.owner,
         budget,
     )?;
+    if let Some(transition) = witness.transition {
+        transition_evidence(witness, transition, result, budget)?;
+    }
     if witness.other_person.is_some() {
         mutual_pair_evidence(witness, result, budget)?;
     }
@@ -833,6 +861,72 @@ fn witness_evidence(
             &mut result.observed,
             "official.workforce.fact.witness_end",
             &interval.end.to_string(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn transition_evidence(
+    witness: &Witness,
+    transition: TransitionWitness,
+    result: &mut RuleEvaluation,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let target_shift = witness.other_shift.ok_or_else(invalid)?;
+    for (key, kind, id) in [
+        (
+            "official.workforce.fact.transition_source_shift",
+            "shift",
+            witness.shift.as_entity_id(),
+        ),
+        (
+            "official.workforce.fact.transition_target_shift",
+            "shift",
+            target_shift.as_entity_id(),
+        ),
+        (
+            "official.workforce.fact.transition_source_location",
+            "location",
+            transition.source_location.as_entity_id(),
+        ),
+        (
+            "official.workforce.fact.transition_target_location",
+            "location",
+            transition.target_location.as_entity_id(),
+        ),
+    ] {
+        let reference = entity_ref(kind, id, budget)?;
+        if kind == "location" {
+            entity(&mut result.affected_entities, kind, id, budget)?;
+        }
+        fact(
+            &mut result.observed,
+            key,
+            VerificationValue::Entity(reference),
+            budget,
+        )?;
+    }
+    fact(
+        &mut result.expected,
+        "official.workforce.fact.required_transition_minutes",
+        VerificationValue::Integer(i64::from(transition.required_minutes)),
+        budget,
+    )?;
+    for (key, value) in [
+        (
+            "official.workforce.fact.actual_transition_seconds",
+            transition.actual.as_secs(),
+        ),
+        (
+            "official.workforce.fact.actual_transition_subsecond_nanoseconds",
+            i64::from(transition.actual.subsec_nanos()),
+        ),
+    ] {
+        fact(
+            &mut result.observed,
+            key,
+            VerificationValue::Integer(value),
             budget,
         )?;
     }

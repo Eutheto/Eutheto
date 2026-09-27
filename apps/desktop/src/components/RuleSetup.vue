@@ -244,6 +244,7 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       personId: "rule-fixed-person",
       shiftId: "rule-fixed-shift",
       personIds: "rule-mutual-people",
+      locationIds: "rule-transition-locations",
       mode: "rule-mutual-mode",
       qualificationMinimums: "rule-qualification-minimums",
     } as const;
@@ -834,6 +835,41 @@ const navigationError = useValidationRoute(
               </p>
             </fieldset>
             <fieldset
+              v-if="state.editor.kind === 'transitionTime'"
+              id="rule-transition-time"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <p class="field-help">{{ copy.transitionTimeScopeHelp }}</p>
+              <WorkforceEntityPicker
+                id="rule-transition-locations"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="location"
+                multiple
+                :label="copy.fields.transitionLocations"
+                :description="copy.fields.transitionLocationsHelp"
+                :model-value="state.editor.raw.locationIds"
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.locationIds === undefined
+                    ? {}
+                    : { error: state.errors.locationIds }),
+                }"
+                @update:model-value="vm.updateRaw({ ...state.editor.raw, locationIds: $event })"
+              />
+              <p>
+                {{
+                  copy.transitionTimeSentence(
+                    formatNumber(state.editor.raw.locationIds.length, locale),
+                  )
+                }}
+              </p>
+            </fieldset>
+            <fieldset
               v-if="state.editor.kind === 'fixedAssignment'"
               id="rule-fixed-assignment-target"
               tabindex="-1"
@@ -1361,6 +1397,13 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
+          <p v-if="state.reviewed.after?.kind === 'transitionTime'">
+            {{
+              copy.transitionTimeSentence(
+                formatNumber(state.reviewed.after.locationIds.length, locale),
+              )
+            }}
+          </p>
           <p>{{ copy.previewHelp }}</p>
           <dl v-if="state.reviewed.summary">
             <div>
@@ -1397,7 +1440,13 @@ const navigationError = useValidationRoute(
                   : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
                       state.reviewed.scopeError === copy.mutualAssignmentRestrictionPairRequired
                     ? copy.mutualAssignmentRestrictionPairRequired
-                    : copy.activeScopeRequired
+                    : state.reviewed.after?.kind === "transitionTime" &&
+                        state.reviewed.transitionScopeProof === null
+                      ? copy.transitionTimeScopeRequired
+                      : state.reviewed.after?.kind === "transitionTime" &&
+                          state.reviewed.scopeError === copy.transitionTimePairRequired
+                        ? copy.transitionTimePairRequired
+                        : copy.activeScopeRequired
             }}
           </p>
         </template>

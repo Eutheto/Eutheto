@@ -198,28 +198,36 @@ The shared person–assignment inspector reads applied native blockers and ident
 Required rules not covered by its analysis. It does not establish whole-plan
 feasibility.
 
-**Required rules** exposes nine implemented kinds: eligibility, availability,
+**Required rules** exposes ten implemented kinds: eligibility, availability,
 coverage, no overlap, minimum rest, Maximum Assignment Count, Required
-Qualification Mix, Fixed Assignment and Mutual Assignment Restriction. The count
-cap applies to matching person–shift assignments by the shift's reporting date
-in a selected calendar period; zero forbids any matching assignment. A clinic
-shift requiring one Specialist and one Nurse can count the same dual-qualified
-person toward both minimums, but each minimum counts distinct assigned people
-on that shift.
+Qualification Mix, Fixed Assignment, Mutual Assignment Restriction and
+Transition Time. The count cap applies to matching person–shift assignments
+by the shift's reporting date in a selected calendar period; zero forbids
+any matching assignment. A clinic shift requiring one Specialist and one
+Nurse can count the same dual-qualified person toward both minimums, but
+each minimum counts distinct assigned people on that shift.
 Qualification mix uses whole-shift qualification grants and does not prorate
 partial shifts. Fixed Assignment chooses a native person and shift, allows
-browsing a bounded date window, and requires the exact named pair to belong to
-the active rule's reviewed scope. Mutual Assignment Restriction chooses native
-people and either limits them to one on each matching shift or forbids distinct
-selected people on matching half-open overlapping shifts (including the same
-shift). New active rules need two selected people inside their reviewed native
-scope; previously saved singleton or empty active rules remain readable no-ops.
-Commands retain stable identities across draft edits, require native before/after
-review, and show native affected counts.
-Independent bounded people/assignment scope previews use the captured revision.
-An active rule with an empty evaluated scope cannot be applied; explicitly
-inactive rules remain supported. Soft locks, Preferences and later rule kinds
-are not presented as implemented desktop policies.
+browsing a bounded date window, and requires the exact named pair to belong
+to the active rule's reviewed scope. Mutual Assignment Restriction chooses
+native people and either limits them to one on each matching shift or
+forbids distinct selected people on matching half-open overlapping shifts
+(including the same shift). New active rules need two selected people inside
+their reviewed native scope; previously saved singleton or empty active
+rules remain readable no-ops.
+Transition Time chooses named native locations and applies only the directed
+source-to-target minutes authored on the source location. Both distinct
+shifts must match the rule scope and belong to the same person; an absent
+or reverse-only matrix entry adds no travel gap. Native prospective review
+proves that two selected locations occur in effective matching shifts
+before new activation or changing an active selection/scope. Existing
+active singleton rules remain readable no-ops and can be deactivated.
+Commands retain stable identities across draft edits, require native
+before/after review, and show native affected counts. Independent bounded
+people/assignment scope previews use the captured revision. An active rule
+with an empty evaluated scope cannot be applied; explicitly inactive rules
+remain supported. Soft locks, Preferences and later rule kinds are not
+presented as implemented desktop policies.
 
 **Validation** separates saved-input fast feedback from an explicit full check of
 the saved revision. Completed, stale, failed and cancelled outcomes remain distinct;
@@ -627,13 +635,17 @@ on an actual shift. Matrix DOM-retention and WebDriver round-trip measurements a
 written to `.cache/e2e/package7-matrix-measurements.json`; these are not heap-memory,
 INP, release-build or cross-platform benchmarks.
 
-The rule/validation scenario reviews and persists a ten-hour Required rest rule,
-checks stable draft identity, live scope pages, empty-active-scope refusal and
-explicit inactivity, and distinguishes completed, stale, failed and cancelled
-validation attempts. It follows an authoritative standalone-coverage shortage to
-the exact count field and reviews a manual repair. An America/New_York repeated-time
-fixture demonstrates that zero fast errors need not imply full readiness and
-navigates the full finding to the second authored weekly start without mutation.
+The rule/validation scenario reviews and persists a ten-hour Required rest rule
+and directed Transition Time between two native-located shifts. It refuses a
+newly active singleton location selection without mutation, saves the
+two-location rule after native shift-scope review, and verifies the same
+location IDs after process restart. It checks stable draft identity, live
+scope pages, empty-active-scope refusal and explicit inactivity, and
+distinguishes completed, stale, failed and cancelled validation attempts.
+It follows an authoritative standalone-coverage shortage to the exact count
+field and reviews a manual repair. An America/New_York repeated-time fixture
+demonstrates that zero fast errors need not imply full readiness and navigates
+the full finding to the second authored weekly start without mutation.
 The native runner also checks WebDriver keyboard input and focus while the UI
 reports a pending full-validation request. That UI flag does not prove native
 admission or entry into the computation loop; input during admitted native

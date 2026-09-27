@@ -93,6 +93,10 @@ interface MutualAssignmentScopeProof {
   readonly selectedPersonIds: readonly string[];
   readonly inScopePersonIds: readonly string[];
 }
+interface TransitionTimeScopeProof {
+  readonly selectedLocationIds: readonly string[];
+  readonly inScopeLocationIds: readonly string[];
+}
 interface ReviewedRule {
   readonly snapshot: SetupCommandSnapshot;
   readonly draftGeneration: number;
@@ -103,6 +107,7 @@ interface ReviewedRule {
   readonly scopeError: string | null;
   readonly targetProof: FixedAssignmentTargetProof | null;
   readonly mutualScopeProof: MutualAssignmentScopeProof | null;
+  readonly transitionScopeProof: TransitionTimeScopeProof | null;
 }
 
 function needsMutualPairProof(
@@ -118,6 +123,19 @@ function needsMutualPairProof(
   );
 }
 
+function needsTransitionLocationProof(
+  before: EditableRule | null,
+  after: Extract<EditableRule, { kind: "transitionTime" }>,
+): boolean {
+  return (
+    before === null ||
+    before.kind !== "transitionTime" ||
+    !before.active ||
+    !sameField(before.locationIds, after.locationIds) ||
+    !sameField(before.scope, after.scope)
+  );
+}
+
 const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.eligibility": "eligibility",
   "official.workforce.rule.availability": "availability",
@@ -128,6 +146,7 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.required-skill-mix": "requiredSkillMix",
   "official.workforce.rule.fixed-assignment": "fixedAssignment",
   "official.workforce.rule.mutual-assignment-restriction": "mutualAssignmentRestriction",
+  "official.workforce.rule.transition-time": "transitionTime",
 };
 function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
   return (
@@ -140,6 +159,7 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     sameField(left.minimumRest, right.minimumRest) &&
     left.personId === right.personId &&
     sameField(left.personIds, right.personIds) &&
+    sameField(left.locationIds, right.locationIds) &&
     left.mode === right.mode &&
     left.shiftId === right.shiftId &&
     sameField(left.compatibleCategoryPairs, right.compatibleCategoryPairs) &&
@@ -155,6 +175,7 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     })
   );
 }
+
 const scopeParts = ["main", "minimumRestBefore", "minimumRestAfter"] as const;
 const entityFields = ["people", "teamIds", "assignmentTypeIds", "locationIds"] as const;
 type PickerKey = `${WorkforceSetupScopePart}:${ScopeEntityField}`;
@@ -297,6 +318,16 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
         proof === null ||
         !sameField(proof.selectedPersonIds, reviewed.after.personIds) ||
         (needsMutualPairProof(reviewed.before, reviewed.after) && proof.inScopePersonIds.length < 2)
+      )
+        return false;
+    }
+    if (reviewed.after.kind === "transitionTime") {
+      const proof = reviewed.transitionScopeProof;
+      if (
+        proof === null ||
+        !sameField(proof.selectedLocationIds, reviewed.after.locationIds) ||
+        (needsTransitionLocationProof(reviewed.before, reviewed.after) &&
+          proof.inScopeLocationIds.length < 2)
       )
         return false;
     }
@@ -591,6 +622,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       before: editor.base,
       targetProof: null as FixedAssignmentTargetProof | null,
       mutualScopeProof: null as MutualAssignmentScopeProof | null,
+      transitionScopeProof: null as TransitionTimeScopeProof | null,
     };
     if (after === null) {
       state.reviewed = { ...base, after: null, summary: null, scopeError: null };
@@ -812,6 +844,82 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               };
             }
           }
+          let transitionScopeProof: TransitionTimeScopeProof | null = null;
+          let transitionScopeError: string | null = null;
+          if (proposed.kind === "transitionTime" && proposed.active) {
+            const selectedLocationIds = [...new Set(proposed.locationIds)];
+            const selected = new Set(selectedLocationIds);
+            const inScope = new Set<string>();
+            const pairProofRequired = needsTransitionLocationProof(editor.base, proposed);
+            const required = pairProofRequired ? Math.min(2, selected.size) : 0;
+            let continuation: SetupContinuationV1 | null = null;
+            let complete = required === 0;
+            try {
+              for (let page = 0; page < 256 && !complete; page += 1) {
+                if (isCancelled() || !current()) return { ...detailResponse, result: null };
+                const operation: SetupOperation<
+                  ScenarioSetupViewResultV2<"official.workforce.setup.rule_scope">
+                > = getScenarioView(
+                  read.scope,
+                  {
+                    source,
+                    query: {
+                      schemaVersion: 1,
+                      viewId: "official.workforce.setup.rule_scope",
+                      parameters: {
+                        rule: reference(editor),
+                        part: "main",
+                        axis: "shifts",
+                        limit: 200,
+                      },
+                      ...(continuation === null ? {} : { continuation }),
+                    },
+                  },
+                  report,
+                );
+                cancelCurrent = () => operation.cancel();
+                const pageResponse = await operation.result;
+                if (isCancelled() || !current()) return { ...pageResponse, result: null };
+                const inspection = pageResponse.result.view.data.result.data;
+                if (
+                  !sameField(inspection.rule, reference(editor)) ||
+                  inspection.part !== "main" ||
+                  inspection.population.axis !== "shifts"
+                )
+                  throw new Error(
+                    "The native shift scope page did not match the reviewed transition-time rule.",
+                  );
+                for (const item of inspection.population.page.items)
+                  if (item.locationId !== null && selected.has(item.locationId))
+                    inScope.add(item.locationId);
+                complete = inScope.size >= required;
+                continuation = inspection.population.page.continuation;
+                if (!complete && continuation === null) break;
+              }
+              if (!complete && continuation !== null)
+                throw new Error(messages.ruleSetup.transitionTimeScopeProofLimit);
+              if (pairProofRequired && inScope.size < 2)
+                transitionScopeError = messages.ruleSetup.transitionTimePairRequired;
+              transitionScopeProof = {
+                selectedLocationIds: proposed.locationIds,
+                inScopeLocationIds: [...inScope],
+              };
+            } catch (failure) {
+              if (isOperationCancelled(failure)) throw failure;
+              return {
+                ...detailResponse,
+                result: {
+                  ...base,
+                  after: proposed,
+                  summary: null,
+                  scopeError: safeMessage(failure),
+                  targetProof,
+                  mutualScopeProof,
+                  transitionScopeProof: null,
+                },
+              };
+            }
+          }
           const summaryOperation = getScenarioView(
             read.scope,
             {
@@ -839,9 +947,10 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
                 ...base,
                 after: proposed,
                 summary,
-                scopeError: mutualScopeError,
+                scopeError: transitionScopeError ?? mutualScopeError,
                 targetProof,
                 mutualScopeProof,
+                transitionScopeProof,
               },
             };
           } catch (failure) {
@@ -852,9 +961,10 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
                 ...base,
                 after: proposed,
                 summary: null,
-                scopeError: mutualScopeError ?? safeMessage(failure),
+                scopeError: transitionScopeError ?? mutualScopeError ?? safeMessage(failure),
                 targetProof,
                 mutualScopeProof,
+                transitionScopeProof,
               },
             };
           }

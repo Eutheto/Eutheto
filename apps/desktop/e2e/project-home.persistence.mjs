@@ -4587,6 +4587,109 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
     [...mutual.record.personIds].sort(),
     [firstMutualPerson.id, secondMutualPerson.id].sort(),
   );
+  const travelSourceId = requestId();
+  const travelTargetId = requestId();
+  const travelSourceShiftId = requestId();
+  const travelTargetShiftId = requestId();
+  const travelRevision = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  const travelShifts = [
+    [travelSourceShiftId, travelSourceId, "18:00:00", "19:00:00"],
+    [travelTargetShiftId, travelTargetId, "19:15:00", "20:15:00"],
+  ].map(([id, locationId, start, end]) => ({
+    kind: "shiftInstance",
+    id,
+    assignmentTypeId: expected.shiftTypeId,
+    locationId,
+    coverage: { kind: "exact", count: 1, qualificationMinimums: [] },
+    startsAt: {
+      instant: `2030-01-16T${start}Z`,
+      local: `2030-01-16T${start}`,
+      offsetSeconds: 0,
+    },
+    endsAt: {
+      instant: `2030-01-16T${end}Z`,
+      local: `2030-01-16T${end}`,
+      offsetSeconds: 0,
+    },
+    origin: { kind: "manual" },
+    reportingAttribution: "startLocalDate",
+    tags: [],
+  }));
+  await nativeRequest(sessionId, "scenario_apply_command", {
+    scenarioId,
+    expectedRevision: travelRevision,
+    commandId: requestId(),
+    actor: { actorId: null, displayName: "Native travel-rule test fixture" },
+    truncateRedo: false,
+    command: {
+      type: "applyBatch",
+      payload: {
+        label: "Two real located shifts and a directed travel matrix",
+        commands: [
+          { kind: "location", id: travelTargetId, name: "Travel target ward", transitions: [] },
+          {
+            kind: "location",
+            id: travelSourceId,
+            name: "Travel source ward",
+            transitions: [{ locationId: travelTargetId, minutes: 30 }],
+          },
+          ...travelShifts,
+        ].map((entity) => ({
+          type: "applyDomainCommand",
+          payload: { commandType: "official.workforce.add_entity", payload: { entity } },
+        })),
+      },
+    },
+  });
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Transition time");
+  const transitionId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(transitionId, "A new directed transition rule needs a stable native UUIDv7");
+  await choosePeopleReference(
+    sessionId,
+    "Locations for transition time",
+    "Travel source ward",
+    '[aria-labelledby="rule-editor-heading"]',
+  );
+  const beforeBlockedTravelReview = (await projects(sessionId)).find(
+    (project) => project.scenarioId === scenarioId,
+  ).revision;
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review?.querySelector('[role=\"alert\"]') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && button.disabled);",
+  );
+  assert.equal(
+    (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
+    beforeBlockedTravelReview,
+    "Native review must refuse a newly active singleton travel rule without mutation",
+  );
+  await choosePeopleReference(
+    sessionId,
+    "Locations for transition time",
+    "Travel target ward",
+    '[aria-labelledby="rule-editor-heading"]',
+  );
+  await activateButton(sessionId, "Review rule changes");
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return !!review && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled) && review.textContent.includes('2 selected locations');",
+  );
+  await screenshot(sessionId, "package8-transition-time-review.png");
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const transition = await package8Rule(sessionId, scenarioId, transitionId);
+  assert.equal(transition.record.kind, "transitionTime");
+  assert.equal(transition.record.active, true);
+  assert.deepEqual(
+    [...transition.record.locationIds].sort(),
+    [travelSourceId, travelTargetId].sort(),
+  );
   await navigate(sessionId, `/project/${scenarioId}/validation`);
   await waitForElement(sessionId, "[data-full-validation-stale]");
   await screenshot(sessionId, "package8-stale-validation.png");
@@ -4601,6 +4704,8 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
     fixedShiftId: expected.shiftInstanceId,
     mutualId,
     mutualPersonIds: [firstMutualPerson.id, secondMutualPerson.id],
+    transitionId,
+    transitionLocationIds: [travelSourceId, travelTargetId],
     counts,
     calendarId: expected.calendarId,
     qualificationId: expected.qualificationId,
@@ -4750,7 +4855,7 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: nine native Required kinds including reporting-date maximum assignment count, qualification mix, named fixed assignment and mutual assignment restriction; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
+    "PASS: ten native Required kinds including reporting-date maximum assignment count, qualification mix, named fixed assignment, mutual restriction and directed travel time; stable category-pair typing; unavailable preferences; bounded selected-shift standalone coverage creation; native shortage -> exact owner/count focus without mutation -> reviewed repair",
   );
 }
 
@@ -5667,6 +5772,13 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   assert.equal(mutual.record.kind, "mutualAssignmentRestriction");
   assert.equal(mutual.record.mode, "overlappingShifts");
   assert.deepEqual([...mutual.record.personIds].sort(), [...expected.mutualPersonIds].sort());
+  const transition = await package8Rule(sessionId, scenarioId, expected.transitionId);
+  assert.equal(transition.record.kind, "transitionTime");
+  assert.equal(transition.record.active, true);
+  assert.deepEqual(
+    [...transition.record.locationIds].sort(),
+    [...expected.transitionLocationIds].sort(),
+  );
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
   for (let index = 0; index < 6; index += 1) {
@@ -5674,7 +5786,7 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: native ten-hour Required rest, reporting-date maximum count, qualification mix, fixed named assignment and mutual restriction review/save/restart; active mutual without an effective pair blocked; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
+    "PASS: native ten-hour Required rest, reporting-date maximum count, qualification mix, fixed named assignment, mutual restriction and directed travel time review/save/restart; new active singleton travel rule blocked by native shift-scope proof; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
   );
 }
 

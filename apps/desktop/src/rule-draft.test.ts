@@ -413,3 +413,67 @@ describe("Mutual assignment restriction draft custody", () => {
     ).toEqual({ ...merged.value, active: false });
   });
 });
+
+const transitionTime: EditableRule & { readonly kind: "transitionTime" } = {
+  id: "01900000-0000-7000-8000-00000000004c",
+  kind: "transitionTime",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  locationIds: ["01900000-0000-7000-8000-00000000004d"],
+};
+
+describe("Transition time draft custody", () => {
+  it("adopts an independent native scope edit without dropping local locations", () => {
+    const raw = {
+      ...createRuleDraft(transitionTime),
+      locationIds: [...transitionTime.locationIds, "01900000-0000-7000-8000-00000000004e"],
+    };
+    const local = ruleRebaseValue(transitionTime, raw);
+    if (local === null) throw new Error("Edited location set must be rebasable");
+    const current: EditableRule & { readonly kind: "transitionTime" } = {
+      ...transitionTime,
+      scope: { people: { kind: "all" }, categories: ["clinic"] },
+    };
+    const merged = rebaseEntityDraft(transitionTime, local, current);
+    expect(merged.conflicts).toEqual([]);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(ruleDraftValue(transitionTime.id, transitionTime.kind, rebased).value).toEqual({
+      ...current,
+      locationIds: raw.locationIds,
+    });
+  });
+
+  it("keeps conflicting location sets whole and preserves an active legacy singleton", () => {
+    expect(
+      ruleDraftValue(transitionTime.id, transitionTime.kind, createRuleDraft(transitionTime)).value,
+    ).toEqual(transitionTime);
+    const [firstLocation] = transitionTime.locationIds;
+    if (firstLocation === undefined) throw new Error("Transition fixture needs one location");
+    const authored = {
+      ...transitionTime,
+      locationIds: [firstLocation, "01900000-0000-7000-8000-00000000004e"],
+    };
+    const raw = {
+      ...createRuleDraft(authored),
+      locationIds: [firstLocation],
+    };
+    const local = ruleRebaseValue(authored, raw);
+    if (local === null) throw new Error("Incomplete location set must be rebasable");
+    const current = {
+      ...authored,
+      locationIds: ["01900000-0000-7000-8000-00000000004f", "01900000-0000-7000-8000-000000000050"],
+    };
+    const merged = rebaseEntityDraft(authored, local, current);
+    expect(merged.conflicts).toContain("locationIds");
+    if (merged.value.kind !== "transitionTime") throw new Error("Wrong rule kind");
+    expect(merged.value.locationIds).toEqual(raw.locationIds);
+    expect(
+      ruleDraftValue(authored.id, authored.kind, {
+        ...createRuleDraft(merged.value, { value: local, raw }),
+        active: false,
+        locationIds: [],
+      }).value,
+    ).toEqual({ ...merged.value, active: false, locationIds: [] });
+  });
+});

@@ -356,6 +356,7 @@ pub(super) fn original_obligations(
                 | WorkforceRule::RequiredSkillMix { .. }
                 | WorkforceRule::FixedAssignment { .. }
                 | WorkforceRule::MutualAssignmentRestriction { .. }
+                | WorkforceRule::TransitionTime { .. }
         ) {
             budget
                 .reserve(1, 2, 48)

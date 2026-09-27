@@ -161,15 +161,16 @@ are reviewed and applied as one undoable batch; they are not assignment-feasibil
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support nine implemented kinds, including Maximum
-Assignment Count with a reporting-date calendar and nonnegative cap, Required
-Qualification Mix with per-shift qualification-expression minimums, Fixed
-Assignment with an exact named person and shift whose active scope must include
-both targets, and Mutual Assignment Restriction for selected people on the same
-shift or on any overlapping shifts. A clinic shift requiring one Specialist and one
-Nurse may count the same dual-qualified person toward both minimums, but each
-minimum counts distinct assigned people. Native scope previews and reviewed
-commands remain required.
+inspector. Required-rule editors support ten implemented kinds, including
+Maximum Assignment Count with a reporting-date calendar and nonnegative cap,
+Required Qualification Mix with per-shift qualification-expression minimums,
+Fixed Assignment with an exact named person and shift whose active scope must
+include both targets, Mutual Assignment Restriction for selected people on the
+same shift or on any overlapping shifts, and directed Transition Time between
+distinct named locations with an authored location-pair duration. A clinic shift
+requiring one Specialist and one Nurse may count the same dual-qualified person
+toward both minimums, but each minimum counts distinct assigned people. Native
+scope previews and reviewed commands remain required.
 Explicit full validation checks the saved revision, distinguishes stale, failed
 and cancelled attempts, and navigates supported
 findings to their owning editor fields; it does not prove plan feasibility. See
@@ -380,6 +381,47 @@ target/cli-package/optimizer scenario validate ./clinic-tiny-with-mutual.json
 `sameShift` restricts listed people only on the same shift; `overlappingShifts`
 also restricts different shifts whose instant intervals intersect. Neither mode
 restricts two assignments to the same person by itself.
+
+For a scenario with two located shifts and a source location whose `transitions`
+contains `{"locationId":"01900000-0000-7000-8000-000000000052","minutes":30}`,
+replace both example location IDs with that scenario's actual source and
+destination IDs and save this as `travel-command.json`:
+
+```json
+{
+  "type": "applyDomainCommand",
+  "payload": {
+    "commandType": "official.workforce.add_rule",
+    "payload": {
+      "rule": {
+        "kind": "transitionTime",
+        "id": "01900000-0000-7000-8000-000000000046",
+        "active": true,
+        "strength": "required",
+        "scope": { "people": { "kind": "all" } },
+        "locationIds": [
+          "01900000-0000-7000-8000-000000000051",
+          "01900000-0000-7000-8000-000000000052"
+        ]
+      }
+    }
+  }
+}
+```
+
+```sh
+target/cli-package/optimizer scenario apply ./located-workforce.json \
+  --commands ./travel-command.json --expected-revision 0 \
+  --output ./located-workforce-with-travel.json
+target/cli-package/optimizer scenario validate ./located-workforce-with-travel.json
+```
+
+For one person assigned both matching shifts, a configured source-to-target
+entry requires at least its elapsed minutes from the source's end to the
+target's start. A missing or reverse-only entry does not infer a gap; No
+overlap remains a separate rule. The desktop editor proves two effective
+selected locations against native shift scope before newly activating this
+rule. Previously saved active singleton selections are loadable no-ops.
 
 Full validation returns its complete report and exit 3 for errors; an obvious
 coverage contradiction is not itself a solver feasibility result. Solve defaults

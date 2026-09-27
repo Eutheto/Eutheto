@@ -73,7 +73,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "transitionTime",
         "official.workforce.rule.transition-time",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
 ];
 const PREFERENCES: &[(&str, &str, RuleSupportV1)] = &[

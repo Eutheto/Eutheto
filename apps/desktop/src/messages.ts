@@ -126,6 +126,14 @@ export const messages = {
       "A new active assignment restriction needs at least two selected people in its reviewed native scope. Switch to Inactive or add people, tags, or teams before saving.",
     mutualAssignmentRestrictionScopeRequired:
       "An active assignment restriction can be saved only after native review proves its selected people in the reviewed scope.",
+    transitionTimeScopeHelp:
+      "Select the locations whose authored transition matrix entries may apply. Native review checks the selected locations against the prospective rule scope; this editor never calculates or parses travel times.",
+    transitionTimeScopeProofLimit:
+      "Native shift-scope review reached its bounded page limit before proving two selected locations. Narrow the scope or retry the review.",
+    transitionTimePairRequired:
+      "A newly active transition-time rule needs at least two selected locations proved in its reviewed native shift scope. Switch to Inactive or add locations before saving.",
+    transitionTimeScopeRequired:
+      "An active transition-time rule can be saved only after native review proves at least two selected locations in its reviewed native shift scope.",
     repairField: "Open field",
 
     fields: {
@@ -146,6 +154,9 @@ export const messages = {
       mutualMode: "Restriction mode",
       mutualModeHelp:
         "Choose whether the restriction applies within one shift or across overlapping shifts.",
+      transitionLocations: "Locations for transition time",
+      transitionLocationsHelp:
+        "Select named locations. The native rule applies only when two matching shifts at distinct selected locations have an explicitly configured directed source-to-target transition entry; an absent entry and the reverse direction impose no inferred requirement. A configured pair need not occur in today's shifts.",
       sameShift: "Same shift",
       overlappingShifts: "Overlapping shifts",
       fixedAssignmentShiftStart: "Show shifts from",
@@ -255,6 +266,8 @@ export const messages = {
       `Require person ${personId} to work shift ${shiftId}.`,
     mutualAssignmentRestrictionSentence: (count: string, mode: string) =>
       `Keep ${count} selected people apart on ${mode === "sameShift" ? "the same shift" : "overlapping shifts"}.`,
+    transitionTimeSentence: (count: string) =>
+      `Apply native configured directional travel time between matching shifts at two of the ${count} selected locations: the earlier shift's location is the source and the later shift's location is the target. Only an authored source-to-target entry applies; an absent entry and the reverse direction impose no inferred travel-time requirement.`,
     reviewActions: {
       create: "Create Required rule",
       update: "Update Required rule",
