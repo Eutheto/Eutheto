@@ -874,7 +874,7 @@ mod tests {
             Some(WorkforcePositionV1::Ordinal { next_ordinal: 0 }),
         )?;
         assert!(!first.candidate_in_implemented_assignment_graph);
-        assert_eq!(first.remaining_required_rule_count, 1);
+        assert_eq!(first.remaining_required_rule_count, 0);
         assert_eq!(first.rejections.total_items, 2);
         let first_row = first.rejections.items.first().ok_or("first rejection")?;
         assert_eq!(first_row.ordinal, 0);
@@ -891,7 +891,7 @@ mod tests {
         )?;
         let second = inspect(&document, 1, 7, Some(position))?;
         assert!(!second.candidate_in_implemented_assignment_graph);
-        assert_eq!(second.remaining_required_rule_count, 1);
+        assert_eq!(second.remaining_required_rule_count, 0);
         assert_eq!(second.rejections.total_items, 2);
         let second_row = second.rejections.items.first().ok_or("second rejection")?;
         assert_eq!(second_row.ordinal, 1);
@@ -925,7 +925,7 @@ mod tests {
             Some(WorkforcePositionV1::Ordinal { next_ordinal: 0 }),
         )?;
         assert!(candidate.candidate_in_implemented_assignment_graph);
-        assert_eq!(candidate.remaining_required_rule_count, 1);
+        assert_eq!(candidate.remaining_required_rule_count, 0);
         assert_eq!(candidate.rejections.total_items, 0);
         assert!(candidate.rejections.items.is_empty());
         assert!(candidate.rejections.continuation.is_none());

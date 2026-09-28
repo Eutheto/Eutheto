@@ -687,7 +687,7 @@ fn compatibility_is_symmetric_and_exempts_only_its_own_rule() -> Result {
 }
 
 #[test]
-fn required_partition_retains_other_active_families_and_only_hard_locks() -> Result {
+fn required_partition_handles_consecutive_and_only_hard_locks() -> Result {
     let mut value = base()?;
     rule(&mut value, 20, "eligibility");
     rule(&mut value, 21, "maximumConsecutive");
@@ -724,15 +724,14 @@ fn required_partition_retains_other_active_families_and_only_hard_locks() -> Res
     let result = run(&value, &[])?;
     assert_eq!(
         result.obligations.handled,
-        [1, 20, 30, 40]
+        [1, 20, 21, 30, 40]
             .map(|index| id(index).parse())
             .into_iter()
             .collect::<std::result::Result<Vec<RuleId>, _>>()?
     );
     assert_eq!(
         result.obligations.remaining,
-        [21, 41]
-            .map(|index| id(index).parse())
+        [41].map(|index| id(index).parse())
             .into_iter()
             .collect::<std::result::Result<Vec<RuleId>, _>>()?
     );

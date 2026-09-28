@@ -1,7 +1,7 @@
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentRuleCompilation,
     AssignmentRuleError, AssignmentRuleLimit, AssignmentVariable,
-    analysis::{Plan, PlannedConstraint, Predicate, hours, predicate_shape, prepare},
+    analysis::{Plan, PlannedConstraint, Predicate, consecutive, hours, predicate_shape, prepare},
     budget::{OperationBudget, add, count, within},
     identity::{IdentityKind, PlanningIdentities},
     input::AssignmentInput,
@@ -51,7 +51,7 @@ pub fn compile_assignment_rules(
 /// Complete construction interleaves each candidate Boolean and its rank integer until the
 /// finished model is canonicalized; source identity always comes from the typed pair.
 #[derive(Clone, Copy)]
-pub(super) enum DecisionVariables<'a> {
+pub(crate) enum DecisionVariables<'a> {
     Contribution(&'a [AssignmentVariable]),
     Complete {
         pairs: &'a [AssignmentPair],
@@ -60,7 +60,7 @@ pub(super) enum DecisionVariables<'a> {
 }
 
 impl<'a> DecisionVariables<'a> {
-    fn boolean(self, index: usize) -> Option<&'a BoolVariable> {
+    pub(crate) fn boolean(self, index: usize) -> Option<&'a BoolVariable> {
         match self {
             Self::Contribution(variables) => variables.get(index).map(|value| &value.variable),
             Self::Complete { variables, .. } => match variables.get(index.checked_mul(2)?)? {
@@ -70,7 +70,7 @@ impl<'a> DecisionVariables<'a> {
         }
     }
 
-    fn pair(self, index: usize) -> Option<AssignmentPair> {
+    pub(crate) fn pair(self, index: usize) -> Option<AssignmentPair> {
         match self {
             Self::Contribution(variables) => variables.get(index).map(|value| value.pair),
             Self::Complete { pairs, .. } => pairs.get(index).copied(),
@@ -118,16 +118,31 @@ fn construct(
                 .clone(),
             _ => parents.get(&planned.rule).ok_or_else(invalid)?.clone(),
         };
-        let (record, fact) = compile_constraint(
-            planned,
-            plan,
-            DecisionVariables::Contribution(&variables),
-            parent,
-            &mut identities,
-            budget,
-        )?;
-        constraints.push(record);
-        provenance.push(fact);
+        if consecutive::is(planned) {
+            consecutive::emit(
+                planned,
+                plan,
+                DecisionVariables::Contribution(&variables),
+                parent,
+                &mut identities,
+                &mut auxiliary_variables,
+                &mut constraints,
+                &mut provenance,
+                budget,
+                limits,
+            )?;
+        } else {
+            let (record, fact) = compile_constraint(
+                planned,
+                plan,
+                DecisionVariables::Contribution(&variables),
+                parent,
+                &mut identities,
+                budget,
+            )?;
+            constraints.push(record);
+            provenance.push(fact);
+        }
     }
     let hour_auxiliaries =
         hours::prepare_contribution(plan, &pairs, &variables, &mut identities, budget)?;
@@ -256,6 +271,7 @@ fn constraint_body(
             let upper = u64::from(maximum).min(count(literals.len())?);
             Constraint::cardinality(literals, 0, upper).map_err(|_| invalid())
         }
+        Predicate::MaximumConsecutive { .. } => Err(invalid()),
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
         | Predicate::MutualSameShift { .. }
@@ -339,6 +355,24 @@ fn derive_predicate(
             ),
             budget,
         ),
+        Predicate::MaximumConsecutive { person, definition } => {
+            let data = plan.definitions[definition]
+                .consecutive
+                .as_ref()
+                .ok_or_else(invalid)?;
+            identities.derive(
+                kind,
+                &(
+                    "maximum_consecutive",
+                    planned.rule,
+                    person,
+                    data.mode,
+                    data.maximum,
+                    data.break_minutes,
+                ),
+                budget,
+            )
+        }
         Predicate::Overlap {
             person,
             first,
@@ -707,6 +741,28 @@ fn constraint_fact(
             maximum_count_payload(person, period, maximum, &mut parameters, budget)?,
             "official.workforce.maximum_assignment_count",
         ),
+        Predicate::MaximumConsecutive { person, definition } => {
+            let data = plan.definitions[definition]
+                .consecutive
+                .as_ref()
+                .ok_or_else(invalid)?;
+            parameters.insert(
+                "maximum".to_owned(),
+                ProvenanceParameter::Integer(i64::from(data.maximum)),
+            );
+            parameters.insert(
+                "mode".to_owned(),
+                ProvenanceParameter::Text(consecutive::mode_name(data.mode).to_owned()),
+            );
+            parameters.insert(
+                "break_minutes".to_owned(),
+                ProvenanceParameter::Integer(i64::from(data.break_minutes.unwrap_or(0))),
+            );
+            (
+                vec![entity("person", EntityId::from_uuid(person.as_uuid()))?],
+                "official.workforce.maximum_consecutive",
+            )
+        }
         Predicate::Overlap {
             person,
             first,
@@ -965,6 +1021,7 @@ struct MeasuredConstraint {
     tags: [(); 0],
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn preflight(
     pairs: &[AssignmentPair],
     plan: &Plan,
@@ -983,6 +1040,7 @@ pub(super) fn preflight(
     let placeholder = ProvenanceId::new(PROVENANCE_ID).map_err(|_| invalid_id())?;
     preflight_variable_facts(pairs, &placeholder, budget, limits)?;
     hours::preflight_contribution(plan, budget, limits)?;
+    consecutive::preflight_contribution(plan, budget, limits)?;
     for (rule, kind) in &plan.parents {
         budget.step()?;
         budget.reserve(1, 0, 512)?;
@@ -990,6 +1048,9 @@ pub(super) fn preflight(
     }
     preflight_hard_lock_facts(plan, &placeholder, budget, limits)?;
     for planned in &plan.constraints {
+        if consecutive::is(planned) {
+            continue;
+        }
         budget.step()?;
         let literals = MeasuredLiterals(if planned.impossible {
             0
@@ -1030,6 +1091,7 @@ pub(super) fn preflight(
                         max: u64::from(maximum).min(literal_count),
                     }
                 }
+                Predicate::MaximumConsecutive { .. } => unreachable!(),
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MutualSameShift { .. }
@@ -1120,7 +1182,7 @@ fn preflight_hard_lock_facts(
     Ok(())
 }
 
-pub(super) fn reserve_fact(
+pub(crate) fn reserve_fact(
     record: &ProvenanceRecord,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,

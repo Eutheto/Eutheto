@@ -198,18 +198,24 @@ The shared person–assignment inspector reads applied native blockers and ident
 Required rules not covered by its analysis. It does not establish whole-plan
 feasibility.
 
-**Required rules** exposes eleven implemented kinds: eligibility, availability,
+**Required rules** exposes twelve implemented kinds: eligibility, availability,
 coverage, no overlap, minimum rest, Maximum Assignment Count, Maximum Hours,
-Required Qualification Mix, Fixed Assignment, Mutual Assignment Restriction
-and Transition Time. The count cap applies to matching person–shift assignments
-by the shift's reporting date in a selected calendar period; zero forbids any
-matching assignment. Maximum Hours caps a named workload bucket for each
-matching person in a fixed calendar period or every rolling window; Reporting
-Date belongs to calendar periods only, while Start Instant and Intersection
-select by native instants. Elapsed intersections are clipped to the window;
-`sum` adds overlapping work and `union` counts elapsed overlaps once.
-A Scheduled Minutes bucket counts signed whole-shift local duration and
-cannot use Intersection.
+Maximum Consecutive, Required Qualification Mix, Fixed Assignment, Mutual
+Assignment Restriction and Transition Time. The count cap applies to matching
+person–shift assignments by the shift's reporting date in a selected calendar
+period; zero forbids any matching assignment. Maximum Consecutive applies only
+to matching assignments in each person's native scope: Worked Days counts
+distinct reporting dates and joins only successive civil dates, while
+Assignments orders matching shifts by start instant and joins adjacent matches
+when their elapsed break is at most the configured minutes; nonmatching selected
+shifts do not break a matching run, and overlaps join.
+Maximum Hours caps a named workload bucket for each matching person in a fixed
+calendar period or every rolling window; Reporting Date belongs to calendar
+periods only, while Start Instant and Intersection select by native instants.
+Elapsed intersections are clipped to the window; `sum` adds overlapping work
+and `union` counts elapsed overlaps once.
+A Scheduled Minutes bucket counts signed whole-shift local duration and cannot
+use Intersection.
 A clinic shift requiring one Specialist and one Nurse can count the same
 dual-qualified person toward both minimums, but each minimum counts distinct
 assigned people on that shift.

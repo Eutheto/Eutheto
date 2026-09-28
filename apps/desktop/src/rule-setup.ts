@@ -37,7 +37,6 @@ import {
 } from "./entity-draft";
 import {
   createRuleDraft,
-  isEditableRule,
   ruleDraftValue,
   ruleRebaseValue,
   type EditableRule,
@@ -143,6 +142,7 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.no-overlap": "noOverlap",
   "official.workforce.rule.minimum-rest": "minimumRest",
   "official.workforce.rule.maximum-hours": "maximumHours",
+  "official.workforce.rule.maximum-consecutive": "maximumConsecutive",
   "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
   "official.workforce.rule.required-skill-mix": "requiredSkillMix",
   "official.workforce.rule.fixed-assignment": "fixedAssignment",
@@ -164,7 +164,7 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     left.personId === right.personId &&
     sameField(left.personIds, right.personIds) &&
     sameField(left.locationIds, right.locationIds) &&
-    left.mode === right.mode &&
+    sameField(left.mode, right.mode) &&
     left.shiftId === right.shiftId &&
     sameField(left.compatibleCategoryPairs, right.compatibleCategoryPairs) &&
     left.qualificationMinimums.length === right.qualificationMinimums.length &&
@@ -489,7 +489,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       if (detail.class !== rule.class || detail.record.id !== rule.ruleId)
         throw new Error("The native rule did not match the requested identity.");
       state.detail = detail;
-      if (detail.class === "required" && isEditableRule(detail.record)) {
+      if (detail.class === "required") {
         state.editor = {
           context: read.context,
           id: detail.record.id,
@@ -529,7 +529,9 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               { key: newUuidV7(), minimum: "", allQualificationIds: [], anyQualificationIds: [] },
             ],
           }
-        : raw;
+        : kind === "maximumConsecutive"
+          ? { ...raw, mode: { kind: "workedDays" as const } }
+          : raw;
     state.editor = {
       context: context(),
       id: newUuidV7(),
@@ -668,8 +670,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
           if (
             detail.class !== "required" ||
             detail.record.id !== editor.id ||
-            detail.record.kind !== editor.kind ||
-            !isEditableRule(detail.record)
+            detail.record.kind !== editor.kind
           )
             throw new Error(
               "The native proposed rule did not match the reviewed identity and kind.",
@@ -1061,8 +1062,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       if (
         detail.class !== "required" ||
         detail.record.id !== editor.id ||
-        detail.record.kind !== editor.kind ||
-        !isEditableRule(detail.record)
+        detail.record.kind !== editor.kind
       )
         throw new Error("The current saved rule no longer has this identity and kind.");
       state.detail = detail;

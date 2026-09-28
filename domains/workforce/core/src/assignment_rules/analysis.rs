@@ -4,6 +4,9 @@ pub(crate) mod support;
 #[path = "compiler_rest.rs"]
 mod rest;
 
+#[path = "compiler_consecutive.rs"]
+pub(super) mod consecutive;
+
 #[path = "compiler_count.rs"]
 mod count;
 #[path = "compiler_mutual.rs"]
@@ -62,6 +65,7 @@ pub(super) struct Definition {
     /// Evidence-only mapping from canonical minimum index to the first authored
     /// `qualificationMinimums` row index. Never affects `MinimumKey` identity.
     pub source_rows: Vec<usize>,
+    pub consecutive: Option<consecutive::ConsecutivePlan>,
 }
 
 #[derive(Clone, Copy)]
@@ -125,6 +129,10 @@ pub(super) enum Predicate {
     FixedAssignment {
         person: PersonId,
         shift: ShiftId,
+    },
+    MaximumConsecutive {
+        person: PersonId,
+        definition: usize,
     },
     HardLock {
         assignment: AssignmentId,
@@ -502,6 +510,7 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::NoOverlap { .. }
             | WorkforceRule::MinimumRest(_)
             | WorkforceRule::MaximumAssignmentCount { .. }
+            | WorkforceRule::MaximumConsecutive { .. }
             | WorkforceRule::MaximumHours { .. }
             | WorkforceRule::RequiredSkillMix { .. }
             | WorkforceRule::FixedAssignment { .. }
@@ -663,6 +672,9 @@ fn plan(
             }
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 count::plan(document, input, &result.candidates, rule, &mut plan, budget)?;
+            }
+            WorkforceRule::MaximumConsecutive { .. } => {
+                consecutive::plan(input, &result.candidates, &mut plan, rule, budget, limits)?;
             }
             WorkforceRule::MaximumHours { .. } => {
                 hours::plan(
@@ -909,6 +921,7 @@ impl CoveragePlanner<'_> {
                     owner,
                     minima,
                     source_rows,
+                    consecutive: None,
                 });
                 entry.insert(index);
                 index
@@ -1082,6 +1095,7 @@ impl SkillMixPlanner<'_> {
                     owner,
                     minima,
                     source_rows,
+                    consecutive: None,
                 });
                 entry.insert(index);
                 index
@@ -1292,7 +1306,18 @@ fn estimate_contribution(
     limits: PlanningIrLimitsV1,
 ) -> Result<(), AssignmentRuleError> {
     let base_variables = result.estimate.variables;
-    let base_constraints = count(plan.constraints.len())?;
+    let mut consecutive_shape = consecutive::Shape::default();
+    let mut generic_constraints = 0_u64;
+    for constraint in &plan.constraints {
+        budget.step()?;
+        if consecutive::is(constraint) {
+            consecutive_shape =
+                consecutive_shape.add(consecutive::shape_constraint(constraint, plan, limits)?)?;
+        } else {
+            generic_constraints = add(generic_constraints, 1)?;
+        }
+    }
+    let base_constraints = add(generic_constraints, consecutive_shape.constraints)?;
     let mut hard_lock_parents = 0;
     for constraint in &plan.constraints {
         budget.step()?;
@@ -1301,7 +1326,7 @@ fn estimate_contribution(
         }
     }
     let base_provenance = add(
-        add(base_variables, base_constraints)?,
+        add(base_variables, generic_constraints)?,
         add(count(plan.parents.len())?, hard_lock_parents)?,
     )?;
     let defaults = PlanningIrLimitsV1::DEFAULT;
@@ -1313,6 +1338,9 @@ fn estimate_contribution(
     )?;
     for constraint in &plan.constraints {
         budget.step()?;
+        if consecutive::is(constraint) {
+            continue;
+        }
         let literals = if constraint.impossible {
             0
         } else {
@@ -1343,13 +1371,20 @@ fn estimate_contribution(
             add(literals, add(2, add(entities, parameters)?)?)?,
         )?;
     }
+    base_references = add(base_references, consecutive_shape.references)?;
     let hour_shape = hours::checked_shape(plan, limits)?;
     let variables = add(
-        add(base_variables, hour_shape.pair_indices)?,
+        add(
+            add(base_variables, consecutive_shape.variables)?,
+            hour_shape.pair_indices,
+        )?,
         hour_shape.helper_variables,
     )?;
     let constraints = add(base_constraints, hour_shape.constraints)?;
-    let provenance = add(base_provenance, hour_shape.provenance)?;
+    let provenance = add(
+        add(base_provenance, consecutive_shape.provenance)?,
+        hour_shape.provenance,
+    )?;
     let references = add(base_references, hour_shape.references)?;
     within(
         variables,
@@ -1432,6 +1467,7 @@ pub(super) fn predicate_shape(
             (2, add(2, count(key.all.len() + key.any.len())?)?)
         }
         Predicate::MaximumAssignmentCount { .. } => (2, 3),
+        Predicate::MaximumConsecutive { .. } => (1, 3),
         Predicate::Overlap { .. } => (3, 0),
         Predicate::OverlapClique { .. } | Predicate::MutualSameShift { .. } => (1, 0),
         Predicate::MutualOverlap {
@@ -1487,6 +1523,7 @@ pub(super) fn commit_append(
                 Predicate::MinimumRest { .. } => "minimum_rest",
                 Predicate::TransitionTime { .. } => "transition_time",
                 Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
+                Predicate::MaximumConsecutive { .. } => "maximum_consecutive",
                 Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
                 Predicate::SkillMixQualification { .. } => "required_skill_mix",
                 Predicate::FixedAssignment { .. } => "fixed_assignment",
@@ -1522,6 +1559,7 @@ fn coverage_bound_findings(
             | Predicate::Qualification { shift, .. }
             | Predicate::SkillMixQualification { shift, .. } => shift,
             Predicate::MaximumAssignmentCount { .. }
+            | Predicate::MaximumConsecutive { .. }
             | Predicate::Overlap { .. }
             | Predicate::OverlapClique { .. }
             | Predicate::MutualSameShift { .. }
@@ -1559,6 +1597,7 @@ fn coverage_bound_findings(
                     )
                 }
                 Predicate::MaximumAssignmentCount { .. }
+                | Predicate::MaximumConsecutive { .. }
                 | Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MutualSameShift { .. }

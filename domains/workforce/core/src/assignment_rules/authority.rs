@@ -354,6 +354,7 @@ pub(super) fn original_obligations(
                 | WorkforceRule::MinimumRest(_)
                 | WorkforceRule::MaximumAssignmentCount { .. }
                 | WorkforceRule::MaximumHours { .. }
+                | WorkforceRule::MaximumConsecutive { .. }
                 | WorkforceRule::RequiredSkillMix { .. }
                 | WorkforceRule::FixedAssignment { .. }
                 | WorkforceRule::MutualAssignmentRestriction { .. }

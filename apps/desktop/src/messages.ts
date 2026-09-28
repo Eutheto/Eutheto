@@ -108,6 +108,10 @@ export const messages = {
     maximumInvalid: "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
     maximumHoursInvalid:
       "Enter at most 32 digits for an exact whole number of minutes from 0 to 4,294,967,295.",
+    breakMinutesInvalid:
+      "Enter at most 32 digits for an exact elapsed whole-minute break from 0 to 4,294,967,295.",
+    maximumConsecutiveModeInvalid: "Choose a consecutive-work mode.",
+    mutualModeInvalid: "Choose a restriction mode.",
     rollingDurationInvalid:
       "Enter at most 32 digits for a positive whole number of minutes from 1 to 4,294,967,295.",
     workloadBucketRequired: "Choose a workload bucket.",
@@ -168,6 +172,23 @@ export const messages = {
       maximum: "Total assignment cap per reporting-date period",
       maximumHelp:
         "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
+      maximumConsecutive: "Maximum consecutive count",
+      maximumConsecutiveHelp:
+        "Limit each person's matching work to this many consecutive worked days or assignments. Zero forbids any matching assignment.",
+      maximumConsecutiveScopeHelp:
+        "The selected people and shift scope determines which assignments match. Use scope filters for nights, assignment types, locations, teams and categories.",
+      maximumConsecutiveMode: "Consecutive-work mode",
+      maximumConsecutiveModeHelp:
+        "Choose whether consecutive work is measured by distinct reporting dates or by matching assignments joined across a bounded elapsed break.",
+      workedDays: "Worked days (distinct reporting dates)",
+      workedDaysHelp:
+        "Each matching reporting date counts once. Runs join only successive civil dates; gaps in candidate occurrence coverage do not change this date-based grouping.",
+      assignments: "Matching assignments",
+      assignmentsHelp:
+        "Matching assignments are ordered by start instant. Adjacent matches join when the elapsed break is at most the allowed break; nonmatching selected shifts do not break a matching run, and overlaps also join.",
+      breakMinutes: "Allowed break between matching assignments (minutes)",
+      breakMinutesHelp:
+        "Enter an exact whole elapsed-minute break from 0 to 4,294,967,295. Zero joins only touching or overlapping matches.",
       maximumMinutes: "Maximum minutes",
       maximumMinutesHelp:
         "Limit the selected bucket's minute measurement for each person in each selected window. Enter zero to forbid any matching contribution.",
@@ -276,6 +297,14 @@ export const messages = {
     manageCalendars: "Go to Work to create a calendar",
     maximumAssignmentCountSentence: (maximum: string) =>
       `Allow at most ${maximum} matching assignments for each person in each reporting-date calendar period. A total cap of zero forbids any matching assignment.`,
+    maximumConsecutiveSentence: (
+      maximum: string,
+      mode: "workedDays" | "assignments",
+      breakMinutes: string,
+    ) =>
+      mode === "workedDays"
+        ? `Limit each person's matching work to at most ${maximum} consecutive worked days, counted by distinct reporting dates. A maximum of zero forbids any matching assignment.`
+        : `Limit each person's matching work to at most ${maximum} consecutive matching assignments when adjacent elapsed breaks are at most ${breakMinutes} minutes. A maximum of zero forbids any matching assignment.`,
     maximumHoursSentence: (maximum: string, window: string) =>
       `Limit each person's selected workload bucket to at most ${maximum} minutes in each ${window}.`,
     minimumRestSentence: (minutes: string) =>

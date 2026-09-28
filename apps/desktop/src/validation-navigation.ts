@@ -2,7 +2,6 @@ import type { LocationQuery, RouteLocationRaw } from "vue-router";
 import { getScenarioView, type SetupOperationScope, type ValidationIssue } from "./api/generated";
 import type { WorkforceSetupEntityKind } from "./api/generated-domain-pack-contracts";
 import { messages } from "./messages";
-import { isEditableRule } from "./rule-draft";
 import type { ValidationEditorTarget } from "./validation-target";
 
 export interface ValidationContext {
@@ -116,7 +115,7 @@ export async function resolveValidationAddress(
     .defaultText;
   return {
     label: `${title ?? record.record.kind} (${address.id})`,
-    route: record.class === "required" && isEditableRule(record.record) ? "project-rules" : null,
+    route: record.class === "required" ? "project-rules" : null,
   };
 }
 

@@ -4352,6 +4352,67 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   maximum = await package8Rule(sessionId, scenarioId, maximumId);
   assert.equal(maximum.record.calendarId, expected.calendarId);
   assert.equal(maximum.record.maximum, 3);
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Maximum consecutive work");
+  const consecutiveWorkedDaysId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(consecutiveWorkedDaysId, "Worked-days maximum consecutive needs a stable rule identity");
+  await setValue(sessionId, "#rule-maximum", "2");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return review?.textContent.includes('consecutive worked days') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+  );
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const consecutiveWorkedDays = await package8Rule(sessionId, scenarioId, consecutiveWorkedDaysId);
+  assert.equal(consecutiveWorkedDays.record.kind, "maximumConsecutive");
+  assert.equal(consecutiveWorkedDays.record.maximum, 2);
+  assert.deepEqual(consecutiveWorkedDays.record.mode, { kind: "workedDays" });
+
+  await navigate(sessionId, `/project/${scenarioId}/rules`);
+  await activateButton(sessionId, "Maximum consecutive work");
+  const consecutiveAssignmentsId = await evaluate(
+    sessionId,
+    "return document.querySelector('#rule-identity').textContent.match(/[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/)?.[0];",
+  );
+  assert(consecutiveAssignmentsId, "Assignment maximum consecutive needs a stable rule identity");
+  await selectValue(sessionId, "#rule-consecutive-mode", "assignments");
+  await setValue(sessionId, "#rule-maximum", "3");
+  await setValue(sessionId, "#rule-consecutive-break-minutes", "1.5");
+  await selectValue(sessionId, "#rule-consecutive-mode", "workedDays");
+  await selectValue(sessionId, "#rule-consecutive-mode", "assignments");
+  assert.equal(
+    await evaluate(
+      sessionId,
+      "return document.querySelector('#rule-consecutive-break-minutes')?.value;",
+    ),
+    "1.5",
+    "Switching modes must retain invalid break input until it is repaired",
+  );
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "return !document.querySelector('#rule-review-heading') && document.activeElement?.id === 'rule-consecutive-break-minutes' && document.activeElement.value === '1.5' && !!document.querySelector('#rule-consecutive-break-minutes-error')?.textContent.trim();",
+  );
+  await setValue(sessionId, "#rule-consecutive-break-minutes", "15");
+  await activateButton(sessionId, "Review rule changes", maximumEditor);
+  await waitFor(
+    sessionId,
+    "const review = document.querySelector('[aria-labelledby=\"rule-review-heading\"]'); return review?.textContent.includes('adjacent elapsed breaks are at most 15 minutes') && [...review.querySelectorAll('button')].some(button => button.textContent.trim() === 'Save reviewed rule' && !button.disabled);",
+  );
+  await activateButton(sessionId, "Save reviewed rule");
+  await waitFor(sessionId, "return !document.querySelector('#rule-editor-heading');");
+  const consecutiveAssignments = await package8Rule(
+    sessionId,
+    scenarioId,
+    consecutiveAssignmentsId,
+  );
+  assert.equal(consecutiveAssignments.record.kind, "maximumConsecutive");
+  assert.equal(consecutiveAssignments.record.maximum, 3);
+  assert.deepEqual(consecutiveAssignments.record.mode, { kind: "assignments", breakMinutes: 15 });
 
   await navigate(sessionId, `/project/${scenarioId}/rules`);
   await activateButton(sessionId, "Maximum hours");
@@ -4762,6 +4823,8 @@ async function package8Acceptance(sessionId, scenarioId, expected) {
   return {
     restId,
     maximumId,
+    consecutiveWorkedDaysId,
+    consecutiveAssignmentsId,
     calendarHoursId,
     rollingHoursId,
     bucketId: expected.bucketId,
@@ -5819,6 +5882,16 @@ async function package8FirstTimeDstWorkAcceptance(sessionId, originalScenarioId,
 async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   const rest = await package8Rule(sessionId, scenarioId, expected.restId);
   const maximum = await package8Rule(sessionId, scenarioId, expected.maximumId);
+  const consecutiveWorkedDays = await package8Rule(
+    sessionId,
+    scenarioId,
+    expected.consecutiveWorkedDaysId,
+  );
+  const consecutiveAssignments = await package8Rule(
+    sessionId,
+    scenarioId,
+    expected.consecutiveAssignmentsId,
+  );
   const inactive = await package8Rule(sessionId, scenarioId, expected.inactiveId);
   const skillMix = await package8Rule(sessionId, scenarioId, expected.skillMixId);
   assert.equal(rest.record.minimumMinutes, 600);
@@ -5826,6 +5899,12 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   assert.equal(maximum.record.kind, "maximumAssignmentCount");
   assert.equal(maximum.record.calendarId, expected.calendarId);
   assert.equal(maximum.record.maximum, 3);
+  assert.equal(consecutiveWorkedDays.record.kind, "maximumConsecutive");
+  assert.equal(consecutiveWorkedDays.record.maximum, 2);
+  assert.deepEqual(consecutiveWorkedDays.record.mode, { kind: "workedDays" });
+  assert.equal(consecutiveAssignments.record.kind, "maximumConsecutive");
+  assert.equal(consecutiveAssignments.record.maximum, 3);
+  assert.deepEqual(consecutiveAssignments.record.mode, { kind: "assignments", breakMinutes: 15 });
   const calendarHours = await package8Rule(sessionId, scenarioId, expected.calendarHoursId);
   const rollingHours = await package8Rule(sessionId, scenarioId, expected.rollingHoursId);
   assert.equal(calendarHours.record.kind, "maximumHours");
@@ -5859,12 +5938,12 @@ async function package8RestartAcceptance(sessionId, scenarioId, expected) {
   );
   // Restore package7's history head before its independent restart/undo checks.
   await navigate(sessionId, `/project/${scenarioId}/history`);
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 10; index += 1) {
     await activateButton(sessionId, "Undo scenario change", '[aria-labelledby="history-heading"]');
     await waitForOutcome(sessionId, "Scenario undo committed");
   }
   console.log(
-    "PASS: native ten-hour Required rest, reporting-date maximum count, fixed-period and rolling maximum hours, qualification mix, fixed named assignment, mutual restriction and directed travel time review/save/restart; invalid rolling duration preserved and focused; new active singleton travel rule blocked by native shift-scope proof; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
+    "PASS: native ten-hour Required rest, reporting-date maximum count, worked-days and assignment-break maximum consecutive, fixed-period and rolling maximum hours, qualification mix, fixed named assignment, mutual restriction and directed travel time review/save/restart; invalid rolling duration and assignment break preserved and focused; new active singleton travel rule blocked by native shift-scope proof; stable rule identity and approval invalidation; active empty-scope refusal and explicit inactive save; full validation and mutation-induced stale status",
   );
 }
 

@@ -161,18 +161,20 @@ are reviewed and applied as one undoable batch; they are not assignment-feasibil
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support eleven implemented kinds, including
+inspector. Required-rule editors support twelve implemented kinds, including
 Maximum Assignment Count with a reporting-date calendar and nonnegative cap,
-Maximum Hours with a native workload bucket, fixed calendar or rolling window,
-membership policy and nonnegative minute cap, Required Qualification Mix with
-per-shift qualification-expression minimums, Fixed Assignment with an exact
-named person and shift whose active scope must include both targets, Mutual
-Assignment Restriction for selected people on the same shift or on any
-overlapping shifts, and directed Transition Time between distinct named
-locations with an authored location-pair duration. A clinic shift
-requiring one Specialist and one Nurse may count the same dual-qualified person
-toward both minimums, but each minimum counts distinct assigned people. Native
-scope previews and reviewed commands remain required.
+Maximum Consecutive with distinct consecutive reporting dates or consecutive
+matching assignments joined by a configured elapsed break, Maximum Hours with
+a native workload bucket, fixed calendar or rolling window, membership policy
+and nonnegative minute cap, Required Qualification Mix with per-shift
+qualification-expression minimums, Fixed Assignment with an exact named person
+and shift whose active scope must include both targets, Mutual Assignment
+Restriction for selected people on the same shift or on any overlapping shifts,
+and directed Transition Time between distinct named locations with an authored
+location-pair duration. A clinic shift requiring one Specialist and one Nurse
+may count the same dual-qualified person toward both minimums, but each
+minimum counts distinct assigned people. Native scope previews and reviewed
+commands remain required.
 Explicit full validation checks the saved revision, distinguishes stale, failed
 and cancelled attempts, and navigates supported
 findings to their owning editor fields; it does not prove plan feasibility. See
@@ -465,6 +467,46 @@ target/cli-package/optimizer solve ./clinic-tiny-with-hours.json \
 The cap is a configured scheduling constraint, not a regulatory hours
 assessment. The CLI accepts worker candidates only after independent
 verification.
+
+To cap each clinician at two consecutive worked reporting dates in the synthetic
+`clinic-tiny` scenario, save this as `consecutive-command.json`:
+
+```json
+{
+  "type": "applyDomainCommand",
+  "payload": {
+    "commandType": "official.workforce.add_rule",
+    "payload": {
+      "rule": {
+        "kind": "maximumConsecutive",
+        "id": "01900000-0000-7000-8000-000000000048",
+        "active": true,
+        "strength": "required",
+        "scope": { "people": { "kind": "all" } },
+        "mode": { "kind": "workedDays" },
+        "maximum": 2
+      }
+    }
+  }
+}
+```
+
+```sh
+target/cli-package/optimizer scenario apply domains/workforce/fixtures/v1/clinic-tiny.json \
+  --commands ./consecutive-command.json --expected-revision 0 \
+  --output ./clinic-tiny-with-consecutive.json
+target/cli-package/optimizer scenario validate ./clinic-tiny-with-consecutive.json
+target/cli-package/optimizer solve ./clinic-tiny-with-consecutive.json \
+  --output ./clinic-tiny-with-consecutive-result.json
+target/cli-package/optimizer solutions verify \
+  ./clinic-tiny-with-consecutive.json ./clinic-tiny-with-consecutive-result.json
+```
+
+`workedDays` counts each reporting date once, even if several selected shifts
+report it; unworked dates break the run. `assignments` instead orders matching
+selected shifts by start instant and joins them when the signed gap from the
+previous matching shift's end is at most `breakMinutes`. A nonmatching shift
+does not interrupt that run. Neither mode is a legal work/rest compliance preset.
 
 Full validation returns its complete report and exit 3 for errors; an obvious
 coverage contradiction is not itself a solver feasibility result. Solve defaults

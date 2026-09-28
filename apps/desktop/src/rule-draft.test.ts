@@ -10,7 +10,7 @@ import {
   ruleRebaseValue,
   type EditableRule,
 } from "./rule-draft";
-import { rebaseEntityDraft } from "./entity-draft";
+import { rebaseEntityDraft, resolveEntityDraftField } from "./entity-draft";
 
 const rest: EditableRule & { readonly kind: "minimumRest" } = {
   id: "01900000-0000-7000-8000-000000000040",
@@ -31,6 +31,16 @@ const count: EditableRule & { readonly kind: "maximumAssignmentCount" } = {
   calendarId: "01900000-0000-7000-8000-000000000042",
   maximum: 2,
 };
+const consecutive: EditableRule & { readonly kind: "maximumConsecutive" } = {
+  id: "01900000-0000-7000-8000-000000000052",
+  kind: "maximumConsecutive",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  maximum: 3,
+  mode: { kind: "workedDays" },
+};
+
 const hours: EditableRule & { readonly kind: "maximumHours" } = {
   id: "01900000-0000-7000-8000-000000000049",
   kind: "maximumHours",
@@ -194,6 +204,135 @@ describe("Maximum assignment count raw custody", () => {
     ).toEqual({ ...current, maximum: 0 });
   });
 });
+describe("Maximum consecutive raw mode and cap custody", () => {
+  it("round-trips worked-day and assignment modes while keeping a blank new cap", () => {
+    expect(createRuleDraft("new").maximum).toEqual({ raw: "", status: "empty" });
+    expect(createRuleDraft(consecutive).mode).toEqual({ kind: "workedDays" });
+    expect(
+      ruleDraftValue(consecutive.id, consecutive.kind, createRuleDraft(consecutive)).value,
+    ).toEqual(consecutive);
+    const assignments = {
+      ...createRuleDraft(consecutive),
+      maximum: parseMaximumAssignmentCountDraft("0"),
+      mode: {
+        kind: "assignments" as const,
+        breakMinutes: parseMaximumAssignmentCountDraft("000"),
+      },
+    };
+    expect(ruleDraftValue(consecutive.id, consecutive.kind, assignments).value).toEqual({
+      ...consecutive,
+      maximum: 0,
+      mode: { kind: "assignments", breakMinutes: 0 },
+    });
+  });
+  it("keeps an inactive break draft while adopting a changed native mode", () => {
+    const raw = {
+      ...createRuleDraft(consecutive),
+      mode: {
+        kind: "workedDays" as const,
+        breakMinutes: parseMaximumAssignmentCountDraft("1.5"),
+      },
+    };
+    expect(createRuleDraft(consecutive, { value: consecutive, raw }).mode).toEqual(raw.mode);
+    const local = ruleRebaseValue(consecutive, raw);
+    if (local === null) throw new Error("Worked-days raw mode must rebase");
+    const current = {
+      ...consecutive,
+      mode: { kind: "assignments" as const, breakMinutes: 15 },
+    };
+    const merged = rebaseEntityDraft(consecutive, local, current);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.mode).toEqual({
+      kind: "assignments",
+      breakMinutes: parseMaximumAssignmentCountDraft("15"),
+    });
+    expect(ruleDraftValue(consecutive.id, consecutive.kind, rebased).value).toEqual(current);
+  });
+
+  it("rejects negative, fractional and overflowing assignment breaks", () => {
+    for (const rawBreak of ["-1", "1.5", "4294967296"]) {
+      const result = ruleDraftValue(consecutive.id, consecutive.kind, {
+        ...createRuleDraft(consecutive),
+        mode: {
+          kind: "assignments",
+          breakMinutes: parseMaximumAssignmentCountDraft(rawBreak),
+        },
+      });
+      expect(result.value).toBeNull();
+      expect(result.errors["mode.breakMinutes"]).toBeDefined();
+    }
+    expect(
+      ruleDraftValue(consecutive.id, consecutive.kind, {
+        ...createRuleDraft(consecutive),
+        mode: {
+          kind: "assignments",
+          breakMinutes: parseMaximumAssignmentCountDraft("4294967295"),
+        },
+      }).value,
+    ).toEqual({
+      ...consecutive,
+      mode: { kind: "assignments", breakMinutes: 4_294_967_295 },
+    });
+  });
+
+  it("preserves invalid cap and break input through a concurrent rebase", () => {
+    const raw = {
+      ...createRuleDraft(consecutive),
+      maximum: parseMaximumAssignmentCountDraft("2e"),
+      mode: {
+        kind: "assignments" as const,
+        breakMinutes: parseMaximumAssignmentCountDraft(""),
+      },
+    };
+    const local = ruleRebaseValue(consecutive, raw);
+    expect(local).not.toBeNull();
+    if (local === null) throw new Error("Invalid consecutive fields must not block rebasing");
+    const current = {
+      ...consecutive,
+      active: false,
+      maximum: 4,
+      mode: { kind: "assignments" as const, breakMinutes: 9 },
+    };
+    const merged = rebaseEntityDraft(consecutive, local, current);
+    const restored = createRuleDraft(merged.value, { value: local, raw });
+    expect(restored.active).toBe(false);
+    expect(restored.maximum).toEqual(raw.maximum);
+    expect(restored.mode).toEqual(raw.mode);
+    const invalid = ruleDraftValue(consecutive.id, consecutive.kind, restored);
+    expect(invalid.value).toBeNull();
+    expect(invalid.errors.maximum).toBeDefined();
+    expect(invalid.errors["mode.breakMinutes"]).toBeDefined();
+  });
+
+  it("resolves a changed mode as one whole field during rebase", () => {
+    const base = {
+      ...consecutive,
+      mode: { kind: "assignments" as const, breakMinutes: 5 },
+    };
+    const local = ruleRebaseValue(base, {
+      ...createRuleDraft(base),
+      mode: { kind: "workedDays" as const },
+    });
+    if (local === null) throw new Error("Changed consecutive mode must rebase");
+    const current = {
+      ...base,
+      mode: { kind: "assignments" as const, breakMinutes: 15 },
+    };
+    const merged = rebaseEntityDraft(base, local, current);
+    expect(merged.conflicts).toContain("mode");
+    const adopted = resolveEntityDraftField(merged, "mode", "current").value;
+    const retained = resolveEntityDraftField(merged, "mode", "draft").value;
+    if (
+      adopted.kind !== "maximumConsecutive" ||
+      retained.kind !== "maximumConsecutive" ||
+      local.kind !== "maximumConsecutive"
+    )
+      throw new Error("Consecutive rebase changed rule kind");
+    expect(adopted.mode).toEqual(current.mode);
+    expect(retained.mode).toEqual(local.mode);
+  });
+});
+
 describe("Maximum hours raw window and cap custody", () => {
   it("parses unsigned maximum minutes and positive rolling duration without rounding", () => {
     expect(parseMaximumHoursMaximumMinutesDraft("0004294967295")).toEqual({

@@ -36,7 +36,12 @@ fn context() -> CompileContext {
 
 #[test]
 fn full_ir_preflight_accounts_for_every_serialized_byte() -> Result {
-    for (extra_shifts, rejected) in [(0, false), (10, false), (0, true)] {
+    for (extra_shifts, rejected, consecutive) in [
+        (0, false, false),
+        (10, false, false),
+        (0, true, false),
+        (10, false, true),
+    ] {
         let mut document = source()?;
         let prototype = document
             .domain
@@ -51,6 +56,16 @@ fn full_ir_preflight_accounts_for_every_serialized_byte() -> Result {
                 .domain
                 .entities
                 .insert(id(200 + index).parse()?, shift);
+        }
+        if consecutive {
+            document.domain.rules.insert(
+                id(33).parse()?,
+                json!({
+                    "kind":"maximumConsecutive","id":id(33),"active":true,
+                    "strength":"required","scope":{"people":{"kind":"all"}},
+                    "mode":{"kind":"assignments","breakMinutes":0},"maximum":1
+                }),
+            );
         }
         if rejected {
             document
@@ -79,11 +94,61 @@ fn full_ir_preflight_accounts_for_every_serialized_byte() -> Result {
         let header = preflight::prepare(&model, &mut budget)?;
         let mut problem = construct(&model, header, &mut budget)?;
         problem.canonicalize()?;
-        assert_eq!(
-            budget.reserved_ir_bytes(),
-            count(serde_json::to_vec(&problem)?.len())?
-        );
+        let reserved = budget.reserved_ir_bytes();
+        let actual = count(serde_json::to_vec(&problem)?.len())?;
+        if consecutive {
+            assert!(
+                reserved >= actual,
+                "mixed-polarity helpers must not undercharge IR"
+            );
+        } else {
+            assert_eq!(reserved, actual);
+        }
     }
+    Ok(())
+}
+
+#[test]
+fn dense_consecutive_helpers_refuse_a_tight_variable_budget_without_weakening_the_rule() -> Result {
+    use super::super::{AssignmentRuleLimit, budget::add};
+
+    let mut document = source()?;
+    let prototype = document
+        .domain
+        .entities
+        .get(&id(8).parse()?)
+        .ok_or("shift")?
+        .clone();
+    for index in 0..10 {
+        let mut shift = prototype.clone();
+        shift["id"] = json!(id(200 + index));
+        document
+            .domain
+            .entities
+            .insert(id(200 + index).parse()?, shift);
+    }
+    let ordinary_variables = count(
+        compile_workforce(&document, &context())?
+            .problem
+            .variables
+            .len(),
+    )?;
+    document.domain.rules.insert(
+        id(33).parse()?,
+        json!({
+            "kind":"maximumConsecutive","id":id(33),"active":true,
+            "strength":"required","scope":{"people":{"kind":"all"}},
+            "mode":{"kind":"assignments","breakMinutes":0},"maximum":1
+        }),
+    );
+    let mut limited = context();
+    limited.planning_limits.max_variables = add(ordinary_variables, 1)?;
+    assert!(matches!(
+        compile_workforce(&document, &limited),
+        Err(AssignmentRuleError::LimitExceeded(
+            AssignmentRuleLimit::Variables
+        ))
+    ));
     Ok(())
 }
 
@@ -165,17 +230,8 @@ fn policy_free_drafts_are_not_given_an_implicit_objective() -> Result {
 fn active_unsupported_obligations_cannot_disappear_from_complete_compilation() -> Result {
     let mut document = source()?;
     let context = context();
-    let rule_id = id(30).parse()?;
     let preference_id = id(31).parse()?;
     let lock_id = id(14).parse()?;
-    document.domain.rules.insert(
-        rule_id,
-        json!({
-            "kind":"maximumConsecutive", "id":id(30), "active":true,
-            "strength":"required", "scope":{"people":{"kind":"all"}},
-            "mode":{"kind":"workedDays"}, "maximum":2
-        }),
-    );
     document.domain.preferences.insert(
         preference_id,
         json!({
@@ -185,28 +241,17 @@ fn active_unsupported_obligations_cannot_disappear_from_complete_compilation() -
         }),
     );
     document.domain.locked_assignments = fixture()?.domain.locked_assignments;
-    for expected in [
-        UnsupportedWorkforceObligation::RequiredRule(rule_id),
-        UnsupportedWorkforceObligation::Preference(preference_id),
-    ] {
-        assert!(matches!(
-            compile_workforce(&document, &context),
-            Err(AssignmentRuleError::UnsupportedObligation(actual)) if actual == expected
-        ));
-        match expected {
-            UnsupportedWorkforceObligation::RequiredRule(_) => {
-                document.domain.rules.get_mut(&rule_id).ok_or("rule")?["active"] = json!(false);
-            }
-            UnsupportedWorkforceObligation::Preference(_) => {
-                document
-                    .domain
-                    .preferences
-                    .get_mut(&preference_id)
-                    .ok_or("preference")?["active"] = json!(false);
-            }
-            UnsupportedWorkforceObligation::SoftLock(_) => unreachable!(),
-        }
-    }
+    assert!(matches!(
+        compile_workforce(&document, &context),
+        Err(AssignmentRuleError::UnsupportedObligation(
+            UnsupportedWorkforceObligation::Preference(actual)
+        )) if actual == preference_id
+    ));
+    document
+        .domain
+        .preferences
+        .get_mut(&preference_id)
+        .ok_or("preference")?["active"] = json!(false);
     let hard = compile_workforce(&document, &context)?;
     assert!(
         hard.problem.constraints.iter().any(|record| {

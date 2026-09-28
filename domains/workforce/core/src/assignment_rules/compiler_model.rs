@@ -1,7 +1,7 @@
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     UnsupportedWorkforceObligation, WorkforceCompilation,
-    analysis::{Plan, hours, prepare, supported_rule},
+    analysis::{Plan, consecutive, hours, prepare, supported_rule},
     budget::{OperationBudget, count, effective_limits},
     compiler::{
         DecisionVariables, compile_constraint, materialize_hard_lock_parents,
@@ -260,6 +260,7 @@ fn construct(
         .checked_mul(2)
         .ok_or_else(invalid)?;
     let mut variables = Vec::with_capacity(variable_count);
+    let mut consecutive_variables = Vec::new();
     let mut constraints = Vec::new();
     let mut projections = Vec::with_capacity(analysis.candidates.len());
     let mut provenance = vec![level_fact(policy, level_provenance.clone())];
@@ -299,20 +300,39 @@ fn construct(
                 .clone(),
             _ => parents.get(&planned.rule).ok_or_else(invalid)?.clone(),
         };
-        let (record, fact) = compile_constraint(
-            planned,
-            plan,
-            DecisionVariables::Complete {
-                pairs: &analysis.candidates,
-                variables: &variables,
-            },
-            parent,
-            &mut identities,
-            budget,
-        )?;
-        constraints.push(record);
-        provenance.push(fact);
+        if consecutive::is(planned) {
+            consecutive::emit(
+                planned,
+                plan,
+                DecisionVariables::Complete {
+                    pairs: &analysis.candidates,
+                    variables: &variables,
+                },
+                parent,
+                &mut identities,
+                &mut consecutive_variables,
+                &mut constraints,
+                &mut provenance,
+                budget,
+                limits,
+            )?;
+        } else {
+            let (record, fact) = compile_constraint(
+                planned,
+                plan,
+                DecisionVariables::Complete {
+                    pairs: &analysis.candidates,
+                    variables: &variables,
+                },
+                parent,
+                &mut identities,
+                budget,
+            )?;
+            constraints.push(record);
+            provenance.push(fact);
+        }
     }
+    variables.extend(consecutive_variables);
     let pair_ints = (0..analysis.candidates.len())
         .map(|index| {
             let position = index.checked_mul(2).and_then(|value| value.checked_add(1));

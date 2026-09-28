@@ -1,6 +1,7 @@
 //! Independent original-domain predicates. This module never consumes candidate or IR decisions.
 mod coverage;
 mod fixed;
+mod maximum_consecutive;
 mod maximum_count;
 mod maximum_hours;
 mod mutual;
@@ -39,8 +40,8 @@ pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_coun
 const SUMMARY: &str = "official.workforce.evaluation.summary";
 
 /// Evaluates Eligibility, Availability, Coverage, `RequiredSkillMix`, `FixedAssignment`, authored
-/// Hard locks, `NoOverlap`, `MinimumRest`, `TransitionTime` and `MaximumAssignmentCount`, plus
-/// unconditional activity/approved-leave facts.
+/// Hard locks, `NoOverlap`, `MinimumRest`, `TransitionTime`, `MaximumAssignmentCount` and
+/// `MaximumConsecutive`, plus unconditional activity/approved-leave facts.
 ///
 /// This is a bounded contribution, not complete verification or feasibility authority. Identified
 /// but inadmissible selections remain in the population and yield original-domain violations.
@@ -229,8 +230,7 @@ fn evaluate_prepared(
                 transition::evaluate(input, selected, rule, &mut summary, budget)?;
             }
             WorkforceRule::MaximumConsecutive { .. } => {
-                retain_id(&mut obligations.remaining, id, budget)?;
-                continue;
+                maximum_consecutive::evaluate(input, selected, rule, &mut summary, budget)?;
             }
         }
         retain_id(&mut obligations.handled, id, budget)?;

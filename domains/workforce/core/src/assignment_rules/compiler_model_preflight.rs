@@ -1,6 +1,6 @@
 use super::super::{
     AssignmentRuleLimit,
-    analysis::{Plan, PlannedConstraint, Predicate, hours},
+    analysis::{Plan, PlannedConstraint, Predicate, consecutive, hours},
     budget::{add, count, within},
     compiler::{BOOL_ID, CONSTRAINT_ID, PROVENANCE_ID, preflight, reserve_fact},
     compiler_rank::{RankIds, RankIndex, emit_rank},
@@ -52,6 +52,7 @@ pub(super) fn prepare(
         }
     }
     preflight(&analysis.candidates, plan, budget, limits)?;
+    let helper_variable_bytes = consecutive::helper_variable_bytes(plan, budget)?;
     // Contribution preflight measures bare Boolean records. Complete variables have a
     // schema-v2 enum wrapper; the root below contributes all punctuation and empty arrays.
     let boolean_wrappers = mul(pairs, count(r#"{"type":"boolean","value":}"#.len())?)?;
@@ -95,7 +96,10 @@ pub(super) fn prepare(
     budget.reserve_ir(
         1,
         add(8, count(context.semantic_metadata.len())?)?,
-        add(root_bytes, add(boolean_wrappers, separators)?)?,
+        add(
+            root_bytes,
+            add(add(boolean_wrappers, helper_variable_bytes)?, separators)?,
+        )?,
     )?;
     budget.reserve(1, 0, 512)?;
     reserve_fact(
@@ -124,7 +128,11 @@ fn complete_shape(
     limits: PlanningIrLimitsV1,
 ) -> Result<(hours::HoursShape, u64, u64, u64), AssignmentRuleError> {
     let hour_shape = hours::checked_shape(plan, limits)?;
-    let variables = add(mul(pairs, 2)?, hour_shape.helper_variables)?;
+    let consecutive_shape = consecutive::shape(plan, limits)?;
+    let variables = add(
+        add(mul(pairs, 2)?, hour_shape.helper_variables)?,
+        consecutive_shape.variables,
+    )?;
     let hour_channel_constraints = hour_shape.pair_indices.checked_mul(2).ok_or_else(invalid)?;
     let hour_constraints = hour_shape
         .constraints
@@ -134,8 +142,14 @@ fn complete_shape(
         .provenance
         .checked_sub(hour_shape.pair_indices)
         .ok_or_else(invalid)?;
+    let generic_constraints = count(plan.constraints.len())?
+        .checked_sub(consecutive_shape.planned_constraints)
+        .ok_or_else(invalid)?;
     let constraints = add(
-        add(count(plan.constraints.len())?, mul(pairs, 2)?)?,
+        add(
+            add(generic_constraints, consecutive_shape.constraints)?,
+            mul(pairs, 2)?,
+        )?,
         hour_constraints,
     )?;
     let base_provenance = analysis
@@ -175,6 +189,7 @@ fn validate_shape(
     let pairs = count(analysis.candidates.len())?;
     let (hour_shape, variables, constraints, provenance) =
         complete_shape(analysis, plan, pairs, limits)?;
+    let consecutive_shape = consecutive::shape(plan, limits)?;
     within(
         variables,
         limits.max_variables,
@@ -216,8 +231,11 @@ fn validate_shape(
         }
     }
     let mut edges = add(
-        add(variables, pairs.saturating_sub(1))?,
-        hour_shape.component_edges,
+        add(
+            add(variables, pairs.saturating_sub(1))?,
+            hour_shape.component_edges,
+        )?,
+        consecutive_shape.component_edges,
     )?;
     budget.reserve(0, 6, 512)?;
     let mut capabilities = BTreeSet::new();
@@ -230,6 +248,10 @@ fn validate_shape(
     }
     for planned in &plan.constraints {
         budget.step()?;
+        if consecutive::is(planned) {
+            consecutive::capabilities(planned, plan, &mut capabilities)?;
+            continue;
+        }
         if !planned.impossible {
             edges = add(edges, count(planned.population.len())?.saturating_sub(1))?;
         }
@@ -252,6 +274,7 @@ fn constraint_capability(planned: &PlannedConstraint) -> Capability {
         | Predicate::Qualification { .. }
         | Predicate::SkillMixQualification { .. }
         | Predicate::MaximumAssignmentCount { .. } => Capability::CardinalityRange,
+        Predicate::MaximumConsecutive { .. } => unreachable!(),
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
         | Predicate::MutualSameShift { .. }

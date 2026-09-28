@@ -48,7 +48,7 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "maximumConsecutive",
         "official.workforce.rule.maximum-consecutive",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "maximumAssignmentCount",

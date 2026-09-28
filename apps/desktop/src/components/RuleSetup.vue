@@ -205,6 +205,49 @@ function updateMaximumHoursMembership(value: string): void {
         : "reportingDate";
   vm.updateRaw({ ...raw, window: { ...raw.window, membership } });
 }
+function maximumConsecutiveModeKind(): "workedDays" | "assignments" {
+  const mode = state.editor?.raw.mode;
+  return typeof mode === "object" && mode.kind === "assignments" ? "assignments" : "workedDays";
+}
+function maximumConsecutiveBreakMinutesRaw(): string {
+  const mode = state.editor?.raw.mode;
+  if (typeof mode !== "object" || mode.breakMinutes === undefined) return "";
+  return mode.breakMinutes.raw;
+}
+function mutualModeKind(): "sameShift" | "overlappingShifts" {
+  const mode = state.editor?.raw.mode;
+  return mode === "overlappingShifts" ? mode : "sameShift";
+}
+function updateMaximumConsecutiveMode(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "maximumConsecutive") return;
+  const mode = raw.mode;
+  const breakMinutes =
+    typeof mode === "object" && mode.breakMinutes !== undefined
+      ? mode.breakMinutes
+      : parseMaximumAssignmentCountDraft("");
+  vm.updateRaw({
+    ...raw,
+    mode:
+      value === "assignments"
+        ? { kind: "assignments" as const, breakMinutes }
+        : { kind: "workedDays" as const, breakMinutes },
+  });
+}
+function updateMaximumConsecutiveBreakMinutes(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "maximumConsecutive") return;
+  const mode = raw.mode;
+  if (typeof mode !== "object" || mode.kind !== "assignments") return;
+  vm.updateRaw({
+    ...raw,
+    mode: {
+      ...mode,
+      breakMinutes: parseMaximumAssignmentCountDraft(value),
+    },
+  });
+}
+
 function maximumHoursWindowLabel(kind: "calendar" | "rolling", membership: string): string {
   const window = kind === "calendar" ? copy.fields.calendarWindow : copy.fields.rollingWindow;
   const member =
@@ -302,6 +345,10 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
     if (field !== undefined && Object.hasOwn(fields, field))
       id = fields[field as keyof typeof fields];
   }
+  if (path.length === 1 && path[0] === "mode" && editor.kind === "maximumConsecutive")
+    id = "rule-consecutive-mode";
+  if (path.length === 2 && path[0] === "mode" && path[1] === "breakMinutes")
+    id = "rule-consecutive-break-minutes";
   if (path.length === 2 && path[0] === "window") {
     const windowFields: Readonly<Record<string, string>> = {
       calendarId: "rule-calendar",
@@ -865,7 +912,7 @@ const navigationError = useValidationRoute(
                 </p>
                 <select
                   id="rule-mutual-mode"
-                  :value="state.editor.raw.mode"
+                  :value="mutualModeKind()"
                   :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
                   aria-describedby="rule-mutual-mode-help rule-mutual-mode-error"
                   :aria-invalid="Boolean(state.errors.mode) || undefined"
@@ -888,7 +935,7 @@ const navigationError = useValidationRoute(
                 {{
                   copy.mutualAssignmentRestrictionSentence(
                     formatNumber(state.editor.raw.personIds.length, locale),
-                    state.editor.raw.mode,
+                    mutualModeKind(),
                   )
                 }}
               </p>
@@ -1060,6 +1107,96 @@ const navigationError = useValidationRoute(
                   {{ state.errors.maximum }}
                 </p>
               </div>
+            </template>
+            <template v-if="state.editor.kind === 'maximumConsecutive'">
+              <fieldset
+                id="rule-maximum-consecutive"
+                tabindex="-1"
+                class="field-stack"
+                aria-describedby="rule-maximum-consecutive-help"
+              >
+                <legend>{{ kindLabel(state.editor.kind) }}</legend>
+                <p id="rule-maximum-consecutive-help" class="field-help">
+                  {{ copy.fields.maximumConsecutiveScopeHelp }}
+                </p>
+                <div class="field-stack">
+                  <label for="rule-maximum">{{ copy.fields.maximumConsecutive }}</label>
+                  <p id="rule-maximum-help" class="field-help">
+                    {{ copy.fields.maximumConsecutiveHelp }}
+                  </p>
+                  <input
+                    id="rule-maximum"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="state.editor.raw.maximum.raw"
+                    :aria-invalid="Boolean(state.errors.maximum) || undefined"
+                    aria-describedby="rule-maximum-help rule-maximum-error"
+                    @input="
+                      vm.updateRaw({
+                        ...state.editor.raw,
+                        maximum: parseMaximumAssignmentCountDraft(text($event)),
+                      })
+                    "
+                  />
+                  <p id="rule-maximum-error" class="text-danger" role="status">
+                    {{ state.errors.maximum }}
+                  </p>
+                </div>
+                <div class="field-stack">
+                  <label for="rule-consecutive-mode">{{
+                    copy.fields.maximumConsecutiveMode
+                  }}</label>
+                  <p id="rule-consecutive-mode-help" class="field-help">
+                    {{ copy.fields.maximumConsecutiveModeHelp }}
+                  </p>
+                  <select
+                    id="rule-consecutive-mode"
+                    :value="maximumConsecutiveModeKind()"
+                    :disabled="
+                      busy || stale || !state.editor.editing || state.editor.rebase !== null
+                    "
+                    aria-describedby="rule-consecutive-mode-help rule-consecutive-mode-error"
+                    :aria-invalid="Boolean(state.errors.mode) || undefined"
+                    @change="updateMaximumConsecutiveMode(text($event))"
+                  >
+                    <option value="workedDays">{{ copy.fields.workedDays }}</option>
+                    <option value="assignments">{{ copy.fields.assignments }}</option>
+                  </select>
+                  <p id="rule-consecutive-mode-error" class="text-danger" role="status">
+                    {{ state.errors.mode }}
+                  </p>
+                </div>
+                <p v-if="maximumConsecutiveModeKind() === 'workedDays'" class="field-help">
+                  {{ copy.fields.workedDaysHelp }}
+                </p>
+                <div v-else class="field-stack">
+                  <label for="rule-consecutive-break-minutes">
+                    {{ copy.fields.breakMinutes }}
+                  </label>
+                  <p id="rule-consecutive-break-minutes-help" class="field-help">
+                    {{ copy.fields.breakMinutesHelp }}
+                  </p>
+                  <input
+                    id="rule-consecutive-break-minutes"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="maximumConsecutiveBreakMinutesRaw()"
+                    :aria-invalid="Boolean(state.errors['mode.breakMinutes']) || undefined"
+                    aria-describedby="rule-consecutive-break-minutes-help rule-consecutive-break-minutes-error"
+                    @input="updateMaximumConsecutiveBreakMinutes(text($event))"
+                  />
+                  <p id="rule-consecutive-break-minutes-error" class="text-danger" role="status">
+                    {{ state.errors["mode.breakMinutes"] }}
+                  </p>
+                  <p class="field-help">{{ copy.fields.assignmentsHelp }}</p>
+                </div>
+              </fieldset>
             </template>
             <template v-if="state.editor.kind === 'maximumHours'">
               <WorkforceEntityPicker
@@ -1579,6 +1716,17 @@ const navigationError = useValidationRoute(
             {{
               copy.maximumAssignmentCountSentence(
                 formatNumber(state.reviewed.after.maximum, locale),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'maximumConsecutive'">
+            {{
+              copy.maximumConsecutiveSentence(
+                formatNumber(state.reviewed.after.maximum, locale),
+                state.reviewed.after.mode.kind,
+                state.reviewed.after.mode.kind === "assignments"
+                  ? formatNumber(state.reviewed.after.mode.breakMinutes, locale)
+                  : "0",
               )
             }}
           </p>

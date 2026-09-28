@@ -2,7 +2,7 @@
   "format": "eutheto/workforce-corpus-expectations",
   "schemaVersion": 1,
   "corpusVersion": 1,
-  "generatorSourceSha256": "89cc26d7e7978c8e44e7e91c9693e7ce58cf662eaabcc490a460fc26335c6989",
+  "generatorSourceSha256": "9fccd28881bf3bc5d2fa8c9400223234309356a5e027c52df8d5c669e90d13e7",
   "cases": [
     {
       "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
@@ -17,11 +17,6 @@
         "modelEnvelope": null,
         "deferredObligations": [
           {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-7d09-9a27-6ea768a298f9",
-            "ruleKind": "maximumConsecutive"
-          },
-          {
             "kind": "preference",
             "ruleId": "01a04a99-f980-74fd-abdc-547a6f74a762",
             "preferenceKind": "workloadBalance"
@@ -33,7 +28,7 @@
           }
         ],
         "semantics": [
-          "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later rules/preferences require Phase07; no claim of feasibility"
+          "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later preferences require Phase07; no claim of feasibility"
         ]
       }
     },

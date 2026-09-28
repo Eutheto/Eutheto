@@ -1075,16 +1075,6 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
         CaseId::LargePressure => (100, 20, 20, None, ResourceLimit),
     };
     let mut deferred_obligations = vec![];
-    let later_rules: &[(&str, &str)] = match case {
-        CaseId::AppendixF => &[("rule-max-consecutive-nights", "maximumConsecutive")],
-        _ => &[],
-    };
-    for (role, kind) in later_rules {
-        deferred_obligations.push(PreservedObligation::Rule {
-            rule_id: id(case, role)?,
-            rule_kind: (*kind).to_owned(),
-        });
-    }
     if matches!(case, CaseId::AppendixF | CaseId::ClinicFull) {
         for (role, kind) in [
             ("pref-balance", "workloadBalance"),
@@ -1143,7 +1133,7 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
 fn semantic_description(case: CaseId) -> &'static str {
     match case {
         CaseId::AppendixF => {
-            "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later rules/preferences require Phase07; no claim of feasibility"
+            "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later preferences require Phase07; no claim of feasibility"
         }
         CaseId::ClinicTiny => {
             "Three clinicians, five four-hour weekday shifts, exact two physicians, one full local day unavailable; basic Required rules only"

@@ -133,6 +133,37 @@ fn endpoint(time: &str) -> Value {
     json!({"instant":format!("2026-11-01T{time}Z"),"local":format!("2026-11-01T{time}"),"offsetSeconds":0})
 }
 
+fn endpoint_on(date: &str, time: &str) -> Value {
+    json!({"instant":format!("{date}T{time}Z"),"local":format!("{date}T{time}"),"offsetSeconds":0})
+}
+
+fn consecutive_fixture() -> Result<Value, Box<dyn Error>> {
+    let mut value = fixture_value()?;
+    value["settings"]["horizon"] =
+        json!({"start":"2026-11-01T00:00:00Z","end":"2026-11-05T00:00:00Z"});
+    value["domain"]["rules"][id(33)]["active"] = json!(false);
+    value["domain"]["entities"][id(8)]["startsAt"] = endpoint("08:00:00");
+    value["domain"]["entities"][id(8)]["endsAt"] = endpoint("09:00:00");
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint("09:00:00");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint("10:00:00");
+    let mut third = value["domain"]["entities"][id(22)].clone();
+    third["id"] = json!(id(25));
+    third["startsAt"] = endpoint("10:00:00");
+    third["endsAt"] = endpoint("11:00:00");
+    value["domain"]["entities"][id(25)] = third;
+    for (lock, shift) in [(40, 8), (41, 22), (42, 25)] {
+        value["domain"]["lockedAssignments"][id(lock)] = json!({
+            "id":id(lock),"personId":id(1),"shiftId":id(shift),"state":{"kind":"hard"}
+        });
+    }
+    value["domain"]["rules"][id(35)] = json!({
+        "kind":"maximumConsecutive","id":id(35),"active":true,"strength":"required",
+        "scope":{"people":{"kind":"all"}},"mode":{"kind":"assignments","breakMinutes":0},
+        "maximum":2
+    });
+    Ok(value)
+}
+
 fn context() -> CompileContext {
     CompileContext {
         scenario_revision: 1,
@@ -2000,6 +2031,191 @@ async fn real_worker_enforces_signed_scheduled_rolling_credit_exit() -> TestResu
         );
     }
     Ok(())
+}
+
+async fn check_consecutive_worker(
+    name: &str,
+    value: Value,
+    expected_feasible: bool,
+    selected: &[AssignmentPair],
+) -> TestResult {
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    assert_eq!(
+        original_accepts(&document, selected)?,
+        expected_feasible,
+        "{name}: original source meaning"
+    );
+    compile_assignment_rules(&document, &context())
+        .map_err(|error| format!("{name}: contribution: {error:?}"))?;
+    let compiled = compile_workforce(&document, &context())
+        .map_err(|error| format!("{name}: complete model: {error:?}"))?;
+    let result = solve_with_real_worker(compiled.problem.clone()).await?;
+    if !expected_feasible {
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::InfeasibilityClaimed,
+            "{name}"
+        );
+        assert!(result.candidates.is_empty(), "{name}");
+        return Ok(());
+    }
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed,
+        "{name}"
+    );
+    let candidate = result
+        .candidates
+        .first()
+        .ok_or("missing real-worker consecutive candidate")?;
+    let clock = eutheto_verify::SystemVerificationClock::default();
+    let reviewer = eutheto_verify::AcceptanceReviewer::new(
+        &eutheto_workforce::WorkforcePack,
+        &document,
+        1,
+        &compiled.problem,
+        &clock,
+    )
+    .map_err(|alarm| alarm.diagnostic_code)?;
+    let decision = reviewer.review(candidate, id(505).parse()?, &context().control);
+    let eutheto_verify::AcceptanceDecision::Accepted { result, .. } = decision else {
+        return Err(format!("{name}: consecutive candidate was not accepted: {decision:?}").into());
+    };
+    let rule_id: RuleId = id(35).parse()?;
+    assert_eq!(result.verification.score.feasibility, 0, "{name}");
+    assert!(
+        result
+            .verification
+            .required_rule_results
+            .iter()
+            .find(|item| item.rule_id == rule_id)
+            .ok_or("missing consecutive verification result")?
+            .satisfied,
+        "{name}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+#[allow(clippy::too_many_lines)]
+async fn real_worker_enforces_consecutive_civil_days_and_selected_assignment_runs() -> TestResult {
+    let base = consecutive_fixture()?;
+    let all_selected = [pair(1, 8)?, pair(1, 22)?, pair(1, 25)?];
+    for (name, third_date, maximum, feasible) in [
+        ("duplicate same-day assignments", "2026-11-01", 1, true),
+        ("zero cap forbids any match", "2026-11-01", 0, false),
+        ("adjacent civil dates", "2026-11-02", 1, false),
+        ("two worked dates within cap", "2026-11-02", 2, true),
+        ("sparse dates do not join", "2026-11-03", 1, true),
+    ] {
+        let mut value = base.clone();
+        value["domain"]["rules"][id(35)]["mode"] = json!({"kind":"workedDays"});
+        value["domain"]["rules"][id(35)]["maximum"] = json!(maximum);
+        value["domain"]["entities"][id(25)]["startsAt"] = endpoint_on(third_date, "10:00:00");
+        value["domain"]["entities"][id(25)]["endsAt"] = endpoint_on(third_date, "11:00:00");
+        check_consecutive_worker(name, value, feasible, &all_selected).await?;
+    }
+    for (name, second_start, third_start, first_end, third_end, break_minutes, maximum, feasible) in [
+        (
+            "three touching selected assignments",
+            "09:00:00",
+            "10:00:00",
+            "09:00:00",
+            "11:00:00",
+            0,
+            2,
+            false,
+        ),
+        (
+            "three selected assignments at cap",
+            "09:00:00",
+            "10:00:00",
+            "09:00:00",
+            "11:00:00",
+            0,
+            3,
+            true,
+        ),
+        (
+            "exact elapsed break",
+            "09:30:00",
+            "10:30:00",
+            "09:00:00",
+            "11:00:00",
+            30,
+            2,
+            false,
+        ),
+        (
+            "one nanosecond beyond break",
+            "09:30:00",
+            "10:30:00.000000001",
+            "09:00:00",
+            "11:00:00",
+            30,
+            2,
+            true,
+        ),
+        (
+            "overlap with reversed end order resets run",
+            "09:00:00",
+            "12:00:00",
+            "20:00:00",
+            "13:00:00",
+            0,
+            2,
+            true,
+        ),
+    ] {
+        let mut value = base.clone();
+        value["domain"]["rules"][id(35)]["maximum"] = json!(maximum);
+        value["domain"]["rules"][id(35)]["mode"]["breakMinutes"] = json!(break_minutes);
+        value["domain"]["entities"][id(8)]["endsAt"] = endpoint(first_end);
+        value["domain"]["entities"][id(22)]["startsAt"] = endpoint(second_start);
+        value["domain"]["entities"][id(25)]["startsAt"] = endpoint(third_start);
+        value["domain"]["entities"][id(25)]["endsAt"] = endpoint(third_end);
+        check_consecutive_worker(name, value, feasible, &all_selected).await?;
+    }
+    let mut filtered = base;
+    let mut call = filtered["domain"]["entities"][id(4)].clone();
+    call["id"] = json!(id(26));
+    call["category"] = json!("call");
+    filtered["domain"]["entities"][id(26)] = call;
+    filtered["domain"]["entities"][id(1)]["eligibleAssignmentTypeIds"] = json!([id(4), id(26)]);
+    for shift in [8, 25] {
+        filtered["domain"]["entities"][id(shift)]["assignmentTypeId"] = json!(id(26));
+    }
+    filtered["domain"]["entities"][id(25)]["startsAt"] = endpoint("09:00:00");
+    filtered["domain"]["entities"][id(25)]["endsAt"] = endpoint("10:00:00");
+    filtered["domain"]["rules"][id(35)]["scope"]["categories"] = json!(["call"]);
+    filtered["domain"]["rules"][id(35)]["maximum"] = json!(1);
+    check_consecutive_worker(
+        "intervening selected nonmatch never resets run",
+        filtered,
+        false,
+        &all_selected,
+    )
+    .await?;
+    let mut skipped_middle = consecutive_fixture()?;
+    skipped_middle["domain"]["rules"][id(35)]["mode"] = json!({"kind":"workedDays"});
+    skipped_middle["domain"]["rules"][id(35)]["maximum"] = json!(1);
+    skipped_middle["domain"]["entities"][id(20)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    skipped_middle["domain"]["entities"][id(22)]["startsAt"] =
+        endpoint_on("2026-11-02", "09:00:00");
+    skipped_middle["domain"]["entities"][id(22)]["endsAt"] = endpoint_on("2026-11-02", "10:00:00");
+    skipped_middle["domain"]["entities"][id(25)]["startsAt"] =
+        endpoint_on("2026-11-03", "10:00:00");
+    skipped_middle["domain"]["entities"][id(25)]["endsAt"] = endpoint_on("2026-11-03", "11:00:00");
+    skipped_middle["domain"]["lockedAssignments"][id(41)]["personId"] = json!(id(20));
+    check_consecutive_worker(
+        "unselected matching middle day does not prohibit separated worked days",
+        skipped_middle,
+        true,
+        &[pair(1, 8)?, pair(20, 22)?, pair(1, 25)?],
+    )
+    .await
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 import type {
+  WorkforceConsecutiveMode,
   WorkforcePairingMode,
   WorkforceQualificationMinimum,
   WorkforceRequiredSkillMixRule,
@@ -59,6 +60,7 @@ export type EditableRule = Extract<
       | "noOverlap"
       | "minimumRest"
       | "maximumHours"
+      | "maximumConsecutive"
       | "maximumAssignmentCount"
       | "requiredSkillMix"
       | "fixedAssignment"
@@ -89,6 +91,19 @@ export function parseMaximumAssignmentCountDraft(raw: string): MaximumAssignment
   if (maximum > maximumAssignmentCountLimit) return { raw, status: "invalid", error: "range" };
   return { raw, status: "valid", maximum: Number(maximum) };
 }
+export type MaximumConsecutiveModeDraft =
+  | { readonly kind: "workedDays"; readonly breakMinutes?: MaximumAssignmentCountDraft }
+  | { readonly kind: "assignments"; readonly breakMinutes: MaximumAssignmentCountDraft };
+
+function maximumConsecutiveModeDraft(value: WorkforceConsecutiveMode): MaximumConsecutiveModeDraft {
+  return value.kind === "workedDays"
+    ? { kind: "workedDays" }
+    : {
+        kind: "assignments",
+        breakMinutes: parseMaximumAssignmentCountDraft(String(value.breakMinutes)),
+      };
+}
+
 type UnsignedIntegerDraft = {
   readonly raw: string;
 } & (
@@ -184,24 +199,8 @@ export interface RuleDraft {
   readonly shiftId: string;
   readonly personIds: readonly string[];
   readonly locationIds: readonly string[];
-  readonly mode: WorkforcePairingMode;
+  readonly mode: WorkforcePairingMode | MaximumConsecutiveModeDraft;
   readonly qualificationMinimums: readonly QualificationMinimumDraft[];
-}
-
-export function isEditableRule(rule: WorkforceRule): rule is EditableRule {
-  return (
-    rule.kind === "eligibility" ||
-    rule.kind === "availability" ||
-    rule.kind === "coverage" ||
-    rule.kind === "noOverlap" ||
-    rule.kind === "minimumRest" ||
-    rule.kind === "maximumHours" ||
-    rule.kind === "maximumAssignmentCount" ||
-    rule.kind === "requiredSkillMix" ||
-    rule.kind === "fixedAssignment" ||
-    rule.kind === "mutualAssignmentRestriction" ||
-    rule.kind === "transitionTime"
-  );
 }
 
 function qualificationIdentity(
@@ -332,6 +331,22 @@ export function createRuleDraft(
     record?.kind === "maximumAssignmentCount" &&
     previous?.value.kind === "maximumAssignmentCount" &&
     (previous.raw.maximum.status !== "valid" || sameField(record.maximum, previous.value.maximum));
+  const previousConsecutiveMode =
+    record?.kind === "maximumConsecutive" &&
+    previous?.value.kind === "maximumConsecutive" &&
+    typeof previous.raw.mode === "object"
+      ? previous.raw.mode
+      : undefined;
+  const keepMaximumConsecutive =
+    record?.kind === "maximumConsecutive" &&
+    previous?.value.kind === "maximumConsecutive" &&
+    (previous.raw.maximum.status !== "valid" || sameField(record.maximum, previous.value.maximum));
+  const keepMaximumConsecutiveMode =
+    record?.kind === "maximumConsecutive" &&
+    previous?.value.kind === "maximumConsecutive" &&
+    ((previousConsecutiveMode?.kind === "assignments" &&
+      previousConsecutiveMode.breakMinutes.status !== "valid") ||
+      sameField(record.mode, previous.value.mode));
   const keepMaximumHours =
     record?.kind === "maximumHours" &&
     previous?.value.kind === "maximumHours" &&
@@ -383,11 +398,15 @@ export function createRuleDraft(
             calendarId: "",
             membership: "reportingDate",
           }),
-    maximum: keepMaximum
+    maximum: keepMaximumConsecutive
       ? previous.raw.maximum
-      : record?.kind === "maximumAssignmentCount"
+      : record?.kind === "maximumConsecutive"
         ? parseMaximumAssignmentCountDraft(String(record.maximum))
-        : (previous?.raw.maximum ?? parseMaximumAssignmentCountDraft("")),
+        : keepMaximum
+          ? previous.raw.maximum
+          : record?.kind === "maximumAssignmentCount"
+            ? parseMaximumAssignmentCountDraft(String(record.maximum))
+            : (previous?.raw.maximum ?? parseMaximumAssignmentCountDraft("")),
     beforeScope:
       record?.kind === "minimumRest"
         ? record.beforeScope
@@ -432,11 +451,15 @@ export function createRuleDraft(
           : record.locationIds
         : (previous?.raw.locationIds ?? []),
     mode:
-      record?.kind === "mutualAssignmentRestriction"
-        ? keepMutualMode
-          ? previous.raw.mode
-          : record.mode
-        : (previous?.raw.mode ?? "sameShift"),
+      record?.kind === "maximumConsecutive"
+        ? keepMaximumConsecutiveMode
+          ? (previousConsecutiveMode as MaximumConsecutiveModeDraft)
+          : maximumConsecutiveModeDraft(record.mode)
+        : record?.kind === "mutualAssignmentRestriction"
+          ? keepMutualMode
+            ? previous.raw.mode
+            : record.mode
+          : (previous?.raw.mode ?? "sameShift"),
     qualificationMinimums:
       record?.kind === "requiredSkillMix"
         ? requiredSkillMixDraft(record, previousSkillMix, previous?.raw.qualificationMinimums)
@@ -461,6 +484,28 @@ export function ruleDraftValue(
       if (Object.keys(errors).length > 0) return { value: null, errors };
       return {
         value: { ...common, kind, personId: draft.personId, shiftId: draft.shiftId },
+        errors: {},
+      };
+    }
+    case "maximumConsecutive": {
+      const maximum = parseMaximumAssignmentCountDraft(draft.maximum.raw);
+      const errors: Record<string, string> = {};
+      if (maximum.status !== "valid") errors.maximum = messages.ruleSetup.maximumInvalid;
+      let mode: WorkforceConsecutiveMode | null = null;
+      if (typeof draft.mode !== "object") {
+        errors.mode = messages.ruleSetup.maximumConsecutiveModeInvalid;
+      } else if (draft.mode.kind === "workedDays") {
+        mode = { kind: "workedDays" };
+      } else {
+        const breakMinutes = parseMaximumAssignmentCountDraft(draft.mode.breakMinutes.raw);
+        if (breakMinutes.status !== "valid")
+          errors["mode.breakMinutes"] = messages.ruleSetup.breakMinutesInvalid;
+        else mode = { kind: "assignments", breakMinutes: breakMinutes.maximum };
+      }
+      if (Object.keys(errors).length > 0 || maximum.status !== "valid" || mode === null)
+        return { value: null, errors };
+      return {
+        value: { ...common, kind, maximum: maximum.maximum, mode },
         errors: {},
       };
     }
@@ -561,11 +606,14 @@ export function ruleDraftValue(
         errors: {},
       };
     }
-    case "mutualAssignmentRestriction":
+    case "mutualAssignmentRestriction": {
+      if (draft.mode !== "sameShift" && draft.mode !== "overlappingShifts")
+        return { value: null, errors: { mode: messages.ruleSetup.mutualModeInvalid } };
       return {
         value: { ...common, kind, personIds: draft.personIds, mode: draft.mode },
         errors: {},
       };
+    }
     case "transitionTime":
       return {
         value: { ...common, kind, locationIds: draft.locationIds },
@@ -593,6 +641,24 @@ export function ruleRebaseValue(base: EditableRule, draft: RuleDraft): EditableR
       personId: draft.personId || base.personId,
       shiftId: draft.shiftId || base.shiftId,
     };
+  if (base.kind === "maximumConsecutive") {
+    let mode: WorkforceConsecutiveMode = base.mode;
+    if (typeof draft.mode === "object") {
+      if (draft.mode.kind === "workedDays") mode = { kind: "workedDays" };
+      else {
+        const breakMinutes = parseMaximumAssignmentCountDraft(draft.mode.breakMinutes.raw);
+        if (breakMinutes.status === "valid")
+          mode = { kind: "assignments", breakMinutes: breakMinutes.maximum };
+      }
+    }
+    return {
+      ...base,
+      active: draft.active,
+      scope: draft.scope,
+      maximum: draft.maximum.status === "valid" ? draft.maximum.maximum : base.maximum,
+      mode,
+    };
+  }
   if (base.kind === "maximumAssignmentCount")
     return {
       ...base,
