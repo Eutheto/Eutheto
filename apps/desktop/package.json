@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
-    "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli": "2.11.5",
     "@testing-library/vue": "8.1.0",
     "@types/node": "24.13.3",
     "@types/web-bluetooth": "0.0.21",
