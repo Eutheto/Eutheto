@@ -23,7 +23,7 @@ const LIMIT: usize = 16 * 1024 * 1024;
 const STAGES: [&str; 8] = [
     "startup", "context", "browser", "loaded", "ready", "printing", "printed", "closed",
 ];
-const FAULTS: [&str; 12] = [
+const FAULTS: [&str; 15] = [
     "failed",
     "renderer-exit",
     "deny-popup",
@@ -36,6 +36,18 @@ const FAULTS: [&str; 12] = [
     "deny-download",
     "deny-print-dialog",
     "deny-print-job",
+    "mac-teardown-watchdog",
+    "mac-session-watchdog",
+    "mac-sigterm-watchdog",
+];
+const DIAGNOSTICS: [&str; 7] = [
+    "lifecycle-loop-returned",
+    "lifecycle-shutdown-entered",
+    "lifecycle-shutdown-returned",
+    "lifecycle-probe-returned",
+    "lifecycle-pool-drained",
+    "lifecycle-unload-entered",
+    "lifecycle-unload-returned",
 ];
 fn invalid() -> io::Error {
     io::Error::other("probe boundary failure")
@@ -109,18 +121,18 @@ async fn settle(child: &mut dyn ChildWrapper, pid: u32) -> io::Result<ExitStatus
     .await
     .map_err(|_| invalid())?
 }
-async fn stages(mut pipe: impl AsyncRead + Unpin, sender: mpsc::Sender<String>) -> io::Result<()> {
+async fn stages(
+    mut pipe: impl AsyncRead + Unpin,
+    sender: mpsc::Sender<&'static str>,
+) -> io::Result<()> {
     let mut buffer = [0; 256];
-    let mut line = Vec::with_capacity(128);
+    let mut line = [0; 128];
+    let mut used = 0;
     let mut total = 0usize;
     loop {
         let count = pipe.read(&mut buffer).await?;
         if count == 0 {
-            return if line.is_empty() {
-                Ok(())
-            } else {
-                Err(invalid())
-            };
+            return if used == 0 { Ok(()) } else { Err(invalid()) };
         }
         total += count;
         if total > 4096 {
@@ -128,24 +140,50 @@ async fn stages(mut pipe: impl AsyncRead + Unpin, sender: mpsc::Sender<String>) 
         }
         for byte in &buffer[..count] {
             if *byte == b'\n' {
-                let event = std::str::from_utf8(&line).map_err(|_| invalid())?;
-                if !STAGES.contains(&event) && !FAULTS.contains(&event) {
-                    return Err(invalid());
-                }
-                sender.send(event.to_owned()).await.map_err(|_| invalid())?;
-                line.clear();
+                let text = std::str::from_utf8(&line[..used]).map_err(|_| invalid())?;
+                let event = STAGES
+                    .iter()
+                    .chain(FAULTS.iter())
+                    .chain(DIAGNOSTICS.iter())
+                    .copied()
+                    .find(|event| *event == text)
+                    .ok_or_else(invalid)?;
+                sender.send(event).await.map_err(|_| invalid())?;
+                used = 0;
             } else {
-                if line.len() == 128 {
+                if used == line.len() {
                     return Err(invalid());
                 }
-                line.push(*byte);
+                line[used] = *byte;
+                used += 1;
             }
         }
     }
 }
-async fn discard_stderr(mut pipe: impl AsyncRead + Unpin) -> io::Result<()> {
+async fn native_stderr(
+    mut pipe: impl AsyncRead + Unpin,
+    sender: mpsc::Sender<&'static str>,
+) -> io::Result<()> {
     let mut buffer = [0; 4096];
     let mut total = 0usize;
+    let mut line = [0; 128];
+    let mut used = 0;
+    let mut overflow = false;
+    let mut emitted = [false; 3];
+    let watchdogs: [(&[u8], &str); 3] = [
+        (
+            b"Teardown watchdog expired; recording dump and terminating.",
+            "mac-teardown-watchdog",
+        ),
+        (
+            b"SessionEnding watchdog expired; recording dump and terminating.",
+            "mac-session-watchdog",
+        ),
+        (
+            b"SIGTERM shutdown watchdog expired; recording dump and re-raising.",
+            "mac-sigterm-watchdog",
+        ),
+    ];
     loop {
         let count = pipe.read(&mut buffer).await?;
         if count == 0 {
@@ -154,6 +192,25 @@ async fn discard_stderr(mut pipe: impl AsyncRead + Unpin) -> io::Result<()> {
         total += count;
         if total > 65536 {
             return Err(invalid());
+        }
+        for byte in &buffer[..count] {
+            if *byte == b'\n' {
+                if !overflow {
+                    for (index, (literal, event)) in watchdogs.iter().enumerate() {
+                        if !emitted[index] && &line[..used] == *literal {
+                            sender.send(*event).await.map_err(|_| invalid())?;
+                            emitted[index] = true;
+                        }
+                    }
+                }
+                used = 0;
+                overflow = false;
+            } else if used < line.len() {
+                line[used] = *byte;
+                used += 1;
+            } else {
+                overflow = true;
+            }
         }
     }
 }
@@ -350,8 +407,8 @@ async fn run() -> io::Result<bool> {
         )
     } else {
         (
-            tokio::spawn(stages(stdout, sender)),
-            tokio::spawn(discard_stderr(stderr)),
+            tokio::spawn(stages(stdout, sender.clone())),
+            tokio::spawn(native_stderr(stderr, sender)),
         )
     };
     let mut next_stage = 0;
@@ -395,10 +452,10 @@ async fn run() -> io::Result<bool> {
             }
             event = receiver.recv(), if !events_done => {
                 if let Some(event) = event {
-                    if FAULTS.contains(&event.as_str()) { fault.get_or_insert("native-failure"); }
-                    else if STAGES.get(next_stage).copied() == Some(event.as_str()) { next_stage += 1; }
-                    else if !(fault.is_some() && event == "closed") { reason = "protocol-failure"; break; }
-                    if emit(&event).is_err() { reason = "pipe-failure"; break; }
+                    if FAULTS.contains(&event) { fault.get_or_insert("native-failure"); }
+                    else if STAGES.get(next_stage).copied() == Some(event) { next_stage += 1; }
+                    else if !DIAGNOSTICS.contains(&event) && !(fault.is_some() && event == "closed") { reason = "protocol-failure"; break; }
+                    if emit(event).is_err() { reason = "pipe-failure"; break; }
                     if (mode == "startup-cancel" && event == "startup") || (mode == "ready-cancel" && event == "ready") || (mode == "printing-cancel" && event == "printing") {
                         reason = "stage-cancel"; break;
                     }
@@ -464,10 +521,29 @@ fn main() {
     std::process::exit(if success { 0 } else { 1 });
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn stderr_publishes_only_complete_exact_watchdogs_once() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let literal = b"Teardown watchdog expired; recording dump and terminating.\n";
+        let mut input = b"PRIVATE_SENTINEL ".to_vec();
+        input.extend_from_slice(literal);
+        input.extend_from_slice(&[b'x'; 129]);
+        input.extend_from_slice(literal);
+        input.extend_from_slice(literal);
+        input.extend_from_slice(literal);
+        input.extend_from_slice(b"SessionEnding watchdog expired; recording dump and terminating.");
+        native_stderr(input.as_slice(), sender).await.unwrap();
+        assert_eq!(receiver.recv().await, Some("mac-teardown-watchdog"));
+        assert_eq!(receiver.recv().await, None);
+        let (sender, _) = mpsc::channel(4);
+        assert!(native_stderr(&[b'x'; 65537][..], sender).await.is_err());
+    }
+
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn reaped_root_settles_with_empty_unix_group() {
         let mut command = CommandWrap::with_new("/bin/sh", |command| {

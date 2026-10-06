@@ -17,6 +17,24 @@ import time
 HERE = Path(__file__).resolve().parent
 MAX_PDF = 32 * 1024 * 1024
 STAGES = {"startup", "context", "browser", "loaded", "ready", "printing", "printed", "closed", "failed", "renderer-exit", "deny-popup", "deny-navigation", "deny-tab", "deny-favicon", "deny-resource", "deny-handler", "deny-protocol", "deny-download", "deny-print-dialog", "deny-print-job"}
+STAGES |= {"lifecycle-loop-returned", "lifecycle-shutdown-entered", "lifecycle-shutdown-returned", "lifecycle-probe-returned", "lifecycle-pool-drained", "lifecycle-unload-entered", "lifecycle-unload-returned", "mac-teardown-watchdog", "mac-session-watchdog", "mac-sigterm-watchdog"}
+BOUNDARIES = {"setup", "owner-start", "owner-read", "initial-observation", "ready-observation", "sandbox-observation", "renderer-injection", "host-injection", "settlement-observation", "inspector"}
+OBSERVATION_FIELDS = {
+    "code": {"other", "native-observation-unavailable", "observation-deadline", "observation-size-limit", "observation-argument-limit", "ambiguous-process-role", "invalid-owned-executable", "unexpected-descendant-executable", "process-scan-limit", "requires-native-64-bit-python", "requires-native-64-bit-process", "invalid-native-commandline", "invalid-integrity-sid", "unsupported-observation-platform", "invalid-process-observations", "missing-retained-process-identity", "invalid-root-pid", "invalid-runtime-root", "owned-process-limit", "root-identity-changed", "owned-process-exited-during-observation", "process-identity-changed", "process-ancestry-changed", "invalid-private-job", "sandbox-introspection-unavailable"},
+    "operation": {"identity", "topology", "short-info", "image", "args", "signal"},
+    "error": {"none", "permission", "not-found", "invalid", "size", "other"},
+    "result": {"zero", "short", "oversized", "ok"},
+}
+
+
+def observation_facts(error):
+    code = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
+    facts = {"code": code if code in OBSERVATION_FIELDS["code"] else "other"}
+    for attribute, field in (("operation", "operation"), ("native_error", "error"), ("native_result", "result")):
+        value = getattr(error, attribute, None)
+        if type(value) is str and value in OBSERVATION_FIELDS[field]:
+            facts[field] = value
+    return facts
 
 
 def digest(path):
@@ -34,8 +52,29 @@ def stop(process):
     process.wait(timeout=10)
 
 
-def command(args, env, cwd, seconds=600, owner=None):
+def tool_failure_facts(output):
+    """Project only closed source names, numeric locations/codes and fixed categories."""
+    locations = []
+    for name in ("main.rs", "windows.rs", "job_object.rs", "host.cc", "entry_windows.cc", "entry_mac.mm", "helper_mac.cc", "CMakeLists.txt", "windows.cmake", "macos.cmake", "cef_variables.cmake", "cef_macros.cmake", "FindCEF.cmake"):
+        match = re.search(rb"(?:^|[\\/ ])" + re.escape(name.encode("ascii")) + rb"[:(]([0-9]{1,6})\b", output, re.MULTILINE)
+        if match:
+            locations.append({"file": name, "line": int(match.group(1))})
+    codes = []
+    for match in re.finditer(rb"\b([CE])([0-9]{4})\b", output):
+        codes.append({"family": match.group(1).decode("ascii"), "number": int(match.group(2))})
+        if len(codes) == 12:
+            break
+    categories = []
+    for name, text in (("registry", b"failed to get "), ("linker", b"linking with"), ("missing-library", b"cannot find -l"), ("undefined-symbol", b"undefined reference"), ("missing-package", b"Could NOT find"), ("cmake-error", b"CMake Error"), ("permission", b"Permission denied"), ("rust-import", b"unresolved import"), ("rust-method", b"no method named"), ("missing-target", b"can't find crate")):
+        if text in output:
+            categories.append(name)
+    return {"locations": locations, "codes": codes, "categories": categories}
+
+
+def command(args, env, cwd, seconds=600, owner=None, operation="discovery"):
     """Bootstrap trusted source directly; all SDK/inspector work uses owned trees."""
+    if operation not in {"discovery", "owner-build", "owner-tests", "publication-tests", "configure", "compile", "inspector-venv", "inspector-install", "inspector-pdf", "version"}:
+        raise ValueError("unknown-tool-operation")
     tool_dir = None
     log = None
     if owner is not None:
@@ -67,12 +106,10 @@ def command(args, env, cwd, seconds=600, owner=None):
         reader.join(timeout=5)
         if reader.is_alive() or overflow.is_set():
             raise RuntimeError("tool-output-limit")
-        if process.returncode:
-            # No source text, raw diagnostic, path or native stderr publication.
-            print('{"toolFailed":true}', flush=True)
-            raise RuntimeError("tool-failed")
+        control = bytes(output)
         if owner is not None:
-            if not re.fullmatch(rb"pid [1-9][0-9]{0,9}\nreason complete\nexit 0\nsettled 1\n", output):
+            terminal = re.fullmatch(rb"pid [1-9][0-9]{0,9}\nreason (complete|deadline|external-cancel|native-failure|protocol-failure|pipe-failure)\nexit (-?[0-9]+)\nsettled 1\n", control)
+            if not terminal:
                 raise RuntimeError("tool-settlement-unverified")
             if log.is_symlink() or not log.is_file():
                 raise RuntimeError("tool-log-invalid")
@@ -80,6 +117,11 @@ def command(args, env, cwd, seconds=600, owner=None):
                 output = stream.read(2 * 1024 * 1024 + 1)
             if len(output) > 2 * 1024 * 1024:
                 raise RuntimeError("tool-log-bound")
+            if process.returncode == 0 and (terminal.group(1) != b"complete" or terminal.group(2) != b"0"):
+                raise RuntimeError("tool-terminal-mismatch")
+        if process.returncode:
+            print(json.dumps({"toolFailed": True, "operation": operation, **tool_failure_facts(output)}), flush=True)
+            raise RuntimeError("tool-failed")
         return bytes(output)
     finally:
         if owner is not None and process.poll() is None:
@@ -147,6 +189,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
     settled = False
     triggered = False
     result = {"mode": mode, "action": action, "passed": False}
+    boundary = "setup"
     try:
         if os.name == "nt":
             job.rmdir()
@@ -155,6 +198,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
         if action == "write-failure":
             (job / "output.pdf").mkdir()
         input_path.write_bytes(html)
+        boundary = "owner-start"
         process = subprocess.Popen([str(owner), str(host), str(job), str(input_path), mode],
                                    env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, close_fds=True,
@@ -185,6 +229,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
         restrictions = None
         deadline = time.monotonic() + 80
         while process.poll() is None or not messages.empty() or reader.is_alive():
+            boundary = "owner-read"
             if overflow.is_set() or time.monotonic() >= deadline:
                 raise RuntimeError("owner-bound")
             try:
@@ -204,6 +249,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
             else:
                 raise RuntimeError("owner-protocol")
             if native_pid and (line.startswith("pid ") or (line == "ready" and mode == "observe")):
+                boundary = "initial-observation" if line.startswith("pid ") else "ready-observation"
                 for item in observe.snapshot(native_pid, runtime_root):
                     records.setdefault((item["pid"], item["start_identity"]), item)
                 if line.startswith("pid "):
@@ -215,6 +261,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
             if line == "ready" and action in ("sandbox", "renderer-kill", "host-kill") and not triggered:
                 values = list(records.values())
                 if action == "sandbox":
+                    boundary = "sandbox-observation"
                     restrictions = observe.sandbox_evidence(values, job)
                     triggered = True
                     if os.name == "nt":
@@ -222,8 +269,10 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
                     else:
                         process.terminate()  # Explicit SIGTERM handler owns Unix cleanup.
                 elif action == "renderer-kill":
-                    triggered = observe.terminate_renderer(values)
+                    boundary = "renderer-injection"
+                    triggered = observe.terminate_renderers(values)
                 elif action == "host-kill":
+                    boundary = "host-injection"
                     root = next((item for item in values if item["pid"] == native_pid), None)
                     triggered = bool(root and observe.terminate_process(root))
                 if not triggered:
@@ -231,6 +280,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
         process.wait(timeout=5)
         reader.join(timeout=5)
         values = list(records.values())
+        boundary = "settlement-observation"
         remaining = observe.survivors(values)
         until = time.monotonic() + 5
         while remaining and time.monotonic() < until:
@@ -243,14 +293,15 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
             result["sandboxVerified"] = bool(restrictions and restrictions.get("verified"))
             result["passed"] = triggered and result["sandboxVerified"] and ((settled and reason == "external-cancel") or os.name == "nt")
         elif action == "write-failure":
-            result["passed"] = settled and reason == "native-failure" and process.returncode != 0 and "printing" in events and "failed" in events and "printed" not in events
+            result["passed"] = settled and reason == "native-failure" and host_exit == 72 and "printing" in events and "failed" in events and "printed" not in events
         elif mode == "oversized":
             result["passed"] = settled and reason == "native-failure" and host_exit == 64 and "context" not in events
         elif action:
-            result["passed"] = triggered and settled and reason == "native-failure" and process.returncode != 0 and (action != "renderer-kill" or "renderer-exit" in events)
+            result["passed"] = triggered and settled and reason == "native-failure" and process.returncode != 0 and (action != "renderer-kill" or ("renderer-exit" in events and host_exit == 72))
         elif mode == "normal" and process.returncode == 0 and not expected_denial:
             pdf = job / "output.pdf"
-            data = command([str(inspector), "-I", str(HERE / "probe.py"), "--inspect", str(pdf)], env, job, 30, owner)
+            boundary = "inspector"
+            data = command([str(inspector), "-I", str(HERE / "probe.py"), "--inspect", str(pdf)], env, job, 30, owner, "inspector-pdf")
             inspected = json.loads(data)
             if type(inspected) is not dict or set(inspected) != {"pages", "rows", "unicode", "inertLabel", "pageContext"}:
                 raise RuntimeError("inspector-fields")
@@ -264,9 +315,13 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
             expected = {"startup-cancel": "startup", "ready-cancel": "ready", "printing-cancel": "printing", "deadline": "ready"}[mode]
             result["passed"] = settled and reason == ("deadline" if mode == "deadline" else "stage-cancel") and process.returncode != 0 and expected in events
         elif expected_denial:
-            result["passed"] = settled and reason == "native-failure" and process.returncode != 0 and expected_denial in events and "printed" not in events
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, KeyError):
-        result["failedBoundary"] = True
+            result["passed"] = settled and reason == "native-failure" and host_exit == 72 and expected_denial in events and "printed" not in events
+        if any(event in {"mac-teardown-watchdog", "mac-session-watchdog", "mac-sigterm-watchdog"} for event in events):
+            result["passed"] = False
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, KeyError) as error:
+        result.update(failedBoundary=True, boundaryStage=boundary)
+        if isinstance(error, observe.ObservationError):
+            result["observationFailure"] = observation_facts(error)
     finally:
         try:
             if process is not None:
@@ -293,9 +348,11 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
                     raise RuntimeError("owned-settlement-unverified")
             shutil.rmtree(job)
             result["stagingRemoved"] = True
-        except (OSError, RuntimeError, subprocess.SubprocessError):
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             # Preserve private staging until exact owned identities are settled.
             result.update(passed=False, cleanupFailed=True, stagingRemoved=False)
+            if isinstance(error, observe.ObservationError):
+                result["cleanupObservationFailure"] = observation_facts(error)
     return result
 
 
@@ -383,6 +440,11 @@ def checked_evidence(data):
                         bound = MAX_PDF if name == "pdfBytes" else (4294967295 if name in {"ownerExit", "hostExit"} else 128)
                         lower = -2147483648 if name in {"ownerExit", "hostExit"} else 0
                         if type(item) is not int or not lower <= item <= bound: raise ValueError("evidence-case-number")
+                    elif name == "boundaryStage":
+                        if type(item) is not str or item not in BOUNDARIES: raise ValueError("evidence-boundary")
+                    elif name in {"observationFailure", "cleanupObservationFailure"}:
+                        if type(item) is not dict or "code" not in item or set(item) - set(OBSERVATION_FIELDS): raise ValueError("evidence-observation")
+                        if any(type(value) is not str or value not in OBSERVATION_FIELDS[field] for field, value in item.items()): raise ValueError("evidence-observation-value")
                     elif name == "events":
                         if type(item) is not list or len(item) > 32 or any(type(event) is not str or event not in STAGES for event in item): raise ValueError("evidence-events")
                     elif name == "pdfSha256":
@@ -442,12 +504,12 @@ def main(args):
         env.update(RUSTC=rustc, CARGO_HOME=str(work / "cargo-home"), CARGO_BUILD_JOBS="2")
         owner_build = work / "owner-build"
         evidence["phase"] = "build"
-        command([cargo, "build", "--locked", "--release", "--manifest-path", str(HERE / "Cargo.toml"), "--target-dir", str(owner_build)], env, work, 900)
+        command([cargo, "build", "--locked", "--release", "--manifest-path", str(HERE / "Cargo.toml"), "--target-dir", str(owner_build)], env, work, 900, operation="owner-build")
         owner = owner_build / "release" / ("cef-native-validation-owner.exe" if os.name == "nt" else "cef-native-validation-owner")
         # Bootstrap is repository-owned source compilation, not SDK execution.
         # Only after it exists may downloaded/derived SDK or inspector code run.
-        command([cargo, "test", "--locked", "--release", "--manifest-path", str(HERE / "Cargo.toml"), "--target-dir", str(owner_build)], env, work, 900, owner)
-        command([sys.executable, "-I", "-B", "-m", "unittest", "discover", "-s", str(HERE / "tests"), "-p", "test_*.py"], env, work, 30, owner)
+        command([cargo, "test", "--locked", "--release", "--manifest-path", str(HERE / "Cargo.toml"), "--target-dir", str(owner_build)], env, work, 900, owner, "owner-tests")
+        command([sys.executable, "-I", "-B", "-m", "unittest", "discover", "-s", str(HERE / "tests"), "-p", "test_*.py"], env, work, 30, owner, "publication-tests")
         evidence["phase"] = "download-admission"
         sdk_work = work / "sdk"
         private_directory(sdk_work, env)
@@ -458,8 +520,8 @@ def main(args):
         configure = ["cmake", "-S", str(HERE), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", f"-DCEF_ROOT={sdk}"]
         if args.target.startswith("macos"):
             configure += ["-DPROJECT_ARCH=" + ("arm64" if args.target == "macosarm64" else "x86_64")]
-        command(configure, env, work, 180, owner)
-        command(["cmake", "--build", str(build), "--config", "Release", "--target", "cef-probe", "--parallel", "2"], env, work, 1200, owner)
+        command(configure, env, work, 180, owner, "configure")
+        command(["cmake", "--build", str(build), "--config", "Release", "--target", "cef-probe", "--parallel", "2"], env, work, 1200, owner, "compile")
         runtime_root = build / "Release"
         host = runtime_root / ("cef-probe.exe" if os.name == "nt" else "cef-probe")
         if args.target.startswith("macos"):
@@ -474,7 +536,7 @@ def main(args):
                 evidence["nativeSha256"][key] = digest(runtime_root / f"cef-probe.app/Contents/Frameworks/{name}.app/Contents/MacOS/{name}")
         evidence["tools"] = {"python": __import__("platform").python_version()}
         for name, executable in [("cargo", cargo), ("rustc", rustc), ("cmake", "cmake"), ("ninja", "ninja")]:
-            version = command([executable, "--version"], env, work, 30, owner)
+            version = command([executable, "--version"], env, work, 30, owner, "version")
             match = re.search(rb"\b[0-9]+(?:\.[0-9]+){1,3}\b", version)
             if match is None:
                 raise RuntimeError("tool-version-unavailable")
@@ -487,9 +549,9 @@ def main(args):
             raise RuntimeError("compiler-version-unavailable")
         evidence["tools"]["compiler"] = match.group(1).decode("ascii")
         venv = work / "inspector"
-        command([sys.executable, "-I", "-m", "venv", str(venv)], env, work, 120, owner)
+        command([sys.executable, "-I", "-m", "venv", str(venv)], env, work, 120, owner, "inspector-venv")
         inspector = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        command([str(inspector), "-I", "-m", "pip", "--isolated", "install", "--disable-pip-version-check", "--no-cache-dir", "--no-deps", "--only-binary=:all:", "--require-hashes", "--index-url", "https://pypi.org/simple", "-r", str(HERE / "requirements.txt")], env, work, 180, owner)
+        command([str(inspector), "-I", "-m", "pip", "--isolated", "install", "--disable-pip-version-check", "--no-cache-dir", "--no-deps", "--only-binary=:all:", "--require-hashes", "--index-url", "https://pypi.org/simple", "-r", str(HERE / "requirements.txt")], env, work, 180, owner, "inspector-install")
         evidence["phase"] = "runtime"
         html = (HERE / "fixture.html").read_bytes()
         evidence["fixtureSha256"] = hashlib.sha256(html).hexdigest()

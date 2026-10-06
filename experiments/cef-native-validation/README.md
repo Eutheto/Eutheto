@@ -78,6 +78,22 @@ any failed/unverified row returns nonzero. CI always attempts a bounded summary,
 including when setup/download/build fails. Superseded/cancelled CI is not evidence.
 Native/tool stderr, raw process arguments, SDKs and PDFs are never published.
 
+Failure diagnostics publish only closed operation/category tokens, known source
+filenames with bounded numeric locations/compiler codes, and closed native-observation
+facts. Raw messages and paths remain private. macOS lifecycle tokens locate shutdown
+progress; only three exact watchdog stderr lines produce fixed fault tokens.
+Watchdogs never count as successful refusal. Intentional native refusals require
+the host's exit 72, not an arbitrary nonzero exit. Renderer injection terminates
+the complete observed renderer set with exact identity guards, avoiding reliance on
+PID ordering when Chromium has spare renderers.
+
+Hosted run [37486042193](https://github.com/Eutheto/Eutheto/actions/runs/37486042193)
+at `e9dc6546dcb7955329c15cc5d09e45197bcc09e0` failed all four targets:
+Linux/Windows failed during build; both macOS targets reached printed/closed but
+exited 2. Neither macOS result establishes PDF fidelity or successful shutdown.
+The added diagnostics investigate these failures without disabling the sandbox
+or accepting watchdog termination.
+
 ## Limits
 
 This is platform feasibility, not product acceptance or redistribution clearance.

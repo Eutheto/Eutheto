@@ -10,4 +10,6 @@ int RunProbe(const CefMainArgs& args, void* sandbox_info);
 #include <functional>
 // Owned by the Cocoa application; an early termination request remains pending.
 void SetProbeCloseHandler(std::function<void()> handler);
+// Fixed diagnostic literals only; never recipient data or success stages.
+void EmitProbeLifecycle(const char* event);
 #endif

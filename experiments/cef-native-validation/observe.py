@@ -8,9 +8,11 @@ libsyscall/wrappers/libproc and Chromium sandbox/mac/seatbelt.cc.
 https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html
 https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
 https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class
-https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/proc_info.c
-https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/proc_info_private.h
-https://raw.githubusercontent.com/chromium/chromium/main/sandbox/mac/seatbelt.cc
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/kern/proc_info.c
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/sys/proc_info_private.h
+https://raw.githubusercontent.com/apple-oss-distributions/xnu/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/libsyscall/wrappers/libproc/libproc.c
+https://raw.githubusercontent.com/chromium/chromium/b859317bf11f6be47f9b7799ec690a0a42a1fb33/sandbox/mac/seatbelt.cc
+https://raw.githubusercontent.com/chromium/chromium/b859317bf11f6be47f9b7799ec690a0a42a1fb33/content/browser/renderer_host/spare_render_process_host_manager_impl.cc
 
 Snapshots are point-in-time descendant observations, not lifetime containment or
 an exhaustive post-compromise sandbox audit. An observer deadline bounds loops,
@@ -38,8 +40,24 @@ SCAN_SECONDS = 8.0
 
 
 class ObservationError(RuntimeError):
-    def __init__(self, code: str = "native-observation-unavailable"):
+    def __init__(self, code: str = "native-observation-unavailable", *,
+                 operation: str | None = None, native_error: str | None = None,
+                 native_result: str | None = None):
         super().__init__(code)
+        self.operation = operation
+        self.native_error = native_error
+        self.native_result = native_result
+
+
+def _mac_failure(operation: str, native_errno: int, native_result: str,
+                 code: str = "native-observation-unavailable") -> ObservationError:
+    # Closed diagnostic categories only; no native text or process data retained.
+    errors = {0: "none", errno.EPERM: "permission", errno.EACCES: "permission",
+              errno.ESRCH: "not-found", errno.EINVAL: "invalid",
+              errno.ENOMEM: "size", errno.EOVERFLOW: "size"}
+    return ObservationError(code, operation=operation,
+                            native_error=errors.get(native_errno, "other"),
+                            native_result=native_result)
 
 
 class _Pidfd:
@@ -381,13 +399,20 @@ class _Mac:
         data = C.create_string_buffer(192)
         C.set_errno(0)
         count = self.info(pid, 18, 0, data, len(data))
+        native_errno = C.get_errno()
         if count != len(data):
-            if C.get_errno() == errno.ESRCH:
-                raise ProcessLookupError()
-            raise ObservationError()
+            failure = _mac_failure("identity", native_errno,
+                                   "zero" if count <= 0 else "short" if count < len(data) else "oversized")
+            if native_errno == errno.ESRCH:
+                missing = ProcessLookupError()
+                missing.operation = failure.operation
+                missing.native_error = failure.native_error
+                missing.native_result = failure.native_result
+                raise missing
+            raise failure
         flags, state, _, actual, parent = struct.unpack_from("<5I", data.raw)
         if actual != pid:
-            raise ObservationError()
+            raise _mac_failure("identity", 0, "ok")
         sec, usec = struct.unpack_from("<QQ", data.raw, 120)
         unique, parent_unique, version = struct.unpack_from("<QQI", data.raw, 152)
         record = _record(pid, parent, f"{unique}:{version}:{sec}:{usec}", "zombie" if state == 5 else "live")
@@ -398,9 +423,13 @@ class _Mac:
 
     def topology(self, end: float) -> dict[int, int]:
         data = (C.c_int * (MAX_SCAN + 1))()
+        C.set_errno(0)
         count = self.list(1, 0, data, C.sizeof(data))
+        native_errno = C.get_errno()
         if count <= 0 or count % 4 or count >= C.sizeof(data):
-            raise ObservationError("process-scan-limit")
+            raise _mac_failure("topology", native_errno,
+                               "zero" if count <= 0 else "oversized" if count >= C.sizeof(data) else "short",
+                               "process-scan-limit")
         result = {}
         for pid in data[:count // 4]:
             _deadline(end)
@@ -410,27 +439,35 @@ class _Mac:
                 short = C.create_string_buffer(64)
                 C.set_errno(0)
                 size = self.info(pid, 13, 0, short, len(short))
+                native_errno = C.get_errno()
                 if size != len(short):
-                    if C.get_errno() == errno.ESRCH:
+                    if native_errno == errno.ESRCH:
                         continue
-                    raise ObservationError()
+                    raise _mac_failure("short-info", native_errno,
+                                       "zero" if size <= 0 else "short" if size < len(short) else "oversized")
                 actual, parent = struct.unpack_from("<II", short.raw)
                 if actual != pid:
-                    raise ObservationError()
+                    raise _mac_failure("short-info", 0, "ok")
                 result[pid] = parent
         return result
 
     def details(self, pid: int) -> tuple[str, list[str]]:
         image = C.create_string_buffer(MAX_PATH)
+        C.set_errno(0)
         length = self.path(pid, image, len(image))
+        native_errno = C.get_errno()
         if not 0 < length < MAX_PATH:
-            raise ObservationError()
+            raise _mac_failure("image", native_errno, "zero" if length <= 0 else "oversized")
         # CTL_KERN=1, KERN_PROCARGS2=49; fixed output, no environment retained.
         mib = (C.c_int * 3)(1, 49, pid)
         data = C.create_string_buffer(MAX_STRING)
         size = C.c_size_t(len(data))
-        if self.sysctl(mib, 3, data, C.byref(size), None, 0) != 0 or not 4 < size.value <= len(data):
-            raise ObservationError()
+        C.set_errno(0)
+        status = self.sysctl(mib, 3, data, C.byref(size), None, 0)
+        native_errno = C.get_errno()
+        if status != 0 or not 4 < size.value <= len(data):
+            raise _mac_failure("args", native_errno,
+                               "oversized" if size.value > len(data) else "zero" if status != 0 or size.value == 0 else "short")
         raw = data.raw[:size.value]
         argc = struct.unpack_from("<i", raw)[0]
         if not 0 < argc <= 512:
@@ -448,6 +485,8 @@ class _Mac:
     def terminate(self, process: dict) -> bool:
         # The kernel selects by PID + pidversion, checks ordinary signal
         # permissions and retains the proc during delivery. No PID-only kill.
+        # proc_terminate[_with_audittoken] chooses SIGTERM for untracked/dirty
+        # processes; its output signal is not an input SIGKILL request.
         send = _bind(self.proc, "proc_signal_with_audittoken", C.c_int, [C.c_void_p, C.c_int])
         token = (C.c_uint32 * 8)()
         token[5] = process["pid"]
@@ -592,8 +631,10 @@ def snapshot(root_pid: int, runtime_root: Path) -> list[dict]:
         return records
     except ObservationError:
         raise
-    except (OSError, ValueError, KeyError, IndexError, AttributeError, UnicodeError, struct.error):
-        raise ObservationError() from None
+    except (OSError, ValueError, KeyError, IndexError, AttributeError, UnicodeError, struct.error) as error:
+        raise ObservationError(operation=getattr(error, "operation", None),
+                               native_error=getattr(error, "native_error", None),
+                               native_result=getattr(error, "native_result", None)) from None
 
 
 def sandbox_evidence(processes: list[dict], private_job: Path) -> dict:
@@ -750,11 +791,27 @@ def terminate_process(process: dict) -> bool:
         return False
 
 
-def terminate_renderer(processes: list[dict]) -> bool:
-    """Use the same exact native identity primitive for one observed renderer."""
+def terminate_renderers(processes: list[dict]) -> bool:
+    """Request termination of every observed renderer using exact native identities.
+
+    Chromium spare renderers share the renderer role: PID ordering does not
+    identify the fixture's renderer. This bounded sampled set is not an
+    exhaustive renderer census. True requires every request to succeed; the
+    caller must separately observe the fixture's renderer-exit and cleanup.
+    """
     try:
         _validate_records(processes)
-        process = next(process for process in processes if process.get("role") == "renderer")
-        return terminate_process(process)
-    except (ObservationError, StopIteration, AttributeError, TypeError):
+        end = time.monotonic() + SCAN_SECONDS
+        requested = 0
+        succeeded = True
+        for process in processes:
+            if process.get("role") == "renderer":
+                _deadline(end)
+                # Do not short-circuit: a failed retained identity must not
+                # leave later observed renderers untouched.
+                sent = terminate_process(process)
+                succeeded = sent and succeeded
+                requested += 1
+        return requested > 0 and succeeded
+    except (ObservationError, AttributeError, TypeError):
         return False

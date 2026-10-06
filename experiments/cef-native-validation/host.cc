@@ -283,6 +283,12 @@ class App final : public CefApp, public CefBrowserProcessHandler {
 };
 }  // namespace
 
+#if defined(OS_MAC)
+void EmitProbeLifecycle(const char* event) {
+  Event(event);
+}
+#endif
+
 int RunProbe(const CefMainArgs& args, void* sandbox_info) {
   CefRefPtr<App> app = new App;
 #if !defined(OS_MAC)
@@ -330,11 +336,18 @@ int RunProbe(const CefMainArgs& args, void* sandbox_info) {
   SetProbeCloseHandler([client = app->client] { client->Fail(); });
 #endif
   CefRunMessageLoop();
+#if defined(OS_MAC)
+  EmitProbeLifecycle("lifecycle-loop-returned\n");
+#endif
   CefRefPtr<Client> completed = app->client;
   app->client = nullptr;
 #if defined(OS_MAC)
   SetProbeCloseHandler({});
+  EmitProbeLifecycle("lifecycle-shutdown-entered\n");
 #endif
   CefShutdown();
+#if defined(OS_MAC)
+  EmitProbeLifecycle("lifecycle-shutdown-returned\n");
+#endif
   return completed->succeeded() ? 0 : 72;
 }

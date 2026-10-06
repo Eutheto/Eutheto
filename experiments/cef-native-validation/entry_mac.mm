@@ -71,26 +71,33 @@ void SetProbeCloseHandler(std::function<void()> handler) {
 }
 
 int main(int argc, char* argv[]) {
-  // Keep the framework loaded until CEF shutdown and Cocoa pool drainage.
-  CefScopedLibraryLoader libraryLoader;
-  if (!libraryLoader.LoadInMain()) {
-    return 1;
-  }
-
-  @autoreleasepool {
-    CefProbeApplication* application = [CefProbeApplication sharedApplication];
-    if (![application isKindOfClass:[CefProbeApplication class]]) {
+  int result;
+  {
+    // Keep the framework loaded until CEF shutdown and Cocoa pool drainage.
+    CefScopedLibraryLoader libraryLoader;
+    if (!libraryLoader.LoadInMain()) {
       return 1;
     }
-    [application setActivationPolicy:NSApplicationActivationPolicyProhibited];
-    __attribute__((objc_precise_lifetime)) CefProbeDelegate* delegate =
-        [[CefProbeDelegate alloc] init];
-    application.delegate = delegate;
 
-    const int result = RunProbe(CefMainArgs(argc, argv), nullptr);
+    @autoreleasepool {
+      CefProbeApplication* application = [CefProbeApplication sharedApplication];
+      if (![application isKindOfClass:[CefProbeApplication class]]) {
+        return 1;
+      }
+      [application setActivationPolicy:NSApplicationActivationPolicyProhibited];
+      __attribute__((objc_precise_lifetime)) CefProbeDelegate* delegate =
+          [[CefProbeDelegate alloc] init];
+      application.delegate = delegate;
 
-    SetProbeCloseHandler({});
-    application.delegate = nil;
-    return result;
+      result = RunProbe(CefMainArgs(argc, argv), nullptr);
+      EmitProbeLifecycle("lifecycle-probe-returned\n");
+
+      SetProbeCloseHandler({});
+      application.delegate = nil;
+    }
+    EmitProbeLifecycle("lifecycle-pool-drained\n");
+    EmitProbeLifecycle("lifecycle-unload-entered\n");
   }
+  EmitProbeLifecycle("lifecycle-unload-returned\n");
+  return result;
 }
