@@ -75,7 +75,7 @@ class Client final : public CefClient, public CefLifeSpanHandler,
     CefQuitMessageLoop();
   }
   bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
-      const CefString&, const CefString&, WindowOpenDisposition, bool,
+      const CefString&, const CefString&, CefLifeSpanHandler::WindowOpenDisposition, bool,
       const CefPopupFeatures&, CefWindowInfo&, CefRefPtr<CefClient>&,
       CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
     Event("deny-popup\n"); Fail(); return true;
@@ -89,7 +89,7 @@ class Client final : public CefClient, public CefLifeSpanHandler,
     return false;
   }
   bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString&,
-      WindowOpenDisposition, bool) override {
+      CefRequestHandler::WindowOpenDisposition, bool) override {
     Event("deny-tab\n"); Fail(); return true;
   }
   CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(

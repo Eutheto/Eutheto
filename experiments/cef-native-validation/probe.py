@@ -60,12 +60,12 @@ def tool_failure_facts(output):
         if match:
             locations.append({"file": name, "line": int(match.group(1))})
     codes = []
-    for match in re.finditer(rb"\b([CE])([0-9]{4})\b", output):
+    for match in re.finditer(rb"\b(LNK|[CE])([0-9]{4})\b", output):
         codes.append({"family": match.group(1).decode("ascii"), "number": int(match.group(2))})
         if len(codes) == 12:
             break
     categories = []
-    for name, text in (("registry", b"failed to get "), ("linker", b"linking with"), ("missing-library", b"cannot find -l"), ("undefined-symbol", b"undefined reference"), ("missing-package", b"Could NOT find"), ("cmake-error", b"CMake Error"), ("permission", b"Permission denied"), ("rust-import", b"unresolved import"), ("rust-method", b"no method named"), ("missing-target", b"can't find crate")):
+    for name, text in (("registry", b"failed to get "), ("linker", b"linking with"), ("missing-library", b"cannot find -l"), ("undefined-symbol", b"undefined reference"), ("missing-package", b"Could NOT find"), ("cmake-error", b"CMake Error"), ("permission", b"Permission denied"), ("rust-import", b"unresolved import"), ("rust-method", b"no method named"), ("missing-target", b"can't find crate"), ("gnu-link-extra-operand", b"link: extra operand"), ("gnu-link-help", b"link --help"), ("msvc-unresolved-external", b"unresolved external symbol"), ("msvc-cannot-open", b"cannot open file"), ("lld-error", b"lld-link: error:")):
         if text in output:
             categories.append(name)
     return {"locations": locations, "codes": codes, "categories": categories}

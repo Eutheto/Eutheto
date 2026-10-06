@@ -94,6 +94,14 @@ exited 2. Neither macOS result establishes PDF fidelity or successful shutdown.
 The added diagnostics investigate these failures without disabling the sandbox
 or accepting watchdog termination.
 
+Run [37491280964](https://github.com/Eutheto/Eutheto/actions/runs/37491280964)
+at `0286aff8a117199c072faaab8dc9550a94e6d641` confirmed a teardown watchdog
+inside `CefShutdown` on both Macs. Renderer-set injection now reaches
+`renderer-exit`, but shutdown still fails; readiness cancellation also lacks
+settlement. Linux reports compilation at the inherited callback disposition
+type; Windows reports owner-link failure. These are failure diagnoses, not
+native acceptance.
+
 ## Limits
 
 This is platform feasibility, not product acceptance or redistribution clearance.

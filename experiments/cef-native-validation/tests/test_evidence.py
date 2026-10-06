@@ -36,6 +36,8 @@ class EvidencePrivacy(unittest.TestCase):
         self.assertEqual(facts["codes"], [{"family": "E", "number": 432}] + [{"family": "E", "number": 599}] * 11)
         self.assertEqual(facts["categories"], ["rust-import"])
         self.assertNotIn("PRIVATE_SENTINEL", json.dumps(facts))
+        linker = probe.tool_failure_facts(b"LINK : fatal error LNK1104: cannot open file 'PRIVATE_SENTINEL.lib'")
+        self.assertEqual(linker, {"locations": [], "codes": [{"family": "LNK", "number": 1104}], "categories": ["msvc-cannot-open"]})
 
     def test_observation_diagnostics_only_publish_closed_values(self):
         error = RuntimeError("PRIVATE_SENTINEL")
