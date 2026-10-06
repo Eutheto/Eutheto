@@ -26,8 +26,6 @@ jobs:
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
-    env:
-      CEF_WORK: ${{ runner.temp }}/cef-native-${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -40,9 +38,9 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal
       - name: Execute synthetic native acceptance
         shell: bash
-        run: python -B experiments/cef-native-validation/probe.py --target '${{ matrix.target }}' --work-dir "$CEF_WORK"
+        run: python -B experiments/cef-native-validation/probe.py --target '${{ matrix.target }}' --work-dir "$RUNNER_TEMP/cef-native-${{ matrix.target }}"
       - name: Report bounded target evidence
         if: always()
         shell: bash
-        run: python -B experiments/cef-native-validation/probe.py --summary "$CEF_WORK/evidence.json"
+        run: python -B experiments/cef-native-validation/probe.py --summary "$RUNNER_TEMP/cef-native-${{ matrix.target }}/evidence.json"
       # No caches or artifacts: SDKs, native binaries and PDFs remain runner-local.
