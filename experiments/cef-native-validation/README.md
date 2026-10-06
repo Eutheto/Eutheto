@@ -102,6 +102,12 @@ settlement. Linux reports compilation at the inherited callback disposition
 type; Windows reports owner-link failure. These are failure diagnoses, not
 native acceptance.
 
+Run [37493396623](https://github.com/Eutheto/Eutheto/actions/runs/37493396623)
+at `8d1f36ad03907f70e828d5c21d6f6b19508982c0` progressed Linux past the callback
+compile error to a missing link-library failure. Windows diagnostics identified
+GNU `link.exe` rather than MSVC; Cargo now selects the admitted MSVC linker explicitly.
+These corrections do not establish target acceptance.
+
 ## Limits
 
 This is platform feasibility, not product acceptance or redistribution clearance.

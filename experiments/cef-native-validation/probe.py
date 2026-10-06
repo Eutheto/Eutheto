@@ -68,6 +68,9 @@ def tool_failure_facts(output):
     for name, text in (("registry", b"failed to get "), ("linker", b"linking with"), ("missing-library", b"cannot find -l"), ("undefined-symbol", b"undefined reference"), ("missing-package", b"Could NOT find"), ("cmake-error", b"CMake Error"), ("permission", b"Permission denied"), ("rust-import", b"unresolved import"), ("rust-method", b"no method named"), ("missing-target", b"can't find crate"), ("gnu-link-extra-operand", b"link: extra operand"), ("gnu-link-help", b"link --help"), ("msvc-unresolved-external", b"unresolved external symbol"), ("msvc-cannot-open", b"cannot open file"), ("lld-error", b"lld-link: error:")):
         if text in output:
             categories.append(name)
+    for library in ("X11", "cef_dll_wrapper", "atomic"):
+        if re.search(rb"cannot find -l" + library.encode("ascii") + rb"(?:\s|:|$)", output):
+            categories.append("missing-" + library)
     return {"locations": locations, "codes": codes, "categories": categories}
 
 
@@ -502,6 +505,12 @@ def main(args):
         cargo = command(["rustup", "which", "--toolchain", "1.97.1", "cargo"], provision.sanitized_env(), work, 30).decode().strip()
         rustc = command(["rustup", "which", "--toolchain", "1.97.1", "rustc"], provision.sanitized_env(), work, 30).decode().strip()
         env.update(RUSTC=rustc, CARGO_HOME=str(work / "cargo-home"), CARGO_BUILD_JOBS="2")
+        if os.name == "nt":
+            # Git Bash can put its unrelated GNU link.exe before MSVC on PATH.
+            linker = Path(env.get("VCTOOLSINSTALLDIR", "")) / "bin/Hostx64/x64/link.exe"
+            if not linker.is_absolute() or not linker.is_file():
+                raise RuntimeError("msvc-linker-unavailable")
+            env["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = str(linker)
         owner_build = work / "owner-build"
         evidence["phase"] = "build"
         command([cargo, "build", "--locked", "--release", "--manifest-path", str(HERE / "Cargo.toml"), "--target-dir", str(owner_build)], env, work, 900, operation="owner-build")
