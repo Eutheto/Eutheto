@@ -19,11 +19,11 @@ use windows::{
 			IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED},
 			JobObjects::{
 				AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-				JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
 				JOBOBJECT_ASSOCIATE_COMPLETION_PORT, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
 				JobObjectAssociateCompletionPortInformation, JobObjectExtendedLimitInformation,
 				SetInformationJobObject, TerminateJobObject,
 			},
+			SystemServices::JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
 			Threading::{
 				CREATE_SUSPENDED, GetProcessId, INFINITE, OpenThread, PROCESS_CREATION_FLAGS,
 				ResumeThread, THREAD_SUSPEND_RESUME,

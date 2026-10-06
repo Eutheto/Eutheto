@@ -9,7 +9,8 @@ must not be uploaded as artifacts or caches.
 
 Prerequisites: native 64-bit Python 3.11+, Rust 1.97.1 via rustup, CMake 3.21+,
 Ninja and the platform compiler. Windows requires an x64 MSVC developer environment;
-macOS requires Xcode command-line tools. Linux needs CEF's native runtime libraries,
+macOS requires Xcode command-line tools. Linux needs the X11 development library
+(`libx11-dev` on the hosted Ubuntu target), CEF's native runtime libraries,
 system fonts and functioning native sandbox prerequisites. Do not disable sandboxing
 to turn a refusal green. Reserve at least 6 GiB of disposable disk space.
 
@@ -107,6 +108,14 @@ at `8d1f36ad03907f70e828d5c21d6f6b19508982c0` progressed Linux past the callback
 compile error to a missing link-library failure. Windows diagnostics identified
 GNU `link.exe` rather than MSVC; Cargo now selects the admitted MSVC linker explicitly.
 These corrections do not establish target acceptance.
+
+Run [37496931725](https://github.com/Eutheto/Eutheto/actions/runs/37496931725)
+confirmed missing `-lX11` on Linux and reached the Windows completion-constant
+import after selecting MSVC. CI now installs the declared X11 link prerequisite;
+the vendored binding imports `JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO` from its actual
+`SystemServices` module with the matching feature. macOS shutdown remains unresolved.
+Intrusive external PID-only sampling was rejected before target execution; no
+sampling code or relaxed acceptance path is included.
 
 ## Limits
 
