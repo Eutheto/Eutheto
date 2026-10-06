@@ -1,0 +1,22 @@
+[package]
+name = "cef-native-validation-owner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[workspace]
+exclude = ["vendor/process-wrap"]
+
+[dependencies]
+tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "process", "rt", "signal", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+process-wrap = { version = "=10.0.0", default-features = false, features = ["tokio1", "kill-on-drop", "process-group"] }
+nix = { version = "=0.31.3", default-features = false, features = ["signal"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "=10.0.0", default-features = false, features = ["tokio1", "kill-on-drop", "job-object", "creation-flags"] }
+
+[patch.crates-io]
+process-wrap = { path = "vendor/process-wrap" }

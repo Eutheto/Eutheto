@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<link rel="icon" href="data:,">
+<title>Synthetic CEF feasibility — no accepted plan authority</title>
+<style>
+body { font: 14px sans-serif; color: black; background: white; }
+section { break-inside: avoid; border-bottom: 1px solid black; padding: 12px 0; }
+@page { size: A4; margin: 20mm; @top-center { content: "SYNTHETIC | Revision 7 | UTC | UNVERIFIED"; } @bottom-center { content: "Page " counter(page) " of " counter(pages); } }
+@media print { label { display: none; } }
+</style>
+<main id="recipient-report">
+<h1>Synthetic native host feasibility</h1>
+<p>No accepted-plan authority. Zoë Δοκιμή — Кириллица →</p>
+<p>&lt;img src=x onerror=alert(1)&gt;</p>
+<label>Filter synthetic rows <input type="search"></label>
+<div id="rows"></div>
+</main>
+<script>
+const root = document.getElementById('recipient-report');
+const container = document.getElementById('rows');
+for (let number = 1; number <= 64; number++) {
+  const row = document.createElement('section');
+  row.dataset.row = String(number);
+  row.textContent = `ROW-${String(number).padStart(3, '0')} Synthetic assignment — UTC 09:00–17:00. Unverified fixture only.`;
+  container.append(row);
+}
+const search = root.querySelector('input');
+search.addEventListener('input', () => {
+  for (const row of container.children) row.hidden = !row.textContent.includes(search.value);
+});
+window.addEventListener('beforeprint', () => {
+  for (const row of container.children) row.hidden = false;
+});
+document.fonts.ready.then(() => root.setAttribute('data-recipient-ready', 'true'));
+</script>
+</html>

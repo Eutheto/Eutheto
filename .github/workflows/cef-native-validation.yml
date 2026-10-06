@@ -1,0 +1,48 @@
+name: CEF native feasibility
+on:
+  push:
+    branches: [experiment/cef-154-native-validation]
+    paths:
+      - experiments/cef-native-validation/**
+      - .github/workflows/cef-native-validation.yml
+permissions:
+  contents: read
+concurrency:
+  group: cef-native-feasibility-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux64
+            runner: ubuntu-24.04
+          - target: windows64
+            runner: windows-2025
+          - target: macosarm64
+            runner: macos-15
+          - target: macosx64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    env:
+      CEF_WORK: ${{ runner.temp }}/cef-native-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Select repository Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Execute synthetic native acceptance
+        shell: bash
+        run: python -B experiments/cef-native-validation/probe.py --target '${{ matrix.target }}' --work-dir "$CEF_WORK"
+      - name: Report bounded target evidence
+        if: always()
+        shell: bash
+        run: python -B experiments/cef-native-validation/probe.py --summary "$CEF_WORK/evidence.json"
+      # No caches or artifacts: SDKs, native binaries and PDFs remain runner-local.
