@@ -135,6 +135,15 @@ process attaches by PID. Resume/join failures terminate rather than releasing
 unsettled observer state. The diagnostic invocation always fails acceptance, even
 if shutdown returns; it never substitutes for the original unsampled case.
 
+Run [37502997852](https://github.com/Eutheto/Eutheto/actions/runs/37502997852)
+at `fbc9f64c0d42012f922d761338ca58bfaba46944` compiled and exercised the
+self-diagnostic on both Macs: each reported captured, nearest Mach message and
+unknown categories, then the same teardown watchdog. This does not identify the
+shutdown cause. Linux's private log matched the exact `No usable sandbox!` literal;
+Windows failed compile-tool settlement admission. All four targets remain failed.
+Read-only Linux user-namespace policy facts distinguish missing prerequisites;
+they do not change kernel/AppArmor policy or establish native sandbox acceptance.
+
 ## Limits
 
 This is platform feasibility, not product acceptance or redistribution clearance.

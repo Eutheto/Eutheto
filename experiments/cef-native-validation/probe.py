@@ -114,8 +114,12 @@ def command(args, env, cwd, seconds=600, owner=None, operation="discovery"):
             raise RuntimeError("tool-output-limit")
         control = bytes(output)
         if owner is not None:
-            terminal = re.fullmatch(rb"pid [1-9][0-9]{0,9}\nreason (complete|deadline|external-cancel|native-failure|protocol-failure|pipe-failure)\nexit (-?[0-9]+)\nsettled 1\n", control)
-            if not terminal:
+            terminal = re.fullmatch(rb"pid [1-9][0-9]{0,9}\nreason (complete|deadline|external-cancel|native-failure|protocol-failure|pipe-failure)\nexit (-?[0-9]{1,10})\nsettled ([01])\n", control)
+            if not terminal or terminal.group(3) != b"1":
+                facts = {"shape": "terminal" if terminal else ("malformed" if control else "empty"), "ownerExit": process.returncode}
+                if terminal:
+                    facts.update(reason=terminal.group(1).decode("ascii"), exit=int(terminal.group(2)), settled=terminal.group(3) == b"1")
+                print(json.dumps({"toolSettlement": True, "operation": operation, **facts}), flush=True)
                 raise RuntimeError("tool-settlement-unverified")
             if log.is_symlink() or not log.is_file():
                 raise RuntimeError("tool-log-invalid")
@@ -422,9 +426,27 @@ def denial_cases(owner, host, runtime_root, work, env, observe, inspector):
     return results
 
 
+def linux_userns_policy():
+    facts = {}
+    for name, path in (
+        ("apparmorRestriction", "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"),
+        ("unprivilegedClone", "/proc/sys/kernel/unprivileged_userns_clone"),
+        ("namespaceQuota", "/proc/sys/user/max_user_namespaces"),
+    ):
+        facts[name] = "unavailable"
+        try:
+            with open(path, "rb") as stream:
+                value = stream.read(32).strip()
+            if re.fullmatch(rb"[0-9]{1,10}", value) and (name == "namespaceQuota" or value in {b"0", b"1"}):
+                facts[name] = "enabled" if int(value) else "disabled"
+        except OSError:
+            pass
+    return facts
+
+
 def checked_evidence(data):
     """Closed publication DTO; never forward arbitrary derived-code dictionaries."""
-    root_fields = {"target", "phase", "passed", "source", "base", "run", "attempt", "architecture", "image", "cases", "sdkSha256", "hostSha256", "fixtureSha256", "nativeSha256", "tools"}
+    root_fields = {"target", "phase", "passed", "source", "base", "run", "attempt", "architecture", "image", "cases", "sdkSha256", "hostSha256", "fixtureSha256", "nativeSha256", "tools", "linuxUsernsPolicy"}
     if type(data) is not dict or set(data) - root_fields or not {"phase", "passed"} <= set(data):
         raise ValueError("evidence-shape")
     enums = {
@@ -446,6 +468,9 @@ def checked_evidence(data):
             if type(hashes) is not dict or len(hashes) > 8: raise ValueError("evidence-hashes")
             if key == "nativeSha256" and set(hashes) - {"owner", "dll", "helper", "helper-alerts", "helper-gpu", "helper-plugin", "helper-renderer"}: raise ValueError("evidence-native")
             if any(type(item) is not str or not re.fullmatch(r"[0-9a-f]{64}", item) for item in hashes.values()): raise ValueError("evidence-hash")
+        elif key == "linuxUsernsPolicy":
+            if type(value) is not dict or set(value) != {"apparmorRestriction", "unprivilegedClone", "namespaceQuota"}: raise ValueError("evidence-userns-policy")
+            if any(type(item) is not str or item not in {"enabled", "disabled", "unavailable"} for item in value.values()): raise ValueError("evidence-userns-value")
         elif key == "tools":
             if type(value) is not dict or set(value) - {"python", "cargo", "rustc", "cmake", "ninja", "compiler"}: raise ValueError("evidence-tools")
             if any(type(item) is not str or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", item) for item in value.values()): raise ValueError("evidence-version")
@@ -514,6 +539,8 @@ def main(args):
                 "source": os.environ.get("GITHUB_SHA", "local"), "run": os.environ.get("GITHUB_RUN_ID", "local"),
                 "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "local"), "architecture": __import__('platform').machine(),
                 "image": os.environ.get("ImageVersion", "local")}
+    if args.target == "linux64":
+        evidence["linuxUsernsPolicy"] = linux_userns_policy()
     created = False
     try:
         private_directory(work, env)

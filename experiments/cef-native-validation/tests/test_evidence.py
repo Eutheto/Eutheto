@@ -27,6 +27,14 @@ class EvidencePrivacy(unittest.TestCase):
                 self.assertNotIn("PRIVATE_SENTINEL", summary.read_text())
                 self.assertIn('"passed": false', summary.read_text())
 
+    def test_linux_policy_rejects_private_or_missing_facts(self):
+        facts = {"apparmorRestriction": "enabled", "unprivilegedClone": "unavailable", "namespaceQuota": "enabled"}
+        evidence = {"phase": "runtime-failed-or-unverified", "passed": False, "linuxUsernsPolicy": facts}
+        self.assertEqual(probe.checked_evidence(evidence), evidence)
+        for invalid in (facts | {"apparmorRestriction": "PRIVATE_SENTINEL"}, facts | {"private": "PRIVATE_SENTINEL"}, {}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                probe.checked_evidence(evidence | {"linuxUsernsPolicy": invalid})
+
     def test_tool_diagnostics_discard_private_text_and_bound_codes(self):
         raw = b"/PRIVATE_SENTINEL/main.rs:123: error[E0432]: unresolved import PRIVATE_SENTINEL\n"
         raw += b"/PRIVATE_SENTINEL/secret.rs:456: PRIVATE_SENTINEL\n"
