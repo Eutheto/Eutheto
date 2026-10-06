@@ -12,4 +12,6 @@ int RunProbe(const CefMainArgs& args, void* sandbox_info);
 void SetProbeCloseHandler(std::function<void()> handler);
 // Fixed diagnostic literals only; never recipient data or success stages.
 void EmitProbeLifecycle(const char* event);
+// Normal shutdown is unchanged; an explicitly diagnostic run may sample itself.
+void ShutdownProbe();
 #endif

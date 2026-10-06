@@ -345,7 +345,11 @@ int RunProbe(const CefMainArgs& args, void* sandbox_info) {
   SetProbeCloseHandler({});
   EmitProbeLifecycle("lifecycle-shutdown-entered\n");
 #endif
+#if defined(OS_MAC)
+  ShutdownProbe();
+#else
   CefShutdown();
+#endif
 #if defined(OS_MAC)
   EmitProbeLifecycle("lifecycle-shutdown-returned\n");
 #endif

@@ -15,7 +15,7 @@ spec.loader.exec_module(probe)
 
 class EvidencePrivacy(unittest.TestCase):
     def test_summary_refuses_nested_private_data_at_both_public_sinks(self):
-        for extra in ({"private": "PRIVATE_SENTINEL"}, {"events": ["PRIVATE_SENTINEL"]}, {"pdfBytes": True}, {"boundaryStage": "PRIVATE_SENTINEL"}, {"observationFailure": {"code": "other", "path": "PRIVATE_SENTINEL"}}, {"cleanupObservationFailure": {"code": "PRIVATE_SENTINEL"}}):
+        for extra in ({"private": "PRIVATE_SENTINEL"}, {"events": ["PRIVATE_SENTINEL"]}, {"pdfBytes": True}, {"boundaryStage": "PRIVATE_SENTINEL"}, {"observationFailure": {"code": "other", "path": "PRIVATE_SENTINEL"}}, {"cleanupObservationFailure": {"code": "PRIVATE_SENTINEL"}}, {"nativeLogCategories": ["PRIVATE_SENTINEL"]}, {"action": "shutdown-diagnostic"}, {"action": "shutdown-diagnostic", "passed": False}):
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
                 source = Path(directory) / "evidence.json"
                 summary = Path(directory) / "summary.md"

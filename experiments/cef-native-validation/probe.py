@@ -18,6 +18,8 @@ HERE = Path(__file__).resolve().parent
 MAX_PDF = 32 * 1024 * 1024
 STAGES = {"startup", "context", "browser", "loaded", "ready", "printing", "printed", "closed", "failed", "renderer-exit", "deny-popup", "deny-navigation", "deny-tab", "deny-favicon", "deny-resource", "deny-handler", "deny-protocol", "deny-download", "deny-print-dialog", "deny-print-job"}
 STAGES |= {"lifecycle-loop-returned", "lifecycle-shutdown-entered", "lifecycle-shutdown-returned", "lifecycle-probe-returned", "lifecycle-pool-drained", "lifecycle-unload-entered", "lifecycle-unload-returned", "mac-teardown-watchdog", "mac-session-watchdog", "mac-sigterm-watchdog"}
+STAGES |= {"diagnostic-self-stack-captured", "diagnostic-self-stack-unavailable", "diagnostic-self-stack-resume-failed", "diagnostic-nearest-mach-message", "diagnostic-nearest-pthread-join", "diagnostic-nearest-condition-wait", "diagnostic-nearest-semaphore-wait", "diagnostic-nearest-ulock-wait", "diagnostic-nearest-dispatch-wait", "diagnostic-nearest-audio-dispose", "diagnostic-nearest-unknown"}
+NATIVE_LOG_LITERALS = {b"No usable sandbox!": "sandbox-unavailable", b"Running as root without --no-sandbox": "root-sandbox-refusal"}
 BOUNDARIES = {"setup", "owner-start", "owner-read", "initial-observation", "ready-observation", "sandbox-observation", "renderer-injection", "host-injection", "settlement-observation", "inspector"}
 OBSERVATION_FIELDS = {
     "code": {"other", "native-observation-unavailable", "observation-deadline", "observation-size-limit", "observation-argument-limit", "ambiguous-process-role", "invalid-owned-executable", "unexpected-descendant-executable", "process-scan-limit", "requires-native-64-bit-python", "requires-native-64-bit-process", "invalid-native-commandline", "invalid-integrity-sid", "unsupported-observation-platform", "invalid-process-observations", "missing-retained-process-identity", "invalid-root-pid", "invalid-runtime-root", "owned-process-limit", "root-identity-changed", "owned-process-exited-during-observation", "process-identity-changed", "process-ancestry-changed", "invalid-private-job", "sandbox-introspection-unavailable"},
@@ -83,6 +85,7 @@ def command(args, env, cwd, seconds=600, owner=None, operation="discovery"):
     if owner is not None:
         executable = shutil.which(str(args[0]), path=env.get("PATH"))
         if executable is None:
+            print(json.dumps({"toolBoundary": True, "operation": operation, "reason": "tool-unavailable"}), flush=True)
             raise RuntimeError("tool-unavailable")
         tool_dir = Path(tempfile.mkdtemp(prefix="cef-tool-", dir=cwd)).resolve()
         log = tool_dir / "output"
@@ -126,6 +129,12 @@ def command(args, env, cwd, seconds=600, owner=None, operation="discovery"):
             print(json.dumps({"toolFailed": True, "operation": operation, **tool_failure_facts(output)}), flush=True)
             raise RuntimeError("tool-failed")
         return bytes(output)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        code = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
+        if code != "tool-failed":
+            reason = code if code in {"tool-limit", "tool-output-limit", "tool-settlement-unverified", "tool-log-invalid", "tool-log-bound", "tool-terminal-mismatch"} else "tool-io"
+            print(json.dumps({"toolBoundary": True, "operation": operation, "reason": reason}), flush=True)
+        raise
     finally:
         if owner is not None and process.poll() is None:
             process.terminate()
@@ -202,7 +211,8 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
             (job / "output.pdf").mkdir()
         input_path.write_bytes(html)
         boundary = "owner-start"
-        process = subprocess.Popen([str(owner), str(host), str(job), str(input_path), mode],
+        native_mode = "shutdown-diagnostic" if action == "shutdown-diagnostic" else mode
+        process = subprocess.Popen([str(owner), str(host), str(job), str(input_path), native_mode],
                                    env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, close_fds=True,
                                    start_new_session=os.name != "nt")
@@ -292,7 +302,15 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
         result.update(events=events, observedProcesses=len(values), survivors=len(remaining), ownerExit=process.returncode, hostExit=host_exit, waited=settled, reason=reason)
         if not values or remaining:
             raise RuntimeError("cleanup-unverified")
-        if action == "sandbox":
+        native_log = job / "cef.log"
+        if settled and native_log.is_file() and not native_log.is_symlink():
+            with native_log.open("rb") as stream:
+                log_bytes = stream.read(65537)
+            if len(log_bytes) <= 65536:
+                result["nativeLogCategories"] = [category for literal, category in NATIVE_LOG_LITERALS.items() if literal in log_bytes]
+        if action == "shutdown-diagnostic":
+            result["passed"] = False
+        elif action == "sandbox":
             result["sandboxVerified"] = bool(restrictions and restrictions.get("verified"))
             result["passed"] = triggered and result["sandboxVerified"] and ((settled and reason == "external-cancel") or os.name == "nt")
         elif action == "write-failure":
@@ -435,6 +453,8 @@ def checked_evidence(data):
             if type(value) is not list or len(value) > 20: raise ValueError("evidence-cases")
             for case in value:
                 if type(case) is not dict: raise ValueError("evidence-case")
+                if case.get("action") == "shutdown-diagnostic" and (case.get("passed") is not False or data["passed"] is not False):
+                    raise ValueError("diagnostic-cannot-pass")
                 for name, item in case.items():
                     if name in {"passed", "waited", "sandboxVerified", "unicode", "inertLabel", "pageContext", "sentinelReachable", "failedBoundary", "cleanupFailed", "stagingRemoved"}:
                         if type(item) is not bool: raise ValueError("evidence-case-bool")
@@ -448,6 +468,8 @@ def checked_evidence(data):
                     elif name in {"observationFailure", "cleanupObservationFailure"}:
                         if type(item) is not dict or "code" not in item or set(item) - set(OBSERVATION_FIELDS): raise ValueError("evidence-observation")
                         if any(type(value) is not str or value not in OBSERVATION_FIELDS[field] for field, value in item.items()): raise ValueError("evidence-observation-value")
+                    elif name == "nativeLogCategories":
+                        if type(item) is not list or len(item) > len(NATIVE_LOG_LITERALS) or any(type(category) is not str or category not in NATIVE_LOG_LITERALS.values() for category in item): raise ValueError("evidence-native-log")
                     elif name == "events":
                         if type(item) is not list or len(item) > 32 or any(type(event) is not str or event not in STAGES for event in item): raise ValueError("evidence-events")
                     elif name == "pdfSha256":
@@ -455,7 +477,7 @@ def checked_evidence(data):
                     else:
                         choices = {
                             "mode": {"normal", "oversized", "startup-cancel", "ready-cancel", "printing-cancel", "deadline", "observe"},
-                            "action": {None, "sandbox", "renderer-kill", "host-kill", "write-failure"},
+                            "action": {None, "sandbox", "renderer-kill", "host-kill", "write-failure", "shutdown-diagnostic"},
                             "reason": {None, "complete", "deadline", "stage-cancel", "external-cancel", "native-failure", "protocol-failure", "pipe-failure", "initial-observation-failure"},
                             "case": {"missing-root", "resource", "navigation", "popup", "download"},
                         }
@@ -568,6 +590,8 @@ def main(args):
         evidence["cases"] = cases
         for mode, action in [("normal", None), ("startup-cancel", None), ("ready-cancel", None), ("printing-cancel", None), ("deadline", None), ("observe", "sandbox"), ("observe", "renderer-kill"), ("observe", "host-kill")]:
             cases.append(runtime_case(owner, host, runtime_root, html, mode, action, work, env, observe, inspector))
+            if mode == "normal" and args.target.startswith("macos") and not cases[-1]["passed"] and "mac-teardown-watchdog" in cases[-1].get("events", []):
+                cases.append(runtime_case(owner, host, runtime_root, html, "normal", "shutdown-diagnostic", work, env, observe, inspector))
         malformed = html.replace(b'id="recipient-report"', b'id="missing-root"')
         case = runtime_case(owner, host, runtime_root, malformed, "normal", None, work, env, observe, inspector, "failed")
         case["case"] = "missing-root"

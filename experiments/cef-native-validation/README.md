@@ -115,7 +115,25 @@ import after selecting MSVC. CI now installs the declared X11 link prerequisite;
 the vendored binding imports `JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO` from its actual
 `SystemServices` module with the matching feature. macOS shutdown remains unresolved.
 Intrusive external PID-only sampling was rejected before target execution; no
-sampling code or relaxed acceptance path is included.
+external sampler or relaxed acceptance path is included.
+
+Run [37498847783](https://github.com/Eutheto/Eutheto/actions/runs/37498847783)
+at `bb4c313b7f7a3a1fd0313046ff6dcaee0e23e23b` failed all four targets.
+Linux built and ran but normal execution stopped after startup; its cause is not
+established. Windows progressed through owner checks and SDK admission, then failed
+the build boundary. Both Macs still reached the teardown watchdog. Closed tool-boundary
+reasons and two exact private native-log literals now distinguish these failures
+without publishing raw logs or changing sandbox policy.
+
+After an ordinary macOS normal-case teardown watchdog, a separate
+`shutdown-diagnostic` invocation observes its own retained main-thread Mach right.
+The joined observer uses fixed buffers and bounded frame reads, resumes the main
+thread before symbol lookup/output, and publishes only closed nearest-symbol
+categories. Unsupported state or an incomplete walk remains explicit; these
+categories do not establish the blocking function or shutdown cause. No external
+process attaches by PID. Resume/join failures terminate rather than releasing
+unsettled observer state. The diagnostic invocation always fails acceptance, even
+if shutdown returns; it never substitutes for the original unsampled case.
 
 ## Limits
 

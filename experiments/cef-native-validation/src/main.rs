@@ -23,7 +23,7 @@ const LIMIT: usize = 16 * 1024 * 1024;
 const STAGES: [&str; 8] = [
     "startup", "context", "browser", "loaded", "ready", "printing", "printed", "closed",
 ];
-const FAULTS: [&str; 15] = [
+const FAULTS: [&str; 16] = [
     "failed",
     "renderer-exit",
     "deny-popup",
@@ -39,8 +39,9 @@ const FAULTS: [&str; 15] = [
     "mac-teardown-watchdog",
     "mac-session-watchdog",
     "mac-sigterm-watchdog",
+    "diagnostic-self-stack-resume-failed",
 ];
-const DIAGNOSTICS: [&str; 7] = [
+const DIAGNOSTICS: [&str; 17] = [
     "lifecycle-loop-returned",
     "lifecycle-shutdown-entered",
     "lifecycle-shutdown-returned",
@@ -48,6 +49,16 @@ const DIAGNOSTICS: [&str; 7] = [
     "lifecycle-pool-drained",
     "lifecycle-unload-entered",
     "lifecycle-unload-returned",
+    "diagnostic-self-stack-captured",
+    "diagnostic-self-stack-unavailable",
+    "diagnostic-nearest-mach-message",
+    "diagnostic-nearest-pthread-join",
+    "diagnostic-nearest-condition-wait",
+    "diagnostic-nearest-semaphore-wait",
+    "diagnostic-nearest-ulock-wait",
+    "diagnostic-nearest-dispatch-wait",
+    "diagnostic-nearest-audio-dispose",
+    "diagnostic-nearest-unknown",
 ];
 fn invalid() -> io::Error {
     io::Error::other("probe boundary failure")
@@ -283,9 +294,13 @@ async fn run() -> io::Result<bool> {
             "printing-cancel",
             "deadline",
             "observe",
+            "shutdown-diagnostic",
         ]
         .contains(&mode)
         {
+            return Err(invalid());
+        }
+        if mode == "shutdown-diagnostic" && !cfg!(target_os = "macos") {
             return Err(invalid());
         }
         let input = PathBuf::from(&args[2]);
@@ -343,6 +358,9 @@ async fn run() -> io::Result<bool> {
                 .env("TMP", &cwd)
                 .env("TMPDIR", &cwd)
                 .env("EUTHETO_PROBE_JOB_DIR", &cwd);
+            if mode == "shutdown-diagnostic" {
+                command.env("EUTHETO_PROBE_SHUTDOWN_DIAGNOSTIC", "1");
+            }
             if ["ready-cancel", "deadline", "observe"].contains(&mode) {
                 command.env("EUTHETO_PROBE_HOLD_READY", "1");
             }
@@ -452,6 +470,9 @@ async fn run() -> io::Result<bool> {
             }
             event = receiver.recv(), if !events_done => {
                 if let Some(event) = event {
+                    if event.starts_with("diagnostic-") && mode != "shutdown-diagnostic" {
+                        reason = "protocol-failure"; break;
+                    }
                     if FAULTS.contains(&event) { fault.get_or_insert("native-failure"); }
                     else if STAGES.get(next_stage).copied() == Some(event) { next_stage += 1; }
                     else if !DIAGNOSTICS.contains(&event) && !(fault.is_some() && event == "closed") { reason = "protocol-failure"; break; }
