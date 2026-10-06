@@ -24,7 +24,7 @@
     "@pinia/colada": "1.4.2",
     "@tanstack/vue-table": "9.2.4",
     "@tanstack/vue-virtual": "3.13.36",
-    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/api": "2.12.1",
     "@vue/devtools-api": "8.2.1",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
-    "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli": "2.12.1",
     "@testing-library/vue": "8.1.0",
     "@types/node": "24.13.3",
     "@types/web-bluetooth": "0.0.21",
