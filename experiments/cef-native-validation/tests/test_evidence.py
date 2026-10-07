@@ -15,7 +15,7 @@ spec.loader.exec_module(probe)
 
 class EvidencePrivacy(unittest.TestCase):
     def test_summary_refuses_nested_private_data_at_both_public_sinks(self):
-        for extra in ({"private": "PRIVATE_SENTINEL"}, {"events": ["PRIVATE_SENTINEL"]}, {"pdfBytes": True}, {"boundaryStage": "PRIVATE_SENTINEL"}, {"observationFailure": {"code": "other", "path": "PRIVATE_SENTINEL"}}, {"cleanupObservationFailure": {"code": "PRIVATE_SENTINEL"}}, {"nativeLogCategories": ["PRIVATE_SENTINEL"]}, {"action": "shutdown-diagnostic"}, {"action": "shutdown-diagnostic", "passed": False}):
+        for extra in ({"private": "PRIVATE_SENTINEL"}, {"events": ["PRIVATE_SENTINEL"]}, {"pdfBytes": True}, {"boundaryStage": "PRIVATE_SENTINEL"}, {"observationFailure": {"code": "other", "path": "PRIVATE_SENTINEL"}}, {"cleanupObservationFailure": {"code": "PRIVATE_SENTINEL"}}, {"nativeLogCategories": ["PRIVATE_SENTINEL"]}, {"action": "shutdown-diagnostic"}, {"action": "shutdown-diagnostic", "passed": False}, {"action": "keychain-control"}, {"action": "keychain-control", "passed": False}):
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
                 source = Path(directory) / "evidence.json"
                 summary = Path(directory) / "summary.md"
@@ -26,6 +26,30 @@ class EvidencePrivacy(unittest.TestCase):
                 self.assertEqual(json.loads(output.getvalue()), {"phase": "missing-evidence", "passed": False})
                 self.assertNotIn("PRIVATE_SENTINEL", summary.read_text())
                 self.assertIn('"passed": false', summary.read_text())
+
+    def test_successful_keychain_control_remains_nonacceptance(self):
+        case = {"mode": "normal", "action": "keychain-control", "passed": False,
+                "hostExit": 0, "ownerExit": 0, "waited": True, "reason": "complete",
+                "events": ["printed", "closed", "lifecycle-shutdown-returned"]}
+        evidence = {"phase": "runtime-failed-or-unverified", "passed": False, "cases": [case]}
+        self.assertEqual(probe.checked_evidence(evidence), evidence)
+        for invalid in (evidence | {"passed": True},
+                        evidence | {"cases": [case | {"passed": True}]}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                probe.checked_evidence(invalid)
+
+    def test_installed_policy_requires_custody_refusal_and_cleanup_for_acceptance(self):
+        evidence = {"phase": "complete", "passed": True,
+                    "linuxSandboxRoute": "apparmor-installed", "linuxPolicyCleanup": True,
+                    "linuxPolicyRefusalVerified": True}
+        self.assertEqual(probe.checked_evidence(evidence), evidence)
+        for invalid in (evidence | {"linuxPolicyCleanup": False},
+                        evidence | {"linuxPolicyRefusalVerified": False},
+                        evidence | {"linuxSandboxRoute": "apparmor-attempted"},
+                        evidence | {"linuxSandboxRoute": "PRIVATE_SENTINEL"},
+                        {"phase": "complete", "passed": True, "linuxSandboxRoute": "apparmor-installed"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                probe.checked_evidence(invalid)
 
     def test_linux_policy_rejects_private_or_missing_facts(self):
         facts = {"apparmorRestriction": "enabled", "unprivilegedClone": "unavailable", "namespaceQuota": "enabled"}

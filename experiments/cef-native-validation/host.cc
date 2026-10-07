@@ -257,7 +257,17 @@ class App final : public CefApp, public CefBrowserProcessHandler {
  public:
   CefRefPtr<Client> client;
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
-  void OnBeforeCommandLineProcessing(const CefString&, CefRefPtr<CefCommandLine> line) override {
+  void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> line) override {
+#if defined(OS_MAC)
+    // CEF warns that changing non-browser process arguments may be undefined.
+    const char* keychain_control = std::getenv("EUTHETO_PROBE_KEYCHAIN_CONTROL");
+    if (process_type.empty() && keychain_control && keychain_control[0] == '1' &&
+        keychain_control[1] == '\0') {
+      line->AppendSwitch("use-mock-keychain");
+    }
+#else
+    (void)process_type;
+#endif
 #if defined(OS_LINUX)
     line->AppendSwitchWithValue("ozone-platform", "headless");
 #endif
@@ -327,10 +337,6 @@ int RunProbe(const CefMainArgs& args, void* sandbox_info) {
   settings.log_severity = LOGSEVERITY_ERROR;
   CefString(&settings.log_file) = Utf8(directory / "cef.log");
   CefString(&settings.root_cache_path) = Utf8(directory / "profile");
-#if !defined(OS_MAC)
-  CefString(&settings.resources_dir_path) = CEF_PROBE_RUNTIME_DIR;
-  CefString(&settings.locales_dir_path) = CEF_PROBE_RUNTIME_DIR "/locales";
-#endif
   if (!CefInitialize(args, settings, app, sandbox_info)) return 71;
 #if defined(OS_MAC)
   SetProbeCloseHandler([client = app->client] { client->Fail(); });

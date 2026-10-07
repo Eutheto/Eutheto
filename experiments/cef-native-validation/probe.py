@@ -8,6 +8,7 @@ import queue
 import re
 import shutil
 import signal
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -78,7 +79,7 @@ def tool_failure_facts(output):
 
 def command(args, env, cwd, seconds=600, owner=None, operation="discovery"):
     """Bootstrap trusted source directly; all SDK/inspector work uses owned trees."""
-    if operation not in {"discovery", "owner-build", "owner-tests", "publication-tests", "configure", "compile", "inspector-venv", "inspector-install", "inspector-pdf", "version"}:
+    if operation not in {"discovery", "owner-build", "owner-tests", "publication-tests", "tool-control", "sandbox-install", "sandbox-cleanup", "configure", "compile", "inspector-venv", "inspector-install", "inspector-pdf", "version"}:
         raise ValueError("unknown-tool-operation")
     tool_dir = None
     log = None
@@ -215,7 +216,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
             (job / "output.pdf").mkdir()
         input_path.write_bytes(html)
         boundary = "owner-start"
-        native_mode = "shutdown-diagnostic" if action == "shutdown-diagnostic" else mode
+        native_mode = action if action in {"shutdown-diagnostic", "keychain-control"} else mode
         process = subprocess.Popen([str(owner), str(host), str(job), str(input_path), native_mode],
                                    env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, close_fds=True,
@@ -312,7 +313,7 @@ def runtime_case(owner, host, runtime_root, html, mode, action, work, env, obser
                 log_bytes = stream.read(65537)
             if len(log_bytes) <= 65536:
                 result["nativeLogCategories"] = [category for literal, category in NATIVE_LOG_LITERALS.items() if literal in log_bytes]
-        if action == "shutdown-diagnostic":
+        if action in {"shutdown-diagnostic", "keychain-control"}:
             result["passed"] = False
         elif action == "sandbox":
             result["sandboxVerified"] = bool(restrictions and restrictions.get("verified"))
@@ -446,9 +447,16 @@ def linux_userns_policy():
 
 def checked_evidence(data):
     """Closed publication DTO; never forward arbitrary derived-code dictionaries."""
-    root_fields = {"target", "phase", "passed", "source", "base", "run", "attempt", "architecture", "image", "cases", "sdkSha256", "hostSha256", "fixtureSha256", "nativeSha256", "tools", "linuxUsernsPolicy"}
+    root_fields = {"target", "phase", "passed", "source", "base", "run", "attempt", "architecture", "image", "cases", "sdkSha256", "hostSha256", "fixtureSha256", "nativeSha256", "tools", "linuxUsernsPolicy", "linuxSandboxRoute", "linuxPolicyCleanup", "linuxPolicyRefusalVerified"}
     if type(data) is not dict or set(data) - root_fields or not {"phase", "passed"} <= set(data):
         raise ValueError("evidence-shape")
+    if data["passed"] is True and (
+        data.get("linuxSandboxRoute") == "apparmor-attempted"
+        or data.get("linuxPolicyCleanup") is False
+        or (data.get("linuxSandboxRoute") == "apparmor-installed" and (
+            data.get("linuxPolicyCleanup") is not True or data.get("linuxPolicyRefusalVerified") is not True))
+    ):
+        raise ValueError("policy-cannot-pass")
     enums = {
         "target": {"linux64", "windows64", "macosx64", "macosarm64"},
         "phase": {"setup", "download-admission", "tooling", "build", "runtime", "complete", "runtime-failed-or-unverified", "setup-failed", "download-admission-failed", "tooling-failed", "build-failed", "runtime-failed", "missing-evidence", "evidence-refused"},
@@ -459,6 +467,10 @@ def checked_evidence(data):
             if type(value) is not str or value not in enums[key]: raise ValueError("evidence-enum")
         elif key == "passed":
             if type(value) is not bool: raise ValueError("evidence-bool")
+        elif key == "linuxSandboxRoute":
+            if type(value) is not str or value not in {"unchanged-userns", "apparmor-attempted", "apparmor-installed"}: raise ValueError("evidence-sandbox-route")
+        elif key in {"linuxPolicyCleanup", "linuxPolicyRefusalVerified"}:
+            if type(value) is not bool: raise ValueError("evidence-policy-cleanup")
         elif key in {"source", "base"}:
             if type(value) is not str or not re.fullmatch(r"(?:[0-9a-f]{40}|local)", value): raise ValueError("evidence-source")
         elif key in {"run", "attempt", "image"}:
@@ -478,7 +490,7 @@ def checked_evidence(data):
             if type(value) is not list or len(value) > 20: raise ValueError("evidence-cases")
             for case in value:
                 if type(case) is not dict: raise ValueError("evidence-case")
-                if case.get("action") == "shutdown-diagnostic" and (case.get("passed") is not False or data["passed"] is not False):
+                if case.get("action") in {"shutdown-diagnostic", "keychain-control"} and (case.get("passed") is not False or data["passed"] is not False):
                     raise ValueError("diagnostic-cannot-pass")
                 for name, item in case.items():
                     if name in {"passed", "waited", "sandboxVerified", "unicode", "inertLabel", "pageContext", "sentinelReachable", "failedBoundary", "cleanupFailed", "stagingRemoved"}:
@@ -502,7 +514,7 @@ def checked_evidence(data):
                     else:
                         choices = {
                             "mode": {"normal", "oversized", "startup-cancel", "ready-cancel", "printing-cancel", "deadline", "observe"},
-                            "action": {None, "sandbox", "renderer-kill", "host-kill", "write-failure", "shutdown-diagnostic"},
+                            "action": {None, "sandbox", "renderer-kill", "host-kill", "write-failure", "shutdown-diagnostic", "keychain-control"},
                             "reason": {None, "complete", "deadline", "stage-cancel", "external-cancel", "native-failure", "protocol-failure", "pipe-failure", "initial-observation-failure"},
                             "case": {"missing-root", "resource", "navigation", "popup", "download"},
                         }
@@ -542,6 +554,7 @@ def main(args):
     if args.target == "linux64":
         evidence["linuxUsernsPolicy"] = linux_userns_policy()
     created = False
+    linux_install = None
     try:
         private_directory(work, env)
         created = True
@@ -566,6 +579,8 @@ def main(args):
         owner = owner_build / "release" / ("cef-native-validation-owner.exe" if os.name == "nt" else "cef-native-validation-owner")
         # Bootstrap is repository-owned source compilation, not SDK execution.
         # Only after it exists may downloaded/derived SDK or inspector code run.
+        # Isolate supervision of a plain native tool before SDK/compiler work.
+        command([sys.executable, "-I", "-B", "-c", "print('CEF_TOOL_CONTROL')"], env, work, 30, owner, "tool-control")
         command([cargo, "test", "--locked", "--release", "--manifest-path", str(HERE / "Cargo.toml"), "--target-dir", str(owner_build)], env, work, 900, owner, "owner-tests")
         command([sys.executable, "-I", "-B", "-m", "unittest", "discover", "-s", str(HERE / "tests"), "-p", "test_*.py"], env, work, 30, owner, "publication-tests")
         evidence["phase"] = "download-admission"
@@ -581,6 +596,47 @@ def main(args):
         command(configure, env, work, 180, owner, "configure")
         command(["cmake", "--build", str(build), "--config", "Release", "--target", "cef-probe", "--parallel", "2"], env, work, 1200, owner, "compile")
         runtime_root = build / "Release"
+        if args.linux_apparmor:
+            if args.target != "linux64" or os.environ.get("GITHUB_ACTIONS") != "true":
+                raise RuntimeError("sandbox-policy-scope")
+            evidence["linuxSandboxRoute"] = "unchanged-userns"
+            if evidence["linuxUsernsPolicy"]["apparmorRestriction"] == "enabled":
+                run, attempt = evidence["run"], evidence["attempt"]
+                if not all(re.fullmatch(r"[1-9][0-9]{0,19}", value) for value in (run, attempt)):
+                    raise RuntimeError("sandbox-policy-identity")
+                linux_policy = Path("/opt") / f"eutheto-cef-native-validation-tools-{run}-{attempt}" / "linux_policy.py"
+                for parent in (linux_policy.parent, Path("/opt")):
+                    metadata = parent.lstat()
+                    if parent.is_symlink() or not parent.is_dir() or metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                        raise RuntimeError("sandbox-installer-parent")
+                metadata = linux_policy.lstat()
+                if linux_policy.is_symlink() or not linux_policy.is_file() or metadata.st_uid != 0 or metadata.st_mode & 0o222:
+                    raise RuntimeError("sandbox-installer-identity")
+                linux_install = (run, attempt, secrets.token_hex(16))
+                evidence["linuxSandboxRoute"] = "apparmor-attempted"
+                source_runtime = runtime_root
+                command(["sudo", "-n", "/usr/bin/python3", "-I", "-B", str(linux_policy), "install", str(source_runtime), *linux_install], env, work, 180, owner, "sandbox-install")
+                runtime_root = Path("/opt/eutheto-cef-native-validation") / f"{run}-{attempt}"
+                for name in ("cef-probe", "libcef.so", "icudtl.dat"):
+                    if digest(source_runtime / name) != digest(runtime_root / name):
+                        raise RuntimeError("sandbox-install-identity")
+                evidence["linuxSandboxRoute"] = "apparmor-installed"
+                # A wrong custody token must not unload policy or remove this tree.
+                wrong_token = "0" * 32 if linux_install[2] != "0" * 32 else "1" * 32
+                try:
+                    command(["sudo", "-n", "/usr/bin/python3", "-I", "-B", str(linux_policy), "cleanup", run, attempt, wrong_token], env, work, 60, owner, "sandbox-cleanup")
+                except RuntimeError as error:
+                    if error.args != ("tool-failed",):
+                        raise
+                else:
+                    raise RuntimeError("sandbox-custody-not-refused")
+                if digest(source_runtime / "cef-probe") != digest(runtime_root / "cef-probe"):
+                    raise RuntimeError("sandbox-refusal-identity")
+                evidence["linuxPolicyRefusalVerified"] = True
+                # Exercise the installed copy with original runtime/library paths
+                # unavailable, rather than silently falling back to writable SDK files.
+                source_runtime.rename(build / "unavailable-runtime")
+                (sdk / "Release").rename(sdk / "unavailable-release")
         host = runtime_root / ("cef-probe.exe" if os.name == "nt" else "cef-probe")
         if args.target.startswith("macos"):
             host = runtime_root / "cef-probe.app/Contents/MacOS/cef-probe"
@@ -618,7 +674,12 @@ def main(args):
         for mode, action in [("normal", None), ("startup-cancel", None), ("ready-cancel", None), ("printing-cancel", None), ("deadline", None), ("observe", "sandbox"), ("observe", "renderer-kill"), ("observe", "host-kill")]:
             cases.append(runtime_case(owner, host, runtime_root, html, mode, action, work, env, observe, inspector))
             if mode == "normal" and args.target.startswith("macos") and not cases[-1]["passed"] and "mac-teardown-watchdog" in cases[-1].get("events", []):
-                cases.append(runtime_case(owner, host, runtime_root, html, "normal", "shutdown-diagnostic", work, env, observe, inspector))
+                # Synthetic A/B only: mock keychain success cannot admit this target.
+                cases.append(runtime_case(owner, host, runtime_root, html, "normal", "keychain-control", work, env, observe, inspector))
+            if mode == "normal" and not cases[0]["passed"]:
+                # Stop this target after its one causal control; later rows cannot
+                # establish feasibility when normal shutdown is unverified.
+                raise RuntimeError("normal-runtime-unverified")
         malformed = html.replace(b'id="recipient-report"', b'id="missing-root"')
         case = runtime_case(owner, host, runtime_root, malformed, "normal", None, work, env, observe, inspector, "failed")
         case["case"] = "missing-root"
@@ -631,6 +692,16 @@ def main(args):
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         evidence["phase"] += "-failed"
     finally:
+        if linux_install is not None:
+            evidence["linuxPolicyCleanup"] = False
+            try:
+                if any(case.get("cleanupFailed") for case in evidence.get("cases", [])):
+                    raise RuntimeError("native-settlement-unverified")
+                command(["sudo", "-n", "/usr/bin/python3", "-I", "-B", str(linux_policy), "cleanup", *linux_install], env, work, 60, owner, "sandbox-cleanup")
+                evidence["linuxPolicyCleanup"] = True
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                evidence["passed"] = False
+                evidence["phase"] = "runtime-failed-or-unverified"
         try:
             evidence = checked_evidence(evidence)
         except ValueError:
@@ -645,6 +716,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", choices=["linux64", "windows64", "macosx64", "macosarm64"])
     parser.add_argument("--work-dir", type=Path)
+    parser.add_argument("--linux-apparmor", action="store_true", help="Use the approved disposable-CI executable-bound policy if the host restricts user namespaces")
     parser.add_argument("--inspect", type=Path)
     parser.add_argument("--summary", type=Path)
     options = parser.parse_args()

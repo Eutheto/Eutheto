@@ -36,8 +36,6 @@ function(add_cef_probe_targets)
     RUNTIME_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}"
     LIBRARY_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}"
     VS_DEBUGGER_COMMAND "${CEF_TARGET_OUT_DIR}/cef-probe.exe")
-  target_compile_definitions(cef-probe PRIVATE
-    CEF_PROBE_RUNTIME_DIR="$<TARGET_FILE_DIR:cef-probe>")
   add_dependencies(cef-probe libcef_dll_wrapper)
   target_link_libraries(cef-probe PRIVATE
     libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})

@@ -34,6 +34,15 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: x64
+      # Trusted scoped-push checkout only; freeze root code before SDK execution.
+      - name: Protect approved Linux policy installer
+        id: policy_tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          policy_root="/opt/eutheto-cef-native-validation-tools-${{ github.run_id }}-${{ github.run_attempt }}"
+          sudo mkdir -m 0755 -- "$policy_root"
+          sudo install -o root -g root -m 0555 experiments/cef-native-validation/linux_policy.py "$policy_root/linux_policy.py"
       - name: Install declared Linux link prerequisite
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libx11-dev
@@ -41,9 +50,16 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal
       - name: Execute synthetic native acceptance
         shell: bash
-        run: python -B experiments/cef-native-validation/probe.py --target '${{ matrix.target }}' --work-dir "$RUNNER_TEMP/cef-native-${{ matrix.target }}"
+        run: python -B experiments/cef-native-validation/probe.py --target '${{ matrix.target }}' --work-dir "$RUNNER_TEMP/cef-native-${{ matrix.target }}" ${{ runner.os == 'Linux' && '--linux-apparmor' || '' }}
       - name: Report bounded target evidence
         if: always()
         shell: bash
         run: python -B experiments/cef-native-validation/probe.py --summary "$RUNNER_TEMP/cef-native-${{ matrix.target }}/evidence.json"
+      - name: Remove owned trusted policy tool
+        if: always() && runner.os == 'Linux' && steps.policy_tools.outcome == 'success'
+        shell: bash
+        run: |
+          policy_root="/opt/eutheto-cef-native-validation-tools-${{ github.run_id }}-${{ github.run_attempt }}"
+          sudo rm -- "$policy_root/linux_policy.py"
+          sudo rmdir -- "$policy_root"
       # No caches or artifacts: SDKs, native binaries and PDFs remain runner-local.

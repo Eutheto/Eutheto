@@ -167,3 +167,30 @@ not a cleanup proof; hosted runner teardown remains the final containment bounda
 The work directory retains locally built SDK/runtime/inspector inputs for inspection;
 remove only that caller-owned directory after reviewing evidence. No generated
 application artifacts, product permissions or release configuration are changed.
+
+## Bounded continuation after maintainer research
+
+The maintainer authorized implementing and testing the researched route. This
+does not adopt CEF or waive licensing, platform, PDF-fidelity or manual gates.
+
+- Every target first exercises a supervised plain tool. Windows process-lifetime
+  regressions cover successful/nonzero commands, deadlines and live descendants
+  before SDK compilation; compiler settlement remains a separate runtime gate.
+- After a failed macOS normal teardown watchdog, one synthetic `keychain-control`
+  run enables `use-mock-keychain` through the browser-process callback. Both that
+  control and the existing shutdown diagnostic are permanently nonacceptance.
+  Normal mode still uses the real keychain and complete `CefShutdown`.
+- A failed normal run stops that target after its bounded causal control; later
+  acceptance cases are unexercised, not waived or treated as passing.
+- The approved disposable Ubuntu CI lane may grant user namespaces only to an
+  exact root-owned installed probe when its AppArmor restriction is confirmed.
+  The trusted installer is frozen before SDK execution. Its bounded install,
+  wrong-token refusal and token-bound cleanup use no global sysctl change or
+  setuid helper. The copied runtime is exercised with original mutable runtime
+  and library paths unavailable. The default local command changes no host policy.
+  This policy exception does not establish browser-process filesystem confinement.
+
+See [Linux sandbox evidence and scoped policy](linux-sandbox.md) and
+[artifact-specific licensing/source disposition](licensing.md). The matching
+SDK helper exists but remains unprivileged and unused. Redistribution clearance,
+packaged font embedding and product integration remain gated.

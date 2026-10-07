@@ -108,10 +108,10 @@ fn group_empty(pid: u32) -> io::Result<bool> {
     } // Patched JobObject::try_wait requires ACTIVE_PROCESS_ZERO.
 }
 async fn settle(child: &mut dyn ChildWrapper, pid: u32) -> io::Result<ExitStatus> {
-    if let Err(error) = child.start_kill() {
-        if !group_empty(pid)? {
-            return Err(error);
-        }
+    if let Err(error) = child.start_kill()
+        && !group_empty(pid)?
+    {
+        return Err(error);
     }
     timeout(Duration::from_secs(5), async {
         loop {
@@ -121,10 +121,10 @@ async fn settle(child: &mut dyn ChildWrapper, pid: u32) -> io::Result<ExitStatus
             let status = child.inner_mut().try_wait()?;
             #[cfg(windows)]
             let status = child.try_wait()?;
-            if let Some(status) = status {
-                if group_empty(pid)? {
-                    return Ok(status);
-                }
+            if let Some(status) = status
+                && group_empty(pid)?
+            {
+                return Ok(status);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -295,12 +295,14 @@ async fn run() -> io::Result<bool> {
             "deadline",
             "observe",
             "shutdown-diagnostic",
+            "keychain-control",
         ]
         .contains(&mode)
         {
             return Err(invalid());
         }
-        if mode == "shutdown-diagnostic" && !cfg!(target_os = "macos") {
+        if ["shutdown-diagnostic", "keychain-control"].contains(&mode) && !cfg!(target_os = "macos")
+        {
             return Err(invalid());
         }
         let input = PathBuf::from(&args[2]);
@@ -361,6 +363,9 @@ async fn run() -> io::Result<bool> {
             if mode == "shutdown-diagnostic" {
                 command.env("EUTHETO_PROBE_SHUTDOWN_DIAGNOSTIC", "1");
             }
+            if mode == "keychain-control" {
+                command.env("EUTHETO_PROBE_KEYCHAIN_CONTROL", "1");
+            }
             if ["ready-cancel", "deadline", "observe"].contains(&mode) {
                 command.env("EUTHETO_PROBE_HOLD_READY", "1");
             }
@@ -387,7 +392,7 @@ async fn run() -> io::Result<bool> {
         let mut ack = [0];
         let mut control = tokio::io::stdin();
         let admitted = tokio::select! {
-            result = timeout(Duration::from_secs(10), control.read_exact(&mut ack)) => matches!(result, Ok(Ok(_))) && ack == [b'a'],
+            result = timeout(Duration::from_secs(10), control.read_exact(&mut ack)) => matches!(result, Ok(Ok(_))) && ack == *b"a",
             _ = &mut interrupted => false,
         };
         if !admitted {
