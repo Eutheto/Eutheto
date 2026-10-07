@@ -152,7 +152,7 @@ Roles are binding: bundled SQLite behind a dedicated service; strict project ZIP
 | `@tauri-apps/api` / CLI | 2.11.1 / 2.11.4 | Match Rust Tauri 2.11.5 by tested lock. |
 | updater / shell plugins | 2.10.1 / 2.3.5 | Capability-scoped; updater artifacts use `bundle.createUpdaterArtifacts`. |
 | Tailwind / Vite plugin | 4.3.3 / 4.3.3 | CSS-first; `tw-animate-css`, not `tailwindcss-animate`. |
-| shadcn-vue / Reka UI | 2.8.2 / 2.10.4 | Editable source; audit Tailwind 4 variable syntax. |
+| shadcn-vue-derived source / Reka UI | generator not installed / 2.10.4 baseline | Keep reviewed editable component source; the 2026-10-07 dependency review removes the unused generator. Reverify a clean locked graph before reinstating it. |
 | `@lucide/vue` | 1.37.0 | Maintained Vue icon package; icons do not replace accessible names. |
 | TanStack Table / Virtual | 9.2.4 / 3.13.36 | Table v9 `useTable`, not v8 examples. |
 | Konva / vue-konva | 10.3.2 / 3.4.0 | Seating; accessible list equivalent required. |
