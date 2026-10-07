@@ -219,3 +219,17 @@ source `4cb72a72e05b7ebb700040ae266bac98159a7f00`, failed all four target gates.
 A commit containing `[cef-confirm-linux]` requests only the evidence-backed
 Linux location confirmation. Other scoped pushes retain the four-target matrix.
 A selective green run cannot clear the other targets or the product gate.
+
+The protected-location correction was confirmed by Linux-only
+[run 37555757214](https://github.com/Eutheto/Eutheto/actions/runs/37555757214),
+source `f583649709fb936ddec0511c22f36b6a8ad22cf5`. All 15 experimental
+rows passed; normal output contained 64 rows in three pages with Unicode,
+inert-label and page-context checks. Installed-copy sandbox observation,
+wrong-token custody refusal and final matching-token cleanup passed.
+The earlier `toolFailed`/`sandbox-cleanup` line is the deliberate wrong-token
+negative call before native cases, not final cleanup. Matching cleanup verifies
+profile absence, removes the exact profile/tree, and only then returns success.
+Every case removed staging without observed survivors. The Unix sandbox row
+uses handled SIGTERM, not abrupt owner death; printing-stage cancellation still
+does not prove exact in-flight work. No visual, packaged-font, complete pipe/drop,
+other-platform or product acceptance is inferred from this selective result.
