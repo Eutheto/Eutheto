@@ -6296,4 +6296,4 @@ export function resetSettingsSection(
   );
 }
 
-// formatter: prettier@3.9.6; config-blake3: 01f5298a6f4e58a5b02cd3e377c93fb4f78aaeb0bfc6376fba43d4cce6b18427
+// formatter: prettier@3.9.9; config-blake3: 01f5298a6f4e58a5b02cd3e377c93fb4f78aaeb0bfc6376fba43d4cce6b18427
