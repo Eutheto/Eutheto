@@ -17,7 +17,7 @@ const MATRIX_SOURCE: &str = include_str!("../../schemas/solver-support-matrix.js
 const GENERATED_TYPESCRIPT_PACK: &str = "apps/desktop/src/api/generated-domain-pack-contracts.ts";
 const GENERATED_GLOBAL_PORTABLE_FIXTURE: &str =
     "tests/migration/fixtures/portable_v2_scenario.json";
-const PRETTIER_VERSION: &str = "3.9.6";
+const PRETTIER_VERSION: &str = "3.9.9";
 const MAX_EXPANDED_SCHEMA_NODES: usize = 100_000;
 const MAX_PACK_CONTRACT_BYTES: usize = 16 * 1024 * 1024;
 

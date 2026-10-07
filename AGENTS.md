@@ -85,6 +85,8 @@ Use `just generate` after changing authoritative generators, schemas, or contrac
 
 Commit `Cargo.lock`, `pnpm-lock.yaml`, `flake.lock`, exact CI action SHAs, worker source/hash metadata, and required generated protocol/DTO/schema artifacts. Build output, local caches, test reports, local databases, and secrets remain ignored.
 
+Dependency updates must keep exact pins aligned across target-specific manifests and generator-tool version checks. Regenerate notices, the license inventory, and the SBOM through `just licenses sbom`, and run `just generate` when an updated formatter changes generated output. Preserve existing license and advisory policy; a dependency bump does not approve new exceptions.
+
 ## Verification
 
 - Bugs: reproduce the failure, fix its causal mechanism, and rerun the reproducer.

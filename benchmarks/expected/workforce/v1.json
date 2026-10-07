@@ -2,7 +2,7 @@
   "format": "eutheto/workforce-corpus-expectations",
   "schemaVersion": 1,
   "corpusVersion": 1,
-  "generatorSourceSha256": "50f46e25db4d742fa705c814a4c301c697e6faa4595b47a70bf16abc935cec46",
+  "generatorSourceSha256": "f6cd376ac16addd06bf2c2f3ed4757fee43ca465f22b6c7f7ff92ae409bc0308",
   "cases": [
     {
       "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
