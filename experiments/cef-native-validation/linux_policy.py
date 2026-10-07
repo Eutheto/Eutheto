@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 
-INSTALL_BASE = "/opt/eutheto-cef-native-validation"
+INSTALL_BASE = "/usr/lib/eutheto-cef-native-validation"
 PROFILE_DIR = "/etc/apparmor.d"
 PROFILE_PREFIX = "eutheto-cef-native-validation-"
 OWNER_FILE = ".cef-policy-owner"

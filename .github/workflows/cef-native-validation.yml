@@ -15,15 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: linux64
-            runner: ubuntu-24.04
-          - target: windows64
-            runner: windows-2025
-          - target: macosarm64
-            runner: macos-15
-          - target: macosx64
-            runner: macos-15-intel
+        # A bounded correction can confirm Linux without replaying known Mac/Windows failures.
+        # Selective runs never establish all-target acceptance; every other push runs all four.
+        include: ${{ contains(github.event.head_commit.message, '[cef-confirm-linux]') && fromJSON('[{"target":"linux64","runner":"ubuntu-24.04"}]') || fromJSON('[{"target":"linux64","runner":"ubuntu-24.04"},{"target":"windows64","runner":"windows-2025"},{"target":"macosarm64","runner":"macos-15"},{"target":"macosx64","runner":"macos-15-intel"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
     steps:
@@ -40,7 +34,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          policy_root="/opt/eutheto-cef-native-validation-tools-${{ github.run_id }}-${{ github.run_attempt }}"
+          policy_root="/usr/lib/eutheto-cef-native-validation-tools-${{ github.run_id }}-${{ github.run_attempt }}"
           sudo mkdir -m 0755 -- "$policy_root"
           sudo install -o root -g root -m 0555 experiments/cef-native-validation/linux_policy.py "$policy_root/linux_policy.py"
       - name: Install declared Linux link prerequisite
@@ -59,7 +53,7 @@ jobs:
         if: always() && runner.os == 'Linux' && steps.policy_tools.outcome == 'success'
         shell: bash
         run: |
-          policy_root="/opt/eutheto-cef-native-validation-tools-${{ github.run_id }}-${{ github.run_attempt }}"
+          policy_root="/usr/lib/eutheto-cef-native-validation-tools-${{ github.run_id }}-${{ github.run_attempt }}"
           sudo rm -- "$policy_root/linux_policy.py"
           sudo rmdir -- "$policy_root"
       # No caches or artifacts: SDKs, native binaries and PDFs remain runner-local.

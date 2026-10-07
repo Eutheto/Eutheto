@@ -604,8 +604,8 @@ def main(args):
                 run, attempt = evidence["run"], evidence["attempt"]
                 if not all(re.fullmatch(r"[1-9][0-9]{0,19}", value) for value in (run, attempt)):
                     raise RuntimeError("sandbox-policy-identity")
-                linux_policy = Path("/opt") / f"eutheto-cef-native-validation-tools-{run}-{attempt}" / "linux_policy.py"
-                for parent in (linux_policy.parent, Path("/opt")):
+                linux_policy = Path("/usr/lib") / f"eutheto-cef-native-validation-tools-{run}-{attempt}" / "linux_policy.py"
+                for parent in (linux_policy.parent, Path("/usr/lib"), Path("/usr")):
                     metadata = parent.lstat()
                     if parent.is_symlink() or not parent.is_dir() or metadata.st_uid != 0 or metadata.st_mode & 0o022:
                         raise RuntimeError("sandbox-installer-parent")
@@ -616,7 +616,7 @@ def main(args):
                 evidence["linuxSandboxRoute"] = "apparmor-attempted"
                 source_runtime = runtime_root
                 command(["sudo", "-n", "/usr/bin/python3", "-I", "-B", str(linux_policy), "install", str(source_runtime), *linux_install], env, work, 180, owner, "sandbox-install")
-                runtime_root = Path("/opt/eutheto-cef-native-validation") / f"{run}-{attempt}"
+                runtime_root = Path("/usr/lib/eutheto-cef-native-validation") / f"{run}-{attempt}"
                 for name in ("cef-probe", "libcef.so", "icudtl.dat"):
                     if digest(source_runtime / name) != digest(runtime_root / name):
                         raise RuntimeError("sandbox-install-identity")

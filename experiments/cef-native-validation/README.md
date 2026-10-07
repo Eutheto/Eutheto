@@ -194,3 +194,28 @@ See [Linux sandbox evidence and scoped policy](linux-sandbox.md) and
 [artifact-specific licensing/source disposition](licensing.md). The matching
 SDK helper exists but remains unprivileged and unused. Redistribution clearance,
 packaged font embedding and product integration remain gated.
+
+## Bounded-control hosted result
+
+Run [37553821340](https://github.com/Eutheto/Eutheto/actions/runs/37553821340),
+source `4cb72a72e05b7ebb700040ae266bac98159a7f00`, failed all four target gates.
+
+- Both Macs completed printing and browser closure but real-keychain normal mode
+  again stopped inside `CefShutdown` at the teardown watchdog. The one-variable
+  mock-keychain control completed shutdown, pool drainage and framework unload
+  with host exit zero, no observed survivors and private staging removed.
+  Its owner exit and case/target acceptance remain failures by design. This
+  localizes a keychain-path dependency, not a production correction.
+- Windows passed the preceding plain-tool control but failed the owned
+  `owner-tests` operation. The published closed facts do not identify the failed
+  regression. SDK admission/compilation and native runtime were not reached;
+  compiler and job-lifetime acceptance remain unverified.
+- Linux completed SDK compilation but stopped before privileged installer
+  invocation; `linuxSandboxRoute` stayed `unchanged-userns`. The documented
+  runner image policy makes `/opt` world-writable, so it is not a suitable
+  protected ancestor. The corrective location is `/usr/lib`, retaining the
+  ownership/no-write/no-follow checks rather than relaxing them.
+
+A commit containing `[cef-confirm-linux]` requests only the evidence-backed
+Linux location confirmation. Other scoped pushes retain the four-target matrix.
+A selective green run cannot clear the other targets or the product gate.
