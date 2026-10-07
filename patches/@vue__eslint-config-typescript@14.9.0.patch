@@ -1,0 +1,98 @@
+diff --git a/dist/bin.js b/dist/bin.js
+index c6e260c7f277036a4fcf241b89196aee3963f00f..2ed9d0a9208d053da059da211a014dad96e86a3e 100755
+--- a/dist/bin.js
++++ b/dist/bin.js
+@@ -3,7 +3,7 @@ import process from 'node:process';
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import { createInterface } from 'node:readline/promises';
+-import fg from 'fast-glob';
++import { glob } from 'tinyglobby';
+ import { Linter } from 'eslint';
+ import tseslint from 'typescript-eslint';
+ 
+@@ -693,14 +693,15 @@ async function resolveTargetFiles(patterns) {
+     }
+     globPatterns.push(pattern);
+   }
+-  const entries = await fg(globPatterns, {
++  const entries = await glob(globPatterns, {
+     cwd: process.cwd(),
+     absolute: true,
+     onlyFiles: true,
+-    unique: true,
++    expandDirectories: false,
+     ignore: DEFAULT_IGNORE
+   });
+-  return [.../* @__PURE__ */ new Set([...explicitFiles, ...entries])].sort();
++  // Glob results use forward slashes; explicit paths use native separators.
++  return [.../* @__PURE__ */ new Set([...explicitFiles, ...entries].map((file) => path.normalize(file)))].sort();
+ }
+ async function loadCandidates(filenames) {
+   return Promise.all(
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 1bae2d533142898a13c50fb114362b21656cfb6b..0c6d76d2c9159a141f6bf553d67d26c2c39ce92f 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -6,7 +6,7 @@ var process$1 = require('node:process');
+ var tseslint = require('typescript-eslint');
+ var pluginVue = require('eslint-plugin-vue');
+ var fs = require('node:fs');
+-var fg = require('fast-glob');
++var { globSync, convertPathToPattern } = require('tinyglobby');
+ var path = require('node:path');
+ var node_util = require('node:util');
+ var vueParser = require('vue-eslint-parser');
+@@ -118,14 +118,16 @@ function groupVueFiles(rootDir, globalIgnores, includeDotFolders) {
+     // This is way too complicated, so we only use process.cwd() as a best-effort guess here.
+     // Could be improved in the future if needed.
+     ...globalIgnores.map(
+-      (pattern) => fg.convertPathToPattern(path.resolve(process.cwd(), pattern))
++      // Normalize native separators before escaping directory-leading glob symbols.
++      (pattern) => convertPathToPattern(path.resolve(process.cwd(), pattern).split(path.sep).join("/"))
+     )
+   ];
+   debug(`Ignoring patterns: ${ignore.join(", ")}`);
+-  const { vueFilesWithScriptTs, otherVueFiles } = fg.sync(["**/*.vue"], {
++  const { vueFilesWithScriptTs, otherVueFiles } = globSync(["**/*.vue"], {
+     cwd: rootDir,
+     ignore,
+-    dot: includeDotFolders
++    dot: includeDotFolders,
++    expandDirectories: false
+   }).reduce(
+     (acc, file) => {
+       const absolutePath = path.resolve(rootDir, file);
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 1b232c59158cf7b8716d007efb33f2605d3b275b..59b43ee23a78aa0047354004d5587fe057fdf19d 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -2,7 +2,7 @@ import process$1 from 'node:process';
+ import tseslint from 'typescript-eslint';
+ import pluginVue from 'eslint-plugin-vue';
+ import fs from 'node:fs';
+-import fg from 'fast-glob';
++import { globSync, convertPathToPattern } from 'tinyglobby';
+ import path from 'node:path';
+ import { debuglog } from 'node:util';
+ import vueParser from 'vue-eslint-parser';
+@@ -114,14 +114,16 @@ function groupVueFiles(rootDir, globalIgnores, includeDotFolders) {
+     // This is way too complicated, so we only use process.cwd() as a best-effort guess here.
+     // Could be improved in the future if needed.
+     ...globalIgnores.map(
+-      (pattern) => fg.convertPathToPattern(path.resolve(process.cwd(), pattern))
++      // Normalize native separators before escaping directory-leading glob symbols.
++      (pattern) => convertPathToPattern(path.resolve(process.cwd(), pattern).split(path.sep).join("/"))
+     )
+   ];
+   debug(`Ignoring patterns: ${ignore.join(", ")}`);
+-  const { vueFilesWithScriptTs, otherVueFiles } = fg.sync(["**/*.vue"], {
++  const { vueFilesWithScriptTs, otherVueFiles } = globSync(["**/*.vue"], {
+     cwd: rootDir,
+     ignore,
+-    dot: includeDotFolders
++    dot: includeDotFolders,
++    expandDirectories: false
+   }).reduce(
+     (acc, file) => {
+       const absolutePath = path.resolve(rootDir, file);
