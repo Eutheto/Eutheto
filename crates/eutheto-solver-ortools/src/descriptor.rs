@@ -58,7 +58,6 @@ pub enum OrToolsDescriptorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eutheto_solver_api::SupportFeatureId;
 
     #[test]
     fn descriptor_exposes_exact_bundled_worker_identity_and_capabilities()
@@ -76,16 +75,6 @@ mod tests {
         assert_eq!(
             descriptor.license.source_url.as_deref(),
             Some("https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz")
-        );
-        assert_eq!(descriptor.capabilities.supported.len(), 16);
-        assert_eq!(
-            descriptor
-                .capabilities
-                .degraded
-                .iter()
-                .map(SupportFeatureId::as_str)
-                .collect::<Vec<_>>(),
-            vec!["solve.proof-and-bounds", "solve.resource-limits"]
         );
         CapabilityMatrix::generated()?.validate_descriptor(&descriptor)?;
         descriptor.validate()?;

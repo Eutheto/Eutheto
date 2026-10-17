@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import type { FieldErrorDto } from "../api/generated";
 import type {
   WorkforceSetupEntityContinuation,
@@ -436,6 +437,9 @@ const navigationError = useValidationRoute(
     <p v-if="project.domainPackId !== 'official.workforce'">{{ messages.setup.unsupported }}</p>
     <template v-else>
       <p>{{ copy.description }}</p>
+      <RouterLink :to="{ name: 'project-work-import', params: { scenarioId: project.scenarioId } }">
+        {{ messages.shiftCsv.title }}
+      </RouterLink>
       <button type="button" class="w-fit" :disabled="!canReplace || !facts" @click="editSettings">
         {{ copy.editSettings }}
       </button>

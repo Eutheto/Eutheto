@@ -10,8 +10,8 @@ use eutheto_core::{
 };
 use eutheto_domain_api::{ContractJsonLimits, ShareResultOptions, ValidatedContractSchema};
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, PortableAcceptedResultV2, RunInputV1, RunPhaseTimingsV1,
-    RunTerminalOutcomeV1, VerificationContextV1, VerificationReport,
+    AcceptedResult, AssignmentValue, OptimizationDirection, PortableAcceptedResult, RunInput,
+    RunPhaseTimingsV1, RunTerminalOutcomeV1, VerificationContextV1, VerificationReport,
 };
 use eutheto_planning_ir::{PlanningIrLimitsV1, ProvenanceParameter};
 use eutheto_solver_api::{BackendTerminationReason, ProgressSink, SolveProgressEvent};
@@ -382,7 +382,7 @@ fn timing(
 }
 
 fn phase_measurements(
-    manifest: &eutheto_domain_ir::RunManifestV1,
+    manifest: &eutheto_domain_ir::RunManifest,
     accepted: bool,
 ) -> Result<TimingMeasurements> {
     let mut result = TimingMeasurements::default();
@@ -555,18 +555,14 @@ fn backend_measurements(outcome: &HeadlessSolveOutcome) -> Result<BackendMeasure
             .objective
             .as_ref()
             .map(|objective| objective.objective_values.clone()),
-        backend_best_bound_values: backend
-            .evidence
-            .objective
-            .as_ref()
-            .and_then(|objective| objective.best_bound_values.clone()),
+        backend_best_bound_values: backend.evidence.best_bound_values.clone(),
         // Headless currently returns no original-domain conflict mapping, matching the CLI contract.
         infeasibility_core: (backend.termination == BackendTerminationReason::InfeasibilityClaimed)
             .then(|| "unavailable:conflictNotReturned".to_owned()),
     })
 }
 
-fn backend_versions(input: &RunInputV1) -> BTreeMap<String, String> {
+fn backend_versions(input: &RunInput) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("backend".to_owned(), input.backend_version.clone()),
         ("adapter".to_owned(), input.adapter_version.clone()),
@@ -591,10 +587,10 @@ fn check_accepted(
     service: &HeadlessService,
     fixture: &LoadedFixture,
     snapshot: &ScenarioSnapshotV1,
-    portable: &PortableAcceptedResultV2,
+    portable: &PortableAcceptedResult,
 ) -> Result<AcceptanceMeasurements> {
     let bytes = serde_json::to_vec(portable)?;
-    let reopened = PortableAcceptedResultV2::from_json(&bytes)?;
+    let reopened = PortableAcceptedResult::from_json(&bytes)?;
     let verified = app(service.verify_result(snapshot, &reopened, &files::control()))?;
     ensure!(
         verified.accepted && verified.score == portable.accepted_result.verification.score,
@@ -616,12 +612,17 @@ fn check_accepted(
         .score
         .context("accepted fixture lacks score expectation")?;
     ensure!(
-        verified.score.feasibility == expected.feasibility && verified.score.levels.len() == 1,
+        verified.score.feasibility == expected.feasibility,
         "authoritative score meaning changed"
     );
-    let rank = &verified.score.levels[0];
+    let rank = verified
+        .score
+        .levels
+        .last()
+        .context("verified score omitted final rank")?;
     ensure!(
         rank.level_id.as_str() == RANK_LEVEL
+            && rank.direction == OptimizationDirection::Minimize
             && (expected.minimum_stable_rank..=expected.maximum_stable_rank).contains(&rank.value),
         "authoritative stable-rank score outside semantic bounds"
     );
@@ -646,7 +647,7 @@ fn check_accepted(
 fn share_checks(
     service: &HeadlessService,
     snapshot: &ScenarioSnapshotV1,
-    portable: &PortableAcceptedResultV2,
+    portable: &PortableAcceptedResult,
 ) -> Result<()> {
     app(service.verify_result(snapshot, portable, &files::control()))?;
     let accepted = &portable.accepted_result;
@@ -657,11 +658,18 @@ fn share_checks(
         let shared = build_workforce_share_result(
             &snapshot.document,
             accepted,
+            portable.run_input.objective_context.as_ref(),
             ShareResultOptions {
                 include_evidence_references: include,
             },
         )?;
         schema.validate(&shared.payload, ContractJsonLimits::DEFAULT)?;
+        ensure!(
+            shared.schema_version == 2
+                && shared.payload["schemaVersion"].as_u64() == Some(2)
+                && shared.payload.get("score").is_none(),
+            "share payload must exclude private objective details"
+        );
         ensure!(
             shared.payload["scenarioRevision"].as_u64() == Some(snapshot.revision.value())
                 && shared.payload["acceptedResultChecksum"].as_str()
@@ -701,6 +709,7 @@ fn share_checks(
         build_workforce_share_result(
             &snapshot.document,
             &unaccepted,
+            portable.run_input.objective_context.as_ref(),
             ShareResultOptions {
                 include_evidence_references: false
             }
@@ -713,6 +722,7 @@ fn share_checks(
         build_workforce_share_result(
             &snapshot.document,
             &forged,
+            portable.run_input.objective_context.as_ref(),
             ShareResultOptions {
                 include_evidence_references: false
             }
@@ -726,6 +736,7 @@ fn share_checks(
         build_workforce_share_result(
             &changed,
             accepted,
+            portable.run_input.objective_context.as_ref(),
             ShareResultOptions {
                 include_evidence_references: false
             }

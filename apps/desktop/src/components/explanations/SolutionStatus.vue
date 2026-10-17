@@ -74,7 +74,7 @@ const stateCopy = computed(() => {
     case "ready":
       if (acceptedReady.value) return "Independent verification accepted this result.";
       if (props.status === "infeasible" || props.status === "unbounded") {
-        return "This proof outcome has no candidate result to select.";
+        return "This backend model outcome has no independently verified candidate or mapped original-rule conflict.";
       }
       return "No independently accepted result is available for selection.";
     case "empty":

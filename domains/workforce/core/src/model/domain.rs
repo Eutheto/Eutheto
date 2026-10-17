@@ -1,7 +1,8 @@
 use super::{
-    AssignmentLock, AssignmentType, Availability, BaseSchedule, CoverageRequirement, Location,
-    Person, Qualification, ShiftInstance, ShiftTemplate, Team, WorkCalendar, WorkforcePreference,
-    WorkforceRule, WorkforceScorePolicy, WorkloadBucket,
+    AssignmentLock, AssignmentType, Availability, BaseSchedule, CoverageRequirement,
+    ExternalStartingPlan, Location, ManualSelection, Person, Qualification, ShiftInstance,
+    ShiftTemplate, Team, WorkCalendar, WorkforcePreference, WorkforceRule, WorkforceScorePolicy,
+    WorkloadBucket,
 };
 use eutheto_types::{AssignmentId, EntityId, RuleId};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,8 @@ pub enum WorkforceEntity {
     Availability(Availability),
     CoverageRequirement(CoverageRequirement),
     BaseSchedule(BaseSchedule),
+    ExternalStartingPlan(ExternalStartingPlan),
+    ManualSelection(ManualSelection),
     ScorePolicy(WorkforceScorePolicy),
 }
 
@@ -58,6 +61,8 @@ impl WorkforceEntity {
             Self::Availability(record) => record.id.as_entity_id(),
             Self::CoverageRequirement(record) => record.id.as_entity_id(),
             Self::BaseSchedule(record) => record.id,
+            Self::ExternalStartingPlan(record) => record.id,
+            Self::ManualSelection(record) => record.id,
             Self::ScorePolicy(record) => record.id,
         }
     }

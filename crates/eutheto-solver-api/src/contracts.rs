@@ -1,9 +1,10 @@
 use eutheto_planning_ir::{
-    BoolVariableId, CandidateValues, IntVariableId, PlanningProblem, PlanningProblemSummary,
+    BoolVariableId, CandidateValues, IntVariableId, Literal, PlanningPreparationBudget,
+    PlanningPreparationError, PlanningProblem, PlanningProblemSummary, PreparedPlanningModel,
     SolveFingerprintInput, Variable, routed_solve_fingerprint,
 };
 use eutheto_types::{
-    BackendId, DurationMillis, ParentSolveBudget, SolveBudgetView, SolveOptions, SolveStatus,
+    BackendId, DurationMillis, OperationControl, SolveBudgetView, SolveOptions, SolveStatus,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
@@ -22,7 +23,7 @@ const MAX_RUNTIME_VERSION_BYTES: usize = 64;
 /// Immutable executable identity captured before a backend is dispatched.
 ///
 /// This operational identity is intentionally separate from [`crate::SolverDescriptor`].
-/// `solver_version` is the exact value persisted as `RunInputV1.solver_version`.
+/// `solver_version` is the exact value persisted as `RunInput.solver_version`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BackendRuntimeIdentity {
@@ -118,7 +119,7 @@ impl BackendRuntimeIdentity {
         &self.worker_version
     }
 
-    /// Exact solver/engine version persisted as `RunInputV1.solver_version`.
+    /// Exact solver/engine version persisted as `RunInput.solver_version`.
     #[must_use]
     pub fn solver_version(&self) -> &str {
         &self.solver_version
@@ -204,9 +205,26 @@ impl SolverApiLimits {
             Ok(self)
         }
     }
+
+    /// Adds one bounded preview slot for intermediate collection.
+    ///
+    /// The ordinary ceilings describe the retained backend output. A router that retains the
+    /// first admitted candidate for an intermediate preview and a separate terminal candidate
+    /// may use this derived view: one additional candidate slot and one additional full
+    /// assignment budget. Saturation keeps the derived limits representable and bounded.
+    #[must_use]
+    pub const fn with_intermediate_candidate_reserve(self) -> Self {
+        Self {
+            max_candidates: self.max_candidates.saturating_add(1),
+            max_candidate_assignments: self.max_candidate_assignments.saturating_mul(2),
+            max_progress_events: self.max_progress_events,
+            max_diagnostic_lines: self.max_diagnostic_lines,
+            max_evidence_refs_per_candidate: self.max_evidence_refs_per_candidate,
+        }
+    }
 }
 
-/// Parent-derived backend budget. The child view retains the original absolute deadline.
+/// Inherited backend budget. The child view retains the request's absolute deadline cap.
 #[derive(Clone)]
 pub struct SolveDispatchBudget {
     parent_view: SolveBudgetView,
@@ -215,12 +233,11 @@ pub struct SolveDispatchBudget {
 }
 
 impl SolveDispatchBudget {
-    fn from_parent(
-        parent: &ParentSolveBudget,
+    fn from_view(
+        parent_view: SolveBudgetView,
         backend_cap: Option<DurationMillis>,
         acceptance_reserve: DurationMillis,
     ) -> Self {
-        let parent_view = parent.phase_view();
         let remaining_at_dispatch = parent_view.snapshot().remaining_milliseconds;
         // Both values derive from this one observation; a prior cap calculation could spend the reserve.
         let available = DurationMillis::new(
@@ -241,6 +258,14 @@ impl SolveDispatchBudget {
     #[must_use]
     pub fn child_view(&self) -> SolveBudgetView {
         self.parent_view.phase_view()
+    }
+    /// Creates a planning-preparation budget over the same inherited dispatch view.
+    #[must_use]
+    pub fn preparation_budget(
+        &self,
+        limits: eutheto_planning_ir::PlanningIrLimitsV1,
+    ) -> PlanningPreparationBudget {
+        PlanningPreparationBudget::new(OperationControl::Solve(self.child_view()), limits)
     }
 
     #[must_use]
@@ -310,7 +335,8 @@ pub struct SolveRequest {
     backend_version: String,
     adapter_version: String,
     problem: Arc<PlanningProblem>,
-    summary: PlanningProblemSummary,
+    summary: Option<PlanningProblemSummary>,
+    prepared: Option<PreparedPlanningModel>,
     options: SolveOptions,
     model_hash: String,
     solve_fingerprint: String,
@@ -333,11 +359,75 @@ impl SolveRequest {
         problem: Arc<PlanningProblem>,
         summary: PlanningProblemSummary,
         options: SolveOptions,
-        parent_budget: &ParentSolveBudget,
+        budget: SolveBudgetView,
         backend_cap: Option<DurationMillis>,
         acceptance_reserve: DurationMillis,
     ) -> Result<Self, serde_json::Error> {
         let model_hash = summary.canonical_ir_hash.clone();
+        Self::construct(
+            backend_id,
+            backend_version,
+            adapter_version,
+            problem,
+            Some(summary),
+            None,
+            model_hash,
+            options,
+            budget,
+            backend_cap,
+            acceptance_reserve,
+        )
+    }
+
+    /// Constructs a request from a planning-kernel-admitted model/summary pair.
+    ///
+    /// The pair is retained privately so backend preflight can reuse the exact admission without
+    /// re-cloning, re-normalizing, or re-hashing the graph.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request-hash serialization fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_prepared(
+        backend_id: BackendId,
+        backend_version: &str,
+        adapter_version: &str,
+        prepared: PreparedPlanningModel,
+        options: SolveOptions,
+        budget: SolveBudgetView,
+        backend_cap: Option<DurationMillis>,
+        acceptance_reserve: DurationMillis,
+    ) -> Result<Self, serde_json::Error> {
+        let problem = Arc::clone(prepared.problem());
+        let model_hash = prepared.summary().canonical_ir_hash.clone();
+        Self::construct(
+            backend_id,
+            backend_version,
+            adapter_version,
+            problem,
+            None,
+            Some(prepared),
+            model_hash,
+            options,
+            budget,
+            backend_cap,
+            acceptance_reserve,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn construct(
+        backend_id: BackendId,
+        backend_version: &str,
+        adapter_version: &str,
+        problem: Arc<PlanningProblem>,
+        summary: Option<PlanningProblemSummary>,
+        prepared: Option<PreparedPlanningModel>,
+        model_hash: String,
+        options: SolveOptions,
+        budget: SolveBudgetView,
+        backend_cap: Option<DurationMillis>,
+        acceptance_reserve: DurationMillis,
+    ) -> Result<Self, serde_json::Error> {
         let canonical_options = serde_json::to_vec(&options)?;
         let solve_fingerprint = routed_solve_fingerprint(&SolveFingerprintInput {
             canonical_ir_hash: model_hash.clone(),
@@ -352,15 +442,39 @@ impl SolveRequest {
             adapter_version: adapter_version.to_owned(),
             problem,
             summary,
+            prepared,
             options,
             model_hash,
             solve_fingerprint,
-            dispatch_budget: SolveDispatchBudget::from_parent(
-                parent_budget,
+            dispatch_budget: SolveDispatchBudget::from_view(
+                budget,
                 backend_cap,
                 acceptance_reserve,
             ),
         })
+    }
+
+    /// Drops the request and releases its prepared-model reservation after all request clones die.
+    ///
+    /// # Errors
+    /// Returns an accounting error if another prepared/request owner remains live.
+    pub fn release_prepared(
+        mut self,
+        budget: &mut PlanningPreparationBudget,
+    ) -> Result<(), PlanningPreparationError> {
+        let Some(prepared) = self.prepared.take() else {
+            drop(self);
+            return Ok(());
+        };
+        drop(self);
+        prepared.release(budget)
+    }
+
+    /// Returns the opaque model admission retained by this request, when prepared construction
+    /// was used. The artifact authenticates summary/hash reuse without exposing mutable internals.
+    #[must_use]
+    pub fn prepared_model(&self) -> Option<&PreparedPlanningModel> {
+        self.prepared.as_ref()
     }
 
     #[must_use]
@@ -384,8 +498,12 @@ impl SolveRequest {
     }
 
     #[must_use]
-    pub const fn summary(&self) -> &PlanningProblemSummary {
-        &self.summary
+    pub fn summary(&self) -> &PlanningProblemSummary {
+        match (&self.summary, &self.prepared) {
+            (Some(summary), _) => summary,
+            (None, Some(prepared)) => prepared.summary(),
+            (None, None) => unreachable!("solve request must contain an admitted summary"),
+        }
     }
 
     #[must_use]
@@ -523,12 +641,11 @@ impl<'de> Deserialize<'de> for BackendEvidenceRef {
     }
 }
 
-/// Backend-native objective and bound evidence. It is never an authoritative domain score.
+/// Backend-native objective evidence. It is never an authoritative domain score.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BackendObjectiveEvidence {
     pub objective_values: Vec<i64>,
-    pub best_bound_values: Option<Vec<i64>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -712,6 +829,28 @@ pub struct BackendExecutionEvidence {
     pub reproducibility: BackendReproducibilityEvidence,
 }
 
+/// Why a completed assumption diagnostic returned no publishable literal core.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackendAssumptionCoreUnavailableReason {
+    /// No nonempty core was returned; this does not prove foundational infeasibility.
+    NotReturned,
+    /// The complete raw core was malformed, duplicated, oversized or outside the submitted set.
+    InvalidCore,
+}
+
+/// Backend assumption evidence, not an independently verified domain-rule result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
+pub enum BackendAssumptionCoreEvidence {
+    /// Complete canonical source literals from a single-worker satisfaction diagnostic.
+    Sufficient { literals: Vec<Literal> },
+    /// No core may be mapped or published.
+    Unavailable {
+        reason: BackendAssumptionCoreUnavailableReason,
+    },
+}
+
 /// Bounded timing/evidence returned by one backend invocation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -724,6 +863,11 @@ pub struct BackendTerminationEvidence {
     /// This is pre-verification evidence and never means the candidate was accepted.
     pub first_incumbent_milliseconds: Option<DurationMillis>,
     pub objective: Option<BackendObjectiveEvidence>,
+    /// Latest exact backend-native bound, independent of any incumbent.
+    pub best_bound_values: Option<Vec<i64>>,
+    /// Present only for infeasibility from the safe nonempty-assumption diagnostic profile.
+    /// Admission validates the whole source-literal set before any provenance mapping.
+    pub assumption_core: Option<BackendAssumptionCoreEvidence>,
     pub evidence_refs: Vec<BackendEvidenceRef>,
     /// Optional adapter-specific operational evidence; it conveys no solver-result authority.
     pub execution: Option<BackendExecutionEvidence>,
@@ -769,6 +913,21 @@ pub struct BackendSolveResult {
     pub progress_event_count: u32,
 }
 
+/// Failure admitting bounded diagnostic backend custody before dispatch.
+#[derive(Debug)]
+pub enum BoundedOutputAdmissionError {
+    /// The ordinary output contract was unusable.
+    Output(OutputError),
+    /// Shared preparation work/control or live custody could not be admitted.
+    Preparation(PlanningPreparationError),
+}
+
+impl From<OutputError> for BoundedOutputAdmissionError {
+    fn from(error: OutputError) -> Self {
+        Self::Output(error)
+    }
+}
+
 /// Hard-limited sink passed to a backend. It rejects malformed candidate values before storage.
 pub struct BoundedBackendOutput<'a> {
     problem: &'a PlanningProblem,
@@ -780,6 +939,7 @@ pub struct BoundedBackendOutput<'a> {
     candidate_assignment_count: u32,
     contract_rejection: Option<OutputError>,
     diagnostic_line_count: u32,
+    preparation_reservation: u64,
 }
 
 impl<'a> BoundedBackendOutput<'a> {
@@ -804,6 +964,48 @@ impl<'a> BoundedBackendOutput<'a> {
             contract_rejection: None,
             progress_event_count: 0,
             diagnostic_line_count: 0,
+            preparation_reservation: 0,
+        })
+    }
+
+    /// Creates diagnostic output custody after reserving the complete bounded candidate envelope.
+    ///
+    /// Admission covers retained candidates, candidate validation/index maps, and the returned
+    /// candidate clone before the backend is invoked. The reservation is returned by
+    /// [`Self::into_candidates_with_reservation`] and must remain live through witness review.
+    ///
+    /// # Errors
+    /// Rejects invalid output limits, interruption, arithmetic or preparation-budget exhaustion.
+    pub fn new_with_preparation(
+        problem: &'a PlanningProblem,
+        progress: &'a mut dyn ProgressSink,
+        dispatch_budget: &SolveDispatchBudget,
+        limits: SolverApiLimits,
+        preparation: &mut PlanningPreparationBudget,
+    ) -> Result<Self, BoundedOutputAdmissionError> {
+        preparation
+            .check()
+            .map_err(BoundedOutputAdmissionError::Preparation)?;
+        let limits = limits.validate()?;
+        let (work, transient) = diagnostic_output_admission(problem, limits)
+            .map_err(BoundedOutputAdmissionError::Preparation)?;
+        preparation
+            .reserve_work(work)
+            .map_err(BoundedOutputAdmissionError::Preparation)?;
+        preparation
+            .reserve_transient(transient)
+            .map_err(BoundedOutputAdmissionError::Preparation)?;
+        Ok(Self {
+            problem,
+            progress,
+            dispatch_budget: dispatch_budget.clone(),
+            limits,
+            candidates: Vec::new(),
+            candidate_assignment_count: 0,
+            contract_rejection: None,
+            progress_event_count: 0,
+            diagnostic_line_count: 0,
+            preparation_reservation: transient,
         })
     }
 
@@ -835,6 +1037,13 @@ impl<'a> BoundedBackendOutput<'a> {
     #[must_use]
     pub fn into_candidates(self) -> Vec<BackendCandidate> {
         self.candidates
+    }
+    /// Consumes diagnostic custody without cloning retained candidate assignments.
+    ///
+    /// The returned reservation remains charged until the caller has finished candidate review.
+    #[must_use]
+    pub fn into_candidates_with_reservation(self) -> (Vec<BackendCandidate>, u64) {
+        (self.candidates, self.preparation_reservation)
     }
 }
 
@@ -961,6 +1170,53 @@ impl BoundedBackendOutput<'_> {
     }
 }
 
+fn diagnostic_output_admission(
+    problem: &PlanningProblem,
+    limits: SolverApiLimits,
+) -> Result<(u64, u64), PlanningPreparationError> {
+    let assignment_bound = u64::try_from(
+        problem
+            .variables
+            .iter()
+            .filter(|variable| matches!(variable, Variable::Boolean(_) | Variable::Integer(_)))
+            .count(),
+    )
+    .unwrap_or(u64::MAX)
+    .min(u64::from(limits.max_candidate_assignments));
+    let candidate_count = u64::from(limits.max_candidates);
+    let evidence_bound = u64::from(limits.max_evidence_refs_per_candidate);
+    let per_candidate = assignment_bound
+        .checked_mul(256)
+        .and_then(|value| value.checked_add(evidence_bound.saturating_mul(192)))
+        .and_then(|value| value.checked_add(4096))
+        .ok_or(PlanningPreparationError::ArithmeticOverflow)?;
+    let retained_output = candidate_count
+        .checked_mul(per_candidate)
+        .ok_or(PlanningPreparationError::ArithmeticOverflow)?;
+    let validation_maps = candidate_count
+        .checked_mul(
+            assignment_bound
+                .checked_mul(192)
+                .and_then(|value| value.checked_add(8192))
+                .ok_or(PlanningPreparationError::ArithmeticOverflow)?,
+        )
+        .ok_or(PlanningPreparationError::ArithmeticOverflow)?;
+    let clone_scratch = retained_output;
+    let transient = retained_output
+        .checked_add(validation_maps)
+        .and_then(|value| value.checked_add(clone_scratch))
+        .ok_or(PlanningPreparationError::ArithmeticOverflow)?;
+    let work = candidate_count
+        .checked_mul(
+            assignment_bound
+                .checked_mul(8)
+                .and_then(|value| value.checked_add(64))
+                .ok_or(PlanningPreparationError::ArithmeticOverflow)?,
+        )
+        .ok_or(PlanningPreparationError::ArithmeticOverflow)?;
+    Ok((work, transient))
+}
+
 fn validate_progress_event(
     event: &SolveProgressEvent,
     objective_level_count: usize,
@@ -999,13 +1255,7 @@ fn validate_objective_evidence(
     evidence: Option<&BackendObjectiveEvidence>,
     objective_level_count: usize,
 ) -> Result<(), OutputError> {
-    if evidence.is_some_and(|value| {
-        value.objective_values.len() != objective_level_count
-            || value
-                .best_bound_values
-                .as_ref()
-                .is_some_and(|bounds| bounds.len() != objective_level_count)
-    }) {
+    if evidence.is_some_and(|value| value.objective_values.len() != objective_level_count) {
         return Err(OutputError::InvalidObjectiveDimension);
     }
     Ok(())
@@ -1125,6 +1375,12 @@ pub trait SolverBackend: Send + Sync {
 
     fn runtime_identity(&self) -> &BackendRuntimeIdentity;
 
+    /// Approved manifest identity of an authenticated bundled worker, when one exists.
+    ///
+    /// This comes from native artifact admission, never worker output or solve options.
+    /// A backend without such custody cannot produce persisted native diagnostic proof.
+    fn verified_worker_manifest_sha256(&self) -> Option<&[u8; 32]>;
+
     fn compatibility(
         &self,
         problem: &PlanningProblemSummary,
@@ -1173,3 +1429,110 @@ impl fmt::Display for OutputError {
 }
 
 impl std::error::Error for OutputError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eutheto_types::{
+        CancellationToken, FixedMonotonicClock, OperationControl, ParentSolveBudget,
+    };
+    use serde_json::json;
+    use std::error::Error;
+    use std::sync::Arc;
+
+    struct NoProgress;
+
+    impl ProgressSink for NoProgress {
+        fn emit(&mut self, _event: SolveProgressEvent) -> Result<(), OutputError> {
+            Ok(())
+        }
+    }
+
+    fn empty_problem() -> Result<PlanningProblem, serde_json::Error> {
+        serde_json::from_value(json!({
+            "schemaVersion": 2,
+            "variables": [],
+            "constraints": [],
+            "objectives": { "levels": [] },
+            "assumptions": [],
+            "projections": [],
+            "provenance": [],
+            "metadata": {
+                "packId": "pack.fixture",
+                "scenarioId": "01890a5d-ac96-7b64-9f74-bbfcf30f9f80",
+                "scenarioRevision": 1,
+                "projectionVersion": 1,
+                "compilerId": "compiler.fixture",
+                "compilerVersion": "1.0.0",
+                "compileMetadata": {},
+                "displayText": {}
+            },
+            "declaredCapabilities": [],
+            "splitAuthorization": null
+        }))
+    }
+
+    fn dispatch_budget() -> Result<SolveDispatchBudget, Box<dyn Error>> {
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(5_000)?,
+            Arc::new(FixedMonotonicClock::default()),
+            CancellationToken::new(),
+        )?;
+        Ok(SolveDispatchBudget::from_view(
+            parent.phase_view(),
+            None,
+            DurationMillis::ZERO,
+        ))
+    }
+
+    #[test]
+    fn diagnostic_output_admission_reserves_before_backend_custody() -> Result<(), Box<dyn Error>> {
+        let problem = empty_problem()?;
+        let mut progress = NoProgress;
+        let mut limits = eutheto_planning_ir::PlanningIrLimitsV1::DEFAULT;
+        limits.max_ir_bytes = 1;
+        let mut preparation = PlanningPreparationBudget::uncontrolled(limits);
+        preparation.reserve_transient(64 * 1024 * 1024)?;
+        let result = BoundedBackendOutput::new_with_preparation(
+            &problem,
+            &mut progress,
+            &dispatch_budget()?,
+            SolverApiLimits::DEFAULT,
+            &mut preparation,
+        );
+        assert!(matches!(
+            result,
+            Err(BoundedOutputAdmissionError::Preparation(
+                PlanningPreparationError::TransientLimitExceeded
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn diagnostic_output_admission_propagates_child_cancellation() -> Result<(), Box<dyn Error>> {
+        let problem = empty_problem()?;
+        let mut progress = NoProgress;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let control = OperationControl::Cancellation(cancellation);
+        let mut preparation = PlanningPreparationBudget::new(
+            control,
+            eutheto_planning_ir::PlanningIrLimitsV1::DEFAULT,
+        );
+        let result = BoundedBackendOutput::new_with_preparation(
+            &problem,
+            &mut progress,
+            &dispatch_budget()?,
+            SolverApiLimits::DEFAULT,
+            &mut preparation,
+        );
+        assert!(matches!(
+            result,
+            Err(BoundedOutputAdmissionError::Preparation(
+                PlanningPreparationError::Cancelled
+            ))
+        ));
+        Ok(())
+    }
+}

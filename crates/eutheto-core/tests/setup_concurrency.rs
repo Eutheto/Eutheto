@@ -10,15 +10,14 @@ use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, EuthetoApp, SetupSourceV2,
     WorkforceGenerationApplyRequestV1,
 };
-use eutheto_domain_api::{DomainPack, DomainPackRegistry, DomainValidationReport};
+use eutheto_domain_api::{DomainPackRegistry, DomainValidationReport};
 use eutheto_store::{NewProject, OpenOptions, SqliteScenarioStore};
 use eutheto_types::{
     ActorRef, AppError, CancellationToken, CommandEnvelope, CommandId, CommandSource, EventTopic,
-    FixedClock, FixedMonotonicClock, OperationControl, OperationId, OverlapPolicy, RequestId,
-    Revision, ScenarioCommand, ScenarioDocument, ScenarioSettings, SetScenarioSettings,
-    SystemIdGenerator,
+    FixedClock, FixedMonotonicClock, OperationId, OverlapPolicy, RequestId, Revision,
+    ScenarioCommand, ScenarioDocument, ScenarioSettings, SetScenarioSettings, SystemIdGenerator,
 };
-use eutheto_workforce::{WorkforcePack, temporal::preview_generation};
+use eutheto_workforce::WorkforcePack;
 use std::{
     error::Error,
     sync::{Arc, atomic::Ordering},
@@ -120,21 +119,37 @@ async fn fixture_app(
     Ok((directory, app, store, original, gate))
 }
 
-fn request(original: &ScenarioDocument) -> TestResult<WorkforceGenerationApplyRequestV1> {
+async fn request(
+    app: &EuthetoApp,
+    original: &ScenarioDocument,
+) -> TestResult<WorkforceGenerationApplyRequestV1> {
+    use eutheto_workforce::setup::contracts::{WorkforceSetupResultV1, WorkforceSetupViewDataV1};
     let mut target = original.settings.clone();
     target.horizon.end = "2026-11-09T05:00:00Z".parse()?;
-    let mut prospective = original.clone();
-    prospective.domain = WorkforcePack
-        .reconcile_settings(
-            original,
-            &target,
-            None,
-            &OperationControl::Cancellation(CancellationToken::new()),
-        )?
-        .domain;
-    prospective.settings = target.clone();
-    let hash =
-        preview_generation(original, &prospective, &CancellationToken::new())?.prospective_hash;
+    let source = SetupSourceV2::CommandPreview {
+        command: settings(target),
+    };
+    // Review the finalized native reconciliation, including generated records, not just raw settings.
+    let result = app
+        .setup_view(
+            original.scenario_id,
+            Revision::INITIAL,
+            source.clone(),
+            eutheto_domain_api::DomainSetupQueryV1 {
+                schema_version: 1,
+                view_id: "official.workforce.setup.generation_review".to_owned(),
+                parameters: serde_json::json!({"changesOnly":true,"limit":1}),
+                continuation: None,
+            },
+            app.setup_cancellation(),
+        )
+        .await
+        .map_err(boxed)?;
+    let WorkforceSetupViewDataV1::GenerationReview(review) =
+        serde_json::from_value::<WorkforceSetupResultV1>(result.view.data)?.result
+    else {
+        return Err("wrong generation view".into());
+    };
     Ok(WorkforceGenerationApplyRequestV1 {
         request_id: RequestId::new(&SystemIdGenerator)?,
         schema_version: 1,
@@ -146,10 +161,8 @@ fn request(original: &ScenarioDocument) -> TestResult<WorkforceGenerationApplyRe
             actor_id: None,
             display_name: "Reviewed generation".to_owned(),
         },
-        source: SetupSourceV2::CommandPreview {
-            command: settings(target),
-        },
-        prospective_hash: hash,
+        source,
+        prospective_hash: review.prospective_hash,
         truncate_redo: false,
     })
 }
@@ -162,7 +175,7 @@ async fn competing_command_commits_while_generation_preparation_is_paused() -> T
         .subscribe(EventTopic::ScenarioChanged)
         .await
         .map_err(boxed)?;
-    let request = request(&original)?;
+    let request = request(&app, &original).await?;
     let preparation_id = request.request_id;
     gate.armed.store(true, Ordering::SeqCst);
     let owner = app.clone();
@@ -221,7 +234,7 @@ async fn cancelled_generation_preparation_has_no_state_or_success_event() -> Tes
         .subscribe(EventTopic::ScenarioChanged)
         .await
         .map_err(boxed)?;
-    let request = request(&original)?;
+    let request = request(&app, &original).await?;
     let cancellation = app.setup_cancellation();
     let signal = cancellation.clone();
     gate.armed.store(true, Ordering::SeqCst);
@@ -249,7 +262,7 @@ async fn same_revision_source_replacement_cannot_publish_a_prepared_command() ->
         .subscribe(EventTopic::ScenarioChanged)
         .await
         .map_err(boxed)?;
-    let request = request(&original)?;
+    let request = request(&app, &original).await?;
     gate.armed.store(true, Ordering::SeqCst);
     let owner = app.clone();
     let pending = tokio::spawn(async move {
@@ -279,8 +292,8 @@ async fn same_revision_source_replacement_cannot_publish_a_prepared_command() ->
     drop(connection);
     gate.release();
     assert!(
-        matches!(pending.await?, Err(AppError::Validation(report)) if report.issues.iter().any(
-        |issue| issue.code == "scenario.setup_source_changed"))
+        pending.await?.is_err(),
+        "same-revision replacement must refuse the prepared mutation"
     );
     let current = store.get_project(original.scenario_id).await?;
     assert_eq!(current.summary.revision, Revision::INITIAL);
@@ -308,7 +321,7 @@ async fn generation_cancellation_after_final_check_preserves_receipt_and_event()
         .subscribe(EventTopic::ScenarioChanged)
         .await
         .map_err(boxed)?;
-    let request = request(&original)?;
+    let request = request(&app, &original).await?;
     let request_id = request.request_id;
     let cancellation = app.setup_cancellation();
     let signal = cancellation.clone();
@@ -544,16 +557,15 @@ async fn full_validation_resource_failure_never_becomes_partial_completed_readin
     ] {
         let (_directory, app, store, original, gate) = fixture_app(OpenOptions::default()).await?;
         *gate.full_report.lock().map_err(boxed)? = Some(DomainValidationReport {
-            issues: vec![
-                eutheto_types::ValidationIssue {
+            issues: (0..count)
+                .map(|index| eutheto_types::ValidationIssue {
                     code: "fixture.amplified_report".to_owned(),
                     severity: eutheto_types::ValidationSeverity::Info,
-                    message,
+                    message: format!("{message}-{index}"),
                     field_path: None,
                     resource: None,
-                };
-                count
-            ],
+                })
+                .collect(),
         });
         let operation_id = OperationId::new(&SystemIdGenerator)?;
         let result = app

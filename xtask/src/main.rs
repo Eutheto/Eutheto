@@ -4,6 +4,7 @@ mod generate;
 mod phase02_generate;
 mod protocol;
 mod protocol_generate;
+mod recipient_generate;
 mod release;
 mod solver;
 mod solver_artifact;

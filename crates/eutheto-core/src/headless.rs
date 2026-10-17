@@ -9,8 +9,8 @@ use super::{
 use eutheto_command::{apply_command_with_registry, validate_document_shape};
 use eutheto_domain_api::{DomainPack, DomainPackRegistry, DomainValidationReport};
 use eutheto_domain_ir::{
-    DomainAssignmentId, EvidenceRenderRequestV1, ExplanationEvidencePayloadV1,
-    ExplanationEvidenceV1, ExplanationResultV1, PortableAcceptedResultV2, VerificationReport,
+    DomainAssignmentId, EvidenceRenderRequestV2, ExplanationEvidencePayloadV2,
+    ExplanationEvidenceV2, ExplanationResultV2, PortableAcceptedResult, VerificationReport,
 };
 use eutheto_export::{BundleKind, PortableScenario};
 use eutheto_import::{
@@ -31,7 +31,7 @@ mod solve;
 pub use solve::*;
 
 #[path = "headless_export.rs"]
-mod export;
+pub(super) mod export;
 pub use export::StoredResultExport;
 
 /// Database-independent scenario operations. All identity, time and pack authority is injected.
@@ -214,6 +214,7 @@ impl HeadlessService {
         validate_standalone_scenario(&snapshot, &InspectionPolicy::default())
             .map_err(|error| import_error(&error))?;
         ensure_supported_document(&snapshot.document, &self.packs).map_err(store_error)?;
+        let original = snapshot.document.clone();
         let mut applied = apply_command_with_registry(
             &snapshot.document,
             snapshot.revision,
@@ -223,6 +224,16 @@ impl HeadlessService {
         )
         .map_err(|error| store_error(command_store_error(&error, Some(&envelope.command))))?;
         applied.document.metadata.updated_at = self.clock.now();
+        if let Some(change_set) = super::manual::finalize_standalone_base_change(
+            &original,
+            &mut applied.document,
+            Some(&control),
+        )
+        .map_err(store_error)?
+        {
+            applied.result.change_set.changes.extend(change_set.changes);
+            applied.result.inverse = None;
+        }
         snapshot.document = applied.document;
         snapshot.revision = applied.result.new_revision;
         validate_standalone_scenario(&snapshot, &InspectionPolicy::default())
@@ -270,7 +281,7 @@ impl HeadlessService {
     pub fn verify_result(
         &self,
         snapshot: &ScenarioSnapshotV1,
-        portable: &PortableAcceptedResultV2,
+        portable: &PortableAcceptedResult,
         control: &OperationControl,
     ) -> Result<VerificationReport, AppError> {
         eutheto_export::validate_scenario_snapshot(snapshot)
@@ -291,24 +302,29 @@ impl HeadlessService {
     pub fn explain_assignment(
         &self,
         snapshot: &ScenarioSnapshotV1,
-        portable: &PortableAcceptedResultV2,
+        portable: &PortableAcceptedResult,
         assignment_id: &DomainAssignmentId,
         control: &OperationControl,
-    ) -> Result<ExplanationResultV1, AppError> {
+    ) -> Result<ExplanationResultV2, AppError> {
         self.verify_result(snapshot, portable, control)?;
         let assignment = assignment_evidence(&portable.accepted_result, assignment_id)?;
         let evidence =
-            ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Assignment { assignment })
+            ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Assignment { assignment })
                 .map_err(|_| solution_contract_error())?;
-        let request = EvidenceRenderRequestV1::new(evidence.clone())
+        let request = EvidenceRenderRequestV2::new(evidence.clone())
             .map_err(|_| solution_contract_error())?;
         let pack = available_pack(&snapshot.document, &self.packs)
             .ok_or_else(|| unsupported_project_pack(&snapshot.document.domain_pack))?;
         let rendered = pack
-            .render_evidence(&snapshot.document, &request)
+            .render_evidence(
+                &snapshot.document,
+                &request,
+                portable.run_input.objective_context.as_ref(),
+                control,
+            )
             .map_err(|error| explanation_render_error(&error))?;
         control.check().map_err(operation_interrupted)?;
-        ExplanationResultV1::new(evidence, rendered).map_err(|_| solution_contract_error())
+        ExplanationResultV2::new(evidence, rendered).map_err(|_| solution_contract_error())
     }
 }
 

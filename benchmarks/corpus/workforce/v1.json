@@ -4,7 +4,7 @@
   "corpusVersion": 1,
   "generator": {
     "method": "role-keyed-uuidv7-fixed-clock;source-sha256-framing-v1",
-    "sourceSha256": "9fccd28881bf3bc5d2fa8c9400223234309356a5e027c52df8d5c669e90d13e7",
+    "sourceSha256": "17cbb6a982ed87f82e5ee6de163e3f2e66bc74ce715c3c42eacb907e0de74697",
     "sources": [
       {
         "path": "benchmarks/workforce-runner/Cargo.toml",
@@ -18,12 +18,12 @@
       },
       {
         "path": "benchmarks/workforce-runner/src/cases.rs",
-        "sha256": "bc9c34f9b9fc93dddb297dc2560618f5b03aad759bdd0fb63797630e41c2d8f7",
+        "sha256": "c4671a8ad37bbb8bd8a5a603a441063e9f64502db1ab6b5cd63ee0e97ac0a6ac",
         "bytes": 42358
       },
       {
         "path": "benchmarks/workforce-runner/src/cases/semantics.rs",
-        "sha256": "b220c1ec86087508b7880a5ccc9b5c7cef3a6a4ae8dbbf44b236f886d3ce845f",
+        "sha256": "f3f66c41f4753eba8afeb70bdbf853b99416e666320b1896c6bc5b2e74378fad",
         "bytes": 48539
       },
       {
@@ -53,8 +53,8 @@
       },
       {
         "path": "benchmarks/workforce-runner/src/headless.rs",
-        "sha256": "1738e759f8ac8a8f7d2ed91045815c387e19a80797aeca5f3806dc0e9969b9d7",
-        "bytes": 39583
+        "sha256": "6883b662accf1e85d4d957b1f5fb2194bca3f51f09a9feae402ba061f450de8b",
+        "bytes": 39846
       },
       {
         "path": "benchmarks/workforce-runner/src/main.rs",
@@ -198,8 +198,8 @@
       "workloadClass": "C",
       "input": {
         "path": "domains/workforce/fixtures/v1/large-supported.json",
-        "sha256": "ef3edf583839ea1d6170a2b186632168c54c61ff11187b6dab9485ff11feaf1d",
-        "bytes": 37420
+        "sha256": "ebee95aec00b746e08e50948d76bb773ec0d503ac3d3e4337bdf567f42e5a172",
+        "bytes": 37749
       }
     },
     {
@@ -215,7 +215,7 @@
   ],
   "expectations": {
     "path": "benchmarks/expected/workforce/v1.json",
-    "sha256": "b7a6dfc23b422c5e3b1c90907707da2f1da95e4bfb53f6143dc5d8b2b9151b94",
+    "sha256": "fb1614a3f6c55d2b1b9204094a39ac0e3700590a52d18a1f3a5a43eac66c3aee",
     "bytes": 11022
   },
   "repair": {

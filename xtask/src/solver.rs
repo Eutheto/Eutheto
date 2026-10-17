@@ -763,6 +763,7 @@ fn manifest_capabilities(capabilities: &[String]) -> Result<BTreeSet<Capability>
             "progress" => Capability::Progress,
             "solution-projection" => Capability::SolutionProjection,
             "solution-stats" => Capability::SolutionStats,
+            "sufficient-assumptions" => Capability::SufficientAssumptions,
             _ => bail!("packaged manifest contains an unknown worker capability"),
         };
         ensure!(

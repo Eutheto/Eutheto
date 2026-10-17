@@ -8,10 +8,10 @@ use crate::temporal::{
 };
 use eutheto_domain_api::DomainPackError;
 use eutheto_types::{
-    LocalWallTime, ScenarioDocument, TimeResolutionFailureKind, ValidationIssue,
-    ValidationSeverity, resolve_local_time,
+    ScenarioDocument, TimeResolutionFailureKind, ValidationIssue, ValidationSeverity,
+    resolve_local_time,
 };
-use jiff::{civil::Date, fmt::temporal::DateTimeParser};
+use jiff::civil::Date;
 
 pub(super) fn validation_error(
     code: &'static str,
@@ -59,16 +59,7 @@ pub(super) fn local_time_resolution(
             "Enter a local date and time without an offset or timezone annotation.",
         )
     };
-    // Jiff's civil parser accepts and discards numeric offsets and zone annotations.
-    // Inspect the borrowed pieces once instead; this view accepts local intent only.
-    let pieces = DateTimeParser::new()
-        .parse_pieces(&parameters.local)
-        .map_err(|_| invalid_local())?;
-    if pieces.offset().is_some() || pieces.time_zone_annotation().is_some() {
-        return Err(invalid_local());
-    }
-    let time = pieces.time().ok_or_else(invalid_local)?;
-    let local = LocalWallTime::from_datetime(pieces.date().to_datetime(time));
+    let local = crate::model::parse_local_intent(&parameters.local).ok_or_else(invalid_local)?;
     let resolved = resolve_local_time(
         local,
         &document.settings.time_zone,

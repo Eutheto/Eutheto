@@ -36,7 +36,7 @@ fn cancellation_after_entry_aborts_input_traversal_and_report_finalization() -> 
     let mut budget = OperationBudget::evaluation(Some(&control));
     budget.cancel_after_steps(10)?;
     assert!(matches!(
-        assess(&document, &solution, &mut budget),
+        assess(&document, &solution, None, &mut budget),
         Err(eutheto_domain_api::DomainPackError::Cancelled)
     ));
     assert!(token.is_cancelled());
@@ -44,7 +44,7 @@ fn cancellation_after_entry_aborts_input_traversal_and_report_finalization() -> 
     let token = CancellationToken::new();
     let control = eutheto_types::OperationControl::Cancellation(token.clone());
     let mut budget = OperationBudget::evaluation(Some(&control));
-    let assessment = assess(&document, &solution, &mut budget)?;
+    let (assessment, input) = assess(&document, &solution, None, &mut budget)?;
     let scope = workforce_verification_scope(&document, 1, None)?;
     let context = VerificationContextV1::new(
         document.scenario_id,
@@ -56,7 +56,13 @@ fn cancellation_after_entry_aborts_input_traversal_and_report_finalization() -> 
     )?;
     budget.cancel_after_steps(1)?;
     assert_eq!(
-        finish(assessment, &solution, &context, &mut budget),
+        finish(
+            assessment,
+            &input.source_document_hash,
+            &solution,
+            &context,
+            &mut budget
+        ),
         Err(eutheto_domain_api::DomainPackError::Cancelled)
     );
     assert!(token.is_cancelled());
@@ -68,12 +74,14 @@ fn source_authority_never_refills_work_or_retained_scratch() -> Result<()> {
     let (document, solution) = fixture()?;
     let mut work = OperationBudget::evaluation(None);
     work.steps(MAX_WORK_STEPS)?;
-    assert!(matches!(assess(&document, &solution, &mut work), Err(error)
-        if error == operation_error(&AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps))));
+    assert!(
+        matches!(assess(&document, &solution, None, &mut work), Err(error)
+        if error == operation_error(&AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::WorkSteps)))
+    );
     let mut scratch = OperationBudget::evaluation(None);
     scratch.reserve(0, 0, 16 * 1024 * 1024)?;
     assert!(
-        matches!(assess(&document, &solution, &mut scratch), Err(error)
+        matches!(assess(&document, &solution, None, &mut scratch), Err(error)
         if error == operation_error(&AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::Bytes)))
     );
     Ok(())

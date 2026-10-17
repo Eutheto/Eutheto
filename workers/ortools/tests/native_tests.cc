@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -69,10 +70,13 @@ protocol::ParentFrame Handshake() {
   request->add_required_capabilities(protocol::CAPABILITY_CP_SAT);
   request->add_required_capabilities(protocol::CAPABILITY_SOLUTION_PROJECTION);
   request->add_required_capabilities(protocol::CAPABILITY_DETERMINISTIC_TIME);
+  request->add_required_capabilities(
+      protocol::CAPABILITY_SUFFICIENT_ASSUMPTIONS);
   return frame;
 }
 
-protocol::ParentFrame Solve(const sat::CpModelProto& model) {
+protocol::ParentFrame Solve(const sat::CpModelProto& model,
+                            bool emit_intermediate_solutions = false) {
   protocol::ParentFrame frame;
   auto* request = frame.mutable_solve_request();
   request->set_request_id("native-test-1");
@@ -81,6 +85,8 @@ protocol::ParentFrame Solve(const sat::CpModelProto& model) {
   request->set_model_fingerprint(fingerprint.data(), fingerprint.size());
   request->mutable_parameters()->set_random_seed(1);
   request->mutable_parameters()->set_deterministic_test_profile(true);
+  if (emit_intermediate_solutions)
+    request->mutable_parameters()->set_emit_intermediate_solutions(true);
   request->mutable_resource_limits()->set_wall_time_millis(1000);
   request->mutable_resource_limits()->set_worker_threads(1);
   return frame;
@@ -236,9 +242,12 @@ void TestHandshake() {
               success.ortools_version() == "9.15.6755" &&
               success.manifest_sha256() == std::string(32, '\x5a'),
           "handshake identity or correlation echo was wrong");
-  for (const int capability : success.capabilities())
-    Require(capability != protocol::CAPABILITY_SUFFICIENT_ASSUMPTIONS,
-            "assumptions capability was advertised");
+  bool assumptions_capability = false;
+  for (const int capability : success.capabilities()) {
+    if (capability == protocol::CAPABILITY_SUFFICIENT_ASSUMPTIONS)
+      assumptions_capability = true;
+  }
+  Require(assumptions_capability, "assumptions capability was not advertised");
 
 
   const std::array<std::string_view, 6> invalid_versions = {
@@ -278,14 +287,6 @@ void TestHandshake() {
   Require(rejected[0].handshake_response().error().code() ==
               protocol::HANDSHAKE_ERROR_CODE_MANIFEST_MISMATCH,
           "bad manifest correlation length was not typed");
-
-  auto assumptions = Handshake();
-  assumptions.mutable_handshake_request()->add_required_capabilities(
-      protocol::CAPABILITY_SUFFICIENT_ASSUMPTIONS);
-  rejected = Run(assumptions);
-  Require(rejected[0].handshake_response().error().code() ==
-              protocol::HANDSHAKE_ERROR_CODE_MISSING_CAPABILITY,
-          "assumptions capability request was not rejected");
 }
 
 void RequireSolveError(const protocol::ParentFrame& solve,
@@ -425,6 +426,205 @@ void TestRealSolveOrderingAndMapping() {
           "infeasible status mapping failed");
 }
 
+void TestIntermediateIncumbentBeforeFinished() {
+  sat::CpModelProto model;
+  auto* variable = model.add_variables();
+  variable->add_domain(7);
+  variable->add_domain(7);
+
+  auto solve = Solve(model, true);
+  auto* projection = solve.mutable_solve_request()->add_projections();
+  projection->set_projection_id(42);
+  projection->set_cp_sat_variable_index(0);
+  const auto frames = Run(Handshake(), &solve);
+  Require(frames.size() >= 3 && frames[0].has_handshake_response() &&
+              frames[1].has_started() && frames[2].has_incumbent() &&
+              frames.back().has_finished(),
+          "intermediate incumbent was not framed before Finished");
+  const auto& first = frames[2].incumbent();
+  Require(first.request_id() == solve.solve_request().request_id() &&
+              first.has_candidate() && first.candidate().values_size() == 1 &&
+              first.candidate().values(0).projection_id() == 42 &&
+              first.candidate().values(0).value() == 7,
+          "first intermediate incumbent was not projected");
+  for (std::size_t index = 2; index + 1 < frames.size(); ++index)
+    Require(frames[index].has_incumbent(),
+            "unexpected non-incumbent frame preceded Finished");
+}
+
+void TestAssumptionProfile() {
+  const auto add_bool = [](sat::CpModelProto* model) {
+    const int index = model->variables_size();
+    auto* variable = model->add_variables();
+    variable->add_domain(0);
+    variable->add_domain(1);
+    return index;
+  };
+  const auto add_equal = [](sat::CpModelProto* model, int variable, int value,
+                            const std::vector<int>& guards) {
+    auto* constraint = model->add_constraints();
+    for (const int guard : guards)
+      constraint->add_enforcement_literal(guard);
+    auto* linear = constraint->mutable_linear();
+    linear->add_vars(variable);
+    linear->add_coeffs(1);
+    linear->add_domain(value);
+    linear->add_domain(value);
+  };
+  const auto require_infeasible_core =
+      [](const std::vector<protocol::WorkerFrame>& frames,
+         const std::vector<int>& expected) {
+        Require(frames.size() == 3 && frames.back().has_finished(),
+                "assumption solve did not finish directly");
+        const auto& finished = frames.back().finished();
+        Require(finished.raw_cp_sat_status() == sat::INFEASIBLE &&
+                    finished.status() ==
+                        protocol::WORKER_SOLVE_STATUS_INFEASIBLE &&
+                    finished.termination_reason() ==
+                        protocol::TERMINATION_REASON_INFEASIBLE,
+                "assumption contradiction did not return infeasible");
+        Require(finished.sufficient_assumptions_size() ==
+                    static_cast<int>(expected.size()),
+                "assumption core size was not complete");
+        std::vector<int> observed(finished.sufficient_assumptions().begin(),
+                                  finished.sufficient_assumptions().end());
+        std::sort(observed.begin(), observed.end());
+        std::vector<int> sorted_expected = expected;
+        std::sort(sorted_expected.begin(), sorted_expected.end());
+        Require(observed == sorted_expected,
+                "assumption core signed membership was not exact");
+      };
+  const auto run = [](const sat::CpModelProto& model) {
+    const auto solve = Solve(model);
+    return Run(Handshake(), &solve);
+  };
+
+  // This is the approved upstream #5141 circuit shape. A disabled-presolve
+  // worker run must retain the signed source literal y rather than a
+  // presolved variable position or an unrelated core.
+  sat::CpModelProto circuit_model;
+  const int v = add_bool(&circuit_model);
+  const int y = add_bool(&circuit_model);
+  const int a = add_bool(&circuit_model);
+  const int b = add_bool(&circuit_model);
+  add_equal(&circuit_model, y, 0, {});
+  auto* circuit = circuit_model.add_constraints()->mutable_circuit();
+  const std::array<std::array<int, 3>, 7> arcs{{
+      {0, 1, add_bool(&circuit_model)},
+      {1, 0, add_bool(&circuit_model)},
+      {0, 2, add_bool(&circuit_model)},
+      {2, 0, add_bool(&circuit_model)},
+      {1, 1, -a - 1},
+      {2, 2, -b - 1},
+      {99, 99, -v - 1},
+  }};
+  for (const auto& arc : arcs) {
+    circuit->add_tails(arc[0]);
+    circuit->add_heads(arc[1]);
+    circuit->add_literals(arc[2]);
+  }
+  circuit_model.add_assumptions(y);
+  require_infeasible_core(run(circuit_model), {y});
+
+  // Signed, unordered, and two-group linear assumptions exercise native
+  // literal identity rather than assumption-vector positions.
+  sat::CpModelProto positive;
+  const int positive_x = add_bool(&positive);
+  add_equal(&positive, positive_x, 0, {});
+  positive.add_assumptions(positive_x);
+  require_infeasible_core(run(positive), {positive_x});
+
+  sat::CpModelProto negative;
+  const int negative_x = add_bool(&negative);
+  add_equal(&negative, negative_x, 1, {});
+  negative.add_assumptions(-negative_x - 1);
+  require_infeasible_core(run(negative), {-negative_x - 1});
+
+  sat::CpModelProto two_groups;
+  const int grouped_x = add_bool(&two_groups);
+  const int grouped_a = add_bool(&two_groups);
+  const int grouped_b = add_bool(&two_groups);
+  add_equal(&two_groups, grouped_x, 1, {grouped_a});
+  add_equal(&two_groups, grouped_x, 0, {-grouped_b - 1});
+  two_groups.add_assumptions(-grouped_b - 1);
+  two_groups.add_assumptions(grouped_a);
+  require_infeasible_core(run(two_groups), {-grouped_b - 1, grouped_a});
+
+  sat::CpModelProto feasible;
+  const int feasible_x = add_bool(&feasible);
+  const int feasible_assumption = add_bool(&feasible);
+  add_equal(&feasible, feasible_x, 0, {});
+  feasible.add_assumptions(feasible_assumption);
+  const auto feasible_frames = run(feasible);
+  Require(feasible_frames.size() == 3 && feasible_frames.back().has_finished(),
+          "feasible assumption solve did not finish");
+  Require(feasible_frames.back().finished().status() ==
+              protocol::WORKER_SOLVE_STATUS_OPTIMAL &&
+              feasible_frames.back().finished().sufficient_assumptions_size() ==
+                  0,
+          "feasible assumption solve fabricated a core");
+  sat::CpModelProto foundational;
+  const int foundational_x = add_bool(&foundational);
+  const int foundational_assumption = add_bool(&foundational);
+  add_equal(&foundational, foundational_x, 0, {});
+  add_equal(&foundational, foundational_x, 1, {});
+  foundational.add_assumptions(foundational_assumption);
+  const auto foundational_frames = run(foundational);
+  Require(foundational_frames.size() == 3 &&
+              foundational_frames.back().has_finished() &&
+              foundational_frames.back().finished().status() ==
+                  protocol::WORKER_SOLVE_STATUS_INFEASIBLE &&
+              foundational_frames.back().finished().sufficient_assumptions_size() ==
+                  0,
+          "foundational infeasibility fabricated an assumption core");
+
+
+  sat::CpModelProto integer_objective;
+  const int integer_x = add_bool(&integer_objective);
+  add_equal(&integer_objective, integer_x, 0, {});
+  integer_objective.mutable_objective()->add_vars(integer_x);
+  integer_objective.mutable_objective()->add_coeffs(1);
+  integer_objective.add_assumptions(integer_x);
+  RequireSolveError(Solve(integer_objective),
+                    protocol::WORKER_ERROR_CODE_UNSUPPORTED_MODEL);
+
+  sat::CpModelProto floating_objective;
+  const int floating_x = add_bool(&floating_objective);
+  add_equal(&floating_objective, floating_x, 0, {});
+  floating_objective.mutable_floating_point_objective()->add_vars(floating_x);
+  floating_objective.mutable_floating_point_objective()->add_coeffs(1.0);
+  floating_objective.add_assumptions(floating_x);
+  RequireSolveError(Solve(floating_objective),
+                    protocol::WORKER_ERROR_CODE_UNSUPPORTED_MODEL);
+
+  sat::CpModelProto multi_worker;
+  const int multi_worker_x = add_bool(&multi_worker);
+  add_equal(&multi_worker, multi_worker_x, 0, {});
+  multi_worker.add_assumptions(multi_worker_x);
+  auto multi_worker_solve = Solve(multi_worker);
+  multi_worker_solve.mutable_solve_request()
+      ->mutable_parameters()
+      ->set_deterministic_test_profile(false);
+  multi_worker_solve.mutable_solve_request()
+      ->mutable_resource_limits()
+      ->set_worker_threads(2);
+  RequireSolveError(multi_worker_solve,
+                    protocol::WORKER_ERROR_CODE_INVALID_PARAMETERS);
+
+  sat::CpModelProto duplicate;
+  const int duplicate_x = add_bool(&duplicate);
+  duplicate.add_assumptions(duplicate_x);
+  duplicate.add_assumptions(duplicate_x);
+  RequireSolveError(Solve(duplicate),
+                    protocol::WORKER_ERROR_CODE_INVALID_MODEL);
+
+  sat::CpModelProto out_of_range;
+  add_bool(&out_of_range);
+  out_of_range.add_assumptions(2);
+  RequireSolveError(Solve(out_of_range),
+                    protocol::WORKER_ERROR_CODE_INVALID_MODEL);
+}
+
 }  // namespace
 
 int main() {
@@ -439,6 +639,10 @@ int main() {
     TestSolveRejections();
     std::cerr << "running TestRealSolveOrderingAndMapping\n";
     TestRealSolveOrderingAndMapping();
+    std::cerr << "running TestAssumptionProfile\n";
+    TestAssumptionProfile();
+    std::cerr << "running TestIntermediateIncumbentBeforeFinished\n";
+    TestIntermediateIncumbentBeforeFinished();
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "native worker test failure: " << error.what() << '\n';

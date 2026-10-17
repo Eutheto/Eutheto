@@ -4,13 +4,16 @@ use std::sync::Arc;
 
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-    BackendSupportColumn, BackupAssetSelection, DeferredCapability, EuthetoApp,
+    BackendSupportColumn, BackupAssetSelection, DeferredCapability, EuthetoApp, ExistingSolveRunV1,
     HISTORY_PAGE_MAX_REQUEST_BYTES, HISTORY_PAGE_MAX_RESPONSE_BYTES, HistoryPageRequestV1,
-    ProjectScope, SolutionCancelCounterfactualRequestV1, SolutionCompareRequestV1,
-    SolutionExplainRequestV1, SolutionListRequestV1, SolutionSelectRequestV1,
-    SolutionStartCounterfactualRequestV1, SolutionSummaryRequestV1, SolutionVerifyRequestV1,
-    SolutionViewRequestV1, SolverSupportMatrixMetadata, SupportCell, SupportFeature,
-    SupportFeatureId, bounded_json_size,
+    MAX_SOLVE_RUN_LIST_LIMIT, ProjectScope, SolutionAdoptBaseRequestV1,
+    SolutionCancelCounterfactualRequestV1, SolutionCompareRequestV3, SolutionExplainRequestV1,
+    SolutionGetCounterfactualRequestV1, SolutionListCounterfactualsRequestV1,
+    SolutionListRequestV1, SolutionSelectRequestV1, SolutionStartCounterfactualRequestV1,
+    SolutionSummaryRequestV1, SolutionVerifyRequestV1, SolutionViewRequestV1,
+    SolveEstimateModelRequestV1, SolveRunListRequestV1, SolverSupportMatrixMetadata,
+    StoredSolveFailure, StoredSolveRequest, SupportCell, SupportFeature, SupportFeatureId,
+    bounded_json_size,
 };
 use eutheto_export::{
     ApplicationMetadata, BackupSelectionScope, BundleKind, FixedExclusion, OmittedAssetReason,
@@ -20,14 +23,19 @@ use eutheto_import::{
     ImportPreview, MigrationRegistryKind, MigrationSubject, PackMigrationVersionSpace,
     RestoreAuthorization, SafetyBackupEvidence,
 };
+use eutheto_solver_api::{ProgressSink, SolveProgressEvent};
 use eutheto_types::{
     ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
-    CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
-    DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, GapPolicy, Horizon, IanaTimeZone,
-    OverlapPolicy, PackId, ProjectListItemV1, ProjectMetadataDto, RequestId, ResourceRef, Revision,
-    SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings, SupplementalIdentity,
-    SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, ValidationIssue,
-    ValidationReport, resolve_local_midnight,
+    BackendSelection, CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult,
+    CommandSource, DomainPackRef, DurationMillis, EventTopic, ExplanationMode, FieldErrorDto,
+    FoundationStatus, GapPolicy, Horizon, IanaTimeZone, KnownVerificationAlarmV1,
+    KnownVerificationSecondaryCauseCode, OperationControl, OperationInterruption, OverlapPolicy,
+    PackId, PreservationPolicy, ProjectListItemV1, ProjectMetadataDto, ReproducibilityMode,
+    RequestId, ResourceLimits, ResourceRef, Revision, SafeDiagnosticValue, ScenarioCommand,
+    ScenarioId, ScenarioSettings, SolveMode, SolveOptions, SolvePhase, SolveStatus,
+    SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem,
+    ValidationIssue, ValidationReport, VerificationAlarmTerminalization, VerificationFailure,
+    WorkerThreadPolicy, resolve_local_midnight,
 };
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -39,9 +47,19 @@ mod bundled_solver;
 
 #[macro_use]
 mod generated_command_catalog;
+mod diagnostic_actions;
+use diagnostic_actions::{solution_create_diagnostic_copy, solution_export_diagnostic};
+mod alternatives;
+use alternatives::{alternatives_get_group, alternatives_start};
+mod manual_repair;
+use manual_repair::{
+    solution_create_repair_request, solution_lock_assignment, solution_unlock_assignment,
+};
 mod native_file;
 mod operations;
-use operations::{OperationClaim, OperationContextV1, OperationPhaseV1, OperationRegistry};
+use operations::{
+    OperationClaim, OperationContextV1, OperationPhaseV1, OperationPurposeV1, OperationRegistry,
+};
 #[macro_use]
 mod setup_boundary;
 use setup_boundary::{
@@ -52,9 +70,10 @@ use setup_boundary::{
 #[macro_use]
 mod people_csv;
 use people_csv::{
-    CsvCustody, people_csv_apply, people_csv_detect, people_csv_preview,
-    people_csv_preview_discard, people_csv_record_sample, people_csv_rejected_rows,
-    people_csv_rejected_rows_save, people_csv_source_close, people_csv_source_open,
+    CsvCustody, assignment_csv_preview, availability_csv_preview, csv_apply, csv_detect,
+    csv_preview_discard, csv_record_sample, csv_report, csv_report_save, csv_source_close,
+    csv_source_open, eligibility_csv_preview, eligibility_matrix_preview,
+    eligibility_matrix_source_open, people_csv_preview, shift_csv_preview,
 };
 #[macro_use]
 mod settings;
@@ -69,6 +88,12 @@ use portable::{
     project_export_preview, project_import_apply, project_import_preview, project_operation_cancel,
     project_restore_apply, project_restore_preview, project_unopened_bundle_inspect,
     project_unopened_bundle_reexport,
+};
+mod recipient_report;
+use recipient_report::{solution_share_create, solution_share_preview, solution_share_release};
+mod schedule_export;
+use schedule_export::{
+    solution_export, solution_export_cancel, solution_export_preview, solution_export_release,
 };
 mod license_inventory;
 
@@ -131,20 +156,28 @@ struct DesktopState {
     operations: Arc<OperationRegistry>,
     csv: Arc<CsvCustody>,
     settings: Arc<SettingsCustody>,
+    recipient_reports: Arc<recipient_report::custody::ReportCustody>,
 }
 
 impl DesktopState {
     fn new(app: EuthetoApp, cache_dir: PathBuf, backup_dir: PathBuf) -> Self {
+        let monotonic_clock: Arc<dyn eutheto_types::MonotonicClock> =
+            Arc::new(eutheto_types::SystemMonotonicClock::new());
         let operations = Arc::new(OperationRegistry::new(
             app.clone(),
             Arc::new(SystemClock),
-            Arc::new(eutheto_types::SystemMonotonicClock::new()),
+            Arc::clone(&monotonic_clock),
             Arc::new(SystemIdGenerator),
             ["main".to_owned()],
         ));
         let csv = Arc::new(CsvCustody::new(app.clone(), Arc::new(SystemIdGenerator)));
         let settings = Arc::new(SettingsCustody::new(app.clone()));
         let portable = Arc::new(PortableCustody::new(app.clone()));
+        let recipient_reports = Arc::new(recipient_report::custody::ReportCustody::new(
+            monotonic_clock,
+            Arc::new(SystemIdGenerator),
+            ["main".to_owned()],
+        ));
         Self {
             app,
             cache_dir,
@@ -153,6 +186,7 @@ impl DesktopState {
             operations,
             csv,
             settings,
+            recipient_reports,
         }
     }
 }
@@ -167,6 +201,565 @@ struct RequestOnly {
     request_id: RequestId,
 }
 
+const SOLVE_API_SCHEMA_VERSION: u32 = 2;
+const SOLVE_START_REQUEST_SCHEMA_VERSION: u32 = 3;
+const SOLVE_REQUEST_MAX_BYTES: usize = 64 * 1024;
+const SOLVE_RESPONSE_MAX_BYTES: usize = 512 * 1024;
+// Complete domain jobs are bounded to 16 MiB; lossless integer strings and the
+// response envelope require additional wire space. Compact lists keep the solve cap.
+const COUNTERFACTUAL_RESPONSE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const SOLVE_ESTIMATE_REQUEST_MAX_BYTES: usize = 8 * 1024;
+const SOLVE_ESTIMATE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const SOLVE_ESTIMATE_TIME_LIMIT_MILLISECONDS: u64 = 30_000;
+const EXPLANATION_RESPONSE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const EXPLANATION_TIME_LIMIT_MILLISECONDS: u64 = 30_000;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolutionExplainOperationRequestV2 {
+    schema_version: u32,
+    operation_id: eutheto_types::OperationId,
+    request_id: RequestId,
+    scenario_id: ScenarioId,
+    source_revision: Revision,
+    request: eutheto_domain_ir::ExplanationRequestV1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolveEstimateModelRequest {
+    request_id: RequestId,
+    operation_id: eutheto_types::OperationId,
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolveBackendOptionsRequest {
+    request_id: RequestId,
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum SolveIntent {
+    Optimize,
+    Repair,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolveStartRequest {
+    request_id: RequestId,
+    operation_id: eutheto_types::OperationId,
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    mode: SolveMode,
+    intent: SolveIntent,
+    #[serde(default)]
+    baseline_source: eutheto_core::StoredBaselineSourceV1,
+    #[serde(default)]
+    maximum_time_milliseconds: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolveCancelRequest {
+    cancel_request_id: RequestId,
+    operation_id: eutheto_types::OperationId,
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolveGetJobRequest {
+    request_id: RequestId,
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    run_id: eutheto_types::SolveRunId,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolveListRunsRequest {
+    request_id: RequestId,
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    revision: Option<Revision>,
+    limit: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveBackendOptionDto {
+    backend_id: BackendId,
+    backend_version: String,
+    adapter_version: String,
+    display_name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveBackendOptionsDto {
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    options: Vec<SolveBackendOptionDto>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SolveJobStatusDto {
+    Running,
+    Optimal,
+    Feasible,
+    Infeasible,
+    Unbounded,
+    NoSolutionWithinLimit,
+    Cancelled,
+    InvalidModel,
+    BackendUnavailable,
+    BackendFailed,
+    VerificationAlarm,
+    Interrupted,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveVerifiedCheckpointDto {
+    result: eutheto_domain_ir::AcceptedResultRefV1,
+    verified_after_milliseconds: DurationMillis,
+    accepted_at: eutheto_types::Rfc3339Timestamp,
+    checkpoint_checksum: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveJobDto {
+    schema_version: u32,
+    request_id: RequestId,
+    run_id: eutheto_types::SolveRunId,
+    scenario_id: ScenarioId,
+    scenario_revision: Revision,
+    status: SolveJobStatusDto,
+    started_at: eutheto_types::Rfc3339Timestamp,
+    finished_at: Option<eutheto_types::Rfc3339Timestamp>,
+    solution_id: Option<eutheto_types::SolutionId>,
+    verification_checksum: Option<String>,
+    checkpoint: Option<SolveVerifiedCheckpointDto>,
+    cancel_operation_id: Option<eutheto_types::OperationId>,
+    stale: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveDiagnosticsSummaryDto {
+    schema_version: u32,
+    job: SolveJobDto,
+    elapsed_milliseconds: Option<DurationMillis>,
+    first_incumbent_milliseconds: Option<DurationMillis>,
+    first_verified_feasible_milliseconds: Option<DurationMillis>,
+    phase_timings: Option<eutheto_domain_ir::RunPhaseTimingsV1>,
+    diagnostic_code: Option<String>,
+    manifest_checksum: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveStartDto {
+    schema_version: u32,
+    current_revision: Revision,
+    reused: bool,
+    job: SolveJobDto,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveListRunsDto {
+    schema_version: u32,
+    scenario_id: ScenarioId,
+    current_revision: Revision,
+    runs: Vec<SolveJobDto>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolveCancelDto {
+    schema_version: u32,
+    cancel_request_id: RequestId,
+    acknowledgement: &'static str,
+}
+
+fn decode_solve_request<T: DeserializeOwned>(request: Option<Value>) -> Result<T, ApiError> {
+    if request
+        .as_ref()
+        .is_some_and(|value| bounded_json_size(value, SOLVE_REQUEST_MAX_BYTES).is_err())
+    {
+        return Err(boundary_error(
+            "solve.request_too_large",
+            "The solve request exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
+    setup_boundary::decode(request)
+}
+fn decode_solve_estimate_request(
+    request: Option<Value>,
+) -> Result<SolveEstimateModelRequest, ApiError> {
+    if request
+        .as_ref()
+        .is_some_and(|value| bounded_json_size(value, SOLVE_ESTIMATE_REQUEST_MAX_BYTES).is_err())
+    {
+        return Err(boundary_error(
+            "solve.request_too_large",
+            "The model estimate request exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
+    setup_boundary::decode(request)
+}
+
+fn require_solve_version(version: u32) -> Result<(), ApiError> {
+    if version == SOLVE_API_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(boundary_error(
+            "solve.version_unsupported",
+            "This solve request version is not supported.",
+            Some("/schemaVersion"),
+        )
+        .into())
+    }
+}
+
+fn solve_options(
+    mode: SolveMode,
+    maximum_time_milliseconds: Option<u32>,
+) -> Result<SolveOptions, ApiError> {
+    let default_milliseconds = match mode {
+        SolveMode::Quick => 2_000,
+        SolveMode::Balanced => 5_000,
+        SolveMode::Deep => 30_000,
+        SolveMode::Custom => {
+            return Err(boundary_error(
+                "solve.mode_unsupported",
+                "Choose Quick, Balanced or Deep for desktop optimization.",
+                Some("/mode"),
+            )
+            .into());
+        }
+    };
+    let duration = maximum_time_milliseconds.unwrap_or(default_milliseconds);
+    if !(1..=30_000).contains(&duration) {
+        return Err(boundary_error(
+            "solve.time_limit_invalid",
+            "The maximum optimization time must be between 1 and 30000 milliseconds.",
+            Some("/maximumTimeMilliseconds"),
+        )
+        .into());
+    }
+    let time_limit_milliseconds = DurationMillis::new(u64::from(duration)).map_err(|_| {
+        boundary_error(
+            "solve.options_invalid",
+            "The selected optimization mode has an invalid bounded deadline.",
+            Some("/maximumTimeMilliseconds"),
+        )
+    })?;
+    Ok(SolveOptions {
+        backend: BackendSelection::Auto,
+        mode,
+        time_limit_milliseconds,
+        memory_limit_bytes: None,
+        worker_threads: WorkerThreadPolicy::Exact(1),
+        random_seed: 1,
+        solution_limit: None,
+        stop_after_first_feasible: mode == SolveMode::Quick,
+        collect_intermediate_solutions: true,
+        explanation_mode: ExplanationMode::Standard,
+        preserve_existing: PreservationPolicy::None,
+        reproducibility: ReproducibilityMode::Deterministic,
+        resource_limits: ResourceLimits {
+            max_entities: 100_000,
+            max_rules: 100_000,
+            max_variables: 100_000,
+            max_constraints: 500_000,
+        },
+    })
+}
+
+fn solve_job(
+    retained: &ExistingSolveRunV1,
+    current_revision: Revision,
+    checkpoint: Option<&eutheto_domain_ir::VerifiedCheckpoint>,
+) -> SolveJobDto {
+    let (status, finished_at, solution_id, verification_checksum) = match &retained.manifest {
+        None => (SolveJobStatusDto::Running, None, None, None),
+        Some(manifest) => match &manifest.outcome {
+            eutheto_domain_ir::RunTerminalOutcomeV1::Accepted {
+                status,
+                solution_id,
+                verification_checksum,
+                ..
+            } => (
+                match status {
+                    SolveStatus::Optimal => SolveJobStatusDto::Optimal,
+                    SolveStatus::Feasible => SolveJobStatusDto::Feasible,
+                    _ => SolveJobStatusDto::BackendFailed,
+                },
+                Some(manifest.finished_at),
+                Some(*solution_id),
+                Some(verification_checksum.clone()),
+            ),
+            eutheto_domain_ir::RunTerminalOutcomeV1::NoResult { status } => (
+                match status {
+                    SolveStatus::Infeasible => SolveJobStatusDto::Infeasible,
+                    SolveStatus::Unbounded => SolveJobStatusDto::Unbounded,
+                    SolveStatus::NoSolutionWithinLimit => SolveJobStatusDto::NoSolutionWithinLimit,
+                    SolveStatus::Cancelled => SolveJobStatusDto::Cancelled,
+                    SolveStatus::InvalidModel => SolveJobStatusDto::InvalidModel,
+                    SolveStatus::BackendUnavailable => SolveJobStatusDto::BackendUnavailable,
+                    SolveStatus::BackendFailed => SolveJobStatusDto::BackendFailed,
+                    SolveStatus::Optimal | SolveStatus::Feasible => {
+                        SolveJobStatusDto::BackendFailed
+                    }
+                },
+                Some(manifest.finished_at),
+                None,
+                None,
+            ),
+            eutheto_domain_ir::RunTerminalOutcomeV1::VerificationAlarm { .. } => (
+                SolveJobStatusDto::VerificationAlarm,
+                Some(manifest.finished_at),
+                None,
+                None,
+            ),
+            eutheto_domain_ir::RunTerminalOutcomeV1::Interrupted => (
+                SolveJobStatusDto::Interrupted,
+                Some(manifest.finished_at),
+                None,
+                None,
+            ),
+        },
+    };
+    SolveJobDto {
+        schema_version: SOLVE_API_SCHEMA_VERSION,
+        request_id: retained.input.request_id,
+        run_id: retained.input.run_id,
+        scenario_id: retained.input.scenario_id,
+        scenario_revision: Revision::new(retained.input.scenario_revision),
+        status,
+        started_at: retained.started_at,
+        finished_at,
+        solution_id,
+        checkpoint: checkpoint.map(|checkpoint| SolveVerifiedCheckpointDto {
+            result: eutheto_domain_ir::AcceptedResultRefV1 {
+                solution_id: checkpoint.accepted_result.solution.solution_id,
+                result_checksum: checkpoint.accepted_result.checksum.clone(),
+            },
+            verified_after_milliseconds: checkpoint.verified_after_milliseconds,
+            accepted_at: checkpoint.accepted_at,
+            checkpoint_checksum: checkpoint.checksum.clone(),
+        }),
+        cancel_operation_id: None,
+        verification_checksum,
+        stale: retained.input.scenario_revision != current_revision.value(),
+    }
+}
+
+async fn durable_solve_job(
+    app: &EuthetoApp,
+    retained: &ExistingSolveRunV1,
+    current_revision: Revision,
+) -> Result<SolveJobDto, ApiError> {
+    let checkpoint = app
+        .solve_get_verified_checkpoint(retained.input.scenario_id, retained.input.run_id)
+        .await
+        .map_err(map_app_error)?;
+    Ok(solve_job(retained, current_revision, checkpoint.as_ref()))
+}
+
+fn attach_live_solve_owner(
+    operations: &OperationRegistry,
+    window_label: &str,
+    job: &mut SolveJobDto,
+) -> Result<(), ApiError> {
+    if matches!(job.status, SolveJobStatusDto::Running) {
+        job.cancel_operation_id = operations.active_solve_operation(
+            window_label,
+            job.request_id,
+            &OperationContextV1::Scenario {
+                scenario_id: job.scenario_id,
+                expected_revision: Some(job.scenario_revision),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn verification_diagnostic_id(error: &AppError) -> Option<RequestId> {
+    match error {
+        AppError::Verification(failure) => failure.diagnostic_id,
+        _ => None,
+    }
+}
+
+fn known_secondary_cause(error: &AppError) -> Option<KnownVerificationSecondaryCauseCode> {
+    let code = match error {
+        AppError::Storage(failure) => Some(failure.code.as_str()),
+        AppError::Protocol(failure) => Some(failure.code.as_str()),
+        _ => None,
+    }?;
+    KnownVerificationSecondaryCauseCode::from_safe_code(code)
+}
+
+fn alarm_manifest_matches(
+    alarm: &KnownVerificationAlarmV1,
+    manifest: &eutheto_domain_ir::RunManifest,
+) -> bool {
+    manifest.run_id == alarm.run_id()
+        && manifest.run_input_checksum == alarm.input_checksum()
+        && matches!(
+            &manifest.outcome,
+            eutheto_domain_ir::RunTerminalOutcomeV1::VerificationAlarm { diagnostic_code }
+                if diagnostic_code == alarm.diagnostic_code().as_str()
+        )
+}
+
+fn known_alarm_app_error(error: &AppError, alarm: KnownVerificationAlarmV1) -> AppError {
+    AppError::Verification(VerificationFailure::from_known_alarm(
+        alarm,
+        verification_diagnostic_id(error),
+    ))
+}
+
+fn map_stored_solve_failure(failure: StoredSolveFailure) -> ApiErrorDto {
+    match failure {
+        StoredSolveFailure::Preparation(failure) => map_app_error(failure.error),
+        StoredSolveFailure::BeforeStart(error) => map_app_error(error),
+        StoredSolveFailure::AfterStart {
+            run_id,
+            error,
+            cleanup,
+            known_alarm,
+        } => {
+            if let Some(alarm) = known_alarm {
+                let terminalization = if run_id == alarm.run_id()
+                    && cleanup
+                        .as_ref()
+                        .is_ok_and(|manifest| alarm_manifest_matches(&alarm, manifest))
+                {
+                    VerificationAlarmTerminalization::Confirmed
+                } else {
+                    VerificationAlarmTerminalization::Unconfirmed
+                };
+                let secondary = cleanup
+                    .as_ref()
+                    .err()
+                    .and_then(known_secondary_cause)
+                    .or_else(|| known_secondary_cause(&error))
+                    .or_else(|| alarm.secondary_cause_code());
+                return map_app_error(known_alarm_app_error(
+                    &error,
+                    alarm
+                        .with_terminalization(terminalization)
+                        .with_secondary_cause(secondary),
+                ));
+            }
+            map_app_error(error)
+        }
+        StoredSolveFailure::FinalizationUnconfirmed {
+            run_id: _,
+            result_id: _,
+            error,
+            known_alarm,
+        } => {
+            if let Some(alarm) = known_alarm {
+                return map_app_error(known_alarm_app_error(
+                    &error,
+                    alarm.with_terminalization(VerificationAlarmTerminalization::Unconfirmed),
+                ));
+            }
+            map_app_error(error)
+        }
+    }
+}
+
+fn should_publish_progress(
+    last: Option<(SolvePhase, std::time::Instant)>,
+    phase: SolvePhase,
+    now: std::time::Instant,
+) -> bool {
+    !last.is_some_and(|(prior, at)| {
+        prior == phase && now.duration_since(at) < std::time::Duration::from_millis(300)
+    })
+}
+
+struct SolveProgressForwarder {
+    app: EuthetoApp,
+    request_id: RequestId,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    run_id: Arc<std::sync::Mutex<Option<eutheto_types::SolveRunId>>>,
+    last: Option<(SolvePhase, std::time::Instant)>,
+}
+
+impl SolveProgressForwarder {
+    fn publish(&mut self, phase: SolvePhase, percent: Option<u8>) {
+        let run_id = {
+            let Ok(guard) = self.run_id.lock() else {
+                return;
+            };
+            let Some(run_id) = *guard else {
+                return;
+            };
+            run_id
+        };
+        let now = std::time::Instant::now();
+        if !should_publish_progress(self.last, phase, now) {
+            return;
+        }
+        self.app.publish_solve_progress(
+            self.request_id,
+            self.scenario_id,
+            self.revision,
+            run_id,
+            phase,
+            percent,
+        );
+        self.last = Some((phase, now));
+    }
+}
+
+impl ProgressSink for SolveProgressForwarder {
+    // Finite progress values are clamped to [0, 100] before fractional truncation.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn emit(&mut self, event: SolveProgressEvent) -> Result<(), eutheto_solver_api::OutputError> {
+        match event {
+            SolveProgressEvent::Queued => self.publish(SolvePhase::Queued, None),
+            SolveProgressEvent::Compiling { percent, .. } => self.publish(
+                SolvePhase::Compiling,
+                percent.and_then(|value| value.is_finite().then(|| value.clamp(0.0, 100.0) as u8)),
+            ),
+            SolveProgressEvent::BackendStarted { .. }
+            | SolveProgressEvent::PresolveSummary(_)
+            | SolveProgressEvent::IncumbentFound(_)
+            | SolveProgressEvent::BoundImproved(_)
+            | SolveProgressEvent::LogLine(_) => self.publish(SolvePhase::Solving, None),
+            SolveProgressEvent::Verifying => self.publish(SolvePhase::Verifying, None),
+            SolveProgressEvent::Explaining => self.publish(SolvePhase::Explaining, None),
+            SolveProgressEvent::Completed(_) => {}
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug)]
 struct CorrelatedRequest<T> {
     request_id: RequestId,
@@ -787,26 +1380,102 @@ impl serde_json::ser::Formatter for JavascriptIntegerFormatter {
     }
 }
 
+struct LimitedResponseWriter<'a> {
+    bytes: Vec<u8>,
+    maximum: Option<usize>,
+    exceeded: bool,
+    control: Option<&'a OperationControl>,
+    interrupted: Option<OperationInterruption>,
+}
+
+impl std::io::Write for LimitedResponseWriter<'_> {
+    fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+        if let Some(control) = self.control
+            && let Err(reason) = control.check()
+        {
+            self.interrupted = Some(reason);
+            return Err(std::io::Error::other("solution response was interrupted"));
+        }
+        if self.maximum.is_some_and(|maximum| {
+            self.bytes
+                .len()
+                .checked_add(input.len())
+                .is_none_or(|length| length > maximum)
+        }) {
+            self.exceeded = true;
+            return Err(std::io::Error::other("solution response exceeds its limit"));
+        }
+        self.bytes.extend_from_slice(input);
+        Ok(input.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn solution_response<T: Serialize>(
     request_id: RequestId,
     current_revision: Revision,
     result: T,
 ) -> SolutionApiResult {
+    solution_response_bounded(request_id, current_revision, result, None)
+}
+
+fn solution_response_bounded<T: Serialize>(
+    request_id: RequestId,
+    current_revision: Revision,
+    result: T,
+    max_bytes: Option<usize>,
+) -> SolutionApiResult {
+    solution_response_controlled(request_id, current_revision, result, max_bytes, None)
+}
+
+fn solution_response_controlled<T: Serialize>(
+    request_id: RequestId,
+    current_revision: Revision,
+    result: T,
+    max_bytes: Option<usize>,
+    control: Option<&OperationControl>,
+) -> SolutionApiResult {
     let envelope = response(request_id, Some(current_revision), Vec::new(), result);
-    let mut bytes = Vec::new();
+    let mut writer = LimitedResponseWriter {
+        bytes: Vec::new(),
+        maximum: max_bytes,
+        exceeded: false,
+        control,
+        interrupted: None,
+    };
     let mut serializer =
-        serde_json::Serializer::with_formatter(&mut bytes, JavascriptIntegerFormatter);
-    envelope
-        .serialize(&mut serializer)
-        .map_err(|_| -> ApiError {
-            boundary_error(
-                "protocol.response_serialization_failed",
-                "The solution response could not be translated safely.",
-                None,
-            )
-            .into()
-        })?;
-    let json = String::from_utf8(bytes).map_err(|_| -> ApiError {
+        serde_json::Serializer::with_formatter(&mut writer, JavascriptIntegerFormatter);
+    let serialization = envelope.serialize(&mut serializer);
+    if let Some(reason) = writer
+        .interrupted
+        .or_else(|| control.and_then(|control| control.check().err()))
+    {
+        return Err(match reason {
+            OperationInterruption::Cancelled => operations::cancelled(),
+            OperationInterruption::DeadlineExceeded => operations::deadline_exceeded(),
+        }
+        .into());
+    }
+    if writer.exceeded {
+        return Err(boundary_error(
+            "solution.response_too_large",
+            "The solution response exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
+    serialization.map_err(|_| -> ApiError {
+        boundary_error(
+            "protocol.response_serialization_failed",
+            "The solution response could not be translated safely.",
+            None,
+        )
+        .into()
+    })?;
+    let json = String::from_utf8(writer.bytes).map_err(|_| -> ApiError {
         boundary_error(
             "protocol.response_serialization_failed",
             "The solution response could not be translated safely.",
@@ -830,7 +1499,97 @@ fn decode_solution_value<T: DeserializeOwned>(request: Value) -> Result<T, ApiEr
 }
 
 fn decode_solution_request<T: DeserializeOwned>(request: Option<Value>) -> Result<T, ApiError> {
-    decode_solution_value(request.ok_or_else(|| Box::new(invalid_solution_request()))?)
+    let request = request.ok_or_else(|| Box::new(invalid_solution_request()))?;
+    if bounded_json_size(&request, SOLVE_REQUEST_MAX_BYTES).is_err() {
+        return Err(boundary_error(
+            "solution.request_too_large",
+            "The solution request exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
+    decode_solution_value(request)
+}
+
+// Leave room for fixed invoke keys and the Tauri channel identifier.
+const OPERATION_REQUEST_ENVELOPE_OVERHEAD_BYTES: usize = 1024;
+
+struct NativeOperationRequest(Option<Value>);
+
+fn operation_request_error(command: &str, too_large: bool) -> ApiErrorDto {
+    match (command, too_large) {
+        ("solution_explain", true) => boundary_error(
+            "solution.request_too_large",
+            "The solution request exceeds its native admission limit.",
+            None,
+        ),
+        ("solution_create_diagnostic_copy" | "solution_export_diagnostic", true) => boundary_error(
+            "diagnostic_action.request_too_large",
+            "The diagnostic action request exceeds its native admission limit.",
+            None,
+        ),
+        ("solution_share_preview" | "solution_share_create" | "solution_share_release", true) => {
+            boundary_error(
+                "recipient.request_too_large",
+                "The recipient request exceeds its native admission limit.",
+                None,
+            )
+        }
+        (
+            "solution_export_preview"
+            | "solution_export"
+            | "solution_export_cancel"
+            | "solution_export_release",
+            true,
+        ) => boundary_error(
+            "schedule_export.request_too_large",
+            "The schedule export request exceeds its native admission limit.",
+            None,
+        ),
+        ("solution_create_diagnostic_copy" | "solution_export_diagnostic", false) => {
+            boundary_error(
+                "setup.invalid_request",
+                "The setup request does not match its supported contract.",
+                None,
+            )
+        }
+        _ => invalid_solution_request(),
+    }
+}
+
+impl<'de, R: tauri::Runtime> tauri::ipc::CommandArg<'de, R> for NativeOperationRequest {
+    fn from_command(
+        command: tauri::ipc::CommandItem<'de, R>,
+    ) -> Result<Self, tauri::ipc::InvokeError> {
+        let maximum = match command.name {
+            "solution_explain" => SOLVE_REQUEST_MAX_BYTES,
+            "solution_create_diagnostic_copy" | "solution_export_diagnostic" => {
+                diagnostic_actions::REQUEST_MAX_BYTES
+            }
+            "solution_share_preview" | "solution_share_create" | "solution_share_release" => {
+                recipient_report::FRAME_BYTES
+            }
+            "solution_export_preview"
+            | "solution_export"
+            | "solution_export_cancel"
+            | "solution_export_release" => schedule_export::FRAME_BYTES,
+            _ => return Err(operation_request_error(command.name, false).into()),
+        };
+        let tauri::ipc::InvokeBody::Json(arguments) = command.message.payload() else {
+            return Err(operation_request_error(command.name, false).into());
+        };
+        let request = arguments.get(command.key).filter(|value| !value.is_null());
+        if request.is_some_and(|value| bounded_json_size(value, maximum).is_err())
+            || bounded_json_size(
+                arguments,
+                maximum + OPERATION_REQUEST_ENVELOPE_OVERHEAD_BYTES,
+            )
+            .is_err()
+        {
+            return Err(operation_request_error(command.name, true).into());
+        }
+        Ok(Self(request.cloned()))
+    }
 }
 
 fn normalize_i64_string(value: &mut Value) -> Result<(), ApiError> {
@@ -877,6 +1636,14 @@ fn decode_counterfactual_start_request(
     request: Option<Value>,
 ) -> Result<SolutionStartCounterfactualRequestV1, ApiError> {
     let mut request = request.ok_or_else(|| Box::new(invalid_solution_request()))?;
+    if bounded_json_size(&request, SOLVE_REQUEST_MAX_BYTES).is_err() {
+        return Err(boundary_error(
+            "solution.request_too_large",
+            "The solution request exceeds its native admission limit.",
+            None,
+        )
+        .into());
+    }
     normalize_counterfactual_int64(&mut request)?;
     decode_solution_value(request)
 }
@@ -921,6 +1688,54 @@ fn validation_error(report: ValidationReport) -> ApiErrorDto {
             .collect(),
         details: None,
         diagnostic_id: None,
+    }
+}
+fn known_alarm_details(alarm: &KnownVerificationAlarmV1) -> BTreeMap<String, SafeDiagnosticValue> {
+    let mut details = BTreeMap::from([
+        (
+            "runId".to_owned(),
+            SafeDiagnosticValue::Text(alarm.run_id().to_string()),
+        ),
+        (
+            "inputChecksum".to_owned(),
+            SafeDiagnosticValue::Text(alarm.input_checksum().to_owned()),
+        ),
+        (
+            "diagnosticCode".to_owned(),
+            SafeDiagnosticValue::Text(alarm.diagnostic_code().as_str().to_owned()),
+        ),
+        (
+            "terminalization".to_owned(),
+            SafeDiagnosticValue::Text(alarm.terminalization().as_str().to_owned()),
+        ),
+    ]);
+    if let Some(code) = alarm.secondary_cause_code() {
+        details.insert(
+            "secondaryCauseCode".to_owned(),
+            SafeDiagnosticValue::Text(code.as_str().to_owned()),
+        );
+    }
+    details
+}
+
+fn known_verification_error(failure: VerificationFailure) -> ApiErrorDto {
+    let Some(alarm) = failure.known_alarm else {
+        return failure_error(
+            failure.code,
+            failure.message,
+            ApiErrorCategoryDto::Verification,
+            failure.retryable,
+            failure.diagnostic_id,
+        );
+    };
+    ApiErrorDto {
+        code: alarm.diagnostic_code().as_str().to_owned(),
+        message: VerificationFailure::KNOWN_ALARM_MESSAGE.to_owned(),
+        category: ApiErrorCategoryDto::Verification,
+        retryable: false,
+        field_errors: Vec::new(),
+        details: Some(known_alarm_details(&alarm)),
+        diagnostic_id: failure.diagnostic_id,
     }
 }
 
@@ -979,13 +1794,7 @@ fn map_app_error(error: AppError) -> ApiErrorDto {
             failure.retryable,
             failure.diagnostic_id,
         ),
-        AppError::Verification(failure) => failure_error(
-            failure.code,
-            failure.message,
-            ApiErrorCategoryDto::Verification,
-            failure.retryable,
-            failure.diagnostic_id,
-        ),
+        AppError::Verification(failure) => known_verification_error(failure),
         AppError::Storage(failure) => failure_error(
             failure.code,
             failure.message,
@@ -1476,6 +2285,8 @@ fn app_get_info(request: RequestOnly) -> ApiResponseDto<AppInfoDto> {
     )
 }
 
+// The explicit implemented-command catalog is intentionally kept together.
+#[allow(clippy::too_many_lines)]
 #[tauri::command]
 fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesDto> {
     const AVAILABLE: &[&str] = &[
@@ -1513,15 +2324,21 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "operation_cancel",
         "operation_release",
         "workforce_apply_reviewed_generation",
-        "people_csv_source_open",
-        "people_csv_source_close",
-        "people_csv_detect",
-        "people_csv_record_sample",
+        "csv_source_open",
+        "eligibility_matrix_source_open",
+        "csv_source_close",
+        "csv_detect",
+        "csv_record_sample",
         "people_csv_preview",
-        "people_csv_apply",
-        "people_csv_preview_discard",
-        "people_csv_rejected_rows",
-        "people_csv_rejected_rows_save",
+        "assignment_csv_preview",
+        "eligibility_csv_preview",
+        "eligibility_matrix_preview",
+        "shift_csv_preview",
+        "availability_csv_preview",
+        "csv_apply",
+        "csv_preview_discard",
+        "csv_report",
+        "csv_report_save",
         "scenario_get_summary",
         "scenario_get_setup_status",
         "scenario_get_view",
@@ -1539,28 +2356,56 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "solution_get_summary",
         "solution_get_view",
         "solution_select",
+        "solution_adopt_base",
         "solution_verify",
         "solution_compare",
-        "solution_explain",
+        "solution_create_diagnostic_copy",
+        "solution_export_diagnostic",
+        "solution_share_preview",
+        "solution_share_create",
+        "solution_share_release",
+        "solution_export_preview",
+        "solution_export",
+        "solution_export_cancel",
+        "solution_export_release",
         "solution_start_counterfactual",
         "solution_cancel_counterfactual",
+        "solution_get_counterfactual",
+        "solution_list_counterfactuals",
+        "solution_lock_assignment",
+        "solution_unlock_assignment",
+        "solution_create_repair_request",
+        "solve_estimate_model",
+        "solve_cancel",
+        "solve_get_job",
+        "alternatives_get_group",
+        "solve_list_runs",
+        "solve_get_diagnostics_summary",
         "settings_get",
         "settings_update",
         "settings_reset_section",
         "settings_export_nonsecret",
         "settings_import_nonsecret",
     ];
+    let mut available_commands = AVAILABLE.to_vec();
+    if cfg!(feature = "bundled-ortools") {
+        available_commands.extend([
+            "solve_get_backend_options",
+            "solve_start",
+            "alternatives_start",
+        ]);
+    }
     let unavailable_commands = REGISTERED_COMMANDS
         .iter()
         .copied()
-        .filter(|command| !AVAILABLE.contains(command))
+        .filter(|command| !available_commands.contains(command))
         .collect();
     response(
         request.request_id,
         None,
         Vec::new(),
         AppCapabilitiesDto {
-            available_commands: AVAILABLE.to_vec(),
+            available_commands,
             unavailable_commands,
         },
     )
@@ -2272,8 +3117,18 @@ async fn solution_get_view<R: tauri::Runtime>(
                     .await
                     .map_err(|error| Box::new(map_app_error(error)))?;
                 execution.preparing_response();
+                let cancellation = execution.cancellation();
                 tauri::async_runtime::spawn_blocking(move || {
-                    solution_response(request_id, result.current_revision, result)
+                    setup_boundary::encode(
+                        &response(
+                            request_id,
+                            Some(result.current_revision),
+                            Vec::new(),
+                            result,
+                        ),
+                        SOLVE_RESPONSE_MAX_BYTES,
+                        Some(cancellation),
+                    )
                 })
                 .await
                 .map_err(|_| {
@@ -2315,6 +3170,34 @@ async fn solution_select(
 }
 
 #[tauri::command]
+async fn solution_adopt_base(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> ApiResult<CommandResult> {
+    let request: SolutionAdoptBaseRequestV1 = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .execute(AppCommand::AdoptBaseSchedule(request))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppCommandResult::ScenarioCommand(result) => Ok(response(
+            request_id,
+            Some(result.new_revision),
+            Vec::new(),
+            result,
+        )),
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected base-adoption result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
 async fn solution_verify(
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -2346,18 +3229,31 @@ async fn solution_compare(
     state: State<'_, DesktopState>,
     request: Option<Value>,
 ) -> SolutionApiResult {
-    let request: CorrelatedRequest<SolutionCompareRequestV1> = decode_solution_request(request)?;
-    let request_id = request.request_id;
-    match state
+    let request: CorrelatedRequest<SolutionCompareRequestV3> = decode_solution_request(request)?;
+    let scenario_id = request.operation.scenario_id;
+    let base_id = request.operation.base_solution_id;
+    let candidate_id = request.operation.candidate_solution_id;
+    let result = state
         .app
-        .query(AppQuery::SolutionCompare(request.operation))
+        .query(AppQuery::SolutionCompareV3(request.operation))
         .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::SolutionComparison(result) => {
+        .map_err(map_app_error)?;
+    match result {
+        AppQueryResult::SolutionComparisonV3(result)
+            if result.schema_version == eutheto_core::SOLUTION_COMPARE_SCHEMA_VERSION
+                && result.scenario_id == scenario_id
+                && result.comparison.base.scenario_id == scenario_id
+                && result.comparison.candidate.scenario_id == scenario_id
+                && result.comparison.base.accepted_result.solution_id == base_id
+                && result.comparison.candidate.accepted_result.solution_id == candidate_id =>
+        {
             let result = *result;
-            let current_revision = result.current_revision;
-            solution_response(request_id, current_revision, result)
+            solution_response_bounded(
+                request.request_id,
+                result.current_revision,
+                result,
+                Some(SOLVE_RESPONSE_MAX_BYTES),
+            )
         }
         _ => Err(boundary_error(
             "protocol.result_mismatch",
@@ -2368,31 +3264,273 @@ async fn solution_compare(
     }
 }
 
-#[tauri::command]
-async fn solution_explain(
-    state: State<'_, DesktopState>,
-    request: Option<Value>,
-) -> SolutionApiResult {
-    let request: CorrelatedRequest<SolutionExplainRequestV1> = decode_solution_request(request)?;
-    let request_id = request.request_id;
-    match state
-        .app
-        .query(AppQuery::SolutionExplain(request.operation))
-        .await
-        .map_err(map_app_error)?
-    {
-        AppQueryResult::SolutionExplanation(result) => {
-            let result = *result;
-            let current_revision = result.current_revision;
-            solution_response(request_id, current_revision, result)
+// Keep the seven closed subject cases together so native source admission remains auditable.
+#[allow(clippy::too_many_lines)]
+fn validate_solution_explanation_source(
+    scenario_id: ScenarioId,
+    source_revision: Revision,
+    subject: &eutheto_domain_ir::ExplanationRequestSubjectV1,
+    result: &eutheto_core::SolutionExplanationDtoV2,
+) -> Result<(), ApiError> {
+    use eutheto_domain_ir::{
+        ExplanationEvidencePayloadV2 as Payload, ExplanationRequestSubjectV1 as Subject,
+    };
+    let selected_revision = source_revision.value();
+    let single_revision = result.scenario_revisions.as_slice() == [source_revision];
+    let comparison_matches = |comparison: &eutheto_domain_ir::SolutionComparisonV2,
+                              base: &eutheto_domain_ir::AcceptedResultRefV1,
+                              candidate: &eutheto_domain_ir::AcceptedResultRefV1,
+                              repair: bool| {
+        let revisions = if repair {
+            [
+                comparison.candidate.scenario_revision,
+                comparison.base.scenario_revision,
+            ]
+        } else {
+            [
+                comparison.base.scenario_revision,
+                comparison.candidate.scenario_revision,
+            ]
+        };
+        comparison.schema_version == eutheto_domain_ir::SOLUTION_COMPARISON_V2_SCHEMA_VERSION
+            && comparison.base.scenario_id == scenario_id
+            && comparison.candidate.scenario_id == scenario_id
+            && &comparison.base.accepted_result == base
+            && &comparison.candidate.accepted_result == candidate
+            && comparison.candidate.scenario_revision == selected_revision
+            && result
+                .scenario_revisions
+                .iter()
+                .map(|revision| revision.value())
+                .eq(revisions)
+            && [
+                &comparison.runs.base.outcome,
+                &comparison.runs.candidate.outcome,
+            ]
+            .into_iter()
+            .zip([base, candidate])
+            .all(|(outcome, expected)| {
+                matches!(
+                    outcome,
+                    eutheto_domain_ir::RunTerminalOutcomeV1::Accepted {
+                        solution_id, accepted_result_checksum, ..
+                    } if *solution_id == expected.solution_id
+                        && *accepted_result_checksum == expected.result_checksum
+                )
+            })
+    };
+    let subject_matches = match (subject, &result.explanation.evidence.evidence) {
+        (Subject::Validation { issue_id }, Payload::Validation { issue }) => {
+            single_revision
+                && issue_id
+                    .as_ref()
+                    .is_none_or(|expected| expected == &issue.issue_id)
         }
-        _ => Err(boundary_error(
+        (Subject::Assignment { assignment_id, .. }, Payload::Assignment { assignment }) => {
+            single_revision && assignment.assignment.id == *assignment_id
+        }
+        (
+            Subject::Infeasibility {
+                solve_run_id,
+                run_manifest_checksum,
+                conflict_id,
+            },
+            Payload::Infeasibility { infeasibility, .. },
+        ) => {
+            single_revision
+                && match &result.infeasibility_context {
+                    Some(context) => {
+                        context.run_id == *solve_run_id
+                            && context.run_manifest_checksum == *run_manifest_checksum
+                            && context.source_revision == source_revision
+                            && context.conflict_id.as_str().strip_prefix("infeasibility.")
+                                == Some(context.evidence_checksum.as_str())
+                            && conflict_id
+                                .as_ref()
+                                .is_none_or(|expected| expected == &context.conflict_id)
+                    }
+                    None => {
+                        conflict_id.is_none()
+                            && matches!(
+                                infeasibility,
+                                eutheto_domain_ir::InfeasibilityEvidenceV1::Unavailable { .. }
+                            )
+                    }
+                }
+        }
+        (
+            Subject::Counterfactual { job_id, base },
+            Payload::Counterfactual {
+                result: counterfactual,
+            },
+        ) => {
+            let semantics = &counterfactual.request.semantics;
+            single_revision
+                && counterfactual.request.job_id == *job_id
+                && &semantics.base == base
+                && semantics.scenario_id == scenario_id
+                && semantics.scenario_revision == selected_revision
+                && counterfactual.base_run_input.scenario_id == scenario_id
+                && counterfactual.base_run_input.scenario_revision == selected_revision
+                && counterfactual.run_input.scenario_id == scenario_id
+                && counterfactual.run_input.scenario_revision == selected_revision
+                && counterfactual.base_run_manifest.run_id == semantics.base_run_id
+                && counterfactual.base_run_input.run_id == semantics.base_run_id
+        }
+        (
+            Subject::SolutionDifference { left, right },
+            Payload::SolutionDifference { comparison },
+        ) => comparison_matches(comparison, left, right, false),
+        (Subject::Repair { current, base }, Payload::Repair { repair }) => {
+            comparison_matches(&repair.comparison, base, current, true)
+        }
+        (
+            Subject::OptimalityStatus {
+                solve_run_id,
+                run_manifest_checksum,
+                result: expected,
+            },
+            Payload::OptimalityStatus { status },
+        ) => {
+            let certainty = if matches!(
+                status.run_manifest.outcome,
+                eutheto_domain_ir::RunTerminalOutcomeV1::Accepted { .. }
+            ) {
+                eutheto_domain_ir::ExplanationCertainty::IndependentlyVerified
+            } else {
+                eutheto_domain_ir::ExplanationCertainty::Deterministic
+            };
+            single_revision
+                && status.schema_version == Some(2)
+                && result.explanation.evidence.certainty == certainty
+                && status.run_input.scenario_id == scenario_id
+                && status.run_input.scenario_revision == selected_revision
+                && status.run_input.run_id == *solve_run_id
+                && status.run_manifest.run_id == *solve_run_id
+                && status.run_manifest.checksum == *run_manifest_checksum
+                && status.result.as_ref() == expected.as_ref()
+        }
+        _ => false,
+    };
+    let source_matches = result.schema_version
+        == eutheto_domain_ir::EXPLANATION_RESULT_V2_SCHEMA_VERSION
+        && result.explanation.schema_version
+            == eutheto_domain_ir::EXPLANATION_RESULT_V2_SCHEMA_VERSION
+        && result.explanation.evidence.schema_version
+            == eutheto_domain_ir::EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION
+        && result.explanation.rendered.schema_version
+            == eutheto_domain_ir::EVIDENCE_RENDER_RESULT_SCHEMA_VERSION
+        && result.scenario_id == scenario_id
+        && result.current_revision >= source_revision
+        && result.explanation.evidence.evidence.kind() == subject.kind()
+        && result.explanation.rendered.kind == subject.kind()
+        && result.explanation.rendered.evidence_checksum == result.explanation.evidence.checksum
+        && (matches!(subject, Subject::Infeasibility { .. })
+            || result.infeasibility_context.is_none());
+    if source_matches && subject_matches {
+        Ok(())
+    } else {
+        Err(boundary_error(
             "protocol.result_mismatch",
-            "The application returned an unexpected solution-explanation result.",
+            "The native explanation result does not match its admitted subject and source.",
             None,
         )
-        .into()),
+        .into())
     }
+}
+
+#[tauri::command]
+async fn solution_explain<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: NativeOperationRequest,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: SolutionExplainOperationRequestV2 = decode_solution_value(
+        request
+            .0
+            .ok_or_else(|| Box::new(invalid_solution_request()))?,
+    )?;
+    require_solve_version(request.schema_version)?;
+    let time_limit = DurationMillis::new(EXPLANATION_TIME_LIMIT_MILLISECONDS)
+        .map_err(|_| Box::new(operations::deadline_exceeded()))?;
+    let operation = setup_boundary::claim(
+        request.operation_id,
+        request.request_id,
+        OperationPurposeV1::SolutionExplain,
+        request.scenario_id,
+        Some(request.source_revision),
+    );
+    let app = state.app.clone();
+    state
+        .operations
+        .run_with_bounded_budget(
+            window.label(),
+            operation,
+            Some(setup_boundary::progress(on_progress)),
+            OperationPhaseV1::Validating,
+            (request, None),
+            time_limit,
+            move |request, mut execution| async move {
+                let (budget, _) = execution.take_solve_admission().ok_or_else(|| {
+                    Box::new(boundary_error(
+                        "operation.budget_missing",
+                        "The explanation deadline was not admitted safely.",
+                        None,
+                    ))
+                })?;
+                let control = OperationControl::Solve(budget.phase_view());
+                let request_id = request.request_id;
+                let scenario_id = request.scenario_id;
+                let source_revision = request.source_revision;
+                let subject = request.request.subject.clone();
+                let result = app
+                    .query(AppQuery::SolutionExplain {
+                        request: SolutionExplainRequestV1 {
+                            schema_version: eutheto_core::SOLUTION_API_SCHEMA_VERSION,
+                            scenario_id,
+                            request: request.request,
+                        },
+                        source_revision,
+                        control: control.clone(),
+                    })
+                    .await
+                    .map_err(|error| Box::new(map_app_error(error)))?;
+                let AppQueryResult::SolutionExplanation(result) = result else {
+                    return Err(Box::new(boundary_error(
+                        "protocol.result_mismatch",
+                        "The application returned an unexpected solution-explanation result.",
+                        None,
+                    )));
+                };
+                let result = *result;
+                validate_solution_explanation_source(
+                    scenario_id,
+                    source_revision,
+                    &subject,
+                    &result,
+                )?;
+                execution.preparing_response();
+                tauri::async_runtime::spawn_blocking(move || {
+                    solution_response_controlled(
+                        request_id,
+                        result.current_revision,
+                        result,
+                        Some(EXPLANATION_RESPONSE_MAX_BYTES),
+                        Some(&control),
+                    )
+                })
+                .await
+                .map_err(|_| {
+                    Box::new(boundary_error(
+                        "protocol.response_serialization_failed",
+                        "The explanation response could not be prepared safely.",
+                        None,
+                    ))
+                })?
+            },
+        )
+        .await
 }
 
 #[tauri::command]
@@ -2410,7 +3548,12 @@ async fn solution_start_counterfactual(
     {
         AppCommandResult::CounterfactualStarted(result) => {
             let current_revision = result.current_revision;
-            solution_response(request_id, current_revision, result)
+            solution_response_bounded(
+                request_id,
+                current_revision,
+                result,
+                Some(COUNTERFACTUAL_RESPONSE_MAX_BYTES),
+            )
         }
         _ => Err(boundary_error(
             "protocol.result_mismatch",
@@ -2436,11 +3579,80 @@ async fn solution_cancel_counterfactual(
     {
         AppCommandResult::CounterfactualCancelled(result) => {
             let current_revision = result.current_revision;
-            solution_response(request_id, current_revision, result)
+            solution_response_bounded(
+                request_id,
+                current_revision,
+                result,
+                Some(COUNTERFACTUAL_RESPONSE_MAX_BYTES),
+            )
         }
         _ => Err(boundary_error(
             "protocol.result_mismatch",
             "The application returned an unexpected counterfactual-cancellation result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_get_counterfactual(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionGetCounterfactualRequestV1> =
+        decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionGetCounterfactual(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionGetCounterfactual(result) => {
+            let result = *result;
+            solution_response_bounded(
+                request_id,
+                result.current_revision,
+                result,
+                Some(COUNTERFACTUAL_RESPONSE_MAX_BYTES),
+            )
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected counterfactual result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_list_counterfactuals(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionListCounterfactualsRequestV1> =
+        decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionListCounterfactuals(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionListCounterfactuals(result) => {
+            let result = *result;
+            solution_response_bounded(
+                request_id,
+                result.current_revision,
+                result,
+                Some(SOLVE_RESPONSE_MAX_BYTES),
+            )
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected counterfactual list.",
             None,
         )
         .into()),
@@ -2481,29 +3693,514 @@ unsupported_commands!(
     app_install_update => ("capability.update_unavailable", "Application updates"),
     scenario_migrate_preview => ("capability.scenario_migration_unavailable", "Scenario migration previews"),
 );
+async fn solve_current_revision(
+    app: &EuthetoApp,
+    scenario_id: ScenarioId,
+) -> Result<Revision, ApiError> {
+    match app
+        .query(AppQuery::ProjectMetadata(scenario_id))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::Project(project) => Ok(project.revision),
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected scenario metadata result.",
+            None,
+        )
+        .into()),
+    }
+}
 
-core_deferred_commands!(
-    DeferredCapability::Solve;
-    solve_get_backend_options,
-    solve_estimate_model,
-    solve_start,
-    solve_cancel,
-    solve_get_job,
-    solve_list_runs,
-    solve_get_diagnostics_summary,
-);
+fn require_solve_revision(current: Revision, expected: Revision) -> Result<(), ApiError> {
+    if current == expected {
+        Ok(())
+    } else {
+        Err(Box::new(map_app_error(AppError::Conflict {
+            expected_revision: expected,
+            actual_revision: current,
+        })))
+    }
+}
 
-core_deferred_commands!(
-    DeferredCapability::Solution;
-    solution_lock_assignment,
-    solution_unlock_assignment,
-    solution_create_repair_request,
-    solution_export_preview,
-    solution_export,
-    solution_share_preview,
-    solution_share_create,
-    solution_export_cancel,
-);
+fn require_solve_runtime(app: &EuthetoApp) -> Result<(), ApiError> {
+    if app.solve_runtime_available() {
+        Ok(())
+    } else {
+        Err(boundary_error(
+            "solve.backend_unavailable",
+            "No compatible packaged solver backend is installed.",
+            None,
+        )
+        .into())
+    }
+}
+
+#[tauri::command]
+async fn solve_get_backend_options(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolveBackendOptionsRequest = decode_solve_request(request)?;
+    require_solve_version(request.schema_version)?;
+    require_solve_runtime(&state.app)?;
+    let current = solve_current_revision(&state.app, request.scenario_id).await?;
+    require_solve_revision(current, request.expected_revision)?;
+    let options = state
+        .app
+        .solve_backend_descriptors()
+        .into_iter()
+        .map(|descriptor| SolveBackendOptionDto {
+            backend_id: descriptor.id,
+            backend_version: descriptor.version,
+            adapter_version: descriptor.adapter_version,
+            display_name: descriptor.display_name,
+        })
+        .collect();
+    setup_boundary::encode_response(
+        request.request_id,
+        Some(current),
+        SolveBackendOptionsDto {
+            schema_version: SOLVE_API_SCHEMA_VERSION,
+            scenario_id: request.scenario_id,
+            revision: current,
+            options,
+        },
+        SOLVE_RESPONSE_MAX_BYTES,
+        None,
+    )
+    .await
+}
+#[tauri::command]
+async fn solve_estimate_model<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request = decode_solve_estimate_request(request)?;
+    require_solve_version(request.schema_version)?;
+    let time_limit = DurationMillis::new(SOLVE_ESTIMATE_TIME_LIMIT_MILLISECONDS).map_err(|_| {
+        boundary_error(
+            "solve.budget_invalid",
+            "The model estimate deadline could not be created safely.",
+            None,
+        )
+    })?;
+    let context = OperationContextV1::Scenario {
+        scenario_id: request.scenario_id,
+        expected_revision: Some(request.expected_revision),
+    };
+    let app = state.app.clone();
+    state
+        .operations
+        .run_with_bounded_budget(
+            window.label(),
+            OperationClaim {
+                operation_id: request.operation_id,
+                request_id: request.request_id,
+                purpose: Some(OperationPurposeV1::SolveEstimate),
+                context,
+            },
+            Some(setup_boundary::progress(on_progress)),
+            OperationPhaseV1::Validating,
+            (request, None),
+            time_limit,
+            move |request, mut execution| async move {
+                let (budget, _) = execution.take_solve_admission().ok_or_else(|| {
+                    boundary_error(
+                        "solve.budget_missing",
+                        "The bounded model estimate was not admitted safely.",
+                        None,
+                    )
+                })?;
+                let result = app
+                    .estimate_stored_model(
+                        SolveEstimateModelRequestV1 {
+                            scenario_id: request.scenario_id,
+                            expected_revision: request.expected_revision,
+                        },
+                        budget,
+                    )
+                    .await
+                    .map_err(map_app_error)?;
+                let current_revision = result.current_revision;
+                let cancellation = Some(execution.cancellation());
+                setup_boundary::finish(
+                    &mut execution,
+                    request.request_id,
+                    Some(current_revision),
+                    result,
+                    SOLVE_ESTIMATE_RESPONSE_MAX_BYTES,
+                    cancellation,
+                )
+                .await
+            },
+        )
+        .await
+}
+
+#[allow(clippy::too_many_lines, clippy::large_futures)]
+#[tauri::command]
+async fn solve_start<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolveStartRequest = decode_solve_request(request)?;
+    if request.schema_version != SOLVE_START_REQUEST_SCHEMA_VERSION {
+        return Err(boundary_error(
+            "solve.unsupported_schema",
+            "This solve-start request version is not supported.",
+            Some("/schemaVersion"),
+        )
+        .into());
+    }
+    if matches!(request.intent, SolveIntent::Optimize)
+        && request.baseline_source != eutheto_core::StoredBaselineSourceV1::Accepted
+    {
+        return Err(boundary_error(
+            "solve.objective_invalid",
+            "Use Repair plan or Alternatives to select an unverified starting plan.",
+            Some("/baselineSource"),
+        )
+        .into());
+    }
+    let options = solve_options(request.mode, request.maximum_time_milliseconds)?;
+    let context = OperationContextV1::Scenario {
+        scenario_id: request.scenario_id,
+        expected_revision: Some(request.expected_revision),
+    };
+    let run_id = Arc::new(std::sync::Mutex::new(None));
+    let observer_run_id = Arc::clone(&run_id);
+    let observer_app = state.app.clone();
+    let observer = Arc::new(move |bound: eutheto_types::SolveRunId| {
+        if let Ok(mut slot) = observer_run_id.lock() {
+            *slot = Some(bound);
+        }
+        observer_app.publish_solve_progress(
+            request.request_id,
+            request.scenario_id,
+            request.expected_revision,
+            bound,
+            SolvePhase::Queued,
+            None,
+        );
+    });
+    let app = state.app.clone();
+    let scenario_id = request.scenario_id;
+    let expected_revision = request.expected_revision;
+    let request_id = request.request_id;
+    let mut stored_request = StoredSolveRequest {
+        request_id,
+        scenario_id,
+        expected_revision: Some(expected_revision),
+        options,
+        objective_selection: match request.intent {
+            SolveIntent::Optimize => None,
+            SolveIntent::Repair => Some(eutheto_core::StoredObjectiveSelectionV1 {
+                schema_version: 1,
+                profile_id: eutheto_domain_ir::ObjectiveProfileId::new(
+                    "official.workforce.objective.minimal-changes",
+                )
+                .map_err(|_| {
+                    boundary_error(
+                        "solve.objective_invalid",
+                        "The native repair objective is invalid.",
+                        None,
+                    )
+                })?,
+                semantic_version: 1,
+                operation: eutheto_domain_ir::RunObjectiveOperation::Repair,
+                baseline_source: request.baseline_source,
+                alternatives_capture_id: None,
+            }),
+        },
+    };
+    state
+        .operations
+        .run_with_solve_budget(
+            window.label(),
+            OperationClaim {
+                operation_id: request.operation_id,
+                request_id,
+                purpose: Some(OperationPurposeV1::SolveStart),
+                context,
+            },
+            None,
+            OperationPhaseV1::Validating,
+            ((), None),
+            stored_request.options.time_limit_milliseconds,
+            move |(), mut execution| async move {
+                let (budget, started_at) = execution.take_solve_admission().ok_or_else(|| {
+                    boundary_error(
+                        "solve.budget_missing",
+                        "The bounded solve owner was not admitted safely.",
+                        None,
+                    )
+                })?;
+                let existing = app
+                    .solve_lookup_native_request(&mut stored_request)
+                    .await
+                    .map_err(|error| Box::new(map_app_error(error)))?;
+                if let Some(existing) = existing {
+                    let current_revision = solve_current_revision(&app, scenario_id).await?;
+                    observer(existing.input.run_id);
+                    let job = durable_solve_job(&app, &existing, current_revision).await?;
+                    return setup_boundary::finish(
+                        &mut execution,
+                        request_id,
+                        Some(current_revision),
+                        SolveStartDto {
+                            schema_version: SOLVE_API_SCHEMA_VERSION,
+                            current_revision,
+                            reused: true,
+                            job,
+                        },
+                        SOLVE_RESPONSE_MAX_BYTES,
+                        None,
+                    )
+                    .await;
+                }
+                require_solve_runtime(&app)?;
+                let current_revision = solve_current_revision(&app, scenario_id).await?;
+                require_solve_revision(current_revision, expected_revision)?;
+                let mut progress = SolveProgressForwarder {
+                    app: app.clone(),
+                    request_id,
+                    scenario_id,
+                    revision: expected_revision,
+                    run_id: Arc::clone(&run_id),
+                    last: None,
+                };
+                let solved = app
+                    .solve_stored_with_budget_observer(
+                        stored_request,
+                        &mut progress,
+                        budget,
+                        started_at,
+                        observer,
+                    )
+                    .await
+                    .map_err(|failure| Box::new(map_stored_solve_failure(failure)))?;
+                let current_revision = solve_current_revision(&app, scenario_id).await?;
+                let job = durable_solve_job(&app, solved.state(), current_revision).await?;
+                if !solved.reused
+                    && let Some(manifest) = solved.state().manifest.as_ref()
+                {
+                    match &manifest.outcome {
+                        eutheto_domain_ir::RunTerminalOutcomeV1::Accepted { status, .. }
+                        | eutheto_domain_ir::RunTerminalOutcomeV1::NoResult { status } => app
+                            .publish_solve_completed(
+                                request_id,
+                                scenario_id,
+                                job.scenario_revision,
+                                job.run_id,
+                                *status,
+                                match &manifest.outcome {
+                                    eutheto_domain_ir::RunTerminalOutcomeV1::Accepted {
+                                        solution_id,
+                                        ..
+                                    } => Some(*solution_id),
+                                    _ => None,
+                                },
+                            ),
+                        // SolveCompleted carries SolveStatus only. Verification alarms and
+                        // interrupted runs remain authoritative through the durable job read.
+                        _ => {}
+                    }
+                }
+                setup_boundary::finish(
+                    &mut execution,
+                    request_id,
+                    Some(current_revision),
+                    SolveStartDto {
+                        schema_version: SOLVE_API_SCHEMA_VERSION,
+                        current_revision,
+                        reused: solved.reused,
+                        job,
+                    },
+                    SOLVE_RESPONSE_MAX_BYTES,
+                    None,
+                )
+                .await
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+async fn solve_cancel<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolveCancelRequest = decode_solve_request(request)?;
+    require_solve_version(request.schema_version)?;
+    let acknowledgement = state.operations.cancel_solve(
+        window.label(),
+        &operations::OperationControlRequestV1 {
+            request_id: request.cancel_request_id,
+            schema_version: 1,
+            operation_id: request.operation_id,
+        },
+        OperationContextV1::Scenario {
+            scenario_id: request.scenario_id,
+            expected_revision: Some(request.expected_revision),
+        },
+    )?;
+    setup_boundary::encode_response(
+        request.cancel_request_id,
+        Some(request.expected_revision),
+        SolveCancelDto {
+            schema_version: SOLVE_API_SCHEMA_VERSION,
+            cancel_request_id: request.cancel_request_id,
+            acknowledgement: match acknowledgement.acknowledgement {
+                operations::CancellationAcknowledgementV1::CancellationRequested => {
+                    "cancellationRequested"
+                }
+                operations::CancellationAcknowledgementV1::NotActive => "notActive",
+            },
+        },
+        SOLVE_RESPONSE_MAX_BYTES,
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn solve_get_job<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolveGetJobRequest = decode_solve_request(request)?;
+    require_solve_version(request.schema_version)?;
+    let current = solve_current_revision(&state.app, request.scenario_id).await?;
+    let retained = state
+        .app
+        .solve_get_job(request.scenario_id, request.run_id)
+        .await
+        .map_err(map_app_error)?
+        .ok_or_else(|| {
+            Box::new(map_app_error(AppError::NotFound(ResourceRef::SolveRun(
+                request.run_id,
+            ))))
+        })?;
+    let mut job = durable_solve_job(&state.app, &retained, current).await?;
+    attach_live_solve_owner(&state.operations, window.label(), &mut job)?;
+    setup_boundary::encode_response(
+        request.request_id,
+        Some(current),
+        job,
+        SOLVE_RESPONSE_MAX_BYTES,
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn solve_list_runs<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolveListRunsRequest = decode_solve_request(request)?;
+    require_solve_version(request.schema_version)?;
+    if request.limit == 0 || request.limit > MAX_SOLVE_RUN_LIST_LIMIT {
+        return Err(boundary_error(
+            "solve.limit_invalid",
+            "The solve history limit is outside the supported bound.",
+            Some("/limit"),
+        )
+        .into());
+    }
+    let current = solve_current_revision(&state.app, request.scenario_id).await?;
+    let retained = state
+        .app
+        .solve_list_runs(SolveRunListRequestV1 {
+            scenario_id: request.scenario_id,
+            scenario_revision: request.revision,
+            limit: request.limit,
+        })
+        .await
+        .map_err(map_app_error)?;
+    let mut runs = Vec::with_capacity(retained.len());
+    for run in &retained {
+        let mut job = durable_solve_job(&state.app, run, current).await?;
+        attach_live_solve_owner(&state.operations, window.label(), &mut job)?;
+        runs.push(job);
+    }
+    setup_boundary::encode_response(
+        request.request_id,
+        Some(current),
+        SolveListRunsDto {
+            schema_version: SOLVE_API_SCHEMA_VERSION,
+            scenario_id: request.scenario_id,
+            current_revision: current,
+            runs,
+        },
+        SOLVE_RESPONSE_MAX_BYTES,
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn solve_get_diagnostics_summary<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolveGetJobRequest = decode_solve_request(request)?;
+    require_solve_version(request.schema_version)?;
+    let current = solve_current_revision(&state.app, request.scenario_id).await?;
+    let retained = state
+        .app
+        .solve_get_job(request.scenario_id, request.run_id)
+        .await
+        .map_err(map_app_error)?
+        .ok_or_else(|| {
+            Box::new(map_app_error(AppError::NotFound(ResourceRef::SolveRun(
+                request.run_id,
+            ))))
+        })?;
+    let manifest = retained.manifest.as_ref();
+    let diagnostic_code = manifest.and_then(|manifest| {
+        if let eutheto_domain_ir::RunTerminalOutcomeV1::VerificationAlarm { diagnostic_code } =
+            &manifest.outcome
+        {
+            Some(diagnostic_code.clone())
+        } else {
+            None
+        }
+    });
+    let mut job = durable_solve_job(&state.app, &retained, current).await?;
+    attach_live_solve_owner(&state.operations, window.label(), &mut job)?;
+    let first_verified_feasible_milliseconds = job
+        .checkpoint
+        .as_ref()
+        .map(|checkpoint| checkpoint.verified_after_milliseconds)
+        .or_else(|| manifest.and_then(|manifest| manifest.first_verified_feasible_milliseconds));
+    setup_boundary::encode_response(
+        request.request_id,
+        Some(current),
+        SolveDiagnosticsSummaryDto {
+            schema_version: SOLVE_API_SCHEMA_VERSION,
+            job,
+            elapsed_milliseconds: manifest.and_then(|manifest| manifest.elapsed_milliseconds),
+            first_incumbent_milliseconds: manifest
+                .and_then(|manifest| manifest.first_incumbent_milliseconds),
+            first_verified_feasible_milliseconds,
+            phase_timings: manifest.map(|manifest| manifest.phase_timings),
+            diagnostic_code,
+            manifest_checksum: manifest.map(|manifest| manifest.checksum.clone()),
+        },
+        SOLVE_RESPONSE_MAX_BYTES,
+        None,
+    )
+    .await
+}
 
 core_deferred_commands!(
     DeferredCapability::ArtificialIntelligence;
@@ -2526,6 +4223,7 @@ core_deferred_commands!(
 
 const FORWARDED_EVENTS: &[(EventTopic, &str)] = &[
     (EventTopic::SolveProgress, "solve://progress"),
+    (EventTopic::SolveVerified, "solve://verified"),
     (EventTopic::SolveCompleted, "solve://completed"),
     (EventTopic::ScenarioChanged, "scenario://changed"),
     (
@@ -2637,6 +4335,7 @@ pub fn run() -> tauri::Result<()> {
             state.csv.close_window(&label);
             state.settings.close_window(&label);
             state.portable.close_window(&label);
+            state.recipient_reports.close_window(&label);
         }
         tauri::RunEvent::Exit => {
             let state = handle.state::<DesktopState>();
@@ -2644,6 +4343,7 @@ pub fn run() -> tauri::Result<()> {
             state.csv.shutdown();
             state.settings.shutdown();
             state.portable.shutdown();
+            state.recipient_reports.shutdown();
         }
         _ => {}
     });
@@ -2654,39 +4354,230 @@ pub fn run() -> tauri::Result<()> {
 mod history_boundary_tests;
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-    use std::sync::Arc;
-
     use eutheto_core::{
         AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
         BackendSupportColumn, CapabilityMatrix, EuthetoApp, ScenarioSummaryV2,
-        SolverSupportMatrixMetadata, SupportCell, SupportFeature, SupportFeatureCategory,
-        SupportFeatureGate, SupportFeatureId,
+        SolverSupportMatrixMetadata, StoredSolveFailure, SupportCell, SupportFeature,
+        SupportFeatureCategory, SupportFeatureGate, SupportFeatureId,
     };
+    use eutheto_domain_ir::RunManifest;
     use eutheto_types::{
         ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId, CancellationToken,
-        CommandId, CommandResult, DomainPackRef, EntityId, EventTopic, ProjectListItemV1,
-        ProjectMetadataDto, REVISION_MAX_V1, RequestId, Revision, SafeDiagnosticValue,
-        ScenarioSettings, ScenarioViewDto, SystemClock, SystemIdGenerator,
+        CommandId, CommandResult, DomainPackRef, EntityId, KnownVerificationAlarmV1,
+        ProjectListItemV1, ProjectMetadataDto, REVISION_MAX_V1, RequestId, Revision,
+        SafeDiagnosticValue, ScenarioSettings, ScenarioViewDto, SolveMode, StorageFailure,
+        SystemClock, SystemIdGenerator, VerificationAlarmTerminalization, VerificationFailure,
     };
     use serde::de::DeserializeOwned;
     use serde_json::{Value, json};
+    use std::error::Error;
+    use std::sync::Arc;
     use tauri::Manager;
 
     use super::{
-        CorrelatedRequest, DesktopState, FORWARDED_EVENTS, NativeFileError, RequestOnly,
-        SolutionExplainRequestV1, SolutionStartCounterfactualRequestV1, app_get_capabilities,
-        decode_counterfactual_start_request, map_app_error, map_native_file_error,
-        normalize_counterfactual_int64, operation_prepare, pack_describe, pack_list,
-        project_archive, project_create, project_delete, project_list, project_open,
+        DesktopState, NativeFileError, OPERATION_REQUEST_ENVELOPE_OVERHEAD_BYTES,
+        SOLVE_REQUEST_MAX_BYTES, SolutionAdoptBaseRequestV1, SolutionCompareRequestV3,
+        SolutionStartCounterfactualRequestV1, decode_counterfactual_start_request,
+        decode_solution_request, map_app_error, map_native_file_error, map_stored_solve_failure,
+        normalize_counterfactual_int64, operation_prepare, operation_release, pack_describe,
+        pack_list, project_archive, project_create, project_delete, project_list, project_open,
         project_unarchive, read_bounded_portable, revision_diagnostic_value,
         scenario_apply_command, scenario_get_summary, scenario_redo, scenario_undo,
-        selected_basename, solution_explain, solution_list, solution_response, solver_describe,
-        solver_get_deferred_gates, solver_get_support_matrix, solver_list,
-        solver_support_matrix_dto, suggested_portable_filename,
+        selected_basename, solution_explain, solution_list, solution_response,
+        solution_response_bounded, solve_options, solver_describe, solver_get_deferred_gates,
+        solver_get_support_matrix, solver_list, solver_support_matrix_dto,
+        suggested_portable_filename,
     };
 
     type IpcResult = Result<tauri::ipc::InvokeResponseBody, Value>;
+
+    #[test]
+    fn desktop_solve_time_override_preserves_modes_and_bounds_the_parent_budget()
+    -> Result<(), Box<dyn Error>> {
+        for (mode, default) in [
+            (SolveMode::Quick, 2_000),
+            (SolveMode::Balanced, 5_000),
+            (SolveMode::Deep, 30_000),
+        ] {
+            let options = solve_options(mode, None).map_err(|error| format!("{error:?}"))?;
+            assert_eq!(options.time_limit_milliseconds.value(), default);
+            for override_ms in [1, 11_000, 30_000] {
+                let options =
+                    solve_options(mode, Some(override_ms)).map_err(|error| format!("{error:?}"))?;
+                assert_eq!(
+                    options.time_limit_milliseconds.value(),
+                    u64::from(override_ms)
+                );
+            }
+            for invalid in [0, 30_001, u32::MAX] {
+                assert!(solve_options(mode, Some(invalid)).is_err());
+            }
+        }
+        assert!(solve_options(SolveMode::Custom, Some(1)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn native_known_verification_mapping_flattens_only_closed_scalars() -> Result<(), Box<dyn Error>>
+    {
+        let run_id = "018f47f2-e880-7000-8000-000000000010".parse()?;
+        let alarm = KnownVerificationAlarmV1::new(
+            run_id,
+            &"ab".repeat(32),
+            "verification.projection_failed",
+            VerificationAlarmTerminalization::Unconfirmed,
+            Some("storage.operation_failed"),
+        )?;
+        let mapped = map_app_error(AppError::Verification(
+            VerificationFailure::from_known_alarm(alarm.clone(), None),
+        ));
+        assert_eq!(mapped.category, ApiErrorCategoryDto::Verification);
+        assert_eq!(mapped.code, "verification.projection_failed");
+        assert_eq!(mapped.message, VerificationFailure::KNOWN_ALARM_MESSAGE);
+        let details = mapped.details.ok_or("known alarm details missing")?;
+        assert_eq!(details.len(), 5);
+        assert_eq!(
+            details.get("runId"),
+            Some(&SafeDiagnosticValue::Text(run_id.to_string()))
+        );
+        assert_eq!(
+            details.get("inputChecksum"),
+            Some(&SafeDiagnosticValue::Text("ab".repeat(32)))
+        );
+        assert_eq!(
+            details.get("diagnosticCode"),
+            Some(&SafeDiagnosticValue::Text(
+                "verification.projection_failed".to_owned()
+            ))
+        );
+        assert_eq!(
+            details.get("terminalization"),
+            Some(&SafeDiagnosticValue::Text("unconfirmed".to_owned()))
+        );
+        assert_eq!(
+            details.get("secondaryCauseCode"),
+            Some(&SafeDiagnosticValue::Text(
+                "storage.operation_failed".to_owned()
+            ))
+        );
+        assert!(details.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "runId"
+                    | "inputChecksum"
+                    | "diagnosticCode"
+                    | "terminalization"
+                    | "secondaryCauseCode"
+            )
+        }));
+
+        let mapped_stored = map_stored_solve_failure(StoredSolveFailure::AfterStart {
+            run_id,
+            known_alarm: Some(alarm),
+            error: AppError::Storage(StorageFailure {
+                code: "storage.operation_failed".to_owned(),
+                message: "original private storage details are not public.".to_owned(),
+                retryable: false,
+                diagnostic_id: None,
+            }),
+            cleanup: Err(AppError::Storage(StorageFailure {
+                code: "storage.operation_failed".to_owned(),
+                message: "raw details are not public.".to_owned(),
+                retryable: false,
+                diagnostic_id: None,
+            })),
+        });
+        assert_eq!(mapped_stored.category, ApiErrorCategoryDto::Verification);
+        assert_eq!(mapped_stored.code, "verification.projection_failed");
+        assert_eq!(
+            mapped_stored
+                .details
+                .as_ref()
+                .and_then(|details| details.get("terminalization")),
+            Some(&SafeDiagnosticValue::Text("unconfirmed".to_owned()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_exact_marked_alarm_readback_confirms_only_matching_manifest()
+    -> Result<(), Box<dyn Error>> {
+        let run_id = "018f47f2-e880-7000-8000-000000000010".parse()?;
+        let checksum = "ab".repeat(32);
+        let diagnostic_code = "verification.projection_failed";
+        let marked_manifest = RunManifest::new_clock_failed_alarm(
+            run_id,
+            checksum.clone(),
+            diagnostic_code.to_owned(),
+            "2026-09-01T00:00:00Z".parse()?,
+            "2026-09-01T00:00:01Z".parse()?,
+        )?;
+        let confirmed = map_stored_solve_failure(StoredSolveFailure::AfterStart {
+            run_id,
+            known_alarm: Some(KnownVerificationAlarmV1::new(
+                run_id,
+                &checksum,
+                diagnostic_code,
+                VerificationAlarmTerminalization::Unconfirmed,
+                None,
+            )?),
+            error: AppError::Storage(StorageFailure {
+                code: "storage.operation_failed".to_owned(),
+                message: "the original execution failure remains private.".to_owned(),
+                retryable: false,
+                diagnostic_id: None,
+            }),
+            cleanup: Ok(Box::new(marked_manifest)),
+        });
+        assert_eq!(
+            confirmed
+                .details
+                .as_ref()
+                .and_then(|details| details.get("terminalization")),
+            Some(&SafeDiagnosticValue::Text("confirmed".to_owned()))
+        );
+
+        let other_run = "018f47f2-e880-7000-8000-000000000011".parse()?;
+        for (manifest_run, manifest_checksum, manifest_code) in [
+            (other_run, checksum.clone(), diagnostic_code),
+            (run_id, "cd".repeat(32), diagnostic_code),
+            (run_id, checksum, "verification.score_failed"),
+        ] {
+            let manifest = RunManifest::new_clock_failed_alarm(
+                manifest_run,
+                manifest_checksum,
+                manifest_code.to_owned(),
+                "2026-09-01T00:00:00Z".parse()?,
+                "2026-09-01T00:00:01Z".parse()?,
+            )?;
+            let alarm = KnownVerificationAlarmV1::new(
+                run_id,
+                &"ab".repeat(32),
+                diagnostic_code,
+                VerificationAlarmTerminalization::Confirmed,
+                None,
+            )?;
+            let mapped = map_stored_solve_failure(StoredSolveFailure::AfterStart {
+                run_id,
+                known_alarm: Some(alarm),
+                error: AppError::Storage(StorageFailure {
+                    code: "storage.operation_failed".to_owned(),
+                    message: "the original execution failure remains private.".to_owned(),
+                    retryable: false,
+                    diagnostic_id: None,
+                }),
+                cleanup: Ok(Box::new(manifest)),
+            });
+            assert_eq!(
+                mapped
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.get("terminalization")),
+                Some(&SafeDiagnosticValue::Text("unconfirmed".to_owned()))
+            );
+        }
+        Ok(())
+    }
 
     fn invoke_ipc(
         webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
@@ -2977,60 +4868,24 @@ mod tests {
     }
 
     #[test]
-    fn phase_04_solution_capabilities_and_event_topics_are_exact() -> Result<(), Box<dyn Error>> {
-        let capabilities = app_get_capabilities(RequestOnly {
-            request_id: RequestId::new(&SystemIdGenerator)?,
-        })
-        .result;
-        for command in [
-            "solution_list",
-            "solution_get_summary",
-            "solution_get_view",
-            "solution_select",
-            "solution_verify",
-            "solution_compare",
-            "solution_explain",
-            "solution_start_counterfactual",
-            "solution_cancel_counterfactual",
-        ] {
-            assert!(capabilities.available_commands.contains(&command));
-            assert!(!capabilities.unavailable_commands.contains(&command));
-        }
-        for command in [
-            "solution_lock_assignment",
-            "solution_unlock_assignment",
-            "solution_create_repair_request",
-            "solution_export_preview",
-            "solution_export",
-            "solution_share_preview",
-            "solution_share_create",
-            "solution_export_cancel",
-        ] {
-            assert!(!capabilities.available_commands.contains(&command));
-            assert!(capabilities.unavailable_commands.contains(&command));
-        }
-
-        for expected in [
-            (EventTopic::SolveProgress, "solve://progress"),
-            (EventTopic::SolveCompleted, "solve://completed"),
-            (
-                EventTopic::ScenarioValidationChanged,
-                "scenario://validation-changed",
-            ),
-            (
-                EventTopic::CounterfactualProgress,
-                "counterfactual://progress",
-            ),
-        ] {
-            assert_eq!(
-                FORWARDED_EVENTS
-                    .iter()
-                    .filter(|mapping| **mapping == expected)
-                    .count(),
-                1
-            );
-        }
-        Ok(())
+    fn solve_progress_caps_same_phase_even_when_compiler_percent_changes() {
+        let at = std::time::Instant::now();
+        let last = Some((eutheto_types::SolvePhase::Compiling, at));
+        assert!(!super::should_publish_progress(
+            last,
+            eutheto_types::SolvePhase::Compiling,
+            at + std::time::Duration::from_millis(299)
+        ));
+        assert!(super::should_publish_progress(
+            last,
+            eutheto_types::SolvePhase::Compiling,
+            at + std::time::Duration::from_millis(300)
+        ));
+        assert!(super::should_publish_progress(
+            last,
+            eutheto_types::SolvePhase::Verifying,
+            at
+        ));
     }
 
     #[tokio::test]
@@ -3085,7 +4940,21 @@ mod tests {
             directory.path().join("solution-backups"),
         );
         let desktop = tauri::test::mock_builder()
-            .invoke_handler(tauri::generate_handler![solution_explain, solution_list])
+            .invoke_handler(tauri::generate_handler![
+                operation_prepare,
+                operation_release,
+                super::diagnostic_actions::solution_create_diagnostic_copy,
+                super::diagnostic_actions::solution_export_diagnostic,
+                super::recipient_report::solution_share_preview,
+                super::recipient_report::solution_share_create,
+                super::recipient_report::solution_share_release,
+                super::schedule_export::solution_export_preview,
+                super::schedule_export::solution_export,
+                super::schedule_export::solution_export_cancel,
+                super::schedule_export::solution_export_release,
+                solution_explain,
+                solution_list
+            ])
             .manage(state)
             .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
         let webview =
@@ -3107,6 +4976,7 @@ mod tests {
                 "schemaVersion": 1,
                 "scenarioId": scenario_id,
                 "currentRevision": 0,
+                "freshlyVerified": false,
                 "solutions": [],
             })
         );
@@ -3117,15 +4987,126 @@ mod tests {
                 "issueId": null,
             },
         });
+        let prepared: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "operation_prepare",
+            &json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "purpose": {"kind": "solutionExplain"},
+                "context": {
+                    "kind": "scenario",
+                    "scenarioId": scenario_id,
+                    "expectedRevision": Revision::INITIAL,
+                },
+            }),
+        )?;
+        // Keep the admitted retained revision; it is not rewritten to a later current revision.
         let explanation_envelope = json!({
             "requestId": RequestId::new(&SystemIdGenerator)?,
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "scenarioId": scenario_id,
+            "operationId": prepared.result["operationId"],
+            "sourceRevision": Revision::INITIAL,
             "request": explanation_request,
         });
-        let _: CorrelatedRequest<SolutionExplainRequestV1> =
-            serde_json::from_value(explanation_envelope.clone())?;
-        let explanation = invoke_ipc(&webview, "solution_explain", &explanation_envelope)?;
+        let oversized_request = json!({"oversized": "x".repeat(SOLVE_REQUEST_MAX_BYTES)});
+        for (command, expected_code) in [
+            ("solution_explain", "solution.request_too_large"),
+            (
+                "solution_create_diagnostic_copy",
+                "diagnostic_action.request_too_large",
+            ),
+            (
+                "solution_export_diagnostic",
+                "diagnostic_action.request_too_large",
+            ),
+            ("solution_share_preview", "recipient.request_too_large"),
+            ("solution_share_create", "recipient.request_too_large"),
+            ("solution_share_release", "recipient.request_too_large"),
+            (
+                "solution_export_preview",
+                "schedule_export.request_too_large",
+            ),
+            ("solution_export", "schedule_export.request_too_large"),
+            (
+                "solution_export_cancel",
+                "schedule_export.request_too_large",
+            ),
+            (
+                "solution_export_release",
+                "schedule_export.request_too_large",
+            ),
+        ] {
+            let error = invoke_ipc_args(
+                &webview,
+                command,
+                json!({"request": oversized_request.clone(), "onProgress": 7}),
+            )?
+            .err()
+            .ok_or("oversized operation request unexpectedly passed native admission")?;
+            assert_eq!(error["code"], expected_code);
+        }
+        for (command, expected_code) in [
+            ("solution_explain", "solution.request_too_large"),
+            (
+                "solution_create_diagnostic_copy",
+                "diagnostic_action.request_too_large",
+            ),
+            (
+                "solution_export_diagnostic",
+                "diagnostic_action.request_too_large",
+            ),
+            ("solution_share_preview", "recipient.request_too_large"),
+            ("solution_share_create", "recipient.request_too_large"),
+            ("solution_share_release", "recipient.request_too_large"),
+            (
+                "solution_export_preview",
+                "schedule_export.request_too_large",
+            ),
+            ("solution_export", "schedule_export.request_too_large"),
+            (
+                "solution_export_cancel",
+                "schedule_export.request_too_large",
+            ),
+            (
+                "solution_export_release",
+                "schedule_export.request_too_large",
+            ),
+        ] {
+            let error = invoke_ipc_args(
+                &webview,
+                command,
+                json!({
+                    "request": explanation_envelope.clone(),
+                    "onProgress": "x".repeat(
+                        SOLVE_REQUEST_MAX_BYTES + OPERATION_REQUEST_ENVELOPE_OVERHEAD_BYTES,
+                    ),
+                }),
+            )?
+            .err()
+            .ok_or("oversized invoke envelope unexpectedly passed native admission")?;
+            assert_eq!(error["code"], expected_code);
+        }
+        let error = invoke_ipc_args(
+            &webview,
+            "solution_explain",
+            json!({
+                "request": explanation_envelope.clone(),
+                "onProgress": "__CHANNEL__:42",
+                "padding": "x".repeat(
+                    SOLVE_REQUEST_MAX_BYTES + OPERATION_REQUEST_ENVELOPE_OVERHEAD_BYTES,
+                ),
+            }),
+        )?
+        .err()
+        .ok_or("oversized invoke envelope unexpectedly passed native admission")?;
+        assert_eq!(error["code"], "solution.request_too_large");
+        let explanation = invoke_ipc_args(
+            &webview,
+            "solution_explain",
+            json!({"request": explanation_envelope, "onProgress": "__CHANNEL__:42"}),
+        )?;
         let Err(explanation) = explanation else {
             return Err("unavailable validation explanation unexpectedly succeeded".into());
         };
@@ -3133,6 +5114,78 @@ mod tests {
             explanation["code"],
             "solution.explanation_validation_unavailable"
         );
+        // Ownership is the actual WebviewWindow label, not a caller-supplied context field.
+        let other_webview =
+            tauri::WebviewWindowBuilder::new(&desktop, "other", tauri::WebviewUrl::default())
+                .build()?;
+        let owner_prepared: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "operation_prepare",
+            &json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "purpose": {"kind": "solutionExplain"},
+                "context": {
+                    "kind": "scenario",
+                    "scenarioId": scenario_id,
+                    "expectedRevision": Revision::INITIAL,
+                },
+            }),
+        )?;
+        let mut wrong_owner = explanation_envelope.clone();
+        wrong_owner["requestId"] = json!(RequestId::new(&SystemIdGenerator)?);
+        wrong_owner["operationId"] = owner_prepared.result["operationId"].clone();
+        let wrong_owner = invoke_ipc_args(
+            &other_webview,
+            "solution_explain",
+            json!({"request": wrong_owner, "onProgress": "__CHANNEL__:42"}),
+        )?;
+        let Err(wrong_owner) = wrong_owner else {
+            return Err("explanation crossed its WebviewWindow owner".into());
+        };
+        assert_eq!(wrong_owner["code"], "operation.not_active");
+        let context_prepared: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "operation_prepare",
+            &json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "purpose": {"kind": "solutionExplain"},
+                "context": {
+                    "kind": "scenario",
+                    "scenarioId": scenario_id,
+                    "expectedRevision": Revision::INITIAL,
+                },
+            }),
+        )?;
+        let mut wrong_context = explanation_envelope.clone();
+        wrong_context["requestId"] = json!(RequestId::new(&SystemIdGenerator)?);
+        wrong_context["operationId"] = context_prepared.result["operationId"].clone();
+        wrong_context["scenarioId"] = json!(eutheto_types::ScenarioId::new(&SystemIdGenerator)?);
+        let wrong_context = invoke_ipc_args(
+            &webview,
+            "solution_explain",
+            json!({"request": wrong_context, "onProgress": "__CHANNEL__:42"}),
+        )?;
+        let Err(wrong_context) = wrong_context else {
+            return Err("explanation crossed its admitted scenario context".into());
+        };
+        assert_eq!(wrong_context["code"], "operation.claim_mismatch");
+        for operation_id in [
+            owner_prepared.result["operationId"].clone(),
+            context_prepared.result["operationId"].clone(),
+        ] {
+            let _: ApiResponseDto<Value> = invoke_ok(
+                &webview,
+                "operation_release",
+                &json!({
+                    "requestId": RequestId::new(&SystemIdGenerator)?,
+                    "schemaVersion": 1,
+                    "operationId": operation_id,
+                }),
+            )?;
+        }
+        assert_recipient_reservation_cleanup(&webview, &other_webview, scenario_id)?;
 
         let malformed = invoke_ipc(
             &webview,
@@ -3182,6 +5235,211 @@ mod tests {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn assert_recipient_reservation_cleanup(
+        webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        other: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        scenario_id: eutheto_types::ScenarioId,
+    ) -> Result<(), Box<dyn Error>> {
+        for (purpose, preview_command, release_command, format) in [
+            (
+                "sharePreview",
+                "solution_share_preview",
+                "solution_share_release",
+                "html",
+            ),
+            (
+                "exportPreview",
+                "solution_export_preview",
+                "solution_export_release",
+                "ics",
+            ),
+        ] {
+            let prepare = json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "purpose": {"kind": purpose},
+                "context": {"kind": "scenario", "scenarioId": scenario_id, "expectedRevision": 0},
+            });
+            let mut operations = Vec::new();
+            for _ in 0..2 {
+                let prepared: ApiResponseDto<Value> =
+                    invoke_ok(webview, "operation_prepare", &prepare)?;
+                operations.push(prepared.result["operationId"].clone());
+            }
+            let mut preview = json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "operationId": operations[0],
+                "scenarioId": scenario_id,
+                "expectedRevision": 0,
+                "solutionId": RequestId::new(&SystemIdGenerator)?,
+                "format": format,
+            });
+            if format == "html" {
+                preview["options"] = json!({});
+            } else {
+                preview["personId"] = Value::Null;
+            }
+            for (patch, expected) in [
+                (json!({"format": "pdf"}), "setup.invalid_request"),
+                (
+                    json!({"options": {"includeHiddenNotes": true}}),
+                    "setup.invalid_request",
+                ),
+                (
+                    json!({"destination": "caller-selected.html"}),
+                    "setup.invalid_request",
+                ),
+                (json!({"schemaVersion": 2}), "operation.version_unsupported"),
+                (
+                    json!({"expectedRevision": 1}),
+                    "recipient.preview_binding_mismatch",
+                ),
+                (
+                    json!({"scenarioId": RequestId::new(&SystemIdGenerator)?}),
+                    "recipient.preview_binding_mismatch",
+                ),
+            ] {
+                let mut request = preview.clone();
+                let Value::Object(fields) = patch else {
+                    return Err("invalid request patch".into());
+                };
+                request
+                    .as_object_mut()
+                    .ok_or("invalid preview object")?
+                    .extend(fields);
+                let error = invoke_ipc_args(
+                    webview,
+                    preview_command,
+                    json!({"request": request, "onProgress": "__CHANNEL__:42"}),
+                )?
+                .err()
+                .ok_or("hostile recipient request passed admission")?;
+                assert_eq!(error["code"], expected);
+            }
+            let error = invoke_ipc_args(
+                other,
+                preview_command,
+                json!({"request": preview, "onProgress": "__CHANNEL__:42"}),
+            )?
+            .err()
+            .ok_or("recipient reservation crossed native windows")?;
+            assert_eq!(error["code"], "recipient.preview_not_active");
+            let mut ordinary = prepare.clone();
+            ordinary["purpose"] = json!({"kind": "scenarioSummary"});
+            let ordinary: ApiResponseDto<Value> =
+                invoke_ok(webview, "operation_prepare", &ordinary)?;
+            let mut wrong_purpose = preview.clone();
+            wrong_purpose["operationId"] = ordinary.result["operationId"].clone();
+            let error = invoke_ipc_args(
+                webview,
+                preview_command,
+                json!({"request": wrong_purpose, "onProgress": "__CHANNEL__:42"}),
+            )?
+            .err()
+            .ok_or("ordinary read authority created a report")?;
+            assert_eq!(error["code"], "recipient.preview_not_active");
+            let _: ApiResponseDto<Value> = invoke_ok(
+                webview,
+                "operation_release",
+                &json!({
+                    "requestId": RequestId::new(&SystemIdGenerator)?,
+                    "schemaVersion": 1,
+                    "operationId": ordinary.result["operationId"],
+                }),
+            )?;
+            // Repeated report refusals must not leak any of the sixteen generic operation slots.
+            for _ in 0..32 {
+                let error = invoke_ipc(webview, "operation_prepare", &prepare)?
+                    .err()
+                    .ok_or("recipient count limit was bypassed")?;
+                assert_eq!(error["code"], "recipient.preview_capacity");
+            }
+            for (index, operation_id) in operations.into_iter().enumerate() {
+                let command = if index == 0 {
+                    release_command
+                } else {
+                    "operation_release"
+                };
+                let release = if index == 0 {
+                    json!({
+                        "requestId": RequestId::new(&SystemIdGenerator)?,
+                        "schemaVersion": 1,
+                        "scenarioId": scenario_id,
+                        "target": {"kind": "operation", "operationId": operation_id},
+                    })
+                } else {
+                    json!({
+                        "requestId": RequestId::new(&SystemIdGenerator)?,
+                        "schemaVersion": 1,
+                        "operationId": operation_id,
+                    })
+                };
+                let released: ApiResponseDto<Value> = invoke_ok(webview, command, &release)?;
+                assert_eq!(released.result["acknowledgement"], "released");
+                let mut released_preview = preview.clone();
+                released_preview["operationId"] = operation_id.clone();
+                let refused = invoke_ipc_args(
+                    webview,
+                    preview_command,
+                    json!({
+                        "request": released_preview,
+                        "onProgress": "__CHANNEL__:42",
+                    }),
+                )?
+                .err()
+                .ok_or("released report reservation was recreated")?;
+                assert_eq!(refused["code"], "recipient.preview_not_active");
+                let _: ApiResponseDto<Value> = invoke_ok(
+                    webview,
+                    "operation_release",
+                    &json!({
+                        "requestId": RequestId::new(&SystemIdGenerator)?,
+                        "schemaVersion": 1,
+                        "operationId": operation_id,
+                    }),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn base_adoption_request_accepts_only_bounded_result_identity_not_assignments()
+    -> Result<(), Box<dyn Error>> {
+        let source = json!({
+            "schemaVersion": 1,
+            "requestId": RequestId::new(&SystemIdGenerator)?,
+            "commandId": CommandId::new(&SystemIdGenerator)?,
+            "scenarioId": eutheto_types::ScenarioId::new(&SystemIdGenerator)?,
+            "expectedRevision": 3,
+            "result": {
+                "solutionId": eutheto_types::SolutionId::new(&SystemIdGenerator)?,
+                "resultChecksum": "a".repeat(64),
+            },
+            "actor": {"actorId": null, "displayName": "Local desktop user"},
+            "truncateRedo": false,
+        });
+        let parsed: SolutionAdoptBaseRequestV1 =
+            decode_solution_request(Some(source.clone())).map_err(|error| error.message)?;
+        assert_eq!(parsed.expected_revision, Revision::new(3));
+        let mut forged = source.clone();
+        forged["assignments"] = json!([{"personId": "untrusted", "shiftId": "untrusted"}]);
+        let Err(error) = decode_solution_request::<SolutionAdoptBaseRequestV1>(Some(forged)) else {
+            return Err("caller-owned assignments bypassed the stored-result projection".into());
+        };
+        assert_eq!(error.code, "solution.request_invalid");
+        let mut oversized = source;
+        oversized["padding"] = json!("x".repeat(65_536));
+        let Err(error) = decode_solution_request::<SolutionAdoptBaseRequestV1>(Some(oversized))
+        else {
+            return Err("oversized input was admitted as a typed request".into());
+        };
+        assert_eq!(error.code, "solution.request_too_large");
+        Ok(())
+    }
+
     #[test]
     fn solution_response_preserves_every_wide_integer_losslessly() -> Result<(), Box<dyn Error>> {
         #[derive(serde::Serialize)]
@@ -3216,6 +5474,399 @@ mod tests {
         assert_eq!(value["result"]["maximum"], i64::MAX.to_string());
         assert_eq!(value["result"]["safeUnsigned"], 9_007_199_254_740_991_u64);
         assert_eq!(value["result"]["wideUnsigned"], u64::MAX.to_string());
+        Ok(())
+    }
+    #[test]
+    fn explanation_response_admits_the_complete_two_megabyte_encoded_envelope()
+    -> Result<(), Box<dyn Error>> {
+        #[derive(Clone, serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompleteFixture {
+            escaped: String,
+            minimum: i64,
+            wide_unsigned: u64,
+            safe_unsigned: u64,
+            padding: String,
+        }
+
+        let request_id = RequestId::new(&SystemIdGenerator)?;
+        let escaped = "\"quoted\" \\\\ slash\nline\t\u{1f600}".to_owned();
+        let fixture = CompleteFixture {
+            escaped: escaped.clone(),
+            minimum: i64::MIN,
+            wide_unsigned: u64::MAX,
+            safe_unsigned: 9_007_199_254_740_991,
+            padding: String::new(),
+        };
+        let base = solution_response(request_id, Revision::INITIAL, fixture.clone())
+            .map_err(|error| format!("base response serialization failed: {}", error.message))?;
+        let base = tauri::ipc::IpcResponse::body(base)?;
+        let tauri::ipc::InvokeResponseBody::Json(base) = base else {
+            return Err("base explanation response was not JSON".into());
+        };
+        let base_bytes = base.len();
+        assert!(base_bytes < super::EXPLANATION_RESPONSE_MAX_BYTES);
+        let fixture = CompleteFixture {
+            escaped,
+            minimum: fixture.minimum,
+            wide_unsigned: fixture.wide_unsigned,
+            safe_unsigned: fixture.safe_unsigned,
+            padding: "x".repeat(super::EXPLANATION_RESPONSE_MAX_BYTES - base_bytes),
+        };
+        let response = solution_response_bounded(
+            request_id,
+            Revision::INITIAL,
+            fixture.clone(),
+            Some(super::EXPLANATION_RESPONSE_MAX_BYTES),
+        )
+        .map_err(|error| {
+            format!(
+                "complete explanation response was rejected: {}",
+                error.message
+            )
+        })?;
+        let body = tauri::ipc::IpcResponse::body(response)?;
+        let tauri::ipc::InvokeResponseBody::Json(body) = body else {
+            return Err("complete explanation response was not JSON".into());
+        };
+        assert_eq!(body.len(), super::EXPLANATION_RESPONSE_MAX_BYTES);
+        let value: Value = serde_json::from_str(&body)?;
+        assert_eq!(value["result"]["escaped"], json!(fixture.escaped));
+        assert_eq!(value["result"]["minimum"], json!(i64::MIN.to_string()));
+        assert_eq!(value["result"]["wideUnsigned"], json!(u64::MAX.to_string()));
+        assert_eq!(
+            value["result"]["safeUnsigned"],
+            json!(9_007_199_254_740_991_u64)
+        );
+        assert_eq!(value["requestId"], json!(request_id));
+        Ok(())
+    }
+
+    #[test]
+    fn explanation_response_observes_cancellation_after_serialization_completion()
+    -> Result<(), Box<dyn Error>> {
+        struct CancelAtCompletion {
+            token: CancellationToken,
+        }
+        impl serde::Serialize for CancelAtCompletion {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let result = serializer.serialize_str("serialized");
+                if result.is_ok() {
+                    self.token.cancel();
+                }
+                result
+            }
+        }
+
+        let token = CancellationToken::new();
+        let control = super::OperationControl::Cancellation(token.clone());
+        let result = super::solution_response_controlled(
+            RequestId::new(&SystemIdGenerator)?,
+            Revision::INITIAL,
+            CancelAtCompletion { token },
+            Some(super::EXPLANATION_RESPONSE_MAX_BYTES),
+            Some(&control),
+        );
+        assert_eq!(
+            result
+                .err()
+                .ok_or("serialization completed after cancellation")?
+                .code,
+            "operation.cancelled"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn current_comparison_response_fails_closed_above_native_size_limit()
+    -> Result<(), Box<dyn Error>> {
+        let request_id = RequestId::new(&SystemIdGenerator)?;
+        let scenario_id = eutheto_types::ScenarioId::new(&SystemIdGenerator)?;
+        let base_id = eutheto_types::SolutionId::new(&SystemIdGenerator)?;
+        let candidate_id = eutheto_types::SolutionId::new(&SystemIdGenerator)?;
+        let request = json!({
+            "schemaVersion": 3,
+            "scenarioId": scenario_id,
+            "baseSolutionId": base_id,
+            "candidateSolutionId": candidate_id,
+        });
+        let decoded: SolutionCompareRequestV3 = decode_solution_request(Some(request.clone()))
+            .map_err(|error| format!("valid V3 comparison request rejected: {error:?}"))?;
+        assert_eq!(decoded.base_solution_id, base_id);
+        let mut extra = request.clone();
+        extra["unknown"] = json!(true);
+        assert!(decode_solution_request::<SolutionCompareRequestV3>(Some(extra)).is_err());
+        let too_large = solution_response_bounded(
+            request_id,
+            Revision::INITIAL,
+            json!({ "difference": "x".repeat(super::SOLVE_RESPONSE_MAX_BYTES) }),
+            Some(super::SOLVE_RESPONSE_MAX_BYTES),
+        );
+        assert!(matches!(
+            too_large,
+            Err(ref error) if error.code == "solution.response_too_large"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn comparison_explanation_binds_exact_refs_without_reanchoring_to_visible_head()
+    -> Result<(), Box<dyn Error>> {
+        use eutheto_domain_ir::{
+            EvidenceRenderRequestV2, EvidenceRenderResultV1, ExplanationEvidencePayloadV2,
+            ExplanationEvidenceV2, ExplanationRequestSubjectV1, ExplanationResultV2,
+            PortableAcceptedResult, prepare_comparison_v2,
+        };
+
+        // Portable contract data is not fresh or local acceptance authority.
+        let source = PortableAcceptedResult::from_json(include_bytes!(
+            "../../../../crates/eutheto-domain-ir/tests/fixtures/portable_accepted_v2.json"
+        ))?;
+        let comparison = prepare_comparison_v2(&source, &source, None)?
+            .finish(eutheto_domain_ir::ComparisonEnrichmentV2::default())?;
+        let source_revision = Revision::try_new(source.scenario_revision)?;
+        let visible_revision = Revision::try_new(source.scenario_revision + 1)?;
+        let subject = ExplanationRequestSubjectV1::SolutionDifference {
+            left: comparison.base.accepted_result.clone(),
+            right: comparison.candidate.accepted_result.clone(),
+        };
+        let evidence =
+            ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::SolutionDifference {
+                comparison: Box::new(comparison),
+            })?;
+        let request = EvidenceRenderRequestV2::new(evidence.clone())?;
+        let rendered = EvidenceRenderResultV1::new(&request, Vec::new())?;
+        let mut result = eutheto_core::SolutionExplanationDtoV2 {
+            schema_version: 2,
+            scenario_id: source.scenario_id,
+            current_revision: visible_revision,
+            scenario_revisions: vec![source_revision, source_revision],
+            explanation: ExplanationResultV2::new(evidence, rendered)?,
+            infeasibility_context: None,
+        };
+        super::validate_solution_explanation_source(
+            source.scenario_id,
+            source_revision,
+            &subject,
+            &result,
+        )
+        .map_err(|error| format!("immutable-source explanation rejected: {error:?}"))?;
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                visible_revision,
+                &subject,
+                &result,
+            )
+            .is_err()
+        );
+
+        let mut wrong_subject = subject.clone();
+        if let ExplanationRequestSubjectV1::SolutionDifference { right, .. } = &mut wrong_subject {
+            right.result_checksum = "b".repeat(64);
+        }
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                source_revision,
+                &wrong_subject,
+                &result,
+            )
+            .is_err()
+        );
+        result.scenario_revisions.push(visible_revision);
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                source_revision,
+                &subject,
+                &result,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn current_status_reply_refuses_recorded_backend_proof_and_legacy_payload()
+    -> Result<(), Box<dyn Error>> {
+        use eutheto_domain_ir::{
+            AcceptedResultRefV1, EvidenceRenderRequestV2, EvidenceRenderResultV1,
+            ExplanationCertainty, ExplanationEvidencePayloadV2, ExplanationEvidenceV2,
+            ExplanationRequestSubjectV1, ExplanationResultV2, OptimalityStatusEvidence,
+            PortableAcceptedResult,
+        };
+        let source = PortableAcceptedResult::from_json(include_bytes!(
+            "../../../../crates/eutheto-domain-ir/tests/fixtures/portable_accepted_v2.json"
+        ))?;
+        let revision = Revision::try_new(source.scenario_revision)?;
+        let reference = AcceptedResultRefV1::from_result(&source.accepted_result)?;
+        let subject = ExplanationRequestSubjectV1::OptimalityStatus {
+            solve_run_id: source.run_input.run_id,
+            run_manifest_checksum: source.run_manifest.checksum.clone(),
+            result: Some(reference.clone()),
+        };
+        let response =
+            |schema_version| -> Result<eutheto_core::SolutionExplanationDtoV2, Box<dyn Error>> {
+                let evidence =
+                    ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::OptimalityStatus {
+                        status: Box::new(OptimalityStatusEvidence {
+                            schema_version,
+                            run_input: source.run_input.clone(),
+                            run_manifest: source.run_manifest.clone(),
+                            result: Some(reference.clone()),
+                        }),
+                    })?;
+                let request = EvidenceRenderRequestV2::new(evidence.clone())?;
+                let rendered = EvidenceRenderResultV1::new(&request, Vec::new())?;
+                Ok(eutheto_core::SolutionExplanationDtoV2 {
+                    schema_version: 2,
+                    scenario_id: source.scenario_id,
+                    current_revision: revision,
+                    scenario_revisions: vec![revision],
+                    explanation: ExplanationResultV2::new(evidence, rendered)?,
+                    infeasibility_context: None,
+                })
+            };
+        let mut current = response(Some(2))?;
+        super::validate_solution_explanation_source(
+            source.scenario_id,
+            revision,
+            &subject,
+            &current,
+        )
+        .map_err(|error| format!("descriptive current status rejected: {error:?}"))?;
+        current.explanation.evidence.certainty = ExplanationCertainty::BackendProof;
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                revision,
+                &subject,
+                &current,
+            )
+            .is_err()
+        );
+        let legacy = response(None)?;
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                revision,
+                &subject,
+                &legacy,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn retained_unavailable_diagnostic_binds_its_own_custody_checksum() -> Result<(), Box<dyn Error>>
+    {
+        use eutheto_domain_ir::{
+            ConflictUnavailableReason, DomainEvidenceId, EvidenceRenderRequestV2,
+            EvidenceRenderResultV1, ExplanationEvidencePayloadV2, ExplanationEvidenceV2,
+            ExplanationRequestSubjectV1, ExplanationResultV2, InfeasibilityEvidenceV1,
+            PortableAcceptedResult,
+        };
+
+        // Contract identity data only; this does not establish native diagnostic authority.
+        let source = PortableAcceptedResult::from_json(include_bytes!(
+            "../../../../crates/eutheto-domain-ir/tests/fixtures/portable_accepted_v2.json"
+        ))?;
+        let revision = Revision::try_new(source.scenario_revision)?;
+        let retained_checksum = "a".repeat(64);
+        let conflict_id = DomainEvidenceId::new(format!("infeasibility.{retained_checksum}"))?;
+        let subject = ExplanationRequestSubjectV1::Infeasibility {
+            solve_run_id: source.run_input.run_id,
+            run_manifest_checksum: source.run_manifest.checksum.clone(),
+            conflict_id: Some(conflict_id.clone()),
+        };
+        let evidence = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Infeasibility {
+            infeasibility: InfeasibilityEvidenceV1::Unavailable {
+                reason: ConflictUnavailableReason::FoundationalInfeasibility,
+            },
+            condition: None,
+        })?;
+        let request = EvidenceRenderRequestV2::new(evidence.clone())?;
+        let rendered = EvidenceRenderResultV1::new(&request, Vec::new())?;
+        let mut result = eutheto_core::SolutionExplanationDtoV2 {
+            schema_version: 2,
+            scenario_id: source.scenario_id,
+            current_revision: revision,
+            scenario_revisions: vec![revision],
+            explanation: ExplanationResultV2::new(evidence, rendered)?,
+            infeasibility_context: Some(eutheto_core::InfeasibilityExplanationContextV1 {
+                run_id: source.run_input.run_id,
+                source_revision: revision,
+                run_manifest_checksum: source.run_manifest.checksum.clone(),
+                evidence_checksum: retained_checksum,
+                conflict_id,
+            }),
+        };
+        super::validate_solution_explanation_source(
+            source.scenario_id,
+            revision,
+            &subject,
+            &result,
+        )
+        .map_err(|error| format!("retained unavailable evidence rejected: {error:?}"))?;
+        result
+            .infeasibility_context
+            .as_mut()
+            .ok_or("missing retained context")?
+            .evidence_checksum = result.explanation.evidence.checksum.clone();
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                revision,
+                &subject,
+                &result,
+            )
+            .is_err()
+        );
+        result.infeasibility_context = None;
+        assert!(
+            super::validate_solution_explanation_source(
+                source.scenario_id,
+                revision,
+                &subject,
+                &result,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn counterfactual_start_bounds_input_before_integer_normalization() {
+        let request = json!({
+            "condition": {"value": {"type": "integer", "value": "not-an-integer"}},
+            "unknown": "x".repeat(SOLVE_REQUEST_MAX_BYTES),
+        });
+        let failure = decode_counterfactual_start_request(Some(request));
+        assert!(matches!(
+            failure,
+            Err(ref error) if error.code == "solution.request_too_large"
+        ));
+    }
+
+    #[test]
+    fn bounded_response_writer_stops_before_retaining_excess_bytes() -> Result<(), Box<dyn Error>> {
+        use std::io::Write;
+        let mut writer = super::LimitedResponseWriter {
+            bytes: Vec::new(),
+            maximum: Some(4),
+            exceeded: false,
+            control: None,
+            interrupted: None,
+        };
+        writer.write_all(b"1234")?;
+        assert!(writer.write_all(b"56").is_err());
+        assert_eq!(writer.bytes, b"1234");
+        assert!(writer.exceeded);
         Ok(())
     }
 

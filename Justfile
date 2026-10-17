@@ -174,7 +174,7 @@ worker-smoke executable resource_root manifest_sha256:
 
 # Prove rule contributions and complete Workforce compilation/projection against the approved worker.
 workforce-rule-worker-test:
-    cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_ -- --ignored
+    cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_ -- --ignored --test-threads=1
 
 
 # Reject Workforce generation drift and validate all original-domain fixture semantics.
@@ -304,13 +304,39 @@ bench:
     printf 'Benchmark evidence: %s\n' "$run_root"
 
 # Build and exercise real Linux desktop persistence through WebKit WebDriver.
-e2e:
+# `just e2e true` tests the unsigned, manifest-bound OR-Tools desktop bundle.
+# `EUTHETO_E2E_CONFLICT_ONLY=1 just e2e true` runs the complete isolated conflict/copy/export flow.
+# `EUTHETO_E2E_CONDITIONAL_ONLY=1 just e2e true` proves saved replacement pins, copy, Undo and Redo.
+# `EUTHETO_E2E_ALTERNATIVES_ONLY=1 just e2e true` exercises sequential profiles and retained recovery.
+# `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true` solves large-supported with the bundled worker, verifies the result, and measures keyboard view/page/calendar transitions.
+# `EUTHETO_E2E_RECIPIENT_EXPORT_ONLY=1 just e2e true` tests keyboard-operated accepted CSV/share reviews before publication checks.
+# `EUTHETO_E2E_KEYBOARD_WORKFLOW_ONLY=1 just e2e true` creates, configures, solves, repairs, compares, and reviews export for a fictional project using UI keyboard actions.
+# `EUTHETO_E2E_EXTERNAL_PLAN_ONLY=1 just e2e true` exercises unverified source editing, Repair and recovery.
+# `EUTHETO_E2E_ASSIGNMENT_CSV_ONLY=1 just e2e true` exercises native assignment import, reports and recovery.
+# `EUTHETO_E2E_ELIGIBILITY_CSV_ONLY=1 just e2e true` exercises sparse eligibility import and recovery.
+# `EUTHETO_E2E_ELIGIBILITY_MATRIX_ONLY=1 just e2e true` exercises real pasted-matrix native review, reports and recovery.
+# `EUTHETO_E2E_SHIFT_CSV_ONLY=1 just e2e true` exercises native shift/time mapping, reports and recovery.
+# `EUTHETO_E2E_AVAILABILITY_CSV_ONLY=1 just e2e true` exercises native availability/time-off import and recovery.
+# Set rebuild=false only to rerun against an existing artifact when application inputs are unchanged.
+e2e bundled="false" rebuild="true":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "$(uname -s)" != "Linux" ]]; then
       printf 'error: desktop WebDriver E2E is supported on Linux only\n' >&2
       exit 1
     fi
+    if [[ "{{ bundled }}" != "true" && "{{ bundled }}" != "false" ]]; then
+      printf 'error: e2e bundled must be true or false\n' >&2
+      exit 1
+    fi
+    if [[ "{{ rebuild }}" != "true" && "{{ rebuild }}" != "false" ]]; then
+      printf 'error: e2e rebuild must be true or false\n' >&2
+      exit 1
+    fi
+    if [[ "{{ bundled }}" == "true" && "{{ rebuild }}" == "true" ]]; then
+      just worker-build-desktop
+    fi
+
 
     e2e_root="$(mktemp -d "${TMPDIR:-/tmp}/eutheto-e2e.XXXXXX")"
     trap 'rm -rf -- "$e2e_root"' EXIT
@@ -322,7 +348,26 @@ e2e:
     mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_RUNTIME_DIR" "$XDG_STATE_HOME"
     chmod 700 "$XDG_RUNTIME_DIR"
 
-    pnpm --filter @eutheto/desktop run tauri build --debug --no-bundle
+    if [[ "{{ bundled }}" == "true" ]]; then
+      shopt -s nullglob
+      bundles=(.cache/cargo-target/release/bundle/deb/*.deb)
+      if [[ ${#bundles[@]} -ne 1 ]]; then
+        printf 'error: expected exactly one unsigned desktop DEB bundle\n' >&2
+        exit 1
+      fi
+      7z x -bd -y "-o$e2e_root/archive" "${bundles[0]}"
+      mkdir -p "$e2e_root/application"
+      tar -xf "$e2e_root/archive/data.tar" -C "$e2e_root/application"
+      if [[ ! -x "$e2e_root/application/usr/bin/eutheto-desktop" ||
+            ! -x "$e2e_root/application/usr/bin/ortools-worker" ]]; then
+        printf 'error: unsigned desktop bundle is missing its application or solver\n' >&2
+        exit 1
+      fi
+      export EUTHETO_E2E_APPLICATION="$e2e_root/application/usr/bin/eutheto-desktop"
+      export EUTHETO_E2E_PACKAGED_SOLVE=1
+    elif [[ "{{ rebuild }}" == "true" ]]; then
+      pnpm --filter @eutheto/desktop run tauri build --debug --no-bundle
+    fi
     e2e_command=(
       "$(command -v env)"
       "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"

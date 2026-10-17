@@ -4,14 +4,17 @@ mod fixed;
 mod maximum_consecutive;
 mod maximum_count;
 mod maximum_hours;
+mod maximum_weekends;
 mod mutual;
 mod predicates;
 mod rest;
 mod skill_mix;
 mod transition;
+mod workload_quota;
 use super::{
     AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleEvaluation,
-    AssignmentRuleLimit, InstantInterval, RequiredRulePartition,
+    AssignmentRuleLimit, HealthDirection, HealthObservation, HealthObservationKind, HealthUnits,
+    InstantInterval, RequiredRulePartition,
     budget::{MAX_SELECTED_PAIRS, OperationBudget, add, count, within},
     input::AssignmentInput,
     intervals::date_range,
@@ -32,12 +35,19 @@ use eutheto_types::{
     CancellationToken, EntityId, PersonId, Rfc3339Timestamp, RuleId, ScenarioDocument,
     ScenarioSettings,
 };
-use jiff::SignedDuration;
-use std::collections::BTreeMap;
+use jiff::{SignedDuration, civil::Date};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const VIOLATIONS: &str = "official.workforce.fact.violation_count";
 pub(super) const CHECKED: &str = "official.workforce.fact.checked_predicate_count";
 const SUMMARY: &str = "official.workforce.evaluation.summary";
+const REPAIR_ASSOCIATION_KIND: &str = "official.workforce.fact.repair_association_kind";
+
+/// One bounded failed original-domain predicate and its changed source pairs.
+pub(super) struct RepairObservation {
+    pub evaluation: RuleEvaluation,
+    pub affected_pairs: Vec<AssignmentPair>,
+}
 
 /// Evaluates Eligibility, Availability, Coverage, `RequiredSkillMix`, `FixedAssignment`, authored
 /// Hard locks, `NoOverlap`, `MinimumRest`, `TransitionTime`, `MaximumAssignmentCount` and
@@ -80,6 +90,73 @@ pub fn evaluate_assignment_rules(
     })
 }
 
+/// Evaluates the same original predicates while retaining bounded observations for the native
+/// accepted-result health view. Normal verification callers do not use this sidecar.
+pub(crate) fn evaluate_assignment_rules_with_health(
+    document: &ScenarioDocument,
+    selected_pairs: &[AssignmentPair],
+    budget: &mut OperationBudget<'_>,
+) -> Result<(AssignmentRuleEvaluation, Vec<HealthObservation>), AssignmentRuleError> {
+    budget.check()?;
+    within(
+        count(selected_pairs.len())?,
+        MAX_SELECTED_PAIRS,
+        AssignmentRuleLimit::SelectedPairs,
+    )?;
+    let input = AssignmentInput::new(document, budget)?;
+    input.validate_selection(selected_pairs, budget)?;
+    let selected = Selected::new(&input, selected_pairs, budget)?;
+    let (evaluations, obligations, health, _) = evaluate_prepared_with_health(
+        document,
+        &input,
+        &selected,
+        &document.settings,
+        budget,
+        true,
+        false,
+        None,
+    )?;
+    Ok((
+        AssignmentRuleEvaluation {
+            source_document_hash: input.source_document_hash,
+            evaluations,
+            obligations,
+        },
+        health,
+    ))
+}
+
+pub(super) fn evaluate_repair_selection(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    selected_pairs: &[AssignmentPair],
+    association_pairs: &[AssignmentPair],
+    budget: &mut OperationBudget<'_>,
+) -> Result<
+    (
+        Vec<RuleEvaluation>,
+        RequiredRulePartition,
+        Vec<RepairObservation>,
+    ),
+    AssignmentRuleError,
+> {
+    budget.check()?;
+    input.validate_selection(selected_pairs, budget)?;
+    input.validate_selection(association_pairs, budget)?;
+    let selected = Selected::with_associations(input, selected_pairs, association_pairs, budget)?;
+    let (evaluations, obligations, _, observations) = evaluate_prepared_with_health(
+        document,
+        input,
+        &selected,
+        &document.settings,
+        budget,
+        false,
+        true,
+        None,
+    )?;
+    Ok((evaluations, obligations, observations))
+}
+
 /// Reuses prepared source data after the caller has checked pair identities, uniqueness and bounds.
 pub(super) fn evaluate_validated_selection(
     document: &ScenarioDocument,
@@ -90,6 +167,25 @@ pub(super) fn evaluate_validated_selection(
 ) -> Result<(Vec<RuleEvaluation>, RequiredRulePartition), AssignmentRuleError> {
     let selected = Selected::new(input, selected_pairs, budget)?;
     evaluate_prepared(document, input, &selected, settings, budget)
+}
+/// Observes only configured workload families during the original required evaluation.
+/// Disabled collection retains ordinary traversal, allocations, error order and budget charges.
+pub(super) fn evaluate_validated_selection_with_outcomes(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    pairs: &[AssignmentPair],
+    settings: &ScenarioSettings,
+    budget: &mut OperationBudget<'_>,
+    outcomes: Option<&mut super::alternative_outcomes::Collector>,
+) -> Result<(Vec<RuleEvaluation>, RequiredRulePartition), AssignmentRuleError> {
+    let selected = Selected::new(input, pairs, budget)?;
+    if outcomes.is_none() {
+        return evaluate_prepared(document, input, &selected, settings, budget);
+    }
+    let (evaluations, obligations, _, _) = evaluate_prepared_with_health(
+        document, input, &selected, settings, budget, false, false, outcomes,
+    )?;
+    Ok((evaluations, obligations))
 }
 
 /// Rechecks this recorded decision only; never certifies aggregate coverage, overlap, rest or
@@ -112,7 +208,7 @@ pub(super) fn evaluate_pair(
     };
     let selected = Selected::new(input, pairs, budget)?;
     let mut evaluations = vec![
-        activity(person, shifts, settings, budget)?
+        activity(person, shifts, settings, false, budget)?
             .finish(RuleId::from_uuid(pair.person_id.as_uuid()), budget)?,
     ];
     if let Some(records) = input.availability_by_person.get(&pair.person_id) {
@@ -125,7 +221,7 @@ pub(super) fn evaluate_pair(
             };
             if record.availability_kind == AvailabilityKind::ApprovedTimeOff {
                 evaluations.push(
-                    approved_leave(input, record, shifts, settings, budget)?.finish(
+                    approved_leave(input, record, shifts, settings, false, budget)?.finish(
                         RuleId::from_uuid(record.id.as_entity_id().as_uuid()),
                         budget,
                     )?,
@@ -142,8 +238,9 @@ pub(super) fn evaluate_pair(
                 WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. }
             )
         {
-            evaluations
-                .push(pair_rule(input, &selected, rule, settings, budget)?.finish(id, budget)?);
+            evaluations.push(
+                pair_rule(input, &selected, rule, settings, false, budget)?.finish(id, budget)?,
+            );
         }
     }
     budget.sort_work(evaluations.len())?;
@@ -160,7 +257,38 @@ fn evaluate_prepared(
     settings: &ScenarioSettings,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(Vec<RuleEvaluation>, RequiredRulePartition), AssignmentRuleError> {
+    let (evaluations, obligations, _, _) = evaluate_prepared_with_health(
+        document, input, selected, settings, budget, false, false, None,
+    )?;
+    Ok((evaluations, obligations))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::type_complexity
+)]
+fn evaluate_prepared_with_health(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    settings: &ScenarioSettings,
+    budget: &mut OperationBudget<'_>,
+    collect_health: bool,
+    collect_repair: bool,
+    mut outcomes: Option<&mut super::alternative_outcomes::Collector>,
+) -> Result<
+    (
+        Vec<RuleEvaluation>,
+        RequiredRulePartition,
+        Vec<HealthObservation>,
+        Vec<RepairObservation>,
+    ),
+    AssignmentRuleError,
+> {
     let mut evaluations = Vec::new();
+    let mut health = Vec::new();
+    let mut observations = Vec::new();
     let mut obligations = RequiredRulePartition {
         handled: Vec::new(),
         remaining: Vec::new(),
@@ -171,6 +299,8 @@ fn evaluate_prepared(
         settings,
         &mut evaluations,
         &mut obligations.handled,
+        &mut observations,
+        collect_repair,
         budget,
     )?;
     for rule in input.domain.rules.values() {
@@ -179,21 +309,58 @@ fn evaluate_prepared(
         if !active {
             continue;
         }
-        let mut summary = Summary::default();
+        // Health re-runs Coverage over the full source, including when no authored rule exists.
+        let mut summary =
+            Summary::new(collect_health && !matches!(rule, WorkforceRule::Coverage { .. }));
+        if collect_repair {
+            summary.enable_repair();
+        }
+        summary.set_rule_id(id);
+        if outcomes.is_some()
+            && matches!(
+                rule,
+                WorkforceRule::WorkloadQuota(_)
+                    | WorkforceRule::MaximumHours { .. }
+                    | WorkforceRule::MaximumAssignmentCount { .. }
+                    | WorkforceRule::MaximumConsecutive { .. }
+                    | WorkforceRule::MaximumWorkedWeekends { .. }
+            )
+            && let Some(outcomes) = outcomes.as_deref_mut()
+        {
+            summary.alternatives = Some(std::mem::take(outcomes));
+        }
         match rule {
             WorkforceRule::FixedAssignment {
                 person_id,
                 shift_id,
+                assigned,
                 ..
             } => {
                 retain_id(&mut obligations.handled, id, budget)?;
-                evaluations.push(fixed::fixed_assignment(
-                    input, selected, id, scope, *person_id, *shift_id, budget,
+                let summary = fixed::fixed_assignment(
+                    input,
+                    selected,
+                    id,
+                    scope,
+                    AssignmentPair {
+                        person_id: *person_id,
+                        shift_id: *shift_id,
+                    },
+                    *assigned,
+                    collect_repair,
+                    budget,
+                )?;
+                evaluations.push(finish_summary(
+                    summary,
+                    id,
+                    selected,
+                    &mut observations,
+                    budget,
                 )?);
                 continue;
             }
             WorkforceRule::Eligibility { .. } | WorkforceRule::Availability { .. } => {
-                summary = pair_rule(input, selected, rule, settings, budget)?;
+                summary = pair_rule(input, selected, rule, settings, collect_repair, budget)?;
             }
             WorkforceRule::Coverage { .. } => {
                 coverage::evaluate(input, selected, scope, &mut summary, budget)?;
@@ -214,6 +381,9 @@ fn evaluate_prepared(
             WorkforceRule::MinimumRest(rule) => {
                 rest::evaluate(input, selected, rule, &mut summary, budget)?;
             }
+            WorkforceRule::WorkloadQuota(_) => {
+                workload_quota::evaluate(document, input, selected, rule, &mut summary, budget)?;
+            }
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 maximum_count::evaluate(document, input, selected, rule, &mut summary, budget)?;
             }
@@ -232,11 +402,65 @@ fn evaluate_prepared(
             WorkforceRule::MaximumConsecutive { .. } => {
                 maximum_consecutive::evaluate(input, selected, rule, &mut summary, budget)?;
             }
+            WorkforceRule::MaximumWorkedWeekends { .. } => {
+                maximum_weekends::evaluate(input, selected, rule, settings, &mut summary, budget)?;
+            }
+        }
+        if collect_health && matches!(rule, WorkforceRule::Coverage { .. }) && summary.checked == 0
+        {
+            budget.reserve(1, 0, 192)?;
+            health.push(HealthObservation {
+                kind: HealthObservationKind::CoverageHeadcount,
+                rule_id: Some(id),
+                coverage_owner: None,
+                person_id: None,
+                shift_id: None,
+                other_shift_id: None,
+                period: None,
+                units: HealthUnits::People,
+                direction: HealthDirection::Minimum,
+                threshold: None,
+                observed: None,
+                satisfied: None,
+                minimum_rank: None,
+                affected_pairs: Vec::new(),
+                affected_pair_count: 0,
+                affected_pairs_truncated: false,
+            });
+        }
+        if let Some(mut observations) = summary.take_health() {
+            health.append(&mut observations);
+        }
+        if let Some(outcomes) = outcomes.as_deref_mut()
+            && let Some(facts) = summary.alternatives.take()
+        {
+            *outcomes = facts;
         }
         retain_id(&mut obligations.handled, id, budget)?;
-        evaluations.push(summary.finish(id, budget)?);
+        evaluations.push(finish_summary(
+            summary,
+            id,
+            selected,
+            &mut observations,
+            budget,
+        )?);
     }
-    append_lock_evaluations(input, selected, &mut evaluations, &mut obligations, budget)?;
+    if collect_health {
+        let mut coverage_summary = Summary::new(true);
+        coverage::evaluate_all(input, selected, &mut coverage_summary, budget)?;
+        if let Some(mut observations) = coverage_summary.take_health() {
+            health.append(&mut observations);
+        }
+    }
+    append_lock_evaluations(
+        input,
+        selected,
+        &mut evaluations,
+        &mut obligations,
+        &mut observations,
+        collect_repair,
+        budget,
+    )?;
     budget.sort_work(obligations.handled.len())?;
     budget.sort_work(obligations.remaining.len())?;
     budget.sort_work(evaluations.len())?;
@@ -244,7 +468,7 @@ fn evaluate_prepared(
     obligations.remaining.sort_unstable();
     evaluations.sort_unstable_by_key(|evaluation| evaluation.rule_id);
     budget.check()?;
-    Ok((evaluations, obligations))
+    Ok((evaluations, obligations, health, observations))
 }
 
 fn append_lock_evaluations(
@@ -252,6 +476,8 @@ fn append_lock_evaluations(
     selected: &Selected<'_>,
     evaluations: &mut Vec<RuleEvaluation>,
     obligations: &mut RequiredRulePartition,
+    observations: &mut Vec<RepairObservation>,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
     for lock in input.domain.locked_assignments.values() {
@@ -260,29 +486,37 @@ fn append_lock_evaluations(
         match lock.state {
             LockState::Hard {} => {
                 retain_id(&mut obligations.handled, lock_id, budget)?;
-                evaluations.push(fixed::hard_lock(
+                let summary = fixed::hard_lock(
                     selected,
                     lock_id,
                     lock.person_id,
                     lock.shift_id,
+                    collect_repair,
+                    budget,
+                )?;
+                evaluations.push(finish_summary(
+                    summary,
+                    lock_id,
+                    selected,
+                    observations,
                     budget,
                 )?);
             }
-            LockState::Soft { .. } => {
-                retain_id(&mut obligations.remaining, lock_id, budget)?;
-            }
-            LockState::Unlocked {} => {}
+            LockState::Soft { .. } | LockState::Unlocked {} => {}
         }
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fact_evaluations(
     input: &AssignmentInput,
     selected: &Selected<'_>,
     settings: &ScenarioSettings,
     evaluations: &mut Vec<RuleEvaluation>,
     handled: &mut Vec<RuleId>,
+    observations: &mut Vec<RepairObservation>,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
     for person_id in &input.people {
@@ -294,7 +528,8 @@ fn fact_evaluations(
             .by_person
             .get(person_id)
             .map_or(&[][..], Vec::as_slice);
-        evaluations.push(activity(person, shifts, settings, budget)?.finish(id, budget)?);
+        let summary = activity(person, shifts, settings, collect_repair, budget)?;
+        evaluations.push(finish_summary(summary, id, selected, observations, budget)?);
     }
     for entity in input.domain.entities.values() {
         budget.step()?;
@@ -310,8 +545,8 @@ fn fact_evaluations(
             .by_person
             .get(&record.person_id)
             .map_or(&[][..], Vec::as_slice);
-        evaluations
-            .push(approved_leave(input, record, shifts, settings, budget)?.finish(id, budget)?);
+        let summary = approved_leave(input, record, shifts, settings, collect_repair, budget)?;
+        evaluations.push(finish_summary(summary, id, selected, observations, budget)?);
     }
     Ok(())
 }
@@ -320,9 +555,14 @@ fn activity(
     person: &Person,
     shifts: &[&ResolvedShift],
     settings: &ScenarioSettings,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
 ) -> Result<Summary, AssignmentRuleError> {
-    let mut summary = Summary::default();
+    let mut summary = if collect_repair {
+        Summary::repair()
+    } else {
+        Summary::default()
+    };
     if shifts.is_empty() {
         return Ok(summary);
     }
@@ -370,9 +610,14 @@ fn approved_leave(
     record: &Availability,
     shifts: &[&ResolvedShift],
     settings: &ScenarioSettings,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
 ) -> Result<Summary, AssignmentRuleError> {
-    let mut summary = Summary::default();
+    let mut summary = if collect_repair {
+        Summary::repair()
+    } else {
+        Summary::default()
+    };
     for shift in shifts {
         budget.step()?;
         let metadata = input.metadata(shift)?;
@@ -388,10 +633,15 @@ fn pair_rule(
     selected: &Selected<'_>,
     rule: &WorkforceRule,
     settings: &ScenarioSettings,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
 ) -> Result<Summary, AssignmentRuleError> {
     let (_, _, scope) = rule.header();
-    let mut summary = Summary::default();
+    let mut summary = if collect_repair {
+        Summary::repair()
+    } else {
+        Summary::default()
+    };
     for (person_id, shifts) in &selected.by_person {
         budget.step()?;
         let person = input.person(*person_id).ok_or_else(invalid)?;
@@ -478,6 +728,7 @@ fn check_availability(
 struct Selected<'a> {
     by_person: BTreeMap<PersonId, Vec<&'a ResolvedShift>>,
     by_shift: BTreeMap<ShiftId, Vec<PersonId>>,
+    associations: Option<BTreeSet<AssignmentPair>>,
 }
 
 impl<'a> Selected<'a> {
@@ -502,6 +753,7 @@ impl<'a> Selected<'a> {
         let mut selected = Self {
             by_person: BTreeMap::new(),
             by_shift: BTreeMap::new(),
+            associations: None,
         };
         for pair in pairs {
             budget.step()?;
@@ -535,6 +787,27 @@ impl<'a> Selected<'a> {
             people.sort_unstable();
         }
         Ok(selected)
+    }
+
+    fn with_associations(
+        input: &'a AssignmentInput,
+        pairs: &[AssignmentPair],
+        associations: &[AssignmentPair],
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<Self, AssignmentRuleError> {
+        let mut selected = Self::new(input, pairs, budget)?;
+        let mut values = BTreeSet::new();
+        for pair in associations {
+            budget.step()?;
+            budget.reserve(0, 1, 48)?;
+            values.insert(*pair);
+        }
+        selected.associations = Some(values);
+        Ok(selected)
+    }
+
+    fn associations(&self) -> Option<&BTreeSet<AssignmentPair>> {
+        self.associations.as_ref()
     }
 }
 
@@ -599,7 +872,7 @@ fn overlap(
                     witness.other_shift = Some(second);
                     witness.interval =
                         predicates::interval(left).intersection(predicates::interval(right));
-                    summary.failure(&witness)?;
+                    summary.failure(&witness, &witness, None, "direct", budget)?;
                 }
             }
         }
@@ -611,7 +884,7 @@ fn overlap(
 struct Witness {
     person: Option<PersonId>,
     other_person: Option<PersonId>,
-    shift: ShiftId,
+    shift: Option<ShiftId>,
     other_shift: Option<ShiftId>,
     owner: EntityId,
     owner_kind: &'static str,
@@ -623,9 +896,13 @@ struct Witness {
     actual: Option<u64>,
     interval: Option<InstantInterval>,
     period: Option<(Rfc3339Timestamp, Rfc3339Timestamp)>,
+    consecutive_start_date: Option<Date>,
+    consecutive_end_date: Option<Date>,
     rest: Option<RestWitness>,
     transition: Option<TransitionWitness>,
     hours: Option<HoursWitness>,
+    quota: Option<QuotaWitness>,
+    quota_count: Option<QuotaCountWitness>,
 }
 
 #[derive(Clone, Copy)]
@@ -636,6 +913,22 @@ struct HoursWitness {
     calendar: Option<WorkCalendarId>,
 }
 
+#[derive(Clone, Copy)]
+struct QuotaWitness {
+    minimum_minutes: u32,
+    maximum_minutes: Option<u32>,
+    actual: SignedDuration,
+    bucket: WorkloadBucketId,
+    calendar: WorkCalendarId,
+}
+
+#[derive(Clone, Copy)]
+struct QuotaCountWitness {
+    minimum: u32,
+    maximum: Option<u32>,
+    actual: u64,
+    calendar: WorkCalendarId,
+}
 #[derive(Clone, Copy)]
 struct RestWitness {
     minimum_minutes: u32,
@@ -660,7 +953,7 @@ impl Witness {
         Self {
             person: Some(pair.person_id),
             other_person: None,
-            shift: pair.shift_id,
+            shift: Some(pair.shift_id),
             other_shift: None,
             owner,
             owner_kind,
@@ -672,9 +965,13 @@ impl Witness {
             actual: None,
             interval: None,
             period: None,
+            consecutive_start_date: None,
+            consecutive_end_date: None,
             rest: None,
             transition: None,
             hours: None,
+            quota: None,
+            quota_count: None,
         }
     }
 
@@ -701,11 +998,145 @@ impl Witness {
     }
 }
 
+const MAX_HEALTH_AFFECTED_PAIRS: usize = 32;
+
+struct RepairFailure {
+    witness: Witness,
+    rule_id: Option<RuleId>,
+    association_kind: &'static str,
+    members: Vec<AssignmentPair>,
+}
+
+fn exact_alternative_duration(duration: SignedDuration) -> Result<i128, AssignmentRuleError> {
+    i128::from(duration.as_secs())
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(i128::from(duration.subsec_nanos())))
+        .ok_or_else(arithmetic)
+}
 #[derive(Default)]
 struct Summary {
     checked: u64,
     violations: u64,
     first: Option<Witness>,
+    source_rule: Option<RuleId>,
+    health: Option<Vec<HealthObservation>>,
+    repair: Option<Vec<RepairFailure>>,
+    alternatives: Option<super::alternative_outcomes::Collector>,
+}
+
+impl Summary {
+    fn new(collect_health: bool) -> Self {
+        Self {
+            health: collect_health.then(Vec::new),
+            ..Self::default()
+        }
+    }
+
+    fn repair() -> Self {
+        Self {
+            repair: Some(Vec::new()),
+            ..Self::default()
+        }
+    }
+
+    fn enable_repair(&mut self) {
+        self.repair = Some(Vec::new());
+    }
+
+    fn collecting_repair(&self) -> bool {
+        self.repair.is_some()
+    }
+
+    fn take_repair(&mut self) -> Option<Vec<RepairFailure>> {
+        self.repair.take()
+    }
+
+    fn set_rule_id(&mut self, rule_id: RuleId) {
+        self.source_rule = Some(rule_id);
+    }
+
+    fn collecting_health(&self) -> bool {
+        self.health.is_some()
+    }
+
+    fn take_health(&mut self) -> Option<Vec<HealthObservation>> {
+        self.health.take()
+    }
+
+    fn record_health(
+        &mut self,
+        mut observation: HealthObservation,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        let Some(health) = self.health.as_mut() else {
+            return Ok(());
+        };
+        observation.rule_id = observation.rule_id.or(self.source_rule);
+        if observation.affected_pairs.len() > MAX_HEALTH_AFFECTED_PAIRS {
+            observation
+                .affected_pairs
+                .truncate(MAX_HEALTH_AFFECTED_PAIRS);
+            observation.affected_pairs_truncated = true;
+        }
+        let items = count(observation.affected_pairs.len())?;
+        let bytes = 192_u64
+            .checked_add(items.checked_mul(48).ok_or_else(arithmetic)?)
+            .ok_or_else(arithmetic)?;
+        budget.reserve(1, items, bytes)?;
+        health.push(observation);
+        Ok(())
+    }
+
+    fn record_alternative(
+        &mut self,
+        witness: &Witness,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        use super::alternative_outcomes::{Family, Key};
+        let Some(outcomes) = self.alternatives.as_mut() else {
+            return Ok(());
+        };
+        let person = witness.person.ok_or_else(invalid)?;
+        let rule = self.source_rule.ok_or_else(invalid)?;
+        let (family, actual, maximum, period) = if let Some(hours) = witness.hours {
+            (
+                Family::MaximumHours,
+                exact_alternative_duration(hours.actual)?,
+                hours.calendar.is_none(),
+                hours.calendar.and(witness.period),
+            )
+        } else if let Some(quota) = witness.quota {
+            (
+                Family::Quota,
+                exact_alternative_duration(quota.actual)?,
+                false,
+                witness.period,
+            )
+        } else if let Some(quota) = witness.quota_count {
+            (
+                Family::Quota,
+                i128::from(quota.actual),
+                false,
+                witness.period,
+            )
+        } else {
+            let (family, maximum) = match witness.reason {
+                "maximum_assignment_count" => (Family::MaximumCount, false),
+                "maximum_consecutive" => (Family::MaximumConsecutive, true),
+                "maximum_worked_weekends" => (Family::MaximumWeekends, true),
+                _ => return Err(invalid()),
+            };
+            (
+                family,
+                i128::from(witness.actual.ok_or_else(invalid)?),
+                maximum,
+                if maximum { None } else { witness.period },
+            )
+        };
+        let mut key = Key::person(family, rule, person);
+        key.period = period;
+        outcomes.amount(key, actual, maximum, budget)
+    }
 }
 
 impl Summary {
@@ -715,15 +1146,52 @@ impl Summary {
         witness: &Witness,
         budget: &mut OperationBudget<'_>,
     ) -> Result<(), AssignmentRuleError> {
+        self.predicate_with_members(failed, witness, None, "direct", budget)
+    }
+
+    fn predicate_with_members(
+        &mut self,
+        failed: bool,
+        witness: &Witness,
+        members: Option<Vec<AssignmentPair>>,
+        association_kind: &'static str,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
+        self.predicate_with_observation(failed, witness, witness, members, association_kind, budget)
+    }
+
+    fn predicate_with_observation(
+        &mut self,
+        failed: bool,
+        witness: &Witness,
+        observation_witness: &Witness,
+        members: Option<Vec<AssignmentPair>>,
+        association_kind: &'static str,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
         budget.step()?;
+        self.record_alternative(witness, budget)?;
         self.checked = add(self.checked, 1)?;
         if failed {
-            self.failure(witness)?;
+            self.failure(
+                witness,
+                observation_witness,
+                members,
+                association_kind,
+                budget,
+            )?;
         }
         Ok(())
     }
 
-    fn failure(&mut self, witness: &Witness) -> Result<(), AssignmentRuleError> {
+    fn failure(
+        &mut self,
+        witness: &Witness,
+        observation_witness: &Witness,
+        members: Option<Vec<AssignmentPair>>,
+        association_kind: &'static str,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<(), AssignmentRuleError> {
         self.violations = add(self.violations, 1)?;
         if self
             .first
@@ -731,6 +1199,37 @@ impl Summary {
             .is_none_or(|first| witness.precedes(first))
         {
             self.first = Some(*witness);
+        }
+        if let Some(repair) = self.repair.as_mut() {
+            let members = if let Some(members) = members {
+                members
+            } else {
+                let mut members = Vec::new();
+                if let (Some(person_id), Some(shift_id)) = (witness.person, witness.shift) {
+                    budget.reserve(0, 1, 48)?;
+                    members.push(AssignmentPair {
+                        person_id,
+                        shift_id,
+                    });
+                }
+                if let Some(shift_id) = witness.other_shift
+                    && let Some(person_id) = witness.other_person.or(witness.person)
+                {
+                    budget.reserve(0, 1, 48)?;
+                    members.push(AssignmentPair {
+                        person_id,
+                        shift_id,
+                    });
+                }
+                members
+            };
+            budget.reserve(1, 0, count(size_of::<RepairFailure>())?)?;
+            repair.push(RepairFailure {
+                witness: *observation_witness,
+                rule_id: self.source_rule,
+                association_kind,
+                members,
+            });
         }
         Ok(())
     }
@@ -787,6 +1286,78 @@ impl Summary {
     }
 }
 
+fn finish_summary(
+    mut summary: Summary,
+    rule_id: RuleId,
+    selected: &Selected<'_>,
+    observations: &mut Vec<RepairObservation>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<RuleEvaluation, AssignmentRuleError> {
+    let repair = summary.take_repair();
+    let evaluation = summary.finish(rule_id, budget)?;
+    if let Some(repair) = repair {
+        append_repair_failures(repair, Some(rule_id), selected, observations, budget)?;
+    }
+    Ok(evaluation)
+}
+
+fn append_repair_failures(
+    failures: Vec<RepairFailure>,
+    fallback_rule: Option<RuleId>,
+    selected: &Selected<'_>,
+    observations: &mut Vec<RepairObservation>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let associations = selected.associations();
+    for failure in failures {
+        budget.step()?;
+        let rule_id = failure
+            .rule_id
+            .or(fallback_rule)
+            .unwrap_or_else(|| RuleId::from_uuid(failure.witness.owner.as_uuid()));
+        let mut evaluation = Summary {
+            checked: 1,
+            violations: 1,
+            first: Some(failure.witness),
+            ..Summary::default()
+        }
+        .finish(rule_id, budget)?;
+        text_fact(
+            &mut evaluation.observed,
+            REPAIR_ASSOCIATION_KIND,
+            failure.association_kind,
+            budget,
+        )?;
+        budget.step()?;
+        evaluation.validate().map_err(|error| match error {
+            eutheto_domain_ir::DomainContractError::LimitExceeded(_) => {
+                AssignmentRuleError::LimitExceeded(AssignmentRuleLimit::PerRecord)
+            }
+            _ => invalid(),
+        })?;
+        let mut affected_pairs = Vec::new();
+        if let Some(associations) = associations {
+            for pair in failure.members {
+                budget.step()?;
+                if associations.contains(&pair) {
+                    budget.reserve(0, 1, 48)?;
+                    affected_pairs.push(pair);
+                }
+            }
+        }
+        budget.sort_work(affected_pairs.len())?;
+        affected_pairs.sort_unstable();
+        affected_pairs.dedup();
+        budget.reserve(1, 0, count(size_of::<RepairObservation>())?)?;
+        observations.push(RepairObservation {
+            evaluation,
+            affected_pairs,
+        });
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 fn witness_evidence(
     witness: &Witness,
     result: &mut RuleEvaluation,
@@ -814,12 +1385,14 @@ fn witness_evidence(
             budget,
         )?;
     }
-    entity(
-        &mut result.affected_entities,
-        "shift",
-        witness.shift.as_entity_id(),
-        budget,
-    )?;
+    if let Some(shift) = witness.shift {
+        entity(
+            &mut result.affected_entities,
+            "shift",
+            shift.as_entity_id(),
+            budget,
+        )?;
+    }
     if let Some(shift) = witness.other_shift {
         entity(
             &mut result.affected_entities,
@@ -839,6 +1412,12 @@ fn witness_evidence(
     }
     if let Some(hours) = witness.hours {
         hours_evidence(hours, result, budget)?;
+    }
+    if let Some(quota) = witness.quota {
+        quota_evidence(witness, quota, result, budget)?;
+    }
+    if let Some(quota) = witness.quota_count {
+        quota_count_evidence(witness, quota, result, budget)?;
     }
     if witness.other_person.is_some() {
         mutual_pair_evidence(witness, result, budget)?;
@@ -878,6 +1457,22 @@ fn witness_evidence(
             &mut result.observed,
             "official.workforce.fact.witness_end",
             &interval.end.to_string(),
+            budget,
+        )?;
+    }
+    if let (Some(start), Some(end)) = (witness.consecutive_start_date, witness.consecutive_end_date)
+    {
+        budget.reserve(0, 2, 128)?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.consecutive_run_start_date",
+            &start.to_string(),
+            budget,
+        )?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.consecutive_run_end_date",
+            &end.to_string(),
             budget,
         )?;
     }
@@ -924,6 +1519,118 @@ fn hours_evidence(
     Ok(())
 }
 
+fn quota_evidence(
+    witness: &Witness,
+    quota: QuotaWitness,
+    result: &mut RuleEvaluation,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    fact(
+        &mut result.expected,
+        "official.workforce.fact.workload_quota_minimum_minutes",
+        VerificationValue::Integer(i64::from(quota.minimum_minutes)),
+        budget,
+    )?;
+    if let Some(maximum) = quota.maximum_minutes {
+        fact(
+            &mut result.expected,
+            "official.workforce.fact.workload_quota_maximum_minutes",
+            VerificationValue::Integer(i64::from(maximum)),
+            budget,
+        )?;
+    }
+    fact(
+        &mut result.observed,
+        "official.workforce.fact.workload_quota_actual_seconds",
+        VerificationValue::Integer(quota.actual.as_secs()),
+        budget,
+    )?;
+    fact(
+        &mut result.observed,
+        "official.workforce.fact.workload_quota_actual_subsecond_nanoseconds",
+        VerificationValue::Integer(i64::from(quota.actual.subsec_nanos())),
+        budget,
+    )?;
+    entity(
+        &mut result.affected_entities,
+        "workload_bucket",
+        quota.bucket.as_entity_id(),
+        budget,
+    )?;
+    entity(
+        &mut result.affected_entities,
+        "calendar",
+        quota.calendar.as_entity_id(),
+        budget,
+    )?;
+    if let Some((start, end)) = witness.period {
+        budget.reserve(0, 2, 128)?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.workload_quota_period_start",
+            &start.to_string(),
+            budget,
+        )?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.workload_quota_period_end",
+            &end.to_string(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn quota_count_evidence(
+    witness: &Witness,
+    quota: QuotaCountWitness,
+    result: &mut RuleEvaluation,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    fact(
+        &mut result.expected,
+        "official.workforce.fact.workload_quota_minimum_assignments",
+        VerificationValue::Integer(i64::from(quota.minimum)),
+        budget,
+    )?;
+    if let Some(maximum) = quota.maximum {
+        fact(
+            &mut result.expected,
+            "official.workforce.fact.workload_quota_maximum_assignments",
+            VerificationValue::Integer(i64::from(maximum)),
+            budget,
+        )?;
+    }
+    fact(
+        &mut result.observed,
+        "official.workforce.fact.workload_quota_actual_assignments",
+        integer(quota.actual)?,
+        budget,
+    )?;
+    entity(
+        &mut result.affected_entities,
+        "calendar",
+        quota.calendar.as_entity_id(),
+        budget,
+    )?;
+    if let Some((start, end)) = witness.period {
+        budget.reserve(0, 2, 128)?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.workload_quota_period_start",
+            &start.to_string(),
+            budget,
+        )?;
+        text_fact(
+            &mut result.observed,
+            "official.workforce.fact.workload_quota_period_end",
+            &end.to_string(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
 fn transition_evidence(
     witness: &Witness,
     transition: TransitionWitness,
@@ -935,7 +1642,7 @@ fn transition_evidence(
         (
             "official.workforce.fact.transition_source_shift",
             "shift",
-            witness.shift.as_entity_id(),
+            witness.shift.ok_or_else(invalid)?.as_entity_id(),
         ),
         (
             "official.workforce.fact.transition_target_shift",
@@ -1007,7 +1714,7 @@ fn mutual_pair_evidence(
         (
             "official.workforce.fact.witness_first_shift",
             "shift",
-            witness.shift.as_entity_id(),
+            witness.shift.ok_or_else(invalid)?.as_entity_id(),
         ),
         (
             "official.workforce.fact.witness_second_person",
@@ -1038,7 +1745,10 @@ fn rest_evidence(
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
     for (key, shift) in [
-        ("official.workforce.fact.rest_source_shift", witness.shift),
+        (
+            "official.workforce.fact.rest_source_shift",
+            witness.shift.ok_or_else(invalid)?,
+        ),
         (
             "official.workforce.fact.rest_target_shift",
             witness.other_shift.ok_or_else(invalid)?,
@@ -1188,6 +1898,60 @@ mod tests {
             shift_id: support::id(8).parse()?,
         })
     }
+    fn pair(person: u32, shift: u32) -> TestResult<AssignmentPair> {
+        Ok(AssignmentPair {
+            person_id: support::id(person).parse()?,
+            shift_id: support::id(shift).parse()?,
+        })
+    }
+
+    fn repair_selection(
+        document: &ScenarioDocument,
+        selected: &[AssignmentPair],
+        associations: &[AssignmentPair],
+    ) -> TestResult<(
+        Vec<RuleEvaluation>,
+        RequiredRulePartition,
+        Vec<RepairObservation>,
+    )> {
+        let mut budget = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(document, &mut budget)?;
+        Ok(evaluate_repair_selection(
+            document,
+            &input,
+            selected,
+            associations,
+            &mut budget,
+        )?)
+    }
+
+    fn observed_text<'a>(evaluation: &'a RuleEvaluation, key: &str) -> TestResult<&'a str> {
+        match evaluation
+            .observed
+            .get(&VerificationFactId::new(key)?)
+            .ok_or("missing observed text fact")?
+        {
+            VerificationValue::Text(value) => Ok(value),
+            _ => Err("observed fact is not text".into()),
+        }
+    }
+
+    fn add_shift_instance(value: &mut serde_json::Value, index: u32, day: u32) {
+        let date = format!("2026-11-{day:02}");
+        let mut shift = value["domain"]["entities"][support::id(8)].clone();
+        shift["id"] = json!(support::id(index));
+        shift["startsAt"] = json!({
+            "instant": format!("{date}T06:30:00Z"),
+            "local": format!("{date}T01:30:00"),
+            "offsetSeconds": -18_000
+        });
+        shift["endsAt"] = json!({
+            "instant": format!("{date}T07:30:00Z"),
+            "local": format!("{date}T02:30:00"),
+            "offsetSeconds": -18_000
+        });
+        value["domain"]["entities"][support::id(index)] = shift;
+    }
 
     fn encoded<T: Serialize>(value: &T) -> TestResult<u64> {
         Ok(u64::try_from(serde_json::to_vec(value)?.len())?)
@@ -1295,6 +2059,7 @@ mod tests {
                 checked: 3,
                 violations: 0,
                 first: None,
+                ..Summary::default()
             }
             .finish(id, budget)?;
             result.validate().map_err(|_| invalid())?;
@@ -1348,6 +2113,7 @@ mod tests {
                 checked: 3,
                 violations: 1,
                 first: Some(witness),
+                ..Summary::default()
             }
             .finish(id, budget)?;
             result.validate().map_err(|_| invalid())?;
@@ -1365,6 +2131,7 @@ mod tests {
             checked: 1,
             violations: 1,
             first: Some(witness),
+            ..Summary::default()
         }
         .finish(rule_id(20)?, &mut OperationBudget::evaluation(None));
         assert_eq!(
@@ -1433,6 +2200,7 @@ mod tests {
                 checked: 1,
                 violations: 1,
                 first: Some(witness),
+                ..Summary::default()
             }
             .finish(id, budget)?;
             result.validate().map_err(|_| invalid())?;
@@ -1698,11 +2466,25 @@ mod tests {
         let input = AssignmentInput::new(&document, &mut budget)?;
         let selected = Selected::new(&input, &[selected_pair()?], &mut budget)?;
         let rule = input.domain.rules.get(&rule_id(20)?).ok_or("rule")?;
-        let baseline = pair_rule(&input, &selected, rule, &document.settings, &mut budget)?;
+        let baseline = pair_rule(
+            &input,
+            &selected,
+            rule,
+            &document.settings,
+            false,
+            &mut budget,
+        )?;
         assert_eq!((baseline.checked, baseline.violations), (2, 1));
         budget.cancel_after_steps(100)?;
         assert!(matches!(
-            pair_rule(&input, &selected, rule, &document.settings, &mut budget),
+            pair_rule(
+                &input,
+                &selected,
+                rule,
+                &document.settings,
+                false,
+                &mut budget
+            ),
             Err(AssignmentRuleError::Cancelled)
         ));
         assert!(token.is_cancelled());
@@ -1825,6 +2607,240 @@ mod tests {
             Err(AssignmentRuleError::LimitExceeded(
                 AssignmentRuleLimit::WorkSteps
             ))
+        );
+        Ok(())
+    }
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn repair_observations_keep_exact_pair_and_group_membership_without_changing_evaluations()
+    -> TestResult {
+        let mut source = serde_json::to_value(document()?)?;
+        source["settings"]["horizon"]["end"] = json!("2026-11-03T05:00:00Z");
+        add_shift_instance(&mut source, 18, 2);
+        let mut second_person = source["domain"]["entities"][support::id(1)].clone();
+        second_person["id"] = json!(support::id(14));
+        second_person["name"] = json!("Riley");
+        second_person["externalId"] = json!("staff-02");
+        second_person["qualificationGrants"] = json!([{"qualificationId":support::id(12)}]);
+        source["domain"]["entities"][support::id(14)] = second_person;
+        source["domain"]["entities"][support::id(12)] = json!({
+            "kind":"qualification","id":support::id(12),"name":"Specialist","description":""
+        });
+        source["domain"]["entities"][support::id(8)]["coverage"] = json!({
+            "kind":"exact","count":2,
+            "qualificationMinimums":[{
+                "qualifications":{"allQualificationIds":[support::id(12)],"anyQualificationIds":[]},
+                "minimum":1
+            }]
+        });
+        source["domain"]["rules"][support::id(20)] = json!({
+            "id":support::id(20), "kind":"fixedAssignment", "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}}, "personId":support::id(1),
+            "shiftId":support::id(8), "assigned":false
+        });
+        source["domain"]["rules"][support::id(21)] = json!({
+            "id":support::id(21), "kind":"workloadQuota", "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}}, "calendarId":support::id(2),
+            "membership":"reportingDate", "minimum":0, "maximum":0,
+            "measure":{"kind":"assignmentCount"}
+        });
+        source["domain"]["rules"][support::id(22)] = json!({
+            "id":support::id(22), "kind":"coverage", "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}}
+        });
+        source["domain"]["rules"][support::id(23)] = json!({
+            "id":support::id(23), "kind":"requiredSkillMix", "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}},
+            "qualificationMinimums":[{
+                "qualifications":{"allQualificationIds":[support::id(11)],"anyQualificationIds":[]},
+                "minimum":2
+            }]
+        });
+        let document: ScenarioDocument = serde_json::from_value(source)?;
+        let next_day = pair(1, 18)?;
+        let unqualified = pair(14, 8)?;
+        let pair = pair(1, 8)?;
+        let selected = [pair];
+        let associations = [pair, next_day, unqualified];
+        let ordinary = evaluate_assignment_rules(&document, &selected, None)?;
+        let (evaluations, obligations, observations) =
+            repair_selection(&document, &selected, &associations)?;
+        assert_eq!(evaluations, ordinary.evaluations);
+        assert_eq!(obligations, ordinary.obligations);
+        let fixed_id = rule_id(20)?;
+        let quota_id = rule_id(21)?;
+        let skill_id = rule_id(23)?;
+
+        let fixed = observations
+            .iter()
+            .find(|value| value.evaluation.rule_id == fixed_id)
+            .ok_or("fixed observation missing")?;
+        assert_eq!(
+            observed_text(&fixed.evaluation, REPAIR_ASSOCIATION_KIND)?,
+            "direct"
+        );
+        assert_eq!(fixed.affected_pairs, [pair]);
+
+        let quota = observations
+            .iter()
+            .find(|value| value.evaluation.rule_id == quota_id)
+            .ok_or("quota observation missing")?;
+        assert_eq!(
+            observed_text(&quota.evaluation, REPAIR_ASSOCIATION_KIND)?,
+            "workload_quota_assignment_count"
+        );
+        assert_eq!(quota.affected_pairs, [pair]);
+
+        let coverage_id = rule_id(22)?;
+        let coverage = observations
+            .iter()
+            .find(|value| {
+                value.evaluation.rule_id == coverage_id
+                    && value.affected_pairs == [pair, unqualified]
+            })
+            .ok_or("shift-scoped coverage observation missing")?;
+        assert_eq!(
+            observed_text(&coverage.evaluation, REPAIR_ASSOCIATION_KIND)?,
+            "coverage_headcount"
+        );
+        assert!(observations.iter().any(|value| {
+            value.evaluation.rule_id == coverage_id && value.affected_pairs == [next_day]
+        }));
+        let coverage_skill = observations
+            .iter()
+            .find(|value| {
+                value.evaluation.rule_id == coverage_id && value.affected_pairs == [unqualified]
+            })
+            .ok_or("qualification-scoped coverage observation missing")?;
+        assert_eq!(
+            observed_text(&coverage_skill.evaluation, REPAIR_ASSOCIATION_KIND)?,
+            "coverage_qualification_minimum"
+        );
+
+        let skill = observations
+            .iter()
+            .find(|value| value.evaluation.rule_id == skill_id && value.affected_pairs == [pair])
+            .ok_or("qualification-scoped skill observation missing")?;
+        assert_eq!(
+            observed_text(&skill.evaluation, REPAIR_ASSOCIATION_KIND)?,
+            "required_skill_mix"
+        );
+
+        let mut health_budget = OperationBudget::evaluation(None);
+        let (health_evaluation, _) =
+            evaluate_assignment_rules_with_health(&document, &selected, &mut health_budget)?;
+        assert_eq!(health_evaluation.evaluations, ordinary.evaluations);
+        assert_eq!(health_evaluation.obligations, ordinary.obligations);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_retains_each_approved_leave_and_exact_coverage_shift() -> TestResult {
+        let mut source = serde_json::to_value(document()?)?;
+        source["settings"]["horizon"]["end"] = json!("2026-11-04T05:00:00Z");
+        add_shift_instance(&mut source, 18, 2);
+        add_shift_instance(&mut source, 19, 3);
+        for index in [30, 31] {
+            source["domain"]["entities"][support::id(index)] = json!({
+                "kind":"availability", "id":support::id(index), "personId":support::id(1),
+                "availabilityKind":"approvedTimeOff",
+                "timeWindow":{"kind":"instant","startsAt":"2026-11-01T05:00:00Z",
+                    "endsAt":"2026-11-01T08:00:00Z"},
+                "effectiveRange":{"startDate":"2026-01-01","endDateExclusive":"2027-01-01"},
+                "source":"fixture","note":"fixture"
+            });
+        }
+        source["domain"]["rules"][support::id(22)] = json!({
+            "id":support::id(22), "kind":"coverage", "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}}
+        });
+        let document: ScenarioDocument = serde_json::from_value(source)?;
+        let first = pair(1, 8)?;
+        let second = pair(1, 18)?;
+        let third = pair(1, 19)?;
+        let (_, _, observations) = repair_selection(&document, &[first], &[first, second, third])?;
+        for index in [30, 31] {
+            let leave_id = rule_id(index)?;
+            let leave = observations
+                .iter()
+                .find(|value| value.evaluation.rule_id == leave_id)
+                .ok_or("approved-leave observation missing")?;
+            assert_eq!(leave.affected_pairs, [first]);
+        }
+        let coverage_id = rule_id(22)?;
+        for member in [second, third] {
+            let coverage = observations
+                .iter()
+                .find(|value| {
+                    value.evaluation.rule_id == coverage_id && value.affected_pairs == [member]
+                })
+                .ok_or("source-shift coverage observation missing")?;
+            assert_eq!(
+                observed_text(&coverage.evaluation, REPAIR_ASSOCIATION_KIND)?,
+                "coverage_headcount"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn repair_errors_publish_no_partial_result_on_exhaustion_or_cancellation() -> TestResult {
+        let document = document()?;
+        let selected = [selected_pair()?];
+        let mut exhausted = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(&document, &mut exhausted)?;
+        leave_output(&mut exhausted, (0, 0, 0))?;
+        assert!(matches!(
+            evaluate_repair_selection(&document, &input, &selected, &selected, &mut exhausted,),
+            Err(AssignmentRuleError::LimitExceeded(_))
+        ));
+
+        let token = CancellationToken::new();
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut cancelled = OperationBudget::evaluation(Some(&control));
+        let input = AssignmentInput::new(&document, &mut cancelled)?;
+        cancelled.cancel_after_steps(1)?;
+        assert!(matches!(
+            evaluate_repair_selection(&document, &input, &selected, &selected, &mut cancelled,),
+            Err(AssignmentRuleError::Cancelled)
+        ));
+        assert!(token.is_cancelled());
+        Ok(())
+    }
+    #[test]
+    fn maximum_weekend_group_keeps_a_nonillustrative_contributor() -> TestResult {
+        let mut source = serde_json::to_value(document()?)?;
+        source["settings"]["horizon"]["end"] = json!("2026-11-08T05:00:00Z");
+        add_shift_instance(&mut source, 18, 7);
+        source["domain"]["rules"][support::id(24)] = json!({
+            "id":support::id(24), "kind":"maximumWorkedWeekends", "active":true,
+            "strength":"required", "scope":{"people":{"kind":"all"}}, "maximum":1
+        });
+        let document: ScenarioDocument = serde_json::from_value(source)?;
+        let first_weekend = pair(1, 8)?;
+        let later_weekend = pair(1, 18)?;
+        let (_, _, observations) =
+            repair_selection(&document, &[first_weekend, later_weekend], &[first_weekend])?;
+        let weekend_id = rule_id(24)?;
+        let observation = observations
+            .iter()
+            .find(|value| value.evaluation.rule_id == weekend_id)
+            .ok_or("weekend observation missing")?;
+        assert_eq!(observation.affected_pairs, [first_weekend]);
+        assert_eq!(
+            observed_text(&observation.evaluation, REPAIR_ASSOCIATION_KIND)?,
+            "maximum_worked_weekends"
+        );
+        let later_shift = format!("official.workforce.{}", support::id(18));
+        assert!(
+            observation
+                .evaluation
+                .affected_entities
+                .iter()
+                .any(|entity| {
+                    entity.kind.as_str() == "official.workforce.shift"
+                        && entity.id.as_str() == later_shift.as_str()
+                })
         );
         Ok(())
     }

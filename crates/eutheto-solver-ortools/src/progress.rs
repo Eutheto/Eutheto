@@ -40,7 +40,6 @@ pub fn candidate_submission(
     let decoded = decode_projected_candidate(translated, candidate)?;
     let objective = (!decoded.objective_values.is_empty()).then_some(BackendObjectiveEvidence {
         objective_values: decoded.objective_values,
-        best_bound_values: None,
     });
     Ok(CandidateSubmission {
         values: decoded.values,
@@ -307,7 +306,6 @@ mod tests {
             observed_after_milliseconds,
             objective: Some(BackendObjectiveEvidence {
                 objective_values: vec![4, 9],
-                best_bound_values: None,
             }),
             evidence_refs: Vec::new(),
         };

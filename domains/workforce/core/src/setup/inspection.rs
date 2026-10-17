@@ -13,7 +13,7 @@ use crate::{
     assignment_rules::{
         AssignmentRuleError, InstantInterval, RejectionCause,
         analysis::{
-            analyze_with_budget,
+            analyze_source_with_budget,
             support::{person_scope, shift_scope},
             supported_rule,
         },
@@ -385,8 +385,9 @@ pub(super) fn assignment_inspection(
     budget.visit()?;
     let mut authority =
         OperationBudget::analysis(Some(budget.control()), PlanningIrLimitsV1::DEFAULT);
-    let analysis = analyze_with_budget(document, &mut authority, PlanningIrLimitsV1::DEFAULT)
-        .map_err(|error| operation_error(&error))?;
+    let analysis =
+        analyze_source_with_budget(document, &mut authority, PlanningIrLimitsV1::DEFAULT)
+            .map_err(|error| operation_error(&error))?;
     let pair = AssignmentPair {
         person_id: parameters.person_id,
         shift_id: parameters.shift_id,

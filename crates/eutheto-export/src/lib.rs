@@ -13,14 +13,18 @@ mod portable_encode;
 #[path = "private_publication_tests.rs"]
 mod private_publication_tests;
 
+mod recipient_report;
+pub use recipient_report::{EncodedRecipientHtml, encode_recipient_html, recipient_renderer};
+
 use eutheto_types::{
-    BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl,
-    PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PortableDomainDocument, PortableJsonLimits,
-    PortableProjectMetadata, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
-    SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument, ScenarioFormat, ScenarioId,
-    ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, SemanticCapability,
-    collect_scenario_owned_uuids, collect_self_declared_uuids, extract_asset_references,
-    extract_result_dependency, extract_result_id, extract_scenario_references,
+    ARCHIVAL_RESULT_CAPABILITY, BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES,
+    OperationControl, OperationInterruption, PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset,
+    PortableDomainDocument, PortableJsonLimits, PortableProjectMetadata, Revision,
+    Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument,
+    ScenarioFormat, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
+    SemanticCapability, collect_result_owned_uuids, collect_scenario_owned_uuids,
+    collect_self_declared_uuids, extract_asset_references, extract_result_dependency,
+    extract_result_id, extract_scenario_references, is_archival_result,
     validate_nonsecret_portable_json, validate_nonsecret_portable_json_bytes,
     validate_scenario_owned_uuid_uniqueness,
 };
@@ -407,9 +411,20 @@ pub enum ExportError {
     DestinationExists(PathBuf),
     #[error("bundle publication was cancelled")]
     Cancelled,
+    #[error("export operation exceeded its deadline")]
+    DeadlineExceeded,
     /// Domain conversion could not complete within a finite operation allowance.
     #[error("domain conversion exceeded its resource limit")]
     ResourceLimitExceeded,
+}
+
+impl From<OperationInterruption> for ExportError {
+    fn from(interruption: OperationInterruption) -> Self {
+        match interruption {
+            OperationInterruption::Cancelled => Self::Cancelled,
+            OperationInterruption::DeadlineExceeded => Self::DeadlineExceeded,
+        }
+    }
 }
 
 /// Serialize as compact deterministic JSON. Struct field order is declared and
@@ -723,6 +738,7 @@ pub fn assemble_scenario_export(
     let asset_metadata = append_sections(&mut payloads, &snapshot.sections)?;
     let mut capabilities = exported_scenario.required_capabilities.clone();
     capabilities.extend(portable.domain.required_capabilities);
+    append_archival_result_requirements(&snapshot.sections.results, &mut capabilities)?;
     let mut extensions: BTreeSet<String> = exported_scenario.extensions.keys().cloned().collect();
     extensions.extend(exported_scenario.document.extensions.keys().cloned());
     extensions.extend(snapshot.nonsemantic_extensions.iter().cloned());
@@ -820,6 +836,7 @@ pub fn assemble_full_backup(
         encode_domain,
     )?;
     let asset_metadata = append_sections(&mut payloads, &snapshot.sections)?;
+    append_archival_result_requirements(&snapshot.sections.results, &mut capabilities)?;
     let manifest = manifest(ManifestInput {
         bundle_id: snapshot.bundle_id,
         bundle_kind: BundleKind::FullBackup,
@@ -872,6 +889,25 @@ fn manifest(input: ManifestInput<'_>) -> BundleManifest {
         },
         extensions: input.extensions.clone(),
     }
+}
+
+fn append_archival_result_requirements(
+    results: &BTreeMap<String, Value>,
+    requirements: &mut BTreeSet<SemanticCapability>,
+) -> Result<(), ExportError> {
+    let mut has_archival = false;
+    for (key, value) in results {
+        has_archival |= is_archival_result(value).map_err(|error| {
+            ExportError::InvalidModel(format!("retained result {key}: {error}"))
+        })?;
+    }
+    if has_archival {
+        requirements.insert(SemanticCapability {
+            id: ARCHIVAL_RESULT_CAPABILITY.to_owned(),
+            version: 1,
+        });
+    }
+    Ok(())
 }
 
 fn validate_scenario_reference_closure(
@@ -1067,7 +1103,14 @@ where
             if let Some(identity) = key_identity {
                 register_export_identity(&mut owners, identity, owner.clone())?;
             }
-            for identity in collect_self_declared_uuids(value) {
+            let identities = if section == "results" {
+                collect_result_owned_uuids(value).map_err(|error| {
+                    ExportError::InvalidModel(format!("retained result {key}: {error}"))
+                })?
+            } else {
+                collect_self_declared_uuids(value)
+            };
+            for identity in identities {
                 register_export_identity(&mut owners, identity, owner.clone())?;
             }
         }
@@ -2158,9 +2201,9 @@ impl PreparedPublication {
     ///
     /// # Errors
     ///
-    /// Returns a destination, cancellation, or filesystem publication error.
+    /// Returns a destination, cancellation, deadline, or filesystem publication error.
     pub fn publish_controlled(self, control: &OperationControl) -> Result<(), ExportError> {
-        let mut cancelled = || control.check().is_err();
+        let mut cancelled = || control.check().map_err(ExportError::from);
         publish_prepared_with_control(self, PublicationFailpoint::None, &mut cancelled)
     }
 }
@@ -2331,7 +2374,13 @@ pub fn prepare_bundle_atomic_cancellable(
     bytes: &[u8],
     cancellation: &CancellationToken,
 ) -> Result<PreparedPublication, ExportError> {
-    let mut cancelled = || cancellation.is_cancelled();
+    let mut cancelled = || {
+        if cancellation.is_cancelled() {
+            Err(ExportError::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
     prepare_bundle_atomic_with_control(
         destination,
         bytes,
@@ -2346,14 +2395,14 @@ pub fn prepare_bundle_atomic_cancellable(
 /// the application service must supply a semantically validated typed value.
 ///
 /// # Errors
-/// Rejects prohibited or oversized JSON, cancellation and temporary-file I/O failure.
+/// Rejects prohibited or oversized JSON, operation interruption and temporary-file I/O failure.
 pub fn prepare_json_atomic_controlled<T: Serialize>(
     destination: &Path,
     value: &T,
     control: &OperationControl,
 ) -> Result<PreparedPublication, ExportError> {
     let bytes = encode_json_controlled(value, control)?;
-    let mut cancelled = || control.check().is_err();
+    let mut cancelled = || control.check().map_err(ExportError::from);
     prepare_atomic_with_control(
         destination,
         &bytes,
@@ -2370,8 +2419,7 @@ pub fn encode_json_controlled<T: Serialize>(
     value: &T,
     control: &OperationControl,
 ) -> Result<Vec<u8>, ExportError> {
-    let mut cancelled = || control.check().is_err();
-    check_cancelled(&mut cancelled)?;
+    control.check().map_err(ExportError::from)?;
     let value = serde_json::to_value(value)?;
     validate_safe_value(&value, 0)?;
     let bytes = canonical_json(&value)?;
@@ -2380,7 +2428,7 @@ pub fn encode_json_controlled<T: Serialize>(
             "JSON document byte limit exceeded".to_owned(),
         ));
     }
-    check_cancelled(&mut cancelled)?;
+    control.check().map_err(ExportError::from)?;
     Ok(bytes)
 }
 
@@ -2396,8 +2444,8 @@ pub fn prepare_text_atomic_controlled(
     text: &str,
     control: &OperationControl,
 ) -> Result<PreparedPublication, ExportError> {
-    let mut cancelled = || control.check().is_err();
-    check_cancelled(&mut cancelled)?;
+    let mut cancelled = || control.check().map_err(ExportError::from);
+    cancelled()?;
     if text.len() as u64 > PORTABLE_LIMITS.max_json_bytes {
         return Err(ExportError::InvalidModel(
             "text document byte limit exceeded".to_owned(),
@@ -2405,7 +2453,7 @@ pub fn prepare_text_atomic_controlled(
     }
     for (index, character) in text.chars().enumerate() {
         if index % 4096 == 0 {
-            check_cancelled(&mut cancelled)?;
+            cancelled()?;
         }
         if character.is_control() && !matches!(character, '\t' | '\r' | '\n') {
             return Err(ExportError::InvalidModel(
@@ -2430,7 +2478,7 @@ pub fn prepare_text_atomic_controlled(
 /// Returns an error when the destination exists, `bytes` fails verification,
 /// temporary-file I/O or verification fails, or publication fails.
 pub fn write_bundle_atomic(destination: &Path, bytes: &[u8]) -> Result<(), ExportError> {
-    write_bundle_atomic_with_control(destination, bytes, PublicationFailpoint::None, || false)
+    write_bundle_atomic_with_control(destination, bytes, PublicationFailpoint::None, || Ok(()))
 }
 
 /// Writes and atomically publishes a bundle unless cancellation is observed
@@ -2446,7 +2494,11 @@ pub fn write_bundle_atomic_cancellable(
     cancellation: &CancellationToken,
 ) -> Result<(), ExportError> {
     write_bundle_atomic_with_control(destination, bytes, PublicationFailpoint::None, || {
-        cancellation.is_cancelled()
+        if cancellation.is_cancelled() {
+            Err(ExportError::Cancelled)
+        } else {
+            Ok(())
+        }
     })
 }
 
@@ -2459,17 +2511,6 @@ enum PublicationFailpoint {
     AfterPublish,
 }
 
-fn check_cancelled<F>(cancelled: &mut F) -> Result<(), ExportError>
-where
-    F: FnMut() -> bool,
-{
-    if cancelled() {
-        Err(ExportError::Cancelled)
-    } else {
-        Ok(())
-    }
-}
-
 fn prepare_bundle_atomic_with_control<F>(
     destination: &Path,
     bytes: &[u8],
@@ -2477,9 +2518,9 @@ fn prepare_bundle_atomic_with_control<F>(
     cancelled: &mut F,
 ) -> Result<PreparedPublication, ExportError>
 where
-    F: FnMut() -> bool,
+    F: FnMut() -> Result<(), ExportError>,
 {
-    check_cancelled(cancelled)?;
+    cancelled()?;
     verify_assembled_bundle(bytes)?;
     prepare_atomic_with_control(destination, bytes, failpoint, cancelled)
 }
@@ -2491,13 +2532,13 @@ fn prepare_atomic_with_control<F>(
     cancelled: &mut F,
 ) -> Result<PreparedPublication, ExportError>
 where
-    F: FnMut() -> bool,
+    F: FnMut() -> Result<(), ExportError>,
 {
     const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
     #[cfg(not(test))]
     let _ = failpoint;
-    check_cancelled(cancelled)?;
+    cancelled()?;
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     #[cfg(windows)]
     let private_directory = PrivatePublicationDirectory::new_in(parent)?;
@@ -2508,19 +2549,19 @@ where
         .suffix(".tmp")
         .tempfile_in(parent)?;
     for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
-        check_cancelled(cancelled)?;
+        cancelled()?;
         temporary.write_all(chunk)?;
     }
-    check_cancelled(cancelled)?;
+    cancelled()?;
     temporary.flush()?;
-    check_cancelled(cancelled)?;
+    cancelled()?;
     temporary.as_file().sync_all()?;
 
     let mut reopened = temporary.reopen()?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; WRITE_CHUNK_BYTES].into_boxed_slice();
     loop {
-        check_cancelled(cancelled)?;
+        cancelled()?;
         let read = reopened.read(&mut buffer)?;
         if read == 0 {
             break;
@@ -2557,11 +2598,11 @@ fn publish_prepared_with_control<F>(
     cancelled: &mut F,
 ) -> Result<(), ExportError>
 where
-    F: FnMut() -> bool,
+    F: FnMut() -> Result<(), ExportError>,
 {
     #[cfg(not(test))]
     let _ = failpoint;
-    check_cancelled(cancelled)?;
+    cancelled()?;
     let parent = prepared
         .destination
         .parent()
@@ -2596,7 +2637,7 @@ fn write_bundle_atomic_with_control<F>(
     mut cancelled: F,
 ) -> Result<(), ExportError>
 where
-    F: FnMut() -> bool,
+    F: FnMut() -> Result<(), ExportError>,
 {
     let prepared =
         prepare_bundle_atomic_with_control(destination, bytes, failpoint, &mut cancelled)?;
@@ -2609,12 +2650,39 @@ fn write_bundle_atomic_with_failpoint(
     bytes: &[u8],
     failpoint: PublicationFailpoint,
 ) -> Result<(), ExportError> {
-    write_bundle_atomic_with_control(destination, bytes, failpoint, || false)
+    write_bundle_atomic_with_control(destination, bytes, failpoint, || Ok(()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eutheto_types::ARCHIVAL_RESULT_FORMAT;
+
+    #[test]
+    fn deadline_during_staging_preserves_destination_and_cleans_temporary()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let destination = directory.path().join("report.html");
+        std::fs::write(&destination, b"existing output")?;
+        let mut checks = 0;
+        let result = prepare_atomic_with_control(
+            &destination,
+            &vec![b'x'; 128 * 1024],
+            PublicationFailpoint::None,
+            &mut || {
+                checks += 1;
+                if checks == 3 {
+                    Err(ExportError::DeadlineExceeded)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(matches!(result, Err(ExportError::DeadlineExceeded)));
+        assert_eq!(std::fs::read(&destination)?, b"existing output");
+        assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
 
     fn scenario_from_json(extension: Value) -> Result<ScenarioSnapshotV1, serde_json::Error> {
         let document: ScenarioDocument = serde_json::from_value(serde_json::json!({
@@ -2971,6 +3039,122 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn archival_exports_derive_capability_and_keep_payload_inert_but_checked()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut selected = snapshot(scenario_from_json(Value::Null)?);
+        let result_id = "018f1e2d-3c4b-7a69-8def-012345678920";
+        let scenario_id = selected.scenario.document.scenario_id;
+        let archive = serde_json::json!({
+            "resultId": result_id,
+            "scenarioId": scenario_id,
+            "scenarioRevision": 7,
+            "solveRunId": "018f1e2d-3c4b-7a69-8def-900000000099",
+            "status": "legacy_unverified",
+            "accepted": false,
+            "createdAt": "2026-08-29T01:02:03+01:00",
+            "normalizedSolution": {
+                "definitions": {
+                    (scenario_id.to_string()): {
+                        "id": scenario_id,
+                        "scenarioId": "018f1e2d-3c4b-7a69-8def-900000000099"
+                    }
+                }
+            },
+            "score": null,
+            "verificationReport": {"accepted": true},
+            "evidence": null
+        });
+        let result = serde_json::json!({
+            "format": ARCHIVAL_RESULT_FORMAT,
+            "schemaVersion": 1,
+            "resultId": result_id,
+            "scenarioId": scenario_id,
+            "scenarioRevision": 7,
+            "archive": archive
+        });
+        selected
+            .sections
+            .results
+            .insert(result_id.to_owned(), result.clone());
+        let bytes = assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
+        let mut zipped = ZipArchive::new(Cursor::new(bytes))?;
+        let manifest: BundleManifest = serde_json::from_reader(zipped.by_name(MANIFEST_PATH)?)?;
+        let capability = SemanticCapability {
+            id: ARCHIVAL_RESULT_CAPABILITY.to_owned(),
+            version: 1,
+        };
+        let mut source_capabilities = selected.scenario.required_capabilities.clone();
+        source_capabilities.extend(
+            portable_encode::encode_fixture_domain(&selected.scenario.document)?
+                .required_capabilities,
+        );
+        let mut expected_capabilities = source_capabilities.clone();
+        expected_capabilities.insert(capability);
+        assert_eq!(manifest.required_capabilities, expected_capabilities);
+        let exported: Value =
+            serde_json::from_reader(zipped.by_name(&format!("results/{result_id}.json"))?)?;
+        assert_eq!(exported, result);
+
+        let mut backup = full_backup(selected.scenario.clone());
+        backup.sections = selected.sections.clone();
+        let bytes = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
+        let mut zipped = ZipArchive::new(Cursor::new(bytes))?;
+        let manifest: BundleManifest = serde_json::from_reader(zipped.by_name(MANIFEST_PATH)?)?;
+        assert_eq!(manifest.required_capabilities, expected_capabilities);
+
+        for payload in [
+            serde_json::json!({"nested": {"asset": "absent.txt"}}),
+            serde_json::json!({"nested": {"apiKey": "synthetic secret"}}),
+            serde_json::json!({"nested": {"content": "<script>synthetic</script>"}}),
+        ] {
+            let mut prohibited = result.clone();
+            prohibited["archive"]["normalizedSolution"] = payload;
+            selected
+                .sections
+                .results
+                .insert(result_id.to_owned(), prohibited);
+            assert!(
+                assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)
+                    .is_err()
+            );
+        }
+        for version in [0, 2] {
+            let mut unsupported = result.clone();
+            unsupported["schemaVersion"] = Value::from(version);
+            selected
+                .sections
+                .results
+                .insert(result_id.to_owned(), unsupported);
+            assert_invalid_model(
+                assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
+                "archival-result",
+            )?;
+        }
+        selected.sections.results.clear();
+        let bytes = assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
+        let mut zipped = ZipArchive::new(Cursor::new(bytes))?;
+        let manifest: BundleManifest = serde_json::from_reader(zipped.by_name(MANIFEST_PATH)?)?;
+        assert_eq!(manifest.required_capabilities, source_capabilities);
+        backup.sections.results.clear();
+        let bytes = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
+        let mut zipped = ZipArchive::new(Cursor::new(bytes))?;
+        let manifest: BundleManifest = serde_json::from_reader(zipped.by_name(MANIFEST_PATH)?)?;
+        assert_eq!(manifest.required_capabilities, source_capabilities);
+        selected.sections.results.insert(
+            result_id.to_owned(),
+            serde_json::json!({
+                "resultId": result_id, "scenarioId": scenario_id, "scenarioRevision": 7, "payload": {}
+            }),
+        );
+        let bytes = assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
+        let mut zipped = ZipArchive::new(Cursor::new(bytes))?;
+        let manifest: BundleManifest = serde_json::from_reader(zipped.by_name(MANIFEST_PATH)?)?;
+        assert_eq!(manifest.required_capabilities, source_capabilities);
+        Ok(())
+    }
+
     #[test]
     fn scenario_exports_include_selected_sections_and_require_exact_result_revision()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -3698,7 +3882,11 @@ mod tests {
         assert!(matches!(
             write_bundle_atomic_with_control(&during, &bundle, PublicationFailpoint::None, || {
                 checks += 1;
-                checks == 4
+                if checks == 4 {
+                    Err(ExportError::Cancelled)
+                } else {
+                    Ok(())
+                }
             },),
             Err(ExportError::Cancelled)
         ));

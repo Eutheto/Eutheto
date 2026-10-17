@@ -5,13 +5,17 @@
 //! transaction and therefore cannot accidentally bypass revision checks.
 
 use eutheto_domain_ir::{
-    AcceptedResult, AcceptedResultRefV1, ComparisonContext, ComparisonRunManifests,
-    CounterfactualConclusionV1, CounterfactualFailureKind, CounterfactualJobErrorV1,
-    CounterfactualJobRecordV1, CounterfactualJobRequestV1, CounterfactualJobState,
-    CounterfactualResultV1, DomainEvidenceId, NormalizedSolution, PortableAcceptedResultV2,
-    RUN_REQUEST_SEMANTICS_SCHEMA_VERSION, RunInputV1, RunManifestV1, RunPhaseTimingsV1,
-    RunRequestSemanticsV1, RunTerminalOutcomeV1, ScoreVector, VerificationReport,
-    VerificationValue, compare_accepted_results, counterfactual_condition_satisfied,
+    AcceptedResult, AcceptedResultRefV1, AssumptionGroupId, ComparisonContext,
+    ComparisonRunManifests, ConflictGroupV1, CounterfactualConclusionV1, CounterfactualConditionV1,
+    CounterfactualFailureKind, CounterfactualJobErrorV1, CounterfactualJobRecordV1,
+    CounterfactualJobRequestV1, CounterfactualJobState, CounterfactualResult,
+    CounterfactualTerminalAuthorityV1, DomainEntityRef, DomainEvidenceId, InfeasibilityEvidenceV1,
+    NormalizedSolution, PortableAcceptedResult, RUN_REQUEST_SEMANTICS_SCHEMA_VERSION,
+    RunInfeasibilityEvidenceV1, RunInput, RunManifest, RunPhaseTimingsV1, RunRequestSemantics,
+    RunSourceAssetBindingsV1, RunSourceAssetCaptureV1, RunSourceAssetRefV1,
+    RunSourceAssetUnavailableReason, RunTerminalOutcomeV1, ScoreVector, VerificationReport,
+    VerificationValue, VerifiedCheckpoint, compare_accepted_results,
+    counterfactual_condition_satisfied,
 };
 use eutheto_export::ApplicationMetadata;
 use eutheto_import::{
@@ -20,15 +24,17 @@ use eutheto_import::{
     SafetyBackupEvidence, StagedBackupRestore, StagedDisposition, StagedImport,
 };
 use eutheto_types::{
-    ActorRef, BackendId, BackendSelection, BundleId, CancellationToken, CommandId, CommandSource,
-    CounterfactualJobId, IanaTimeZone, MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset,
+    ARCHIVAL_RESULT_FORMAT, ActorRef, AssetReferenceVisitControl, BackendId, BackendSelection,
+    BundleId, CancellationToken, CommandId, CommandSource, CounterfactualJobId, IanaTimeZone,
+    IdGenerator, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl, PackId, PortableAsset,
     PortableJsonLimits, ProjectMetadataDto, RequestId, Revision, Rfc3339Timestamp,
     SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
     ScenarioSnapshotId, ScenarioSnapshotV1, SemanticCapability, SolutionId, SolveOptions,
     SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
-    collect_scenario_owned_uuids, collect_self_declared_uuids, extract_result_dependency,
-    extract_result_id, extract_scenario_references, validate_nonsecret_portable_json,
-    validate_scenario_owned_uuid_uniqueness,
+    collect_result_owned_uuids, collect_scenario_owned_uuids, collect_self_declared_uuids,
+    extract_result_dependency, extract_result_id, extract_scenario_references, is_archival_result,
+    validate_nonsecret_portable_json, validate_nonsecret_portable_json_bytes,
+    validate_scenario_owned_uuid_uniqueness, visit_asset_reference_map,
 };
 use rusqlite::{
     Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, limits::Limit, params,
@@ -36,10 +42,11 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{File, OpenOptions as FileOpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -48,7 +55,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-const CURRENT_SCHEMA_VERSION: u32 = 5;
+const CURRENT_SCHEMA_VERSION: u32 = 8;
 const INITIAL_MIGRATION: &str = include_str!("../../../migrations/V1_initial_schema.sql");
 const INDEPENDENT_VERIFICATION_MIGRATION: &str =
     include_str!("../../../migrations/V2_independent_verification.sql");
@@ -58,17 +65,30 @@ const SELECTED_SOLUTION_MIGRATION: &str =
     include_str!("../../../migrations/V4_selected_solution.sql");
 const COUNTERFACTUAL_RUN_OWNERSHIP_MIGRATION: &str =
     include_str!("../../../migrations/V5_counterfactual_run_ownership.sql");
+const COUNTERFACTUAL_COMPLETED_OWNERSHIP_MIGRATION: &str =
+    include_str!("../../../migrations/V6_counterfactual_completed_ownership.sql");
+const VERIFIED_CHECKPOINTS_MIGRATION: &str =
+    include_str!("../../../migrations/V7_verified_checkpoints.sql");
+const INFEASIBILITY_CUSTODY_MIGRATION: &str =
+    include_str!("../../../migrations/V8_infeasibility_custody.sql");
 const SQLITE_LENGTH_LIMIT_BYTES: i32 = 128 * 1024 * 1024;
 // Allows one SQLite busy-timeout interval for worker cleanup and one for the
 // owning process to persist its terminal timeout/cancellation outcome.
 const SOLVE_TERMINAL_PERSISTENCE_GRACE_MILLISECONDS: u64 = 10_000;
+const PRE_V2_BACKUP_SUFFIX: &str = ".pre-v2-backup.sqlite3";
 const V1_MIGRATION_NAME: &str = "V1_initial_schema.sql";
 const V2_MIGRATION_NAME: &str = "V2_independent_verification.sql";
 const V3_MIGRATION_NAME: &str = "V3_counterfactual_job_requests.sql";
 const V4_MIGRATION_NAME: &str = "V4_selected_solution.sql";
 const V5_MIGRATION_NAME: &str = "V5_counterfactual_run_ownership.sql";
-const PRE_V2_BACKUP_SUFFIX: &str = ".pre-v2-backup.sqlite3";
+const V6_MIGRATION_NAME: &str = "V6_counterfactual_completed_ownership.sql";
+const V7_MIGRATION_NAME: &str = "V7_verified_checkpoints.sql";
+const V8_MIGRATION_NAME: &str = "V8_infeasibility_custody.sql";
 const MAX_SNAPSHOT_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
+/// Private native history rows are bounded before either JSON payload is decoded.
+pub const MAX_PRIVATE_HISTORY_ENTRY_BYTES: usize = 64 * 1024 * 1024;
+/// Persisted discriminator used only to project history and select bounded trusted receipts.
+pub const NATIVE_PRIVATE_HISTORY_COMMAND_TYPE: &str = "eutheto.native.private.v1";
 const IMPORT_PROVENANCE_RETENTION_POLICY_VERSION: u32 = 1;
 const MAX_IMPORT_PROVENANCE_ROWS: u64 = 128;
 const MAX_IMPORT_PROVENANCE_BYTES: u64 = 4 * 1024 * 1024;
@@ -101,6 +121,10 @@ pub enum StoreError {
         expected: Revision,
         actual: Revision,
     },
+    #[error("the scenario changed after its native custody snapshot was captured")]
+    StaleScenarioCustody,
+    #[error("a private history payload exceeds its bound")]
+    PrivateHistoryPayloadTooLarge,
     #[error(
         "library revision conflict: expected {}, actual {}",
         .expected.value(),
@@ -165,26 +189,47 @@ pub enum StoreError {
     SolveRunCollision(SolveRunId),
     #[error("solve run {0} was not found")]
     SolveRunNotFound(SolveRunId),
-    #[error("solve run {0} is already terminal")]
+    #[error("solve run {0} has already reached a terminal outcome")]
     SolveRunTerminalConflict(SolveRunId),
+    #[error("solve run list limit must be between 1 and {maximum}")]
+    SolveRunListLimit { maximum: u32 },
     #[error("persisted solve run is invalid: {0}")]
     InvalidPersistedRun(String),
+    #[error("persisted infeasibility evidence is invalid: {0}")]
+    InvalidPersistedInfeasibilityEvidence(String),
+    #[error("historical source assets are unavailable for diagnostic copy: {reason:?}")]
+    SourceAssetUnavailable {
+        reason: RunSourceAssetUnavailableReason,
+    },
     #[error("persisted accepted result is invalid: {0}")]
     InvalidPersistedResult(String),
     #[error("accepted result {0} was not found")]
     AcceptedResultNotFound(SolutionId),
+    #[error("accepted result {0} changed since it was independently verified")]
+    AcceptedResultChanged(SolutionId),
     #[error("persisted candidate diagnostics are invalid: {0}")]
     InvalidPersistedDiagnostic(String),
     #[error("scenario snapshot {0} does not match its solve input")]
     SnapshotMismatch(ScenarioSnapshotId),
     #[error("counterfactual request {request_id} conflicts with an existing request")]
     CounterfactualRequestIdConflict { request_id: RequestId },
+    #[error("counterfactual cancellation request {request_id} conflicts with durable state")]
+    CounterfactualCancelRequestIdConflict { request_id: RequestId },
+    #[error("counterfactual finalization observed stale cancellation state")]
+    StaleCounterfactualFinalizationObservation {
+        cancellation: CounterfactualCancellationObservationV1,
+        /// The untouched terminal material must be retimed/rebound once by
+        /// the causal owner; it is not a retry token or serialized authority.
+        finalization: Box<CounterfactualRunFinalizationV1>,
+    },
     #[error("counterfactual job {0} collides with an existing job")]
     CounterfactualJobCollision(CounterfactualJobId),
     #[error("counterfactual job {0} was not found")]
     CounterfactualJobNotFound(CounterfactualJobId),
-    #[error("counterfactual cancellation request {request_id} conflicts with persisted state")]
-    CounterfactualCancelRequestIdConflict { request_id: RequestId },
+    #[error("counterfactual job list limit must be between 1 and {maximum}")]
+    CounterfactualJobListLimit { maximum: u32 },
+    #[error("counterfactual job list cursor is invalid: {0}")]
+    InvalidCounterfactualCursor(String),
     #[error("counterfactual job {0} cannot make the requested transition")]
     CounterfactualTransitionConflict(CounterfactualJobId),
     #[error("persisted counterfactual job is invalid: {0}")]
@@ -628,7 +673,38 @@ pub struct StoredProject {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredAcceptedResultV2 {
     pub document: ScenarioDocument,
-    pub portable: PortableAcceptedResultV2,
+    pub portable: PortableAcceptedResult,
+}
+
+/// Compact expectation for one independently verified accepted source.
+///
+/// The Store compares every component to its freshly reloaded local tuple, then
+/// keeps a separate Store-computed canonical digest in its opaque custody stamp.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedSourceExpectationV1 {
+    scenario_id: ScenarioId,
+    solution_id: SolutionId,
+    result_checksum: String,
+    run_id: SolveRunId,
+    run_input_checksum: String,
+    run_manifest_checksum: String,
+    portable_checksum: String,
+}
+
+impl AcceptedSourceExpectationV1 {
+    /// Derives a comparison-only expectation from a freshly loaded accepted source.
+    #[must_use]
+    pub fn from_stored(accepted: &StoredAcceptedResultV2) -> Self {
+        Self {
+            scenario_id: accepted.portable.scenario_id,
+            solution_id: accepted.portable.result_id,
+            result_checksum: accepted.portable.accepted_result.checksum.clone(),
+            run_id: accepted.portable.run_input.run_id,
+            run_input_checksum: accepted.portable.run_input.checksum.clone(),
+            run_manifest_checksum: accepted.portable.run_manifest.checksum.clone(),
+            portable_checksum: accepted.portable.checksum.clone(),
+        }
+    }
 }
 
 /// Compact validated projection of one independently accepted result.
@@ -636,6 +712,7 @@ pub struct StoredAcceptedResultV2 {
 pub struct StoredAcceptedResultSummary {
     pub result: AcceptedResultRefV1,
     pub run_id: SolveRunId,
+    pub run_input_checksum: String,
     pub scenario_id: ScenarioId,
     pub scenario_revision: Revision,
     pub current_revision: Revision,
@@ -660,6 +737,48 @@ pub struct PortableSupplementalSections {
     pub shared_records: BTreeMap<String, Vec<u8>>,
     pub preferences: BTreeMap<String, Vec<u8>>,
     pub assets: BTreeMap<String, PortableAsset>,
+}
+
+/// Native noncanonical payloads to project as inert archival results.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeArchivalSelection {
+    /// Reserve native roots without reading their raw JSON payloads.
+    Exclude,
+    /// Project only this scenario's noncanonical native rows.
+    Scenario(ScenarioId),
+    /// Project every noncanonical native row.
+    All,
+}
+
+/// The outer `Option` on APIs carrying this value represents no marker. A
+/// present value is always persisted as an inseparable ID/timestamp pair.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CounterfactualCancellationObservationV1 {
+    /// Correlation identity of the one immutable cancellation marker.
+    pub cancel_request_id: RequestId,
+    /// Wall-clock time recorded with `cancel_request_id`.
+    pub cancel_requested_at: Rfc3339Timestamp,
+}
+
+/// Native, nonserialized authority for one diagnostic copy operation.
+#[derive(Clone, Debug)]
+pub struct StoreDiagnosticCopyRequestV1 {
+    pub run_id: SolveRunId,
+    pub scenario_id: ScenarioId,
+    pub source_revision: Revision,
+    pub run_manifest_checksum: String,
+    pub evidence_checksum: String,
+    pub group_id: AssumptionGroupId,
+    pub expected_library_revision: Revision,
+    pub request_id: RequestId,
+}
+
+/// Result of one atomic diagnostic copy and its normal command journal write.
+#[derive(Debug)]
+pub struct StoreDiagnosticCopyOutcome<T> {
+    pub project: StoredProject,
+    pub command: CommittedCommand<T>,
+    pub library_revision: Revision,
 }
 
 /// Immutable caller-supplied solve request. Scenario-owned fields are derived
@@ -702,6 +821,8 @@ pub struct NewSolveRunV1 {
     pub solve_options: SolveOptions,
     /// Optional canonical temporary-condition-set hash.
     pub temporary_condition_hash: Option<String>,
+    /// Recorded objective semantics; None is reserved for exact historical derived replay.
+    pub objective_context: Option<eutheto_domain_ir::RunObjectiveContext>,
     /// Parent-recorded execution start time.
     pub started_at: Rfc3339Timestamp,
 }
@@ -710,29 +831,103 @@ pub struct NewSolveRunV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartedSolveRunV1 {
     /// Immutable typed input persisted for the run.
-    pub input: RunInputV1,
+    pub input: RunInput,
     /// Original parent-recorded start time used for deadlines and manifests.
     pub started_at: Rfc3339Timestamp,
     /// Whether an existing request was reused.
     pub reused: bool,
 }
 
-/// Validated retained request state; reading it never starts or takes ownership of work.
+/// Validated retained solve state returned by scenario-scoped read paths.
+///
+/// The manifest is absent only while the durable run is still running. Callers
+/// must not treat the absence as cancellation or failure; they may refresh the
+/// same immutable run identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExistingSolveRunV1 {
-    pub input: RunInputV1,
+    pub input: RunInput,
     pub started_at: Rfc3339Timestamp,
-    /// Absent only for a still-running request.
-    pub manifest: Option<RunManifestV1>,
+    pub manifest: Option<RunManifest>,
 }
+
+/// Maximum number of solve runs returned by one bounded scenario query.
+pub const MAX_SOLVE_RUN_LIST_LIMIT: u32 = 32;
+
+/// Retained solve authority for one immutable scenario revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SolveRunListRequestV1 {
+    pub scenario_id: ScenarioId,
+    pub scenario_revision: Option<Revision>,
+    pub limit: u32,
+}
+/// Maximum number of counterfactual jobs returned by one bounded scenario query.
+pub const MAX_COUNTERFACTUAL_JOB_LIST_LIMIT: u32 = 32;
+
+/// Descending keyset position for a counterfactual job list.
+///
+/// The cursor is valid only for the exact persisted job and `created_at`
+/// pair from which it was produced. The list endpoint verifies that binding
+/// before running the page query.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CounterfactualJobListCursorV1 {
+    pub created_at: Rfc3339Timestamp,
+    pub job_id: CounterfactualJobId,
+}
+
+/// One bounded, validated projection of a counterfactual job.
+///
+/// The list deliberately omits result manifests and comparison payloads.
+/// Call [`SqliteScenarioStore::load_counterfactual_job`] for the complete
+/// lifecycle record after selecting an item.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CounterfactualJobListItemV1 {
+    pub job_id: CounterfactualJobId,
+    pub request_id: RequestId,
+    pub scenario_id: ScenarioId,
+    pub scenario_revision: Revision,
+    pub base_solution_id: SolutionId,
+    pub condition: CounterfactualConditionV1,
+    pub created_at: Rfc3339Timestamp,
+    pub state: CounterfactualJobState,
+    pub finished_at: Option<Rfc3339Timestamp>,
+    pub error: Option<CounterfactualJobErrorV1>,
+}
+
+/// One bounded page of validated counterfactual job list items.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CounterfactualJobListPageV1 {
+    pub jobs: Vec<CounterfactualJobListItemV1>,
+    pub next_cursor: Option<CounterfactualJobListCursorV1>,
+}
+
+// ExistingSolveRunV1 is also the idempotent request lookup result. Keep the
+// declaration above the public request type so both paths share one authority.
 
 /// Exact immutable scenario snapshot and typed input for backend execution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedSolveInputV1 {
     /// Immutable typed input persisted for the run.
-    pub input: RunInputV1,
+    pub input: RunInput,
     /// Exact scenario document referenced by the input snapshot.
     pub document: ScenarioDocument,
+}
+
+/// Exact terminal infeasibility source for native explanation reads.
+///
+/// The document is loaded from the immutable solve snapshot, never from the
+/// current scenario projection. Counterfactual conditions come from the
+/// owning immutable job request and are cross-checked against retained
+/// evidence when evidence exists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredInfeasibilitySourceV1 {
+    pub document: ScenarioDocument,
+    pub input: RunInput,
+    pub manifest: RunManifest,
+    pub evidence: Option<RunInfeasibilityEvidenceV1>,
+    pub condition: Option<CounterfactualConditionV1>,
 }
 
 /// Result of atomically creating or reusing a counterfactual request.
@@ -750,7 +945,7 @@ pub enum CounterfactualJobTransitionV1 {
     /// Mark queued work as started.
     Running { started_at: Rfc3339Timestamp },
     /// Persist a locally authorized counterfactual result.
-    Completed { result: Box<CounterfactualResultV1> },
+    Completed { result: Box<CounterfactualResult> },
     /// Persist a safe typed failure.
     Failed {
         finished_at: Rfc3339Timestamp,
@@ -768,29 +963,31 @@ pub enum CounterfactualRunFinalizationV1 {
     CompletedAccepted {
         accepted_result: Box<AcceptedResult>,
         evidence: BTreeMap<DomainEvidenceId, VerificationValue>,
-        manifest: RunManifestV1,
-        result: Box<CounterfactualResultV1>,
+        manifest: RunManifest,
+        result: Box<CounterfactualResult>,
     },
     /// Persist an infeasibility proof or post-run limit outcome and complete the job.
     CompletedNoResult {
-        manifest: RunManifestV1,
-        result: Box<CounterfactualResultV1>,
+        manifest: RunManifest,
+        result: Box<CounterfactualResult>,
+        /// Optional exact local proof/custody for the infeasible no-result.
+        infeasibility_evidence: Option<Box<RunInfeasibilityEvidenceV1>>,
     },
     /// Quarantine an invalid candidate and fail the job with a typed error.
     Quarantined {
-        manifest: RunManifestV1,
+        manifest: RunManifest,
         candidate_diagnostics: CandidateDiagnosticsV1,
         error: CounterfactualJobErrorV1,
     },
     /// Persist a terminal no-result run and fail the job with a typed error.
     Failed {
-        manifest: RunManifestV1,
+        manifest: RunManifest,
         error: CounterfactualJobErrorV1,
     },
     /// Persist a cancelled derived run and cancel the job.
-    Cancelled { manifest: RunManifestV1 },
+    Cancelled { manifest: RunManifest },
     /// Persist an interrupted derived run and interrupt the job.
-    Interrupted { manifest: RunManifestV1 },
+    Interrupted { manifest: RunManifest },
 }
 
 /// Result of linearizing a cancellation request against terminal completion.
@@ -889,6 +1086,9 @@ pub struct LibrarySnapshot {
     pub manifest_extensions: BTreeMap<String, Value>,
     pub nonsemantic_extensions: BTreeSet<String>,
     pub sections: PortableSupplementalSections,
+    /// Canonical accepted-result identities observed in the same transaction as `sections`.
+    /// Opaque imported results are present in `sections.results` but absent here.
+    pub canonical_result_ids: BTreeSet<SolutionId>,
     pub provenance: Vec<PersistedImportProvenance>,
     pub supplemental_identities: BTreeSet<SupplementalIdentity>,
     pub supplemental_identity_owners: BTreeMap<Uuid, SupplementalIdentity>,
@@ -988,6 +1188,68 @@ pub struct HistoryEntry {
     pub applied: bool,
 }
 
+/// Store-created proof of one exact scenario/history view. Its fields are private so callers
+/// cannot mint authority; it is rechecked in the transaction that starts or mutates work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioCustodyStamp {
+    scenario_id: ScenarioId,
+    revision: Revision,
+    document_hash: String,
+    cursor_sequence: u64,
+    branch_generation: u64,
+    receipt: Option<PrivateHistoryBinding>,
+    accepted_source: Option<AcceptedSourceBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AcceptedSourceBinding {
+    expected: AcceptedSourceExpectationV1,
+    canonical_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PrivateHistoryBinding {
+    command_id: CommandId,
+    history_sequence: u64,
+    branch_generation: u64,
+    revision_before: Revision,
+    revision_after: Revision,
+    payload_digest: String,
+}
+
+impl ScenarioCustodyStamp {
+    #[must_use]
+    pub const fn scenario_id(&self) -> ScenarioId {
+        self.scenario_id
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    #[must_use]
+    pub fn document_hash(&self) -> &str {
+        &self.document_hash
+    }
+}
+
+/// One Store-selected private row and the current view it was selected against.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrivateHistoryLookup {
+    pub stamp: ScenarioCustodyStamp,
+    pub entry: Option<HistoryEntry>,
+}
+
+/// One exact solve snapshot captured with the current document and its custody stamp.
+#[derive(Clone, Debug)]
+pub struct SolveSnapshotCapture {
+    pub project: StoredProject,
+    pub snapshot_id: ScenarioSnapshotId,
+    pub snapshot_created_at: Rfc3339Timestamp,
+    pub stamp: ScenarioCustodyStamp,
+}
+
 /// Maximum number of entries returned by a metadata history page.
 pub const HISTORY_PAGE_MAX_ENTRIES: u32 = 100;
 /// Maximum UTF-8 bytes returned for one recorded history summary.
@@ -1039,6 +1301,8 @@ pub struct HistoryCommand {
     pub document: ScenarioDocument,
     pub command: Value,
     pub entry: HistoryEntry,
+    /// Same-scenario retained admission row selected in the same replay transaction.
+    pub related_private_receipt: Option<HistoryEntry>,
     pub target_document_updated_at: Rfc3339Timestamp,
 }
 
@@ -1360,12 +1624,18 @@ impl SqliteScenarioStore {
     /// Reads the portable-library revision, authoritative documents and wrapper
     /// metadata, application settings, supplemental identities, JSON records,
     /// assets and their declarations, and import provenance from one snapshot.
+    /// Native root occupancy is always included; raw native payload admission is selection-scoped.
+    /// Available exact native sources are retained, but missing native-only sources remain absent
+    /// for the selected-result exporter to refuse. Imported, canonical and internal sources are strict.
     ///
     /// # Errors
     ///
     /// Returns an error if the actor or snapshot transaction fails, or if any
     /// stored identifier, timestamp, numeric value, or JSON payload is invalid.
-    pub async fn library_snapshot(&self) -> Result<LibrarySnapshot, StoreError> {
+    pub async fn library_snapshot(
+        &self,
+        native_archives: NativeArchivalSelection,
+    ) -> Result<LibrarySnapshot, StoreError> {
         self.call(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
@@ -1388,9 +1658,33 @@ impl SqliteScenarioStore {
             let settings = load_all_settings(&transaction)?;
             let (manifest_extensions, nonsemantic_extensions) =
                 load_portable_library_metadata(&transaction)?;
-            let supplemental_identity_owners = load_supplemental_identity_owners(&transaction)?;
-            let sections = load_portable_sections(&transaction)?;
-            let supplemental_identities = portable_section_identities(&sections);
+            let mut supplemental_identity_owners = load_supplemental_identity_owners(&transaction)?;
+            let (mut sections, canonical_result_ids) = load_portable_sections(&transaction)?;
+            let mut supplemental_identities = portable_section_identities(&sections);
+            // Native IDs remain SolveState owners. Only this preview map exposes archive occupancy.
+            for id in native_archival_result_ids(&transaction)? {
+                let owner = SupplementalIdentity {
+                    section: SupplementalSectionKind::Results,
+                    key: format!("{id}.json"),
+                };
+                if supplemental_identity_owners.contains_key(&id) {
+                    return Err(StoreError::IdentityCollision(id));
+                }
+                supplemental_identity_owners.insert(id, owner.clone());
+                supplemental_identities.insert(owner);
+            }
+            for (key, bytes) in load_native_archival_results(&transaction, native_archives)? {
+                if sections.results.insert(key.clone(), bytes).is_some() {
+                    let id = Uuid::parse_str(key.strip_suffix(".json").unwrap_or(&key)).map_err(
+                        |error| {
+                            StoreError::Integrity(format!(
+                                "invalid native result identity: {error}"
+                            ))
+                        },
+                    )?;
+                    return Err(StoreError::IdentityCollision(id));
+                }
+            }
             let provenance = load_import_provenance(&transaction)?;
             transaction.commit()?;
             Ok(LibrarySnapshot {
@@ -1403,6 +1697,7 @@ impl SqliteScenarioStore {
                 manifest_extensions,
                 nonsemantic_extensions,
                 sections,
+                canonical_result_ids,
                 provenance,
                 supplemental_identities,
                 supplemental_identity_owners,
@@ -1526,6 +1821,238 @@ impl SqliteScenarioStore {
             .await
     }
 
+    /// Reads an exact current or retained historical source without reconstructing or mutating it.
+    ///
+    /// # Errors
+    /// Rejects unavailable revisions, malformed persisted data and interrupted reads.
+    pub async fn load_scenario_source(
+        &self,
+        scenario_id: ScenarioId,
+        revision: Revision,
+        control: OperationControl,
+    ) -> Result<ScenarioSnapshotV1, StoreError> {
+        check_operation_control(&control)?;
+        self.call(move |connection| {
+            check_operation_control(&control)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let snapshot =
+                load_exact_historical_scenario_revision(&transaction, scenario_id, revision)?;
+            check_operation_control(&control)?;
+            Ok(snapshot)
+        })
+        .await
+    }
+
+    /// Distinguishes a genuinely external claim from any retained result or run identity.
+    ///
+    /// This includes unaccepted results and foreign-scenario runs; it grants no acceptance.
+    ///
+    /// # Errors
+    /// Returns database/actor failures or an interrupted operation.
+    pub async fn has_result_or_run_identity(
+        &self,
+        solution_id: SolutionId,
+        run_id: SolveRunId,
+        control: OperationControl,
+    ) -> Result<bool, StoreError> {
+        check_operation_control(&control)?;
+        self.call(move |connection| {
+            check_operation_control(&control)?;
+            let found = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM solutions WHERE id = ?1 UNION ALL SELECT 1 FROM solve_runs WHERE id = ?2)",
+                params![solution_id.to_string(), run_id.to_string()],
+                |row| row.get(0),
+            )?;
+            check_operation_control(&control)?;
+            Ok(found)
+        })
+        .await
+    }
+
+    /// Captures one revision-consistent project and Store-created history custody proof.
+    ///
+    /// The expected document prevents preparation from rebasing onto a same-revision replacement.
+    /// The returned stamp is rechecked by the write transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or database operation fails, the operation is cancelled,
+    /// the expected revision or document is stale, persisted project data is invalid, or the
+    /// accepted-source custody no longer matches.
+    pub async fn capture_scenario_custody(
+        &self,
+        scenario_id: ScenarioId,
+        expected_revision: Revision,
+        expected_document: ScenarioDocument,
+        control: OperationControl,
+        accepted_source: Option<AcceptedSourceExpectationV1>,
+    ) -> Result<(StoredProject, ScenarioCustodyStamp), StoreError> {
+        self.call(move |connection| {
+            check_operation_control(&control)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let project = load_project(&transaction, scenario_id)?;
+            ensure_revision(expected_revision, project.summary.revision.value())?;
+            if expected_document != project.document {
+                return Err(StoreError::StaleScenarioCustody);
+            }
+            let stamp = capture_custody_stamp(
+                &transaction,
+                &project,
+                scenario_id,
+                None,
+                accepted_source.as_ref(),
+                Some(&control),
+            )?;
+            check_operation_control(&control)?;
+            Ok((project, stamp))
+        })
+        .await
+    }
+
+    /// Captures the exact immutable source snapshot for one native profile group.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or database operation fails, the operation is cancelled,
+    /// the expected revision or document is stale, retained history or project data is invalid,
+    /// the accepted-source custody no longer matches, or snapshot serialization fails.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn capture_solve_snapshot(
+        &self,
+        scenario_id: ScenarioId,
+        expected_revision: Revision,
+        expected_document: ScenarioDocument,
+        created_at: Rfc3339Timestamp,
+        receipt_command_id: Option<CommandId>,
+        control: OperationControl,
+        accepted_source: Option<AcceptedSourceExpectationV1>,
+    ) -> Result<(SolveSnapshotCapture, Option<HistoryEntry>), StoreError> {
+        let snapshot_policy = self.snapshot_policy;
+        self.call(move |connection| {
+            check_operation_control(&control)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let project = load_project(&transaction, scenario_id)?;
+            ensure_revision(expected_revision, project.summary.revision.value())?;
+            if expected_document != project.document {
+                return Err(StoreError::StaleScenarioCustody);
+            }
+            let (cursor, generation, max_sequence) = history_state(&transaction, scenario_id)?;
+            history_page_availability(
+                &transaction,
+                &scenario_id.to_string(),
+                cursor,
+                generation,
+                max_sequence,
+            )?;
+            validate_applied_history_prefix(&transaction, &scenario_id.to_string(), cursor)?;
+            let receipt = receipt_command_id
+                .map(|command_id| {
+                    load_private_history_receipt(
+                        &transaction,
+                        scenario_id,
+                        command_id,
+                        cursor,
+                        generation,
+                        Some(&control),
+                    )
+                })
+                .transpose()?
+                .flatten();
+            let stamp = capture_custody_stamp(
+                &transaction,
+                &project,
+                scenario_id,
+                receipt.as_ref().map(|receipt| receipt.0.clone()),
+                accepted_source.as_ref(),
+                Some(&control),
+            )?;
+            let document_json = serialize_document(&project.document)?;
+            let (snapshot_id, snapshot_created_at) = ensure_solve_snapshot(
+                &transaction,
+                scenario_id,
+                expected_revision,
+                document_json.as_bytes(),
+                created_at,
+                snapshot_policy,
+            )?;
+            check_operation_control(&control)?;
+            transaction.commit()?;
+            Ok((
+                SolveSnapshotCapture {
+                    project,
+                    snapshot_id,
+                    snapshot_created_at,
+                    stamp,
+                },
+                receipt.map(|(_, entry)| entry),
+            ))
+        })
+        .await
+    }
+
+    /// Selects one bounded private receipt by indexed command identity.
+    ///
+    /// The row must belong to the retained applied prefix. Its admission revision and generation
+    /// are deliberately not compared with current scenario values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or database operation fails, the operation is cancelled,
+    /// the expected revision conflicts, retained history or persisted project data is invalid,
+    /// or the accepted-source custody no longer matches.
+    pub async fn lookup_private_history(
+        &self,
+        scenario_id: ScenarioId,
+        expected_revision: Revision,
+        command_id: CommandId,
+        control: OperationControl,
+        accepted_source: Option<AcceptedSourceExpectationV1>,
+    ) -> Result<PrivateHistoryLookup, StoreError> {
+        self.call(move |connection| {
+            check_operation_control(&control)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let project = load_project(&transaction, scenario_id)?;
+            ensure_revision(expected_revision, project.summary.revision.value())?;
+            let scenario_key = scenario_id.to_string();
+            let (cursor, generation, max_sequence) = history_state(&transaction, scenario_id)?;
+            history_page_availability(
+                &transaction,
+                &scenario_key,
+                cursor,
+                generation,
+                max_sequence,
+            )?;
+            validate_applied_history_prefix(&transaction, &scenario_key, cursor)?;
+            let receipt = load_private_history_receipt(
+                &transaction,
+                scenario_id,
+                command_id,
+                cursor,
+                generation,
+                Some(&control),
+            )?;
+            let stamp = capture_custody_stamp(
+                &transaction,
+                &project,
+                scenario_id,
+                receipt.as_ref().map(|receipt| receipt.0.clone()),
+                accepted_source.as_ref(),
+                Some(&control),
+            )?;
+            check_operation_control(&control)?;
+            transaction.commit()?;
+            Ok(PrivateHistoryLookup {
+                stamp,
+                entry: receipt.map(|(_, entry)| entry),
+            })
+        })
+        .await
+    }
+
     /// Starts an immutable V2 solve run or reuses the run already bound to the
     /// same request identity and canonical request hash.
     ///
@@ -1537,6 +2064,9 @@ impl SqliteScenarioStore {
     pub async fn start_solve_run(
         &self,
         request: NewSolveRunV1,
+        custody_stamp: ScenarioCustodyStamp,
+        expected_snapshot_id: Option<ScenarioSnapshotId>,
+        control: OperationControl,
     ) -> Result<StartedSolveRunV1, StoreError> {
         let snapshot_policy = self.snapshot_policy;
         #[cfg(debug_assertions)]
@@ -1545,6 +2075,9 @@ impl SqliteScenarioStore {
             start_solve_run_transaction(
                 connection,
                 request,
+                Some(custody_stamp),
+                expected_snapshot_id,
+                &control,
                 snapshot_policy,
                 #[cfg(debug_assertions)]
                 &failpoint,
@@ -1557,9 +2090,156 @@ impl SqliteScenarioStore {
     ///
     /// # Errors
     ///
-    /// Returns an error if the actor or run is unavailable, the persisted input
-    /// is invalid, the snapshot binding does not match, bounded decompression
-    /// fails, or the exact scenario document is invalid.
+    /// Returns a store error when recovery, persisted run validation, or the
+    /// transactional read fails.
+    pub async fn load_solve_run_by_request(
+        &self,
+        request_id: RequestId,
+    ) -> Result<Option<ExistingSolveRunV1>, StoreError> {
+        self.call(move |connection| {
+            recover_running_v2_runs(connection)?;
+            let transaction = connection.transaction()?;
+            let run_id: Option<String> = transaction
+                .query_row(
+                    "SELECT id FROM solve_runs WHERE request_id = ?1",
+                    [request_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(run_id) = run_id else {
+                transaction.commit()?;
+                return Ok(None);
+            };
+            let run_id = run_id.parse().map_err(|error| {
+                StoreError::InvalidPersistedRun(format!("invalid retained run ID: {error}"))
+            })?;
+            let retained = load_existing_solve_run(&transaction, run_id)?;
+            if retained.input.request_id != request_id {
+                return Err(StoreError::InvalidPersistedRun(
+                    "retained request state disagrees with immutable run authority".to_owned(),
+                ));
+            }
+            transaction.commit()?;
+            Ok(Some(retained))
+        })
+        .await
+    }
+
+    /// Reads one retained solve run only when it belongs to the requested scenario.
+    ///
+    /// This endpoint never starts work, claims a running run, or exposes another
+    /// scenario's request identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error when recovery, persisted run validation, or the
+    /// transactional read fails.
+    pub async fn load_solve_run(
+        &self,
+        scenario_id: ScenarioId,
+        run_id: SolveRunId,
+    ) -> Result<Option<ExistingSolveRunV1>, StoreError> {
+        self.call(move |connection| {
+            recover_running_v2_runs(connection)?;
+            let transaction = connection.transaction()?;
+            let exists: Option<String> = transaction
+                .query_row(
+                    "SELECT id FROM solve_runs WHERE id = ?1 AND scenario_id = ?2",
+                    params![run_id.to_string(), scenario_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(_) = exists else {
+                transaction.commit()?;
+                return Ok(None);
+            };
+            let retained = load_existing_solve_run(&transaction, run_id)?;
+            if retained.input.scenario_id != scenario_id {
+                return Err(StoreError::InvalidPersistedRun(
+                    "scenario-scoped run row disagrees with immutable run authority".to_owned(),
+                ));
+            }
+            transaction.commit()?;
+            Ok(Some(retained))
+        })
+        .await
+    }
+
+    /// Lists bounded retained solve runs for one scenario, newest first.
+    ///
+    /// A revision filter is exact when present. The limit is mandatory and
+    /// capped so a missed event or restart cannot turn a read into an
+    /// unbounded response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid list limit or returns a store error when recovery,
+    /// persisted run validation, or the transactional read fails.
+    pub async fn list_solve_runs(
+        &self,
+        request: SolveRunListRequestV1,
+    ) -> Result<Vec<ExistingSolveRunV1>, StoreError> {
+        if request.limit == 0 || request.limit > MAX_SOLVE_RUN_LIST_LIMIT {
+            return Err(StoreError::SolveRunListLimit {
+                maximum: MAX_SOLVE_RUN_LIST_LIMIT,
+            });
+        }
+        self.call(move |connection| {
+            recover_running_v2_runs(connection)?;
+            let transaction = connection.transaction()?;
+            let limit = i64::from(request.limit);
+            let rows = if let Some(revision) = request.scenario_revision {
+                let revision = u64_to_i64(revision.value())?;
+                let mut statement = transaction.prepare(
+                    "SELECT id FROM solve_runs
+                     WHERE scenario_id = ?1 AND scenario_revision = ?2
+                     ORDER BY started_at DESC, id DESC LIMIT ?3",
+                )?;
+                statement
+                    .query_map(
+                        params![request.scenario_id.to_string(), revision, limit],
+                        |row| row.get::<_, String>(0),
+                    )?
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                let mut statement = transaction.prepare(
+                    "SELECT id FROM solve_runs
+                     WHERE scenario_id = ?1
+                     ORDER BY started_at DESC, id DESC LIMIT ?2",
+                )?;
+                statement
+                    .query_map(params![request.scenario_id.to_string(), limit], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            let mut retained = Vec::with_capacity(rows.len());
+            for run_id in rows {
+                let run_id = run_id.parse().map_err(|error| {
+                    StoreError::InvalidPersistedRun(format!("invalid retained run ID: {error}"))
+                })?;
+                let run = load_existing_solve_run(&transaction, run_id)?;
+                if run.input.scenario_id != request.scenario_id
+                    || request
+                        .scenario_revision
+                        .is_some_and(|revision| run.input.scenario_revision != revision.value())
+                {
+                    return Err(StoreError::InvalidPersistedRun(
+                        "scenario-scoped run row disagrees with immutable run authority".to_owned(),
+                    ));
+                }
+                retained.push(run);
+            }
+            transaction.commit()?;
+            Ok(retained)
+        })
+        .await
+    }
+    /// Loads the immutable run input and scenario snapshot captured at solve admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the run does not exist or its persisted snapshot is invalid.
     pub async fn load_solve_input(
         &self,
         run_id: SolveRunId,
@@ -1568,67 +2248,121 @@ impl SqliteScenarioStore {
             .await
     }
 
-    /// Resolves idempotent request state before a caller reads moving-current scenario data.
+    /// Loads one bounded, exact run-infeasibility evidence row.
+    ///
+    /// Legacy V7 runs have no row and return `Ok(None)`. A present row is
+    /// validated against its immutable input and final manifest before it is
+    /// returned; SQL byte length is checked before allocating the JSON value.
     ///
     /// # Errors
-    /// Rejects inconsistent persisted input, terminal bindings, timing columns or database errors.
-    pub async fn load_solve_run_by_request(
+    ///
+    /// Returns an error if the run is missing, the actor or transaction fails,
+    /// or persisted run/evidence data is invalid or inconsistent.
+    pub async fn load_run_infeasibility_evidence(
         &self,
-        request_id: RequestId,
-    ) -> Result<Option<ExistingSolveRunV1>, StoreError> {
+        run_id: SolveRunId,
+    ) -> Result<Option<RunInfeasibilityEvidenceV1>, StoreError> {
         self.call(move |connection| {
-            let transaction = connection.transaction()?;
-            let row: Option<(String, Option<String>, Option<i64>)> = transaction
-                .query_row(
-                    "SELECT id, finished_at, elapsed_ms FROM solve_runs WHERE request_id = ?1",
-                    [request_id.to_string()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()?;
-            let Some((run_id, finished_at, elapsed_ms)) = row else {
-                return Ok(None);
-            };
-            let run_id: SolveRunId = run_id.parse().map_err(|_| {
-                StoreError::InvalidPersistedRun("invalid retained run ID".to_owned())
-            })?;
-            let (input, status, manifest_json, started_at) =
-                load_run_input_record(&transaction, run_id)?;
-            let manifest = manifest_json
-                .map(|json| RunManifestV1::from_json(json.as_bytes()))
-                .transpose()
-                .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
-            let finished_at = finished_at
-                .map(|value| parse_timestamp(&value, "solve-run finished_at"))
-                .transpose()?;
-            let elapsed_ms = elapsed_ms.map(i64_to_u64).transpose()?;
-            let consistent = match &manifest {
-                None => status == "running" && finished_at.is_none() && elapsed_ms.is_none(),
-                Some(manifest) => {
-                    manifest.run_id == input.run_id
-                        && manifest.run_input_checksum == input.checksum
-                        && manifest.started_at == started_at
-                        && Some(manifest.finished_at) == finished_at
-                        && manifest
-                            .elapsed_milliseconds
-                            .map(eutheto_types::DurationMillis::value)
-                            == elapsed_ms
-                        && terminal_status(&manifest.outcome)? == status
-                }
-            };
-            if input.request_id != request_id || !consistent {
-                return Err(StoreError::InvalidPersistedRun(
-                    "retained request state disagrees with immutable run authority".to_owned(),
-                ));
-            }
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let evidence = load_run_infeasibility_evidence_in_transaction(&transaction, run_id)?;
             transaction.commit()?;
-            Ok(Some(ExistingSolveRunV1 {
-                input,
-                started_at,
-                manifest,
-            }))
+            Ok(evidence)
         })
         .await
     }
+
+    /// Loads one exact terminal infeasibility source for native explanation.
+    ///
+    /// The scenario document is read from the immutable solve snapshot
+    /// retained by the run. Counterfactual conditions are read from the
+    /// owning immutable job request rather than from the current scenario or
+    /// derived native pin context. Current asset rows are deliberately not
+    /// consulted; asset drift is a diagnostic-copy failure, not an inspection
+    /// failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(None)` only when `run_id` is absent. A present nonterminal,
+    /// non-infeasible, cross-scenario, malformed, or substituted run is
+    /// rejected as typed persisted-run or evidence authority failure.
+    pub async fn load_run_infeasibility_source(
+        &self,
+        scenario_id: ScenarioId,
+        run_id: SolveRunId,
+    ) -> Result<Option<StoredInfeasibilitySourceV1>, StoreError> {
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let source =
+                load_run_infeasibility_source_in_transaction(&transaction, scenario_id, run_id)?;
+            transaction.commit()?;
+            Ok(source)
+        })
+        .await
+    }
+    /// Saves the first independently verified candidate for one still-running solve.
+    ///
+    /// The checkpoint is a separate local authority from terminal run and accepted-result
+    /// persistence. A repeated save is a no-op only when the stored checkpoint is byte-identical
+    /// to the canonical serialization of `checkpoint`.
+    /// On success, returns the same owned checkpoint after commit for event publication without
+    /// copying its assignments or verification report across the database actor boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the checkpoint is invalid, its immutable input does not exactly
+    /// match the persisted run, its acceptance timestamp exceeds the parent solve deadline, the
+    /// run is missing or terminal, a different checkpoint already exists, or the actor/database
+    /// is unavailable.
+    pub async fn save_verified_checkpoint(
+        &self,
+        run_id: SolveRunId,
+        checkpoint: VerifiedCheckpoint,
+    ) -> Result<VerifiedCheckpoint, StoreError> {
+        self.call(move |connection| {
+            save_verified_checkpoint_transaction(connection, run_id, &checkpoint)?;
+            Ok(checkpoint)
+        })
+        .await
+    }
+
+    /// Loads the retained first independently verified candidate for one solve run.
+    ///
+    /// Checkpoint authority remains readable after terminal completion, failure, cancellation,
+    /// or startup recovery. A missing row returns `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persisted checkpoint JSON, checksum, immutable input, or run binding
+    /// is invalid, or when the actor/database is unavailable.
+    pub async fn load_verified_checkpoint(
+        &self,
+        run_id: SolveRunId,
+    ) -> Result<Option<VerifiedCheckpoint>, StoreError> {
+        self.call(move |connection| load_verified_checkpoint_row(connection, run_id))
+            .await
+    }
+
+    /// Loads one verified checkpoint together with the exact immutable scenario document it used.
+    ///
+    /// The lookup is checkpoint-local and does not require or fabricate a terminal solution row.
+    /// It remains available after the parent solve becomes terminal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persisted checkpoint, run-input, snapshot, or solution bindings are
+    /// invalid, or when the actor/database is unavailable.
+    pub async fn load_verified_checkpoint_for_solution(
+        &self,
+        solution_id: SolutionId,
+    ) -> Result<Option<(ScenarioDocument, VerifiedCheckpoint)>, StoreError> {
+        self.call(move |connection| {
+            load_verified_checkpoint_for_solution_row(connection, solution_id)
+        })
+        .await
+    }
+
     /// Lists compact independently accepted results for a scenario, newest first.
     ///
     /// The list never exposes unverified, quarantined, or legacy rows. Every
@@ -1694,23 +2428,28 @@ impl SqliteScenarioStore {
     ///
     /// Returns a revision conflict for stale scenario authority, not-found for
     /// missing, unaccepted, legacy, or cross-scenario results, and rejects
-    /// invalid persisted accepted-result authority.
+    /// invalid persisted accepted-result authority or a source tuple changed
+    /// since independent verification.
     pub async fn select_accepted_result(
         &self,
         scenario_id: ScenarioId,
         expected_revision: Revision,
         solution_id: SolutionId,
+        verified: StoredAcceptedResultV2,
     ) -> Result<StoredAcceptedResultSummary, StoreError> {
         self.call(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let current_revision = scenario_revision(&transaction, scenario_id)?;
             ensure_revision(expected_revision, current_revision.value())?;
-            let portable = load_local_accepted_authority(&transaction, solution_id)?;
-            if portable.scenario_id != scenario_id {
+            let loaded = load_stored_accepted_result(&transaction, solution_id)?;
+            if loaded.portable.scenario_id != scenario_id {
                 return Err(StoreError::AcceptedResultNotFound(solution_id));
             }
-            let summary = accepted_result_summary(&portable, current_revision, true)?;
+            if loaded != verified {
+                return Err(StoreError::AcceptedResultChanged(solution_id));
+            }
+            let summary = accepted_result_summary(&loaded.portable, current_revision, true)?;
             transaction.execute(
                 "UPDATE scenarios SET selected_solution_id = ?2 WHERE id = ?1",
                 params![scenario_id.to_string(), solution_id.to_string()],
@@ -1783,7 +2522,7 @@ impl SqliteScenarioStore {
     pub async fn finalize_accepted_run(
         &self,
         accepted_result: AcceptedResult,
-        manifest: RunManifestV1,
+        manifest: RunManifest,
         evidence: BTreeMap<DomainEvidenceId, VerificationValue>,
     ) -> Result<(), StoreError> {
         #[cfg(debug_assertions)]
@@ -1811,7 +2550,7 @@ impl SqliteScenarioStore {
     /// invalid or unsafe, or the atomic database commit fails.
     pub async fn finalize_quarantined_run(
         &self,
-        manifest: RunManifestV1,
+        manifest: RunManifest,
         candidate_diagnostics: CandidateDiagnosticsV1,
     ) -> Result<(), StoreError> {
         #[cfg(debug_assertions)]
@@ -1836,9 +2575,36 @@ impl SqliteScenarioStore {
     /// Returns an error if the actor or run is unavailable, the run is already
     /// terminal, the manifest is invalid or has an unsupported outcome, or the
     /// atomic database commit fails.
-    pub async fn finalize_terminal_run(&self, manifest: RunManifestV1) -> Result<(), StoreError> {
-        self.call(move |connection| finalize_terminal_run_transaction(connection, &manifest))
-            .await
+    pub async fn finalize_terminal_run(
+        &self,
+        manifest: RunManifest,
+        infeasibility_evidence: Option<RunInfeasibilityEvidenceV1>,
+    ) -> Result<(), StoreError> {
+        let evidence_json = infeasibility_evidence
+            .as_ref()
+            .map(|evidence| {
+                evidence.validate().map_err(|error| {
+                    StoreError::InvalidPersistedInfeasibilityEvidence(error.to_string())
+                })?;
+                serialize_bounded_json(
+                    evidence,
+                    eutheto_domain_ir::MAX_RUN_INFEASIBILITY_EVIDENCE_BYTES,
+                    "run infeasibility evidence",
+                )
+                .map_err(|error| {
+                    StoreError::InvalidPersistedInfeasibilityEvidence(error.to_string())
+                })
+            })
+            .transpose()?;
+        self.call(move |connection| {
+            finalize_terminal_run_transaction(
+                connection,
+                &manifest,
+                infeasibility_evidence.as_ref(),
+                evidence_json.as_deref(),
+            )
+        })
+        .await
     }
 
     /// Atomically creates or reuses an exact counterfactual job request.
@@ -1850,6 +2616,7 @@ impl SqliteScenarioStore {
     pub async fn start_counterfactual_job(
         &self,
         request: CounterfactualJobRequestV1,
+        verified_base: StoredAcceptedResultV2,
     ) -> Result<StartedCounterfactualJobV1, StoreError> {
         #[cfg(debug_assertions)]
         let failpoint = Arc::clone(&self.failpoint);
@@ -1857,6 +2624,7 @@ impl SqliteScenarioStore {
             start_counterfactual_job_transaction(
                 connection,
                 &request,
+                &verified_base,
                 #[cfg(debug_assertions)]
                 &failpoint,
             )
@@ -1901,14 +2669,17 @@ impl SqliteScenarioStore {
         &self,
         job_id: CounterfactualJobId,
         finalization: CounterfactualRunFinalizationV1,
+        expected_cancellation: Option<CounterfactualCancellationObservationV1>,
     ) -> Result<CounterfactualJobRecordV1, StoreError> {
+        validate_counterfactual_finalization_queue(&finalization)?;
         #[cfg(debug_assertions)]
         let failpoint = Arc::clone(&self.failpoint);
         self.call(move |connection| {
             finalize_counterfactual_run_transaction(
                 connection,
                 job_id,
-                &finalization,
+                finalization,
+                expected_cancellation.as_ref(),
                 false,
                 #[cfg(debug_assertions)]
                 &failpoint,
@@ -1927,8 +2698,92 @@ impl SqliteScenarioStore {
         &self,
         job_id: CounterfactualJobId,
     ) -> Result<CounterfactualJobRecordV1, StoreError> {
-        self.call(move |connection| load_counterfactual_job_row(connection, job_id))
-            .await
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let job = load_counterfactual_job_row(&transaction, job_id)?;
+            transaction.commit()?;
+            Ok(job)
+        })
+        .await
+    }
+    /// Lists bounded, compact counterfactual job items for one scenario,
+    /// newest first. Each item is first validated through the complete
+    /// lifecycle and local-authority loader, but result manifests are not
+    /// returned by this endpoint.
+    ///
+    /// `before` is an exclusive descending keyset cursor. It must identify an
+    /// existing, fully valid job owned by `scenario_id`, and its timestamp must
+    /// exactly match the persisted job timestamp. The next cursor is present
+    /// only when another row exists after the returned page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid limit or cursor, a missing scenario, invalid persisted
+    /// counterfactual authority, and actor/database failures.
+    pub async fn list_counterfactual_jobs(
+        &self,
+        scenario_id: ScenarioId,
+        before: Option<CounterfactualJobListCursorV1>,
+        limit: u32,
+    ) -> Result<CounterfactualJobListPageV1, StoreError> {
+        if limit == 0 || limit > MAX_COUNTERFACTUAL_JOB_LIST_LIMIT {
+            return Err(StoreError::CounterfactualJobListLimit {
+                maximum: MAX_COUNTERFACTUAL_JOB_LIST_LIMIT,
+            });
+        }
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let page =
+                list_counterfactual_jobs_in_transaction(&transaction, scenario_id, before, limit)?;
+            transaction.commit()?;
+            Ok(page)
+        })
+        .await
+    }
+
+    /// Loads a completed counterfactual, its base, and its independently accepted alternative
+    /// from one read snapshot. Completed records are already checked against retained local
+    /// run and conclusion authority by the shared job loader.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a mismatched completed job or any changed persisted conclusion authority.
+    pub async fn load_counterfactual_completion_for_evidence(
+        &self,
+        job_id: CounterfactualJobId,
+    ) -> Result<
+        (
+            CounterfactualJobRecordV1,
+            Option<StoredAcceptedResultV2>,
+            Option<StoredAcceptedResultV2>,
+        ),
+        StoreError,
+    > {
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let job = load_counterfactual_job_row(&transaction, job_id)?;
+            let (base, alternative) = if let Some(result) = &job.result {
+                let base = load_stored_accepted_result(
+                    &transaction,
+                    result.request.semantics.base.solution_id,
+                )?;
+                let alternative = match &result.conclusion {
+                    CounterfactualConclusionV1::VerifiedAlternative { alternative, .. } => Some(
+                        load_stored_accepted_result(&transaction, alternative.solution_id)?,
+                    ),
+                    _ => None,
+                };
+                (Some(base), alternative)
+            } else {
+                (None, None)
+            };
+            transaction.commit()?;
+            Ok((job, base, alternative))
+        })
+        .await
     }
 
     /// Applies one legal counterfactual lifecycle transition using an explicit database CAS.
@@ -2082,6 +2937,8 @@ impl SqliteScenarioStore {
 
     /// Duplicates only the project document. Journal, snapshots, runs, and
     /// solutions deliberately remain attached to the source project.
+    /// `post_remap` receives the source document, remapped destination document, and complete
+    /// source-to-destination identity mapping before the copy is persisted.
     ///
     /// # Errors
     ///
@@ -2090,7 +2947,8 @@ impl SqliteScenarioStore {
     /// source document is malformed or cannot be serialized, a numeric value is
     /// out of range, the transaction fails, or the database actor is
     /// unavailable.
-    pub async fn duplicate_project(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn duplicate_project<F>(
         &self,
         source_id: ScenarioId,
         expected_source_revision: Revision,
@@ -2098,7 +2956,17 @@ impl SqliteScenarioStore {
         id_remap: BTreeMap<Uuid, Uuid>,
         title: String,
         created_at: Rfc3339Timestamp,
-    ) -> Result<StoredProject, StoreError> {
+        post_remap: F,
+    ) -> Result<StoredProject, StoreError>
+    where
+        F: FnOnce(
+                &ScenarioDocument,
+                &mut ScenarioDocument,
+                &BTreeMap<Uuid, Uuid>,
+            ) -> Result<(), StoreError>
+            + Send
+            + 'static,
+    {
         self.call(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2106,13 +2974,77 @@ impl SqliteScenarioStore {
             ensure_revision(expected_source_revision, source.summary.revision.value())?;
             let occupied = authoritative_occupied_uuids(&transaction)?;
             let (document, portable) = duplicate_project_contents(
-                source, new_id, &id_remap, &occupied, &title, created_at,
+                source, new_id, &id_remap, &occupied, &title, created_at, post_remap,
             )?;
             insert_project(&transaction, &document, Revision::INITIAL, None, &portable)?;
             validate_global_identity_ownership(&transaction)?;
             increment_library_revision(&transaction)?;
             transaction.commit()?;
             load_project(connection, new_id)
+        })
+        .await
+    }
+
+    /// Creates an immutable, evidence-bound diagnostic copy and applies one
+    /// caller-supplied command to the fresh destination in the same transaction.
+    ///
+    /// `post_remap` receives the source document, remapped destination document, and complete
+    /// source-to-destination identity mapping before the caller's command is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the library revision or source-run identity conflicts,
+    /// required run, evidence, or asset custody is missing or invalid, ID generation
+    /// or the command callback fails, cancellation is observed before commit, or
+    /// the actor/transaction fails.
+    pub async fn create_diagnostic_copy<T, F, G>(
+        &self,
+        request: StoreDiagnosticCopyRequestV1,
+        ids: Arc<dyn IdGenerator>,
+        created_at: Rfc3339Timestamp,
+        control: OperationControl,
+        post_remap: G,
+        apply: F,
+    ) -> Result<StoreDiagnosticCopyOutcome<T>, StoreError>
+    where
+        T: Send + 'static,
+        G: FnOnce(
+                &ScenarioDocument,
+                &mut ScenarioDocument,
+                &BTreeMap<Uuid, Uuid>,
+            ) -> Result<(), StoreError>
+            + Send
+            + 'static,
+        F: for<'a> FnOnce(
+                &'a ScenarioDocument,
+                &'a ScenarioDocument,
+                &'a BTreeMap<Uuid, Uuid>,
+                &'a ConflictGroupV1,
+                Option<&'a CounterfactualConditionV1>,
+            ) -> Result<CommandWrite<T>, StoreError>
+            + Send
+            + 'static,
+    {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        #[cfg(debug_assertions)]
+        let command_commit_test_hook = self.command_commit_test_hook.clone();
+        self.call(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            create_diagnostic_copy_in_transaction(
+                transaction,
+                &request,
+                ids.as_ref(),
+                created_at,
+                &control,
+                post_remap,
+                apply,
+                #[cfg(debug_assertions)]
+                &failpoint,
+                #[cfg(debug_assertions)]
+                command_commit_test_hook.as_ref(),
+            )
         })
         .await
     }
@@ -2131,13 +3063,16 @@ impl SqliteScenarioStore {
     /// redo history requires explicit truncation, the callback returns a typed
     /// command error, command data cannot be serialized, numeric bounds are
     /// exceeded, snapshot sizing or compression fails, the transaction or actor
-    /// fails, cancellation is observed before commit, or a debug failpoint is triggered.
+    /// fails, cancellation or deadline expiry is observed before commit, or a debug
+    /// failpoint is triggered. Once the final control check passes, commit wins
+    /// over later cancellation or expiry.
     pub async fn execute_command<T, F>(
         &self,
         scenario_id: ScenarioId,
         expected_revision: Revision,
         branch_policy: RedoBranchPolicy,
-        cancellation: CancellationToken,
+        custody_stamp: ScenarioCustodyStamp,
+        control: OperationControl,
         apply: F,
     ) -> Result<CommittedCommand<T>, StoreError>
     where
@@ -2150,7 +3085,7 @@ impl SqliteScenarioStore {
         #[cfg(debug_assertions)]
         let command_commit_test_hook = self.command_commit_test_hook.clone();
         self.call(move |connection| {
-            Self::check_command_cancelled(&cancellation)?;
+            check_operation_control(&control)?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let project = load_project(&transaction, scenario_id)?;
@@ -2159,97 +3094,36 @@ impl SqliteScenarioStore {
             let document = project.document;
             let portable = project.portable;
             ensure_revision(expected_revision, actual_revision)?;
-            let (cursor, mut generation, max_sequence) = history_state(&transaction, scenario_id)?;
-            if cursor < max_sequence {
-                match branch_policy {
-                    RedoBranchPolicy::Reject => return Err(StoreError::RedoBranchRequiresTruncation),
-                    RedoBranchPolicy::Truncate => {
-                        transaction.execute(
-                            "DELETE FROM command_journal WHERE scenario_id = ?1 AND history_sequence > ?2",
-                            params![scenario_id.to_string(), u64_to_i64(cursor)?],
-                        )?;
-                        generation = generation.checked_add(1).ok_or(StoreError::NumericRange)?;
-                    }
-                }
-            }
-            Self::check_command_cancelled(&cancellation)?;
-            let write = apply(&document)?;
-            let new_revision = checked_revision(actual_revision)?
-                .checked_next()
-                .map_err(|_| StoreError::NumericRange)?;
-            validate_project_owned_uuid_uniqueness(&write.document, new_revision, &portable)
-                .map_err(StoreError::InvalidScenarioIdentity)?;
-            record_scenario_identity_owners(
+            recheck_custody_stamp(
                 &transaction,
+                &document,
                 scenario_id,
-                &collect_project_owned_uuids(
-                    &write.document,
-                    &portable.semantic_extensions,
-                    &portable.extensions,
-                ),
+                expected_revision,
+                &custody_stamp,
+                Some(&control),
             )?;
-            let sequence = cursor.checked_add(1).ok_or(StoreError::NumericRange)?;
-            let document_json = serialize_document(&write.document)?;
-            let projection = document_projection(&write.document);
-            let command_json = serde_json::to_string(&write.journal.command)?;
-            let inverse_json = write
-                .journal
-                .inverse
-                .as_ref()
-                .map(serde_json::to_string)
-                .transpose()?;
-            let actor_json = serde_json::to_string(&write.journal.actor)?;
-            transaction.execute(
-                "UPDATE scenarios SET domain_pack_id = ?2, domain_schema_version = ?3, title = ?4, description = ?5, document_json = ?6, revision = ?7, updated_at = ?8 WHERE id = ?1",
-                params![
-                    scenario_id.to_string(),
-                    projection.domain_pack_id,
-                    u32_to_i64(projection.domain_schema_version),
-                    projection.title,
-                    projection.description,
-                    document_json,
-                    u64_to_i64(new_revision.value())?,
-                    projection.updated_at,
-                ],
-            )?;
-            record_scenario_revision_high_water(
-                &transaction,
-                scenario_id,
-                new_revision,
-            )?;
-            #[cfg(debug_assertions)]
-            consume_failpoint(&failpoint, Failpoint::AfterDocumentWrite)?;
-            transaction.execute(
-                "INSERT INTO command_journal (id, scenario_id, revision_before, revision_after, command_type, command_json, inverse_json, actor_json, source, summary, created_at, history_sequence, branch_generation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![write.journal.command_id.to_string(), scenario_id.to_string(), u64_to_i64(actual_revision)?, u64_to_i64(new_revision.value())?, write.journal.command_type, command_json, inverse_json, actor_json, command_source_name(write.journal.source), write.journal.summary, write.journal.created_at.to_string(), u64_to_i64(sequence)?, u64_to_i64(generation)?],
-            )?;
-            transaction.execute(
-                "UPDATE scenario_history_state SET cursor_sequence = ?2, branch_generation = ?3 WHERE scenario_id = ?1",
-                params![scenario_id.to_string(), u64_to_i64(sequence)?, u64_to_i64(generation)?],
-            )?;
-            maybe_snapshot(&transaction, scenario_id, new_revision.value(), sequence, &write.document, &write.journal.created_at, snapshot_policy)?;
-            validate_global_identity_ownership(&transaction)?;
-            increment_library_revision(&transaction)?;
-            Self::commit_command(
+            execute_command_write_in_transaction(
                 transaction,
-                &cancellation,
+                scenario_id,
+                expected_revision,
+                branch_policy,
+                &control,
+                snapshot_policy,
+                &document,
+                &portable,
+                apply,
+                #[cfg(debug_assertions)]
+                &failpoint,
                 #[cfg(debug_assertions)]
                 command_commit_test_hook.as_ref(),
-            )?;
-            Ok(CommittedCommand {
-                new_revision,
-                output: write.output,
-            })
+            )
+            .map(|execution| execution.committed)
         })
         .await
     }
 
     fn check_command_cancelled(cancellation: &CancellationToken) -> Result<(), StoreError> {
-        if cancellation.is_cancelled() {
-            Err(StoreError::OperationCancelled)
-        } else {
-            Ok(())
-        }
+        check_operation_control(&OperationControl::Cancellation(cancellation.clone()))
     }
 
     fn commit_command(
@@ -2257,17 +3131,12 @@ impl SqliteScenarioStore {
         cancellation: &CancellationToken,
         #[cfg(debug_assertions)] hook: Option<&CommandCommitTestHook>,
     ) -> Result<(), StoreError> {
-        #[cfg(debug_assertions)]
-        if let Some(hook) = hook {
-            hook.actor_pause(CommandCommitTestPhase::BeforeFinalCancellationCheck);
-        }
-        Self::check_command_cancelled(cancellation)?;
-        #[cfg(debug_assertions)]
-        if let Some(hook) = hook {
-            hook.actor_pause(CommandCommitTestPhase::AfterFinalCancellationCheck);
-        }
-        transaction.commit()?;
-        Ok(())
+        commit_command_with_control(
+            transaction,
+            &OperationControl::Cancellation(cancellation.clone()),
+            #[cfg(debug_assertions)]
+            hook,
+        )
     }
 
     /// Applies the inverse of the current history entry.
@@ -2278,22 +3147,27 @@ impl SqliteScenarioStore {
     /// undo is unavailable, the command is not reversible, the callback returns
     /// a typed command error, stored history or JSON is invalid, numeric bounds
     /// are exceeded, or the transaction or actor fails.
-    pub async fn undo<T, F>(
+    pub async fn undo<T, S, F>(
         &self,
         scenario_id: ScenarioId,
         expected_revision: Revision,
         applied_at: Rfc3339Timestamp,
+        control: OperationControl,
+        select_related_receipt: S,
         apply_inverse: F,
     ) -> Result<CommittedCommand<T>, StoreError>
     where
         T: Send + 'static,
+        S: FnOnce(&HistoryEntry) -> Result<Option<CommandId>, StoreError> + Send + 'static,
         F: FnOnce(HistoryCommand) -> Result<(ScenarioDocument, T), StoreError> + Send + 'static,
     {
         self.move_history(
             scenario_id,
             expected_revision,
             applied_at,
+            control,
             HistoryDirection::Undo,
+            select_related_receipt,
             apply_inverse,
         )
         .await
@@ -2307,56 +3181,76 @@ impl SqliteScenarioStore {
     /// redo is unavailable, the callback returns a typed command error, stored
     /// history or JSON is invalid, numeric bounds are exceeded, or the
     /// transaction or actor fails.
-    pub async fn redo<T, F>(
+    pub async fn redo<T, S, F>(
         &self,
         scenario_id: ScenarioId,
         expected_revision: Revision,
         applied_at: Rfc3339Timestamp,
+        control: OperationControl,
+        select_related_receipt: S,
         apply_command: F,
     ) -> Result<CommittedCommand<T>, StoreError>
     where
         T: Send + 'static,
+        S: FnOnce(&HistoryEntry) -> Result<Option<CommandId>, StoreError> + Send + 'static,
         F: FnOnce(HistoryCommand) -> Result<(ScenarioDocument, T), StoreError> + Send + 'static,
     {
         self.move_history(
             scenario_id,
             expected_revision,
             applied_at,
+            control,
             HistoryDirection::Redo,
+            select_related_receipt,
             apply_command,
         )
         .await
     }
 
-    async fn move_history<T, F>(
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    async fn move_history<T, S, F>(
         &self,
         scenario_id: ScenarioId,
         expected_revision: Revision,
         applied_at: Rfc3339Timestamp,
+        control: OperationControl,
         direction: HistoryDirection,
+        select_related_receipt: S,
         apply: F,
     ) -> Result<CommittedCommand<T>, StoreError>
     where
         T: Send + 'static,
+        S: FnOnce(&HistoryEntry) -> Result<Option<CommandId>, StoreError> + Send + 'static,
         F: FnOnce(HistoryCommand) -> Result<(ScenarioDocument, T), StoreError> + Send + 'static,
     {
         self.call(move |connection| {
+            check_operation_control(&control)?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            check_operation_control(&control)?;
             let project = load_project(&transaction, scenario_id)?;
             retain_current_project_revision_if_required(&transaction, &project)?;
             let actual_revision = project.summary.revision.value();
             let document = project.document;
             let portable = project.portable;
             ensure_revision(expected_revision, actual_revision)?;
-            let (cursor, _generation, max_sequence) = history_state(&transaction, scenario_id)?;
+            let (cursor, generation, max_sequence) = history_state(&transaction, scenario_id)?;
+            let scenario_key = scenario_id.to_string();
+            history_page_availability(
+                &transaction, &scenario_key, cursor, generation, max_sequence,
+            )?;
+            validate_applied_history_prefix(&transaction, &scenario_key, cursor)?;
+            check_operation_control(&control)?;
             let target_sequence = match direction {
                 HistoryDirection::Undo if cursor == 0 => return Err(StoreError::NoUndo),
                 HistoryDirection::Undo => cursor,
                 HistoryDirection::Redo if cursor >= max_sequence => return Err(StoreError::NoRedo),
                 HistoryDirection::Redo => cursor.checked_add(1).ok_or(StoreError::NumericRange)?,
             };
+            check_operation_control(&control)?;
             let entry = load_history_entry(&transaction, scenario_id, target_sequence, cursor)?;
+            let related_receipt_id = select_related_receipt(&entry)?;
+            check_operation_control(&control)?;
             let command = match direction {
                 HistoryDirection::Undo => entry.inverse.clone().ok_or(StoreError::CommandNotReversible)?,
                 HistoryDirection::Redo => entry.command.clone(),
@@ -2365,6 +3259,29 @@ impl SqliteScenarioStore {
                 HistoryDirection::Undo => cursor.checked_sub(1).ok_or(StoreError::NumericRange)?,
                 HistoryDirection::Redo => target_sequence,
             };
+            let related_private_receipt = if let Some(command_id) = related_receipt_id {
+                let related = load_related_history_entry(
+                    &transaction,
+                    scenario_id,
+                    command_id,
+                    cursor,
+                    generation,
+                    Some(&control),
+                )?;
+                if let Some(receipt) = related {
+                    if receipt.history_sequence >= target_sequence
+                        || receipt.history_sequence > new_cursor
+                    {
+                        return Err(StoreError::StaleScenarioCustody);
+                    }
+                    Some(receipt)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            check_operation_control(&control)?;
             let target_document_updated_at = match direction {
                 HistoryDirection::Undo if new_cursor == 0 => document.metadata.created_at,
                 HistoryDirection::Undo => {
@@ -2372,12 +3289,15 @@ impl SqliteScenarioStore {
                 }
                 HistoryDirection::Redo => entry.created_at,
             };
+            check_operation_control(&control)?;
             let (updated_document, output) = apply(HistoryCommand {
                 document,
                 command,
                 entry,
+                related_private_receipt,
                 target_document_updated_at,
             })?;
+            check_operation_control(&control)?;
             let new_revision = checked_revision(actual_revision)?
                 .checked_next()
                 .map_err(|_| StoreError::NumericRange)?;
@@ -2417,6 +3337,7 @@ impl SqliteScenarioStore {
             )?;
             validate_global_identity_ownership(&transaction)?;
             increment_library_revision(&transaction)?;
+            check_operation_control(&control)?;
             transaction.commit()?;
             Ok(CommittedCommand {
                 new_revision,
@@ -2450,9 +3371,19 @@ impl SqliteScenarioStore {
             )?;
             let cursor = i64_to_u64(cursor)?;
             let mut statement = connection.prepare(
-                "SELECT id, revision_before, revision_after, command_type, command_json, inverse_json, actor_json, source, summary, created_at, history_sequence, branch_generation FROM command_journal WHERE scenario_id = ?1 ORDER BY history_sequence, branch_generation",
+                "SELECT id, revision_before, revision_after, command_type,
+                        CASE WHEN command_type = ?1 THEN 'null' ELSE command_json END,
+                        CASE WHEN command_type = ?1 THEN NULL ELSE inverse_json END,
+                        CASE WHEN command_type = ?1 THEN '{\"actorId\":null,\"displayName\":\"Private history entry\"}' ELSE actor_json END,
+                        source,
+                        CASE WHEN command_type = ?1 THEN 'Private native history entry' ELSE summary END,
+                        created_at, history_sequence, branch_generation
+                 FROM command_journal WHERE scenario_id = ?2 ORDER BY history_sequence, branch_generation",
             )?;
-            let mut rows = statement.query([scenario_id.to_string()])?;
+            let mut rows = statement.query(params![
+                NATIVE_PRIVATE_HISTORY_COMMAND_TYPE,
+                scenario_id.to_string()
+            ])?;
             let mut entries = Vec::new();
             while let Some(row) = rows.next()? {
                 entries.push(parse_history_row(row, cursor)?);
@@ -2518,7 +3449,8 @@ impl SqliteScenarioStore {
                        CASE WHEN length(CAST(id AS BLOB)) <= 36 THEN id ELSE NULL END,
                        revision_before, revision_after,
                        CASE WHEN length(CAST(source AS BLOB)) <= 16 THEN source ELSE NULL END,
-                       CASE WHEN length(CAST(summary AS BLOB)) <= ?4 THEN summary ELSE NULL END,
+                       CASE WHEN command_type = ?5 THEN 'Private native history entry'
+                            WHEN length(CAST(summary AS BLOB)) <= ?4 THEN summary ELSE NULL END,
                        CASE WHEN length(CAST(created_at AS BLOB)) <= 64 THEN created_at ELSE NULL END,
                        history_sequence, branch_generation
                      FROM command_journal
@@ -2530,6 +3462,7 @@ impl SqliteScenarioStore {
                     before_sequence.map(u64_to_i64).transpose()?,
                     i64::from(limit) + 1,
                     i64::try_from(HISTORY_SUMMARY_MAX_BYTES).map_err(|_| StoreError::NumericRange)?,
+                    NATIVE_PRIVATE_HISTORY_COMMAND_TYPE,
                 ])?;
                 let mut expected_sequence =
                     before_sequence.map_or(max_sequence, |before| max_sequence.min(before - 1));
@@ -2796,6 +3729,516 @@ impl SqliteScenarioStore {
         Ok(())
     }
 }
+fn check_operation_control(control: &OperationControl) -> Result<(), StoreError> {
+    control.check().map_err(|_| StoreError::OperationCancelled)
+}
+
+fn commit_command_with_control(
+    transaction: rusqlite::Transaction<'_>,
+    control: &OperationControl,
+    #[cfg(debug_assertions)] hook: Option<&CommandCommitTestHook>,
+) -> Result<(), StoreError> {
+    #[cfg(debug_assertions)]
+    if let Some(hook) = hook {
+        hook.actor_pause(CommandCommitTestPhase::BeforeFinalCancellationCheck);
+    }
+    check_operation_control(control)?;
+    #[cfg(debug_assertions)]
+    if let Some(hook) = hook {
+        hook.actor_pause(CommandCommitTestPhase::AfterFinalCancellationCheck);
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+struct ExecutedCommand<T> {
+    committed: CommittedCommand<T>,
+    project: StoredProject,
+    library_revision: Revision,
+}
+
+// Keep the revision, journal/inverse, and final cancellation latch under one transaction owner.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn execute_command_write_in_transaction<T, F>(
+    transaction: rusqlite::Transaction<'_>,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    branch_policy: RedoBranchPolicy,
+    control: &OperationControl,
+    snapshot_policy: SnapshotPolicy,
+    document: &ScenarioDocument,
+    portable: &PortableWrapperMetadata,
+    apply: F,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+    #[cfg(debug_assertions)] command_commit_test_hook: Option<&CommandCommitTestHook>,
+) -> Result<ExecutedCommand<T>, StoreError>
+where
+    T: Send + 'static,
+    F: FnOnce(&ScenarioDocument) -> Result<CommandWrite<T>, StoreError>,
+{
+    check_operation_control(control)?;
+    let actual_revision = i64_to_u64(transaction.query_row(
+        "SELECT revision FROM scenarios WHERE id = ?1",
+        [scenario_id.to_string()],
+        |row| row.get(0),
+    )?)?;
+    ensure_revision(expected_revision, actual_revision)?;
+    let (cursor, mut generation, max_sequence) = history_state(&transaction, scenario_id)?;
+    if cursor < max_sequence {
+        match branch_policy {
+            RedoBranchPolicy::Reject => return Err(StoreError::RedoBranchRequiresTruncation),
+            RedoBranchPolicy::Truncate => {
+                transaction.execute(
+                    "DELETE FROM command_journal WHERE scenario_id = ?1 AND history_sequence > ?2",
+                    params![scenario_id.to_string(), u64_to_i64(cursor)?],
+                )?;
+                generation = generation.checked_add(1).ok_or(StoreError::NumericRange)?;
+            }
+        }
+    }
+    check_operation_control(control)?;
+    let write = apply(document)?;
+    check_operation_control(control)?;
+    let new_revision = checked_revision(actual_revision)?
+        .checked_next()
+        .map_err(|_| StoreError::NumericRange)?;
+    validate_project_owned_uuid_uniqueness(&write.document, new_revision, portable)
+        .map_err(StoreError::InvalidScenarioIdentity)?;
+    record_scenario_identity_owners(
+        &transaction,
+        scenario_id,
+        &collect_project_owned_uuids(
+            &write.document,
+            &portable.semantic_extensions,
+            &portable.extensions,
+        ),
+    )?;
+    let sequence = cursor.checked_add(1).ok_or(StoreError::NumericRange)?;
+    let document_json = serialize_document(&write.document)?;
+    let projection = document_projection(&write.document);
+    let command_json = serde_json::to_string(&write.journal.command)?;
+    let inverse_json = write
+        .journal
+        .inverse
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+    if write.journal.command_type == NATIVE_PRIVATE_HISTORY_COMMAND_TYPE
+        && (command_json.len() > MAX_PRIVATE_HISTORY_ENTRY_BYTES
+            || inverse_json
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_PRIVATE_HISTORY_ENTRY_BYTES))
+    {
+        return Err(StoreError::PrivateHistoryPayloadTooLarge);
+    }
+    let actor_json = serde_json::to_string(&write.journal.actor)?;
+    transaction.execute(
+        "UPDATE scenarios SET domain_pack_id = ?2, domain_schema_version = ?3, title = ?4, description = ?5, document_json = ?6, revision = ?7, updated_at = ?8 WHERE id = ?1",
+        params![
+            scenario_id.to_string(),
+            projection.domain_pack_id,
+            u32_to_i64(projection.domain_schema_version),
+            projection.title,
+            projection.description,
+            document_json,
+            u64_to_i64(new_revision.value())?,
+            projection.updated_at,
+        ],
+    )?;
+    record_scenario_revision_high_water(&transaction, scenario_id, new_revision)?;
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterDocumentWrite)?;
+    transaction.execute(
+        "INSERT INTO command_journal (id, scenario_id, revision_before, revision_after, command_type, command_json, inverse_json, actor_json, source, summary, created_at, history_sequence, branch_generation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            write.journal.command_id.to_string(),
+            scenario_id.to_string(),
+            u64_to_i64(actual_revision)?,
+            u64_to_i64(new_revision.value())?,
+            write.journal.command_type,
+            command_json,
+            inverse_json,
+            actor_json,
+            command_source_name(write.journal.source),
+            write.journal.summary,
+            write.journal.created_at.to_string(),
+            u64_to_i64(sequence)?,
+            u64_to_i64(generation)?,
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE scenario_history_state SET cursor_sequence = ?2, branch_generation = ?3 WHERE scenario_id = ?1",
+        params![
+            scenario_id.to_string(),
+            u64_to_i64(sequence)?,
+            u64_to_i64(generation)?,
+        ],
+    )?;
+    maybe_snapshot(
+        &transaction,
+        scenario_id,
+        new_revision.value(),
+        sequence,
+        &write.document,
+        &write.journal.created_at,
+        snapshot_policy,
+    )?;
+    validate_global_identity_ownership(&transaction)?;
+    increment_library_revision(&transaction)?;
+    let library_revision = library_revision(&transaction)?;
+    let project = load_project(&transaction, scenario_id)?;
+    commit_command_with_control(
+        transaction,
+        control,
+        #[cfg(debug_assertions)]
+        command_commit_test_hook,
+    )?;
+    Ok(ExecutedCommand {
+        committed: CommittedCommand {
+            new_revision,
+            output: write.output,
+        },
+        project,
+        library_revision,
+    })
+}
+
+// Keep source custody, destination creation, command application, and commit in one transaction.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn create_diagnostic_copy_in_transaction<T, F, G>(
+    transaction: rusqlite::Transaction<'_>,
+    request: &StoreDiagnosticCopyRequestV1,
+    ids: &dyn IdGenerator,
+    created_at: Rfc3339Timestamp,
+    control: &OperationControl,
+    post_remap: G,
+    apply: F,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+    #[cfg(debug_assertions)] command_commit_test_hook: Option<&CommandCommitTestHook>,
+) -> Result<StoreDiagnosticCopyOutcome<T>, StoreError>
+where
+    T: Send + 'static,
+    G: FnOnce(
+            &ScenarioDocument,
+            &mut ScenarioDocument,
+            &BTreeMap<Uuid, Uuid>,
+        ) -> Result<(), StoreError>
+        + Send
+        + 'static,
+    F: for<'a> FnOnce(
+            &'a ScenarioDocument,
+            &'a ScenarioDocument,
+            &'a BTreeMap<Uuid, Uuid>,
+            &'a ConflictGroupV1,
+            Option<&'a CounterfactualConditionV1>,
+        ) -> Result<CommandWrite<T>, StoreError>
+        + Send
+        + 'static,
+{
+    check_operation_control(control)?;
+    let expected_library = library_revision(&transaction)?;
+    if expected_library != request.expected_library_revision {
+        return Err(StoreError::LibraryConflict {
+            expected: request.expected_library_revision,
+            actual: expected_library,
+        });
+    }
+    let (input, status, manifest_json, _) = load_run_input_record(&transaction, request.run_id)?;
+    if input.scenario_id != request.scenario_id
+        || checked_revision(input.scenario_revision)? != request.source_revision
+    {
+        return Err(StoreError::InvalidPersistedRun(
+            "diagnostic copy source revision does not match the run".to_owned(),
+        ));
+    }
+    if status != "infeasible" {
+        return Err(StoreError::InvalidPersistedRun(
+            "diagnostic copy requires an infeasible terminal run".to_owned(),
+        ));
+    }
+    let manifest_json = manifest_json.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("diagnostic copy run manifest is missing".to_owned())
+    })?;
+    let manifest = RunManifest::from_json(manifest_json.as_bytes())
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    manifest
+        .validate_native_input_binding(&input)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    if manifest.checksum != request.run_manifest_checksum
+        || !matches!(
+            manifest.outcome,
+            RunTerminalOutcomeV1::NoResult {
+                status: SolveStatus::Infeasible
+            }
+        )
+    {
+        return Err(StoreError::InvalidPersistedRun(
+            "diagnostic copy manifest binding is invalid".to_owned(),
+        ));
+    }
+    let evidence = load_run_infeasibility_evidence_in_transaction(&transaction, request.run_id)?
+        .ok_or_else(|| {
+            StoreError::InvalidPersistedInfeasibilityEvidence(
+                "diagnostic copy evidence is missing".to_owned(),
+            )
+        })?;
+    if evidence.checksum != request.evidence_checksum {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "diagnostic copy evidence checksum does not match".to_owned(),
+        ));
+    }
+    let InfeasibilityEvidenceV1::Conflict { groups, .. } = &evidence.infeasibility else {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "diagnostic copy requires mapped conflict evidence".to_owned(),
+        ));
+    };
+    let group = groups
+        .iter()
+        .find(|group| group.group_id == request.group_id)
+        .ok_or_else(|| {
+            StoreError::InvalidPersistedInfeasibilityEvidence(
+                "diagnostic copy conflict group is missing".to_owned(),
+            )
+        })?
+        .clone();
+    require_run_source_asset_binding(&transaction, &input)?;
+    let bindings = load_source_asset_bindings(&transaction, request.run_id)?.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("source asset custody is missing".to_owned())
+    })?;
+    let source_snapshot = load_exact_historical_scenario_revision(
+        &transaction,
+        request.scenario_id,
+        request.source_revision,
+    )?;
+    let (wrapper_hash, _) = hash_serialized_json(&source_snapshot)?;
+    let source_hash = blake3::hash(serialize_document(&source_snapshot.document)?.as_bytes())
+        .to_hex()
+        .to_string();
+    if wrapper_hash != bindings.source_wrapper_hash || source_hash != input.snapshot_document_hash {
+        return Err(StoreError::InvalidPersistedRun(
+            "diagnostic copy source snapshot binding is invalid".to_owned(),
+        ));
+    }
+    validate_current_source_assets(&transaction, &source_snapshot, &bindings)?;
+    let source = stored_project_from_historical_snapshot(source_snapshot)?;
+    let occupied = authoritative_occupied_uuids(&transaction)?;
+    let owned = collect_project_owned_uuids(
+        &source.document,
+        &source.portable.semantic_extensions,
+        &source.portable.extensions,
+    );
+    let mut mapping = BTreeMap::new();
+    let mut mapped = BTreeSet::new();
+    let destination_id = loop {
+        let uuid = ids
+            .next_uuid()
+            .map_err(|error| StoreError::InvalidDuplicateMapping(error.to_string()))?;
+        if uuid.get_version_num() == 7 && !occupied.contains(&uuid) && mapped.insert(uuid) {
+            break ScenarioId::from_uuid(uuid);
+        }
+    };
+    mapping.insert(
+        source.document.scenario_id.as_uuid(),
+        destination_id.as_uuid(),
+    );
+    for identity in owned
+        .iter()
+        .copied()
+        .filter(|id| *id != source.document.scenario_id.as_uuid())
+    {
+        loop {
+            let uuid = ids
+                .next_uuid()
+                .map_err(|error| StoreError::InvalidDuplicateMapping(error.to_string()))?;
+            if uuid.get_version_num() == 7 && !occupied.contains(&uuid) && mapped.insert(uuid) {
+                mapping.insert(identity, uuid);
+                break;
+            }
+        }
+    }
+    let title = diagnostic_copy_title(&source.document.metadata.title);
+    let (fresh_document, fresh_portable) = duplicate_project_contents(
+        source.clone(),
+        destination_id,
+        &mapping,
+        &occupied,
+        &title,
+        created_at,
+        post_remap,
+    )?;
+    insert_project(
+        &transaction,
+        &fresh_document,
+        Revision::INITIAL,
+        None,
+        &fresh_portable,
+    )?;
+    check_operation_control(control)?;
+    let write = apply(
+        &source.document,
+        &fresh_document,
+        &mapping,
+        &group,
+        evidence.condition.as_ref(),
+    )?;
+    let execution = execute_command_write_in_transaction(
+        transaction,
+        destination_id,
+        Revision::INITIAL,
+        RedoBranchPolicy::Reject,
+        control,
+        SnapshotPolicy::default(),
+        &fresh_document,
+        &fresh_portable,
+        |_| Ok(write),
+        #[cfg(debug_assertions)]
+        failpoint,
+        #[cfg(debug_assertions)]
+        command_commit_test_hook,
+    )?;
+    Ok(StoreDiagnosticCopyOutcome {
+        project: execution.project,
+        command: execution.committed,
+        library_revision: execution.library_revision,
+    })
+}
+
+fn diagnostic_copy_title(title: &str) -> String {
+    let mut result = format!("{title} (diagnostic copy)");
+    while result.len() > 512 {
+        result.pop();
+    }
+    result
+}
+
+fn stored_project_from_historical_snapshot(
+    snapshot: ScenarioSnapshotV1,
+) -> Result<StoredProject, StoreError> {
+    let projection = document_projection(&snapshot.document);
+    Ok(StoredProject {
+        summary: ProjectSummary {
+            id: snapshot.document.scenario_id,
+            domain_pack_id: projection.domain_pack_id.parse().map_err(|error| {
+                StoreError::InvalidPersistedRun(format!("invalid source pack id: {error}"))
+            })?,
+            domain_schema_version: projection.domain_schema_version,
+            title: projection.title,
+            description: projection.description,
+            revision: snapshot.revision,
+            created_at: parse_timestamp(&projection.created_at, "source created_at")?,
+            updated_at: parse_timestamp(&projection.updated_at, "source updated_at")?,
+            last_opened_at: None,
+            archived_at: None,
+        },
+        document: snapshot.document,
+        portable: PortableWrapperMetadata {
+            required_capabilities: snapshot.required_capabilities,
+            semantic_extensions: snapshot.semantic_extensions,
+            extensions: snapshot.extensions,
+        },
+    })
+}
+
+fn validate_current_source_assets(
+    connection: &Connection,
+    source: &ScenarioSnapshotV1,
+    bindings: &RunSourceAssetBindingsV1,
+) -> Result<(), StoreError> {
+    let references = collect_source_asset_references(source)
+        .map_err(|reason| StoreError::SourceAssetUnavailable { reason })?;
+    let RunSourceAssetCaptureV1::Available { assets } = &bindings.capture else {
+        let reason = match &bindings.capture {
+            RunSourceAssetCaptureV1::Unavailable { reason } => *reason,
+            RunSourceAssetCaptureV1::Available { .. } => unreachable!(),
+        };
+        return Err(StoreError::SourceAssetUnavailable { reason });
+    };
+    if assets.len() != references.len()
+        || assets
+            .iter()
+            .map(|asset| asset.reference.as_str())
+            .collect::<BTreeSet<_>>()
+            != references.iter().copied().collect::<BTreeSet<_>>()
+    {
+        return Err(StoreError::SourceAssetUnavailable {
+            reason: RunSourceAssetUnavailableReason::InvalidSource,
+        });
+    }
+    let mut aggregate_bytes = 0_u64;
+    for asset in assets {
+        let metadata: Option<(i64, Option<i64>, i64)> = connection
+            .query_row(
+                "SELECT length(CAST(value AS BLOB)), length(CAST(asset_media_type AS BLOB)), asset_redistribution_permitted FROM portable_sections WHERE section = 'assets' AND key = ?1",
+                [asset.reference.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((length, media_type_length, permitted)) = metadata else {
+            return Err(StoreError::SourceAssetUnavailable {
+                reason: RunSourceAssetUnavailableReason::MissingAsset,
+            });
+        };
+        let sql_length = u64::try_from(length).ok();
+        let oversized_row = sql_length
+            .is_some_and(|bytes| bytes > eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_ENTRY_BYTES);
+        let valid_length = length >= 0
+            && sql_length == Some(asset.byte_length)
+            && asset.byte_length <= eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_ENTRY_BYTES
+            && asset.byte_length <= eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_CONTENT_BYTES;
+        let valid_media_type_length =
+            media_type_length.is_some_and(|length| (0..=512).contains(&length));
+        if !valid_length
+            || !valid_media_type_length
+            || permitted != i64::from(asset.redistribution_permitted)
+        {
+            return Err(StoreError::SourceAssetUnavailable {
+                reason: if oversized_row
+                    || asset.byte_length > eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_ENTRY_BYTES
+                {
+                    RunSourceAssetUnavailableReason::ResourceLimitExceeded
+                } else {
+                    RunSourceAssetUnavailableReason::InvalidSource
+                },
+            });
+        }
+        aggregate_bytes = aggregate_bytes
+            .checked_add(asset.byte_length)
+            .filter(|bytes| *bytes <= eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_CONTENT_BYTES)
+            .ok_or(StoreError::SourceAssetUnavailable {
+                reason: RunSourceAssetUnavailableReason::ResourceLimitExceeded,
+            })?;
+        let media_type_bytes: Vec<u8> = connection.query_row(
+            "SELECT CAST(asset_media_type AS BLOB) FROM portable_sections WHERE section = 'assets' AND key = ?1",
+            [asset.reference.as_str()],
+            |row| row.get(0),
+        )?;
+        let Ok(media_type) = String::from_utf8(media_type_bytes) else {
+            return Err(StoreError::SourceAssetUnavailable {
+                reason: RunSourceAssetUnavailableReason::InvalidSource,
+            });
+        };
+        if media_type != asset.media_type || !valid_source_asset_media_type(&media_type) {
+            return Err(StoreError::SourceAssetUnavailable {
+                reason: RunSourceAssetUnavailableReason::InvalidSource,
+            });
+        }
+        // The bounded SQL length and per-entry ceiling are checked before
+        // reading one opaque blob.
+        let bytes: Vec<u8> = connection.query_row(
+            "SELECT value FROM portable_sections WHERE section = 'assets' AND key = ?1",
+            [asset.reference.as_str()],
+            |row| row.get(0),
+        )?;
+        if eutheto_export::sha256_hex(&bytes) != asset.sha256
+            || u64::try_from(bytes.len()).ok() != Some(asset.byte_length)
+        {
+            return Err(StoreError::SourceAssetUnavailable {
+                reason: RunSourceAssetUnavailableReason::InvalidSource,
+            });
+        }
+    }
+    Ok(())
+}
 
 fn solve_request_hash(
     request: &NewSolveRunV1,
@@ -2803,8 +4246,12 @@ fn solve_request_hash(
     pack_schema_version: u32,
     scenario_timezone: &IanaTimeZone,
 ) -> Result<String, StoreError> {
-    RunRequestSemanticsV1 {
-        schema_version: RUN_REQUEST_SEMANTICS_SCHEMA_VERSION,
+    RunRequestSemantics {
+        schema_version: if request.objective_context.is_some() {
+            RUN_REQUEST_SEMANTICS_SCHEMA_VERSION
+        } else {
+            1
+        },
         scenario_id: request.scenario_id,
         scenario_revision: request.expected_revision.value(),
         pack_id: pack_id.clone(),
@@ -2824,6 +4271,7 @@ fn solve_request_hash(
         solve_options: request.solve_options.clone(),
         scenario_timezone: scenario_timezone.clone(),
         temporary_condition_hash: request.temporary_condition_hash.clone(),
+        objective_context: request.objective_context.clone(),
     }
     .canonical_hash()
     .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))
@@ -2835,6 +4283,9 @@ fn solve_request_hash(
 fn start_solve_run_transaction(
     connection: &mut Connection,
     request: NewSolveRunV1,
+    custody_stamp: Option<ScenarioCustodyStamp>,
+    expected_snapshot_id: Option<ScenarioSnapshotId>,
+    control: &OperationControl,
     snapshot_policy: SnapshotPolicy,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<StartedSolveRunV1, StoreError> {
@@ -2842,7 +4293,11 @@ fn start_solve_run_transaction(
     let started = start_solve_run_in_transaction(
         &transaction,
         request,
+        custody_stamp,
+        expected_snapshot_id,
+        Some(control),
         snapshot_policy,
+        SourceAssetBindingsMode::Capture,
         #[cfg(debug_assertions)]
         failpoint,
     )?;
@@ -2850,11 +4305,24 @@ fn start_solve_run_transaction(
     Ok(started)
 }
 
+#[derive(Clone, Debug)]
+enum SourceAssetBindingsMode {
+    /// Capture the exact current source wrapper and referenced asset metadata.
+    Capture,
+    /// Inherit the base run's exact nullable custody value, including legacy NULL.
+    Inherit(Option<String>),
+}
+
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn start_solve_run_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     request: NewSolveRunV1,
+    custody_stamp: Option<ScenarioCustodyStamp>,
+    expected_snapshot_id: Option<ScenarioSnapshotId>,
+    control: Option<&OperationControl>,
     snapshot_policy: SnapshotPolicy,
+    source_asset_bindings_mode: SourceAssetBindingsMode,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<StartedSolveRunV1, StoreError> {
     let existing: Option<(String, String, Option<String>)> = transaction
@@ -2890,6 +4358,23 @@ fn start_solve_run_in_transaction(
                 "idempotent request columns disagree with the typed input".to_owned(),
             ));
         }
+        if expected_snapshot_id.is_some_and(|expected| input.snapshot_id != expected) {
+            return Err(StoreError::SolveRequestIdConflict {
+                request_id: request.request_id,
+            });
+        }
+        if let SourceAssetBindingsMode::Inherit(expected) = &source_asset_bindings_mode {
+            let stored: Option<String> = transaction.query_row(
+                "SELECT source_asset_bindings_json FROM solve_runs WHERE id = ?1",
+                [run_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if stored != *expected {
+                return Err(StoreError::InvalidPersistedRun(
+                    "idempotent source asset custody changed".to_owned(),
+                ));
+            }
+        }
         return Ok(StartedSolveRunV1 {
             input,
             started_at,
@@ -2904,6 +4389,25 @@ fn start_solve_run_in_transaction(
         &project.document.settings.time_zone,
     )?;
     ensure_revision(request.expected_revision, project.summary.revision.value())?;
+    let current_stamp = match custody_stamp {
+        Some(stamp) => stamp,
+        None => capture_custody_stamp(
+            transaction,
+            &project,
+            request.scenario_id,
+            None,
+            None,
+            control,
+        )?,
+    };
+    recheck_custody_stamp(
+        transaction,
+        &project.document,
+        request.scenario_id,
+        request.expected_revision,
+        &current_stamp,
+        control,
+    )?;
     let run_collision: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM solve_runs WHERE id = ?1)",
         [request.run_id.to_string()],
@@ -2912,6 +4416,7 @@ fn start_solve_run_in_transaction(
     if run_collision {
         return Err(StoreError::SolveRunCollision(request.run_id));
     }
+    let source_snapshot = historical_scenario_from_project(project.clone());
     let document_json = serialize_document(&project.document)?;
     let document_hash = blake3::hash(document_json.as_bytes()).to_hex().to_string();
     let (snapshot_id, snapshot_created_at) = ensure_solve_snapshot(
@@ -2922,7 +4427,10 @@ fn start_solve_run_in_transaction(
         request.started_at,
         snapshot_policy,
     )?;
-    let input = RunInputV1::new(
+    if expected_snapshot_id.is_some_and(|expected| snapshot_id != expected) {
+        return Err(StoreError::SnapshotMismatch(snapshot_id));
+    }
+    let input = RunInput::new(
         request.run_id,
         request.request_id,
         request.scenario_id,
@@ -2947,6 +4455,7 @@ fn start_solve_run_in_transaction(
         request.solve_options.clone(),
         project.document.settings.time_zone.clone(),
         request.temporary_condition_hash,
+        request.objective_context,
     )
     .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
     if input.request_hash != request_hash {
@@ -2954,12 +4463,26 @@ fn start_solve_run_in_transaction(
             "constructed run input disagrees with canonical request semantics".to_owned(),
         ));
     }
+    let source_asset_bindings_json = match source_asset_bindings_mode {
+        SourceAssetBindingsMode::Capture => Some(capture_source_asset_bindings(
+            transaction,
+            &input,
+            &source_snapshot,
+        )?),
+        SourceAssetBindingsMode::Inherit(bindings) => {
+            if let Some(json) = &bindings {
+                RunSourceAssetBindingsV1::from_json(json.as_bytes())
+                    .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+            }
+            bindings
+        }
+    };
     let input_json = serialize_checked_json(&input, "solve-run input")
         .map_err(StoreError::InvalidPersistedRun)?;
     let options_json = serialize_checked_json(&request.solve_options, "solve options")
         .map_err(StoreError::InvalidPersistedRun)?;
     transaction.execute(
-        "INSERT INTO solve_runs (id, request_id, scenario_id, scenario_revision, input_hash, backend_id, backend_version, protocol_version, status, options_json, started_at, run_input_json, run_manifest_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', ?9, ?10, ?11, NULL)",
+        "INSERT INTO solve_runs (id, request_id, scenario_id, scenario_revision, input_hash, backend_id, backend_version, protocol_version, status, options_json, started_at, run_input_json, run_manifest_json, source_asset_bindings_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', ?9, ?10, ?11, NULL, ?12)",
         params![
             request.run_id.to_string(),
             request.request_id.to_string(),
@@ -2972,6 +4495,7 @@ fn start_solve_run_in_transaction(
             options_json,
             request.started_at.to_string(),
             input_json,
+            source_asset_bindings_json,
         ],
     )?;
     validate_global_identity_ownership(transaction)?;
@@ -2982,6 +4506,296 @@ fn start_solve_run_in_transaction(
         started_at: request.started_at,
         reused: false,
     })
+}
+
+struct StreamingJsonHash {
+    hasher: blake3::Hasher,
+    bytes: u64,
+}
+
+impl Write for StreamingJsonHash {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                io::Error::other("serialized JSON byte count is outside supported range")
+            })?)
+            .ok_or_else(|| io::Error::other("serialized JSON byte count overflowed"))?;
+        self.hasher.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn hash_serialized_json<T: Serialize>(value: &T) -> Result<(String, u64), StoreError> {
+    let mut writer = StreamingJsonHash {
+        hasher: blake3::Hasher::new(),
+        bytes: 0,
+    };
+    serde_json::to_writer(&mut writer, value)?;
+    Ok((writer.hasher.finalize().to_hex().to_string(), writer.bytes))
+}
+
+/// A bounded output sink used for JSON persistence.
+struct BoundedJsonWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Write for BoundedJsonWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let next = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .filter(|length| *length <= self.limit)
+            .ok_or_else(|| io::Error::other("bounded JSON payload exceeded its limit"))?;
+        self.bytes.extend_from_slice(bytes);
+        debug_assert_eq!(next, self.bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialize_bounded_json<T: Serialize>(
+    value: &T,
+    limit: usize,
+    context: &str,
+) -> Result<String, StoreError> {
+    let mut writer = BoundedJsonWriter {
+        bytes: Vec::new(),
+        limit,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|error| {
+        StoreError::InvalidPersistedRun(format!("{context} exceeds its byte limit: {error}"))
+    })?;
+    String::from_utf8(writer.bytes).map_err(|error| {
+        StoreError::InvalidPersistedRun(format!("{context} is not UTF-8: {error}"))
+    })
+}
+
+fn valid_source_asset_reference(reference: &str) -> bool {
+    !reference.is_empty()
+        && reference.len() <= eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_KEY_BYTES
+        && !reference
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'\\' | b':'))
+        && reference
+            .split('/')
+            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+}
+
+fn valid_source_asset_media_type(media_type: &str) -> bool {
+    !media_type.is_empty()
+        && media_type.len() <= 512
+        && media_type.is_ascii()
+        && !media_type.bytes().any(|byte| byte.is_ascii_control())
+}
+fn collect_source_asset_references<'a>(
+    source: &'a ScenarioSnapshotV1,
+) -> Result<BTreeSet<&'a str>, RunSourceAssetUnavailableReason> {
+    let mut references = BTreeSet::new();
+    let limit_exceeded = Cell::new(false);
+    let mut visit = |reference: &'a str| -> Result<
+        AssetReferenceVisitControl,
+        eutheto_types::PortableReferenceError,
+    > {
+        if references.contains(reference) {
+            return Ok(AssetReferenceVisitControl::Continue);
+        }
+        if reference.len() > eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_KEY_BYTES
+            || references.len() >= eutheto_domain_ir::MAX_RUN_SOURCE_ASSETS
+        {
+            limit_exceeded.set(true);
+            return Ok(AssetReferenceVisitControl::Stop);
+        }
+        references.insert(reference);
+        Ok(AssetReferenceVisitControl::Continue)
+    };
+    for value in source
+        .document
+        .domain
+        .entities
+        .values()
+        .chain(source.document.domain.rules.values())
+        .chain(source.document.domain.preferences.values())
+        .chain(source.document.domain.locked_assignments.values())
+    {
+        eutheto_types::visit_asset_references(value, &mut visit)
+            .map_err(|_| RunSourceAssetUnavailableReason::InvalidSource)?;
+        if limit_exceeded.get() {
+            return Err(RunSourceAssetUnavailableReason::ResourceLimitExceeded);
+        }
+    }
+    for map in [
+        &source.document.extensions,
+        &source.semantic_extensions,
+        &source.extensions,
+    ] {
+        visit_asset_reference_map(
+            map.iter().map(|(key, value)| (key.as_str(), value)),
+            &mut visit,
+        )
+        .map_err(|_| RunSourceAssetUnavailableReason::InvalidSource)?;
+        if limit_exceeded.get() {
+            return Err(RunSourceAssetUnavailableReason::ResourceLimitExceeded);
+        }
+    }
+    Ok(references)
+}
+
+// Preserve the custody checks and SQL-length-before-blob-read order in one scope.
+#[allow(clippy::too_many_lines)]
+fn capture_source_asset_bindings(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &RunInput,
+    source: &ScenarioSnapshotV1,
+) -> Result<String, StoreError> {
+    let (source_wrapper_hash, source_wrapper_bytes) = hash_serialized_json(source)?;
+    let capture = if source_wrapper_bytes > MAX_SCENARIO_DOCUMENT_BYTES {
+        RunSourceAssetCaptureV1::Unavailable {
+            reason: RunSourceAssetUnavailableReason::ResourceLimitExceeded,
+        }
+    } else {
+        match collect_source_asset_references(source) {
+            Ok(references) => {
+                let mut assets = Vec::with_capacity(references.len());
+                let mut aggregate_bytes = 0_u64;
+                let mut unavailable = None;
+                for reference in references {
+                    if !valid_source_asset_reference(reference) {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    }
+                    let metadata: Option<(i64, Option<i64>, Option<i64>)> = transaction
+                        .query_row(
+                            "SELECT length(CAST(value AS BLOB)), length(CAST(asset_media_type AS BLOB)), asset_redistribution_permitted FROM portable_sections WHERE section = 'assets' AND key = ?1",
+                            [reference],
+                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        )
+                        .optional()?;
+                    let Some((length, media_type_length, redistribution_permitted)) = metadata
+                    else {
+                        unavailable = Some(RunSourceAssetUnavailableReason::MissingAsset);
+                        break;
+                    };
+                    if length < 0 {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    }
+                    let length = u64::try_from(length).map_err(|_| StoreError::NumericRange)?;
+                    if length > eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_ENTRY_BYTES {
+                        unavailable = Some(RunSourceAssetUnavailableReason::ResourceLimitExceeded);
+                        break;
+                    }
+                    aggregate_bytes = match aggregate_bytes.checked_add(length) {
+                        Some(value)
+                            if value <= eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_CONTENT_BYTES =>
+                        {
+                            value
+                        }
+                        _ => {
+                            unavailable =
+                                Some(RunSourceAssetUnavailableReason::ResourceLimitExceeded);
+                            break;
+                        }
+                    };
+                    let Some(media_type_length) = media_type_length else {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    };
+                    if !(0..=512).contains(&media_type_length) {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    }
+                    let media_type_bytes: Vec<u8> = transaction.query_row(
+                        "SELECT CAST(asset_media_type AS BLOB) FROM portable_sections WHERE section = 'assets' AND key = ?1",
+                        [reference],
+                        |row| row.get(0),
+                    )?;
+                    let Ok(media_type) = String::from_utf8(media_type_bytes) else {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    };
+                    let redistribution_permitted = match redistribution_permitted {
+                        Some(0) => false,
+                        Some(1) => true,
+                        _ => {
+                            unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                            break;
+                        }
+                    };
+                    if !valid_source_asset_media_type(&media_type) {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    }
+                    // The bounded SQL length, per-entry and aggregate ceilings
+                    // are checked before reading one opaque blob.
+                    let bytes: Vec<u8> = transaction.query_row(
+                        "SELECT value FROM portable_sections WHERE section = 'assets' AND key = ?1",
+                        [reference],
+                        |row| row.get(0),
+                    )?;
+                    if u64::try_from(bytes.len()).ok() != Some(length) {
+                        unavailable = Some(RunSourceAssetUnavailableReason::InvalidSource);
+                        break;
+                    }
+                    assets.push(RunSourceAssetRefV1 {
+                        reference: reference.to_owned(),
+                        sha256: eutheto_export::sha256_hex(&bytes),
+                        media_type,
+                        redistribution_permitted,
+                        byte_length: length,
+                    });
+                }
+                if let Some(reason) = unavailable {
+                    RunSourceAssetCaptureV1::Unavailable { reason }
+                } else {
+                    RunSourceAssetCaptureV1::Available { assets }
+                }
+            }
+            Err(reason) => RunSourceAssetCaptureV1::Unavailable { reason },
+        }
+    };
+    let bindings =
+        match RunSourceAssetBindingsV1::new(input, source_wrapper_hash.clone(), capture.clone()) {
+            Ok(bindings) => bindings,
+            Err(_) => RunSourceAssetBindingsV1::new(
+                input,
+                source_wrapper_hash.clone(),
+                RunSourceAssetCaptureV1::Unavailable {
+                    reason: RunSourceAssetUnavailableReason::ResourceLimitExceeded,
+                },
+            )
+            .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?,
+        };
+    if let Ok(json) = serialize_bounded_json(
+        &bindings,
+        eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_BINDING_BYTES,
+        "source asset bindings",
+    ) {
+        Ok(json)
+    } else {
+        let unavailable = RunSourceAssetBindingsV1::new(
+            input,
+            source_wrapper_hash,
+            RunSourceAssetCaptureV1::Unavailable {
+                reason: RunSourceAssetUnavailableReason::ResourceLimitExceeded,
+            },
+        )
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+        serialize_bounded_json(
+            &unavailable,
+            eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_BINDING_BYTES,
+            "source asset bindings",
+        )
+    }
 }
 
 fn ensure_solve_snapshot(
@@ -3050,7 +4864,7 @@ fn bounded_decompress_snapshot(compressed: &[u8]) -> Result<Vec<u8>, StoreError>
     Ok(bytes)
 }
 
-fn parse_run_input(bytes: &[u8]) -> Result<RunInputV1, StoreError> {
+fn parse_run_input(bytes: &[u8]) -> Result<RunInput, StoreError> {
     if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
         > eutheto_export::PORTABLE_LIMITS.max_json_bytes
     {
@@ -3058,7 +4872,7 @@ fn parse_run_input(bytes: &[u8]) -> Result<RunInputV1, StoreError> {
             "run input exceeds the JSON byte limit".to_owned(),
         ));
     }
-    RunInputV1::from_json(bytes).map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))
+    RunInput::from_json(bytes).map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))
 }
 
 struct PersistedRunRow {
@@ -3076,7 +4890,29 @@ struct PersistedRunRow {
 fn load_run_input_record(
     connection: &Connection,
     run_id: SolveRunId,
-) -> Result<(RunInputV1, String, Option<String>, Rfc3339Timestamp), StoreError> {
+) -> Result<(RunInput, String, Option<String>, Rfc3339Timestamp), StoreError> {
+    let maximum_json_bytes = i64::try_from(eutheto_export::PORTABLE_LIMITS.max_json_bytes)
+        .map_err(|_| StoreError::NumericRange)?;
+    let lengths: Option<(Option<i64>, Option<i64>)> = connection
+        .query_row(
+            "SELECT length(CAST(run_input_json AS BLOB)), length(CAST(run_manifest_json AS BLOB)) FROM solve_runs WHERE id = ?1",
+            [run_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((input_length, manifest_length)) = lengths else {
+        return Err(StoreError::SolveRunNotFound(run_id));
+    };
+    for (name, length) in [
+        ("run input", input_length),
+        ("run manifest", manifest_length),
+    ] {
+        if length.is_some_and(|length| length < 0 || length > maximum_json_bytes) {
+            return Err(StoreError::InvalidPersistedRun(format!(
+                "{name} exceeds the JSON byte limit"
+            )));
+        }
+    }
     let row: Option<PersistedRunRow> = connection
         .query_row(
             "SELECT id, request_id, scenario_id, scenario_revision, input_hash, status, run_manifest_json, started_at, run_input_json FROM solve_runs WHERE id = ?1",
@@ -3139,21 +4975,145 @@ fn load_run_input_record(
     Ok((input, status, manifest_json, started_at))
 }
 
+fn load_existing_solve_run(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<ExistingSolveRunV1, StoreError> {
+    let (input, status, manifest_json, started_at) = load_run_input_record(connection, run_id)?;
+    let (finished_at, elapsed_ms): (Option<String>, Option<i64>) = connection.query_row(
+        "SELECT finished_at, elapsed_ms FROM solve_runs WHERE id = ?1",
+        [run_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let manifest = manifest_json
+        .map(|json| RunManifest::from_json(json.as_bytes()))
+        .transpose()
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    if let Some(manifest) = &manifest {
+        manifest
+            .validate_native_input_binding(&input)
+            .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    }
+    let finished_at = finished_at
+        .map(|value| parse_timestamp(&value, "solve-run finished_at"))
+        .transpose()?;
+    let elapsed_ms = elapsed_ms.map(i64_to_u64).transpose()?;
+    let consistent = match &manifest {
+        None => status == "running" && finished_at.is_none() && elapsed_ms.is_none(),
+        Some(manifest) => {
+            manifest.run_id == input.run_id
+                && manifest.run_input_checksum == input.checksum
+                && manifest.started_at == started_at
+                && Some(manifest.finished_at) == finished_at
+                && manifest
+                    .elapsed_milliseconds
+                    .map(eutheto_types::DurationMillis::value)
+                    == elapsed_ms
+                && terminal_status(&manifest.outcome)? == status
+        }
+    };
+    if !consistent {
+        return Err(StoreError::InvalidPersistedRun(
+            "retained run timing or terminal state is inconsistent".to_owned(),
+        ));
+    }
+    if manifest.as_ref().is_some_and(|manifest| {
+        matches!(
+            manifest.outcome,
+            RunTerminalOutcomeV1::VerificationAlarm { .. }
+        )
+    }) {
+        validate_quarantined_payload_absence(connection, run_id)?;
+    }
+    Ok(ExistingSolveRunV1 {
+        input,
+        started_at,
+        manifest,
+    })
+}
+
 fn load_solve_input_row(
     connection: &Connection,
     run_id: SolveRunId,
 ) -> Result<LoadedSolveInputV1, StoreError> {
+    type SolveInputSnapshotRow = (
+        Option<String>,
+        i64,
+        i64,
+        Option<Vec<u8>>,
+        Option<String>,
+        bool,
+    );
     let (input, _, _, _) = load_run_input_record(connection, run_id)?;
-    let row: Option<(String, i64, Vec<u8>, String)> = connection
+    let compressed_limit =
+        i64::try_from(MAX_SNAPSHOT_DOCUMENT_BYTES).map_err(|_| StoreError::NumericRange)?;
+    let row: Option<SolveInputSnapshotRow> = connection
         .query_row(
-            "SELECT scenario_id, revision, document_json_zstd, created_at FROM scenario_snapshots WHERE id = ?1",
-            [input.snapshot_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            "WITH measured AS (
+                 SELECT *, length(CAST(scenario_id AS BLOB)) <= 36
+                           AND length(CAST(created_at AS BLOB)) <= 64 AS metadata_within_limits
+                 FROM scenario_snapshots WHERE id = ?1
+             )
+             SELECT CASE WHEN metadata_within_limits THEN scenario_id ELSE NULL END, revision,
+                    length(CAST(document_json_zstd AS BLOB)),
+                    CASE WHEN metadata_within_limits
+                              AND length(CAST(document_json_zstd AS BLOB)) <= ?2
+                         THEN document_json_zstd ELSE NULL END,
+                    CASE WHEN metadata_within_limits THEN created_at ELSE NULL END,
+                    metadata_within_limits FROM measured",
+            params![input.snapshot_id.to_string(), compressed_limit],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((scenario_id, revision, compressed, snapshot_created_at)) = row else {
+    let Some((
+        scenario_id,
+        revision,
+        compressed_length,
+        compressed,
+        snapshot_created_at,
+        metadata_admitted,
+    )) = row
+    else {
         return Err(StoreError::SnapshotMismatch(input.snapshot_id));
     };
+    if !metadata_admitted {
+        return Err(StoreError::InvalidPersistedRun(
+            "solve snapshot metadata exceeds its byte limit".to_owned(),
+        ));
+    }
+    let scenario_id = scenario_id.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("solve snapshot scenario is missing".to_owned())
+    })?;
+    let snapshot_created_at = snapshot_created_at.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("solve snapshot timestamp is missing".to_owned())
+    })?;
+    if compressed_length < 0 {
+        return Err(StoreError::InvalidPersistedRun(
+            "solve snapshot compressed byte length is invalid".to_owned(),
+        ));
+    }
+    if compressed_length > compressed_limit {
+        return Err(StoreError::InvalidPersistedRun(
+            "solve snapshot compressed document exceeds its byte limit".to_owned(),
+        ));
+    }
+    let compressed = compressed.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("solve snapshot compressed document is missing".to_owned())
+    })?;
+    if i64::try_from(compressed.len()).ok() != Some(compressed_length) {
+        return Err(StoreError::InvalidPersistedRun(
+            "solve snapshot compressed byte length changed while loading".to_owned(),
+        ));
+    }
     let document_bytes = bounded_decompress_snapshot(&compressed)?;
     let document_value: Value = serde_json::from_slice(&document_bytes)
         .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
@@ -3177,6 +5137,497 @@ fn load_solve_input_row(
     Ok(LoadedSolveInputV1 { input, document })
 }
 
+fn load_source_asset_bindings(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<Option<RunSourceAssetBindingsV1>, StoreError> {
+    let length: Option<i64> = connection
+        .query_row(
+            "SELECT length(CAST(source_asset_bindings_json AS BLOB)) FROM solve_runs WHERE id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(length) = length else {
+        return Ok(None);
+    };
+    let length = usize::try_from(length).map_err(|_| {
+        StoreError::InvalidPersistedRun("source asset binding length is invalid".to_owned())
+    })?;
+    if length > eutheto_domain_ir::MAX_RUN_SOURCE_ASSET_BINDING_BYTES {
+        return Err(StoreError::InvalidPersistedRun(
+            "source asset binding exceeds its byte limit".to_owned(),
+        ));
+    }
+    let json: String = connection.query_row(
+        "SELECT source_asset_bindings_json FROM solve_runs WHERE id = ?1",
+        [run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if json.len() != length {
+        return Err(StoreError::InvalidPersistedRun(
+            "source asset binding SQL length changed while loading".to_owned(),
+        ));
+    }
+    RunSourceAssetBindingsV1::from_json(json.as_bytes())
+        .map(Some)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))
+}
+
+fn load_exact_historical_scenario_revision(
+    connection: &Connection,
+    scenario_id: ScenarioId,
+    revision: Revision,
+) -> Result<ScenarioSnapshotV1, StoreError> {
+    let current_revision: Option<i64> = connection
+        .query_row(
+            "SELECT revision FROM scenarios WHERE id = ?1",
+            [scenario_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(current_revision) = current_revision else {
+        return Err(StoreError::ScenarioNotFound(scenario_id));
+    };
+    if i64_to_u64(current_revision)? == revision.value() {
+        return Ok(historical_scenario_from_project(load_project(
+            connection,
+            scenario_id,
+        )?));
+    }
+    let length: Option<i64> = connection
+        .query_row(
+            "SELECT length(CAST(scenario_json AS BLOB)) FROM retained_scenario_revisions WHERE scenario_id = ?1 AND revision = ?2",
+            params![scenario_id.to_string(), u64_to_i64(revision.value())?],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(length) = length else {
+        return Err(StoreError::InvalidPersistedRun(
+            "requested historical scenario revision is unavailable".to_owned(),
+        ));
+    };
+    let length = usize::try_from(length).map_err(|_| {
+        StoreError::InvalidPersistedRun("historical source length is invalid".to_owned())
+    })?;
+    let document_limit =
+        usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES).map_err(|_| StoreError::NumericRange)?;
+    if length > document_limit {
+        return Err(StoreError::InvalidPersistedRun(
+            "historical source exceeds its byte limit".to_owned(),
+        ));
+    }
+    let json: String = connection.query_row(
+        "SELECT scenario_json FROM retained_scenario_revisions WHERE scenario_id = ?1 AND revision = ?2",
+        params![scenario_id.to_string(), u64_to_i64(revision.value())?],
+        |row| row.get(0),
+    )?;
+    if json.len() != length {
+        return Err(StoreError::InvalidPersistedRun(
+            "historical source SQL length changed while loading".to_owned(),
+        ));
+    }
+    let scenario: ScenarioSnapshotV1 = serde_json::from_str(&json)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    validate_historical_scenario(&scenario).map_err(StoreError::InvalidPersistedRun)?;
+    if scenario.document.scenario_id != scenario_id || scenario.revision != revision {
+        return Err(StoreError::InvalidPersistedRun(
+            "historical source identity disagrees with requested revision".to_owned(),
+        ));
+    }
+    Ok(scenario)
+}
+
+fn validate_run_source_asset_binding(
+    connection: &Connection,
+    input: &RunInput,
+) -> Result<Option<RunSourceAssetBindingsV1>, StoreError> {
+    let Some(binding) = load_source_asset_bindings(connection, input.run_id)? else {
+        // V7 runs deliberately retain NULL as unknown custody. It remains
+        // valid for proof inspection but is not sufficient for diagnostic
+        // copy, which uses the strict helper below.
+        return Ok(None);
+    };
+    let (origin_input, _, _, _) = load_run_input_record(connection, binding.origin_run_id)?;
+    let source = load_exact_historical_scenario_revision(
+        connection,
+        binding.scenario_id,
+        checked_revision(binding.scenario_revision)?,
+    )?;
+    let (wrapper_hash, _) = hash_serialized_json(&source)?;
+    binding
+        .validate_source(&origin_input, &wrapper_hash)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    if binding.scenario_id != input.scenario_id
+        || binding.scenario_revision != input.scenario_revision
+        || binding.source_document_hash != input.snapshot_document_hash
+    {
+        return Err(StoreError::InvalidPersistedRun(
+            "source asset custody disagrees with solve input".to_owned(),
+        ));
+    }
+    Ok(Some(binding))
+}
+
+fn require_run_source_asset_binding(
+    connection: &Connection,
+    input: &RunInput,
+) -> Result<RunSourceAssetBindingsV1, StoreError> {
+    validate_run_source_asset_binding(connection, input)?.ok_or(
+        StoreError::SourceAssetUnavailable {
+            reason: RunSourceAssetUnavailableReason::InvalidSource,
+        },
+    )
+}
+
+fn load_run_infeasibility_source_in_transaction(
+    connection: &Connection,
+    scenario_id: ScenarioId,
+    run_id: SolveRunId,
+) -> Result<Option<StoredInfeasibilitySourceV1>, StoreError> {
+    let present: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM solve_runs WHERE id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if present.is_none() {
+        return Ok(None);
+    }
+
+    let retained = load_existing_solve_run(connection, run_id)?;
+    let manifest = retained.manifest.ok_or_else(|| {
+        StoreError::InvalidPersistedRun(
+            "infeasibility source requires a terminal solve run".to_owned(),
+        )
+    })?;
+    if retained.input.scenario_id != scenario_id
+        || !matches!(
+            &manifest.outcome,
+            RunTerminalOutcomeV1::NoResult {
+                status: SolveStatus::Infeasible
+            }
+        )
+    {
+        return Err(StoreError::InvalidPersistedRun(
+            "infeasibility source run or scenario binding is invalid".to_owned(),
+        ));
+    }
+
+    let loaded = load_solve_input_row(connection, run_id)?;
+    if loaded.input != retained.input {
+        return Err(StoreError::InvalidPersistedRun(
+            "infeasibility source input changed while loading".to_owned(),
+        ));
+    }
+
+    let evidence = load_run_infeasibility_evidence_in_transaction(connection, run_id)?;
+    let owner_id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM counterfactual_jobs WHERE derived_run_id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let condition = if let Some(owner_id) = owner_id {
+        let owner_id: CounterfactualJobId = owner_id.parse().map_err(|error| {
+            StoreError::InvalidPersistedRun(format!(
+                "counterfactual owner job identity is invalid: {error}"
+            ))
+        })?;
+        let ownership =
+            load_counterfactual_run_ownership(connection, owner_id)?.ok_or_else(|| {
+                StoreError::InvalidPersistedRun(
+                    "infeasibility source owner has no derived run".to_owned(),
+                )
+            })?;
+        let owner = load_counterfactual_job_row(connection, owner_id)?;
+        let semantics = &owner.request.semantics;
+        let condition = owner.request.condition.clone();
+        if ownership.run_id != run_id
+            || semantics.scenario_id != scenario_id
+            || semantics.scenario_revision != loaded.input.scenario_revision
+            || semantics.snapshot_id != loaded.input.snapshot_id
+            || semantics.snapshot_document_hash != loaded.input.snapshot_document_hash
+            || semantics.condition_checksum != condition.checksum
+            || loaded.input.temporary_condition_hash.as_ref() != Some(&condition.checksum)
+        {
+            return Err(StoreError::InvalidPersistedRun(
+                "infeasibility source condition or owner binding is invalid".to_owned(),
+            ));
+        }
+        Some(condition)
+    } else {
+        if loaded.input.temporary_condition_hash.is_some() {
+            return Err(StoreError::InvalidPersistedRun(
+                "conditional infeasibility source has no owner job".to_owned(),
+            ));
+        }
+        None
+    };
+    if let Some(evidence) = &evidence
+        && evidence.condition.as_ref() != condition.as_ref()
+    {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "infeasibility evidence condition disagrees with owner request".to_owned(),
+        ));
+    }
+    Ok(Some(StoredInfeasibilitySourceV1 {
+        document: loaded.document,
+        input: loaded.input,
+        manifest,
+        evidence,
+        condition,
+    }))
+}
+
+fn load_run_infeasibility_evidence_in_transaction(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<Option<RunInfeasibilityEvidenceV1>, StoreError> {
+    let (input, status, manifest_json, _) = load_run_input_record(connection, run_id)?;
+    let length: Option<i64> = connection
+        .query_row(
+            "SELECT length(CAST(evidence_json AS BLOB)) FROM run_infeasibility_evidence WHERE run_id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(length) = length else {
+        return Ok(None);
+    };
+    let length = usize::try_from(length).map_err(|_| {
+        StoreError::InvalidPersistedInfeasibilityEvidence(
+            "evidence SQL byte length is invalid".to_owned(),
+        )
+    })?;
+    if length > eutheto_domain_ir::MAX_RUN_INFEASIBILITY_EVIDENCE_BYTES {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "evidence exceeds its byte limit".to_owned(),
+        ));
+    }
+    let json: String = connection.query_row(
+        "SELECT evidence_json FROM run_infeasibility_evidence WHERE run_id = ?1",
+        [run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if json.len() != length {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "evidence SQL length changed while loading".to_owned(),
+        ));
+    }
+    let evidence = RunInfeasibilityEvidenceV1::from_json(json.as_bytes())
+        .map_err(|error| StoreError::InvalidPersistedInfeasibilityEvidence(error.to_string()))?;
+    let manifest_json = manifest_json.ok_or_else(|| {
+        StoreError::InvalidPersistedInfeasibilityEvidence(
+            "evidence row has no terminal manifest".to_owned(),
+        )
+    })?;
+    let manifest = RunManifest::from_json(manifest_json.as_bytes())
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    manifest
+        .validate_native_input_binding(&input)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    evidence
+        .validate_binding(&input, &manifest)
+        .map_err(|error| StoreError::InvalidPersistedInfeasibilityEvidence(error.to_string()))?;
+    validate_run_source_asset_binding(connection, &input)?;
+    if status != "infeasible" {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "evidence row status disagrees with terminal manifest".to_owned(),
+        ));
+    }
+    Ok(Some(evidence))
+}
+
+fn invalid_verified_checkpoint(message: impl Into<String>) -> StoreError {
+    StoreError::InvalidPersistedResult(format!(
+        "verified checkpoint is invalid: {}",
+        message.into()
+    ))
+}
+
+fn parse_verified_checkpoint(bytes: &[u8]) -> Result<VerifiedCheckpoint, StoreError> {
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint exceeds the JSON byte limit",
+        ));
+    }
+    VerifiedCheckpoint::from_json(bytes)
+        .map_err(|error| invalid_verified_checkpoint(error.to_string()))
+}
+
+fn serialize_verified_checkpoint(checkpoint: &VerifiedCheckpoint) -> Result<String, StoreError> {
+    checkpoint
+        .validate()
+        .map_err(|error| invalid_verified_checkpoint(error.to_string()))?;
+    serialize_checked_json(checkpoint, "verified checkpoint").map_err(invalid_verified_checkpoint)
+}
+
+fn validate_verified_checkpoint_parent(
+    connection: &Connection,
+    run_id: SolveRunId,
+    checkpoint: &VerifiedCheckpoint,
+    require_running: bool,
+) -> Result<ExistingSolveRunV1, StoreError> {
+    checkpoint
+        .validate()
+        .map_err(|error| invalid_verified_checkpoint(error.to_string()))?;
+    if checkpoint.run_input.run_id != run_id {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint run ID does not match the requested run",
+        ));
+    }
+    let retained = load_existing_solve_run(connection, run_id)?;
+    if require_running && retained.manifest.is_some() {
+        return Err(StoreError::SolveRunTerminalConflict(run_id));
+    }
+    if retained.input != checkpoint.run_input {
+        return Err(StoreError::InvalidPersistedRun(
+            "verified checkpoint run input disagrees with the immutable persisted input".to_owned(),
+        ));
+    }
+    if checkpoint.accepted_at < retained.started_at {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint acceptance precedes the parent solve start",
+        ));
+    }
+    let deadline = solve_deadline(&retained.input, retained.started_at).ok_or_else(|| {
+        invalid_verified_checkpoint("parent solve deadline is outside supported timestamp range")
+    })?;
+    if checkpoint.accepted_at.as_timestamp() > deadline {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint acceptance exceeds the immutable parent solve deadline",
+        ));
+    }
+    Ok(retained)
+}
+
+fn save_verified_checkpoint_transaction(
+    connection: &mut Connection,
+    run_id: SolveRunId,
+    checkpoint: &VerifiedCheckpoint,
+) -> Result<(), StoreError> {
+    let checkpoint_json = serialize_verified_checkpoint(checkpoint)?;
+    let solution_id = checkpoint.accepted_result.solution.solution_id.to_string();
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    validate_verified_checkpoint_parent(&transaction, run_id, checkpoint, true)?;
+    let existing: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT solution_id, checkpoint_json FROM verified_checkpoints WHERE run_id = ?1",
+            [run_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((stored_solution_id, stored_json)) = existing {
+        let stored = parse_verified_checkpoint(stored_json.as_bytes())?;
+        validate_verified_checkpoint_parent(&transaction, run_id, &stored, false)?;
+        if stored_solution_id != solution_id
+            || stored_json != checkpoint_json
+            || &stored != checkpoint
+        {
+            return Err(invalid_verified_checkpoint(
+                "a different checkpoint is already retained for this run",
+            ));
+        }
+        transaction.commit()?;
+        return Ok(());
+    }
+    let colliding_run: Option<String> = transaction
+        .query_row(
+            "SELECT run_id FROM verified_checkpoints WHERE solution_id = ?1",
+            [solution_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if colliding_run.is_some() {
+        return Err(invalid_verified_checkpoint(
+            "accepted solution identity is already claimed by another checkpoint",
+        ));
+    }
+    transaction.execute(
+        "INSERT INTO verified_checkpoints (run_id, solution_id, checkpoint_json) VALUES (?1, ?2, ?3)",
+        params![run_id.to_string(), solution_id, checkpoint_json],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn load_verified_checkpoint_row(
+    connection: &mut Connection,
+    run_id: SolveRunId,
+) -> Result<Option<VerifiedCheckpoint>, StoreError> {
+    let transaction = connection.transaction()?;
+    let row: Option<(String, String, String)> = transaction
+        .query_row(
+            "SELECT run_id, solution_id, checkpoint_json FROM verified_checkpoints WHERE run_id = ?1",
+            [run_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((stored_run_id, stored_solution_id, checkpoint_json)) = row else {
+        transaction.commit()?;
+        return Ok(None);
+    };
+    if stored_run_id != run_id.to_string() {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint foreign-key run identity is inconsistent",
+        ));
+    }
+    let checkpoint = parse_verified_checkpoint(checkpoint_json.as_bytes())?;
+    validate_verified_checkpoint_parent(&transaction, run_id, &checkpoint, false)?;
+    if stored_solution_id != checkpoint.accepted_result.solution.solution_id.to_string() {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint solution identity column disagrees with its typed authority",
+        ));
+    }
+    transaction.commit()?;
+    Ok(Some(checkpoint))
+}
+
+fn load_verified_checkpoint_for_solution_row(
+    connection: &mut Connection,
+    solution_id: SolutionId,
+) -> Result<Option<(ScenarioDocument, VerifiedCheckpoint)>, StoreError> {
+    let transaction = connection.transaction()?;
+    let row: Option<(String, String, String)> = transaction
+        .query_row(
+            "SELECT run_id, solution_id, checkpoint_json FROM verified_checkpoints WHERE solution_id = ?1",
+            [solution_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((run_id_text, stored_solution_id, checkpoint_json)) = row else {
+        transaction.commit()?;
+        return Ok(None);
+    };
+    let run_id = run_id_text.parse().map_err(|error| {
+        invalid_verified_checkpoint(format!("invalid persisted run ID: {error}"))
+    })?;
+    let checkpoint = parse_verified_checkpoint(checkpoint_json.as_bytes())?;
+    validate_verified_checkpoint_parent(&transaction, run_id, &checkpoint, false)?;
+    if stored_solution_id != solution_id.to_string()
+        || checkpoint.accepted_result.solution.solution_id != solution_id
+    {
+        return Err(invalid_verified_checkpoint(
+            "checkpoint solution identity does not match the lookup key",
+        ));
+    }
+    let loaded = load_solve_input_row(&transaction, run_id)?;
+    if loaded.input != checkpoint.run_input {
+        return Err(StoreError::InvalidPersistedRun(
+            "checkpoint input changed while loading its immutable snapshot".to_owned(),
+        ));
+    }
+    transaction.commit()?;
+    Ok(Some((loaded.document, checkpoint)))
+}
+
 fn serialize_checked_json<T: Serialize>(value: &T, context: &str) -> Result<String, String> {
     let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
@@ -3195,6 +5646,70 @@ fn serialize_checked_json<T: Serialize>(value: &T, context: &str) -> Result<Stri
     )
     .map_err(|error| format!("{context} violates the nonsecret policy: {error}"))?;
     String::from_utf8(bytes).map_err(|error| error.to_string())
+}
+
+fn validate_counterfactual_finalization_queue(
+    finalization: &CounterfactualRunFinalizationV1,
+) -> Result<(), StoreError> {
+    let check_manifest = |manifest: &RunManifest| {
+        serialize_checked_json(manifest, "counterfactual run manifest")
+            .map_err(invalid_counterfactual)
+    };
+    let check_result = |result: &CounterfactualResult| {
+        serialize_checked_json(result, "counterfactual result").map_err(invalid_counterfactual)
+    };
+    match finalization {
+        CounterfactualRunFinalizationV1::CompletedAccepted {
+            accepted_result,
+            evidence,
+            manifest,
+            result,
+        } => {
+            check_manifest(manifest)?;
+            check_result(result)?;
+            serialize_checked_json(accepted_result.as_ref(), "accepted result")
+                .map_err(invalid_counterfactual)?;
+            serialize_checked_json(evidence, "accepted result evidence")
+                .map_err(invalid_counterfactual)?;
+        }
+        CounterfactualRunFinalizationV1::CompletedNoResult {
+            manifest,
+            result,
+            infeasibility_evidence,
+        } => {
+            check_manifest(manifest)?;
+            check_result(result)?;
+            if let Some(evidence) = infeasibility_evidence {
+                serialize_bounded_json(
+                    evidence.as_ref(),
+                    eutheto_domain_ir::MAX_RUN_INFEASIBILITY_EVIDENCE_BYTES,
+                    "counterfactual infeasibility evidence",
+                )
+                .map_err(|error| invalid_counterfactual(error.to_string()))?;
+            }
+        }
+        CounterfactualRunFinalizationV1::Quarantined {
+            manifest,
+            candidate_diagnostics,
+            error,
+        } => {
+            check_manifest(manifest)?;
+            serialize_checked_json(candidate_diagnostics, "candidate diagnostics")
+                .map_err(invalid_counterfactual)?;
+            serialize_checked_json(error, "counterfactual error")
+                .map_err(invalid_counterfactual)?;
+        }
+        CounterfactualRunFinalizationV1::Failed { manifest, error } => {
+            check_manifest(manifest)?;
+            serialize_checked_json(error, "counterfactual error")
+                .map_err(invalid_counterfactual)?;
+        }
+        CounterfactualRunFinalizationV1::Cancelled { manifest }
+        | CounterfactualRunFinalizationV1::Interrupted { manifest } => {
+            check_manifest(manifest)?;
+        }
+    }
+    Ok(())
 }
 
 fn terminal_status(outcome: &RunTerminalOutcomeV1) -> Result<&'static str, StoreError> {
@@ -3238,7 +5753,7 @@ fn terminal_status(outcome: &RunTerminalOutcomeV1) -> Result<&'static str, Store
     }
 }
 
-fn solve_deadline(input: &RunInputV1, started_at: Rfc3339Timestamp) -> Option<jiff::Timestamp> {
+fn solve_deadline(input: &RunInput, started_at: Rfc3339Timestamp) -> Option<jiff::Timestamp> {
     started_at
         .as_timestamp()
         .checked_add(std::time::Duration::from_millis(
@@ -3248,7 +5763,7 @@ fn solve_deadline(input: &RunInputV1, started_at: Rfc3339Timestamp) -> Option<ji
 }
 
 fn solve_recovery_deadline(
-    input: &RunInputV1,
+    input: &RunInput,
     started_at: Rfc3339Timestamp,
 ) -> Option<jiff::Timestamp> {
     solve_deadline(input, started_at).and_then(|deadline| {
@@ -3262,8 +5777,8 @@ fn solve_recovery_deadline(
 
 fn validate_terminal_manifest(
     connection: &Connection,
-    manifest: &RunManifestV1,
-) -> Result<RunInputV1, StoreError> {
+    manifest: &RunManifest,
+) -> Result<RunInput, StoreError> {
     manifest
         .validate()
         .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
@@ -3277,6 +5792,9 @@ fn validate_terminal_manifest(
             "terminal manifest does not bind the stored run input".to_owned(),
         ));
     }
+    manifest
+        .validate_native_input_binding(&input)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
     Ok(input)
 }
 
@@ -3303,7 +5821,7 @@ fn reject_counterfactual_owned_run(
 fn finalize_accepted_run_transaction(
     connection: &mut Connection,
     accepted_result: &AcceptedResult,
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
     evidence: &BTreeMap<DomainEvidenceId, VerificationValue>,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<(), StoreError> {
@@ -3324,7 +5842,7 @@ fn finalize_accepted_run_transaction(
 fn finalize_accepted_run_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     accepted_result: &AcceptedResult,
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
     evidence: &BTreeMap<DomainEvidenceId, VerificationValue>,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<(), StoreError> {
@@ -3354,7 +5872,7 @@ fn finalize_accepted_run_in_transaction(
             "accepted finalization is past the terminal persistence cutoff".to_owned(),
         ));
     }
-    let wrapper = PortableAcceptedResultV2::new(
+    let wrapper = PortableAcceptedResult::new(
         input,
         manifest.clone(),
         accepted_result.clone(),
@@ -3454,9 +5972,30 @@ fn validate_candidate_diagnostics(
         .map_err(StoreError::InvalidPersistedDiagnostic)
 }
 
+fn validate_quarantined_payload_absence(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<(), StoreError> {
+    let has_payload: bool = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM solutions WHERE solve_run_id = ?1
+            UNION ALL SELECT 1 FROM verified_checkpoints WHERE run_id = ?1
+            UNION ALL SELECT 1 FROM run_infeasibility_evidence WHERE run_id = ?1
+        )",
+        [run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if has_payload {
+        return Err(StoreError::InvalidPersistedRun(
+            "verification-alarm run retains result or proof material".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn finalize_quarantined_run_transaction(
     connection: &mut Connection,
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
     diagnostics: &CandidateDiagnosticsV1,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<(), StoreError> {
@@ -3475,7 +6014,7 @@ fn finalize_quarantined_run_transaction(
 
 fn finalize_quarantined_run_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
     diagnostics: &CandidateDiagnosticsV1,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<(), StoreError> {
@@ -3510,6 +6049,11 @@ fn finalize_quarantined_run_in_transaction(
     if changed != 1 {
         return Err(StoreError::SolveRunTerminalConflict(manifest.run_id));
     }
+    transaction.execute(
+        "DELETE FROM verified_checkpoints WHERE run_id = ?1",
+        [manifest.run_id.to_string()],
+    )?;
+    validate_quarantined_payload_absence(transaction, manifest.run_id)?;
     synchronize_retained_scenario_revisions(transaction, Vec::new())?;
     #[cfg(debug_assertions)]
     consume_failpoint(failpoint, Failpoint::AfterQuarantineWrite)?;
@@ -3518,20 +6062,50 @@ fn finalize_quarantined_run_in_transaction(
 
 fn finalize_terminal_run_transaction(
     connection: &mut Connection,
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
+    evidence: Option<&RunInfeasibilityEvidenceV1>,
+    evidence_json: Option<&str>,
 ) -> Result<(), StoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     reject_counterfactual_owned_run(&transaction, manifest.run_id)?;
-    finalize_terminal_run_in_transaction(&transaction, manifest)?;
+    finalize_terminal_run_in_transaction(&transaction, manifest, evidence, evidence_json)?;
     transaction.commit()?;
     Ok(())
 }
 
 fn finalize_terminal_run_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
+    evidence: Option<&RunInfeasibilityEvidenceV1>,
+    evidence_json: Option<&str>,
 ) -> Result<(), StoreError> {
-    validate_terminal_manifest(transaction, manifest)?;
+    let input = validate_terminal_manifest(transaction, manifest)?;
+    match (&manifest.outcome, evidence) {
+        (
+            RunTerminalOutcomeV1::NoResult {
+                status: SolveStatus::Infeasible,
+            },
+            Some(evidence),
+        ) => {
+            evidence
+                .validate_binding(&input, manifest)
+                .map_err(|error| {
+                    StoreError::InvalidPersistedInfeasibilityEvidence(error.to_string())
+                })?;
+            validate_run_source_asset_binding(transaction, &input)?;
+            if evidence_json.is_none() {
+                return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+                    "serialized evidence is missing".to_owned(),
+                ));
+            }
+        }
+        (_, Some(_)) => {
+            return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+                "infeasibility evidence requires an infeasible no-result manifest".to_owned(),
+            ));
+        }
+        (_, None) => {}
+    }
     if !matches!(
         &manifest.outcome,
         RunTerminalOutcomeV1::NoResult { .. } | RunTerminalOutcomeV1::Interrupted
@@ -3558,6 +6132,12 @@ fn finalize_terminal_run_in_transaction(
     if changed != 1 {
         return Err(StoreError::SolveRunTerminalConflict(manifest.run_id));
     }
+    if let Some(evidence_json) = evidence_json {
+        transaction.execute(
+            "INSERT INTO run_infeasibility_evidence (run_id, evidence_json) VALUES (?1, ?2)",
+            params![manifest.run_id.to_string(), evidence_json],
+        )?;
+    }
     synchronize_retained_scenario_revisions(transaction, Vec::new())?;
     Ok(())
 }
@@ -3582,6 +6162,7 @@ struct PersistedCounterfactualRow {
     result_json: Option<String>,
     evidence_json: Option<String>,
     error_json: Option<String>,
+    terminal_authority_json: Option<String>,
     request_json: String,
 }
 
@@ -3639,7 +6220,7 @@ fn parse_counterfactual_request(bytes: &[u8]) -> Result<CounterfactualJobRequest
         .map_err(|error| invalid_counterfactual(error.to_string()))
 }
 
-fn parse_counterfactual_result(bytes: &[u8]) -> Result<CounterfactualResultV1, StoreError> {
+fn parse_counterfactual_result(bytes: &[u8]) -> Result<CounterfactualResult, StoreError> {
     if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
         > eutheto_export::PORTABLE_LIMITS.max_json_bytes
     {
@@ -3647,18 +6228,208 @@ fn parse_counterfactual_result(bytes: &[u8]) -> Result<CounterfactualResultV1, S
             "counterfactual result exceeds the JSON byte limit",
         ));
     }
-    CounterfactualResultV1::from_json(bytes)
+    CounterfactualResult::from_json(bytes)
         .map_err(|error| invalid_counterfactual(error.to_string()))
 }
 
-#[allow(clippy::too_many_lines)]
+fn counterfactual_job_list_item(
+    record: &CounterfactualJobRecordV1,
+) -> Result<CounterfactualJobListItemV1, StoreError> {
+    let semantics = &record.request.semantics;
+    Ok(CounterfactualJobListItemV1 {
+        job_id: record.request.job_id,
+        request_id: record.request.request_id,
+        scenario_id: semantics.scenario_id,
+        scenario_revision: checked_revision(semantics.scenario_revision)?,
+        base_solution_id: semantics.base.solution_id,
+        condition: record.request.condition.clone(),
+        created_at: record.request.created_at,
+        state: record.state,
+        finished_at: record.finished_at,
+        error: record.error,
+    })
+}
+
+fn list_counterfactual_jobs_in_transaction(
+    connection: &Connection,
+    scenario_id: ScenarioId,
+    before: Option<CounterfactualJobListCursorV1>,
+    limit: u32,
+) -> Result<CounterfactualJobListPageV1, StoreError> {
+    // Keep the endpoint's scenario contract explicit even when no rows match.
+    scenario_revision(connection, scenario_id)?;
+
+    if let Some(cursor) = before {
+        let cursor_job = match load_counterfactual_job_row(connection, cursor.job_id) {
+            Ok(job) => job,
+            Err(StoreError::CounterfactualJobNotFound(_)) => {
+                return Err(StoreError::InvalidCounterfactualCursor(
+                    "cursor job was not found".to_owned(),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        if cursor_job.request.semantics.scenario_id != scenario_id {
+            return Err(StoreError::InvalidCounterfactualCursor(
+                "cursor job belongs to another scenario".to_owned(),
+            ));
+        }
+        if cursor_job.request.created_at != cursor.created_at {
+            return Err(StoreError::InvalidCounterfactualCursor(
+                "cursor timestamp does not match its job".to_owned(),
+            ));
+        }
+    }
+
+    let sql_limit = i64::from(limit)
+        .checked_add(1)
+        .ok_or(StoreError::NumericRange)?;
+    let scenario_key = scenario_id.to_string();
+    let ids = if let Some(cursor) = before {
+        let mut statement = connection.prepare(
+            "SELECT id FROM counterfactual_jobs
+             WHERE scenario_id = ?1
+               AND (created_at < ?2 OR (created_at = ?2 AND id < ?3))
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?4",
+        )?;
+        statement
+            .query_map(
+                params![
+                    scenario_key,
+                    cursor.created_at.to_string(),
+                    cursor.job_id.to_string(),
+                    sql_limit,
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut statement = connection.prepare(
+            "SELECT id FROM counterfactual_jobs
+             WHERE scenario_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        statement
+            .query_map(params![scenario_key, sql_limit], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let page_limit = usize::try_from(limit).map_err(|_| StoreError::NumericRange)?;
+    let has_more = ids.len() > page_limit;
+    let mut ids = ids;
+    if has_more {
+        ids.truncate(page_limit);
+    }
+    let mut jobs = Vec::with_capacity(ids.len());
+    for raw_id in ids {
+        let job_id = raw_id.parse().map_err(|error| {
+            invalid_counterfactual(format!("invalid counterfactual job identity: {error}"))
+        })?;
+        let job = load_counterfactual_job_row(connection, job_id)?;
+        if job.request.semantics.scenario_id != scenario_id {
+            return Err(invalid_counterfactual(
+                "counterfactual list row belongs to another scenario",
+            ));
+        }
+        jobs.push(counterfactual_job_list_item(&job)?);
+    }
+
+    let next_cursor = if has_more {
+        jobs.last().map(|job| CounterfactualJobListCursorV1 {
+            created_at: job.created_at,
+            job_id: job.job_id,
+        })
+    } else {
+        None
+    };
+    Ok(CounterfactualJobListPageV1 { jobs, next_cursor })
+}
+
 fn load_counterfactual_job_row(
     connection: &Connection,
     job_id: CounterfactualJobId,
 ) -> Result<CounterfactualJobRecordV1, StoreError> {
+    load_counterfactual_job_row_internal(connection, job_id, false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_counterfactual_job_row_internal(
+    connection: &Connection,
+    job_id: CounterfactualJobId,
+    allow_terminal_run_mismatch: bool,
+) -> Result<CounterfactualJobRecordV1, StoreError> {
+    type CounterfactualJobLengths = (
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    );
+    let maximum_json_bytes = i64::try_from(eutheto_export::PORTABLE_LIMITS.max_json_bytes)
+        .map_err(|_| StoreError::NumericRange)?;
+    let lengths: Option<CounterfactualJobLengths> =
+        connection
+            .query_row(
+                "SELECT length(CAST(condition_json AS BLOB)), length(CAST(result_json AS BLOB)), length(CAST(evidence_json AS BLOB)), length(CAST(error_json AS BLOB)), length(CAST(request_json AS BLOB)), length(CAST(terminal_authority_json AS BLOB)) FROM counterfactual_jobs WHERE id = ?1",
+                [job_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+    let Some((
+        condition_length,
+        result_length,
+        evidence_length,
+        error_length,
+        request_length,
+        authority_length,
+    )) = lengths
+    else {
+        return Err(StoreError::CounterfactualJobNotFound(job_id));
+    };
+    for (name, length, maximum) in [
+        (
+            "counterfactual condition",
+            condition_length,
+            maximum_json_bytes,
+        ),
+        ("counterfactual result", result_length, maximum_json_bytes),
+        (
+            "counterfactual evidence",
+            evidence_length,
+            i64::try_from(eutheto_domain_ir::MAX_RUN_INFEASIBILITY_EVIDENCE_BYTES)
+                .map_err(|_| StoreError::NumericRange)?,
+        ),
+        ("counterfactual error", error_length, maximum_json_bytes),
+        ("counterfactual request", request_length, maximum_json_bytes),
+        (
+            "counterfactual terminal authority",
+            authority_length,
+            maximum_json_bytes,
+        ),
+    ] {
+        if length.is_some_and(|length| length < 0 || length > maximum) {
+            return Err(invalid_counterfactual(format!(
+                "{name} exceeds its byte limit"
+            )));
+        }
+    }
     let row = connection
         .query_row(
-            "SELECT id, request_id, request_hash, cancel_request_id, scenario_id, scenario_revision, snapshot_id, base_solution_id, base_result_checksum, condition_json, total_budget_ms, state, cancel_requested_at, created_at, started_at, finished_at, result_json, evidence_json, error_json, request_json FROM counterfactual_jobs WHERE id = ?1",
+            "SELECT id, request_id, request_hash, cancel_request_id, scenario_id, scenario_revision, snapshot_id, base_solution_id, base_result_checksum, condition_json, total_budget_ms, state, cancel_requested_at, created_at, started_at, finished_at, result_json, evidence_json, error_json, terminal_authority_json, request_json FROM counterfactual_jobs WHERE id = ?1",
             [job_id.to_string()],
             |row| {
                 Ok(PersistedCounterfactualRow {
@@ -3681,7 +6452,8 @@ fn load_counterfactual_job_row(
                     result_json: row.get(16)?,
                     evidence_json: row.get(17)?,
                     error_json: row.get(18)?,
-                    request_json: row.get(19)?,
+                    terminal_authority_json: row.get(19)?,
+                    request_json: row.get(20)?,
                 })
             },
         )
@@ -3696,9 +6468,8 @@ fn load_counterfactual_job_row(
         ));
     }
     let request = parse_counterfactual_request(row.request_json.as_bytes())?;
-    let condition =
-        eutheto_domain_ir::CounterfactualConditionV1::from_json(row.condition_json.as_bytes())
-            .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let condition = CounterfactualConditionV1::from_json(row.condition_json.as_bytes())
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
     let stored_job_id: CounterfactualJobId = row
         .id
         .parse()
@@ -3754,6 +6525,11 @@ fn load_counterfactual_job_row(
         .as_deref()
         .map(|value| parse_checked_json(value.as_bytes(), "counterfactual error"))
         .transpose()?;
+    let terminal_authority = row
+        .terminal_authority_json
+        .as_deref()
+        .map(|value| parse_checked_json(value.as_bytes(), "counterfactual terminal authority"))
+        .transpose()?;
     let state = parse_counterfactual_state(&row.state)?;
     let record = CounterfactualJobRecordV1::new(
         request,
@@ -3764,6 +6540,7 @@ fn load_counterfactual_job_row(
         cancel_requested_at,
         result,
         error,
+        terminal_authority,
     )
     .map_err(|error| invalid_counterfactual(error.to_string()))?;
     let semantics = &record.request.semantics;
@@ -3800,17 +6577,45 @@ fn load_counterfactual_job_row(
             .transpose()
             .map_err(invalid_counterfactual)?
             != row.error_json
+        || record
+            .terminal_authority
+            .as_ref()
+            .map(|value| serialize_checked_json(value, "counterfactual terminal authority"))
+            .transpose()
+            .map_err(invalid_counterfactual)?
+            != row.terminal_authority_json
     {
         return Err(invalid_counterfactual(
             "counterfactual columns disagree with the typed record",
         ));
     }
-    if let Some(ownership) = load_counterfactual_run_ownership(connection, job_id)? {
-        let (input, _, _, run_started_at) = load_run_input_record(connection, ownership.run_id)
+    let ownership = load_counterfactual_run_ownership(connection, job_id)?;
+    if let Some(result) = &record.result {
+        let expected = CounterfactualRunOwnership {
+            run_id: result.run_input.run_id,
+            request_id: result.run_input.request_id,
+        };
+        if ownership != Some(expected) {
+            return Err(invalid_counterfactual(
+                "completed counterfactual result belongs to a different derived run",
+            ));
+        }
+    }
+    if let Some(ownership) = ownership {
+        let retained = load_existing_solve_run(connection, ownership.run_id)
             .map_err(|error| invalid_counterfactual(error.to_string()))?;
+        let input = &retained.input;
+        let terminal_finished_at = retained
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.finished_at);
+        let transient_terminalization = allow_terminal_run_mismatch
+            && record.state == CounterfactualJobState::Running
+            && record.finished_at.is_none()
+            && terminal_finished_at.is_some();
         if record.state == CounterfactualJobState::Queued
-            || record.started_at != Some(run_started_at)
-            || input.request_id != ownership.request_id
+            || record.started_at != Some(retained.started_at)
+            || (record.finished_at != terminal_finished_at && !transient_terminalization)
             || input.run_id == semantics.base_run_id
             || input.scenario_id != semantics.scenario_id
             || input.scenario_revision != semantics.scenario_revision
@@ -3825,6 +6630,10 @@ fn load_counterfactual_job_row(
             ));
         }
     }
+    if let Some(result) = &record.result {
+        validate_counterfactual_completion_authority(connection, result)?;
+    }
+    validate_persisted_counterfactual_terminal_authority(connection, &record)?;
     Ok(record)
 }
 
@@ -3859,7 +6668,7 @@ struct PersistedAcceptedAuthorityRow {
 }
 
 fn accepted_result_summary(
-    portable: &PortableAcceptedResultV2,
+    portable: &PortableAcceptedResult,
     current_revision: Revision,
     selected: bool,
 ) -> Result<StoredAcceptedResultSummary, StoreError> {
@@ -3880,6 +6689,7 @@ fn accepted_result_summary(
     Ok(StoredAcceptedResultSummary {
         result,
         run_id: portable.run_input.run_id,
+        run_input_checksum: portable.run_input.checksum.clone(),
         scenario_id: portable.scenario_id,
         scenario_revision,
         current_revision,
@@ -3896,7 +6706,7 @@ fn accepted_result_summary(
 fn load_local_accepted_authority(
     connection: &Connection,
     solution_id: SolutionId,
-) -> Result<PortableAcceptedResultV2, StoreError> {
+) -> Result<PortableAcceptedResult, StoreError> {
     let row: Option<PersistedAcceptedAuthorityRow> = connection
         .query_row(
             "SELECT solve_run_id, scenario_id, scenario_revision, normalized_solution_json, score_json, verification_report_json, evidence_json, created_at FROM solutions WHERE id = ?1 AND accepted = 1 AND status = 'verified'",
@@ -3930,7 +6740,10 @@ fn load_local_accepted_authority(
         .map_err(|error| invalid_result(error.to_string()))?;
     let manifest_json =
         manifest_json.ok_or_else(|| invalid_result("accepted run manifest is missing"))?;
-    let manifest = RunManifestV1::from_json(manifest_json.as_bytes())
+    let manifest = RunManifest::from_json(manifest_json.as_bytes())
+        .map_err(|error| invalid_result(error.to_string()))?;
+    manifest
+        .validate_native_input_binding(&input)
         .map_err(|error| invalid_result(error.to_string()))?;
     let solution = NormalizedSolution::from_json(row.solution_json.as_bytes())
         .map_err(|error| invalid_result(error.to_string()))?;
@@ -3984,7 +6797,7 @@ fn load_local_accepted_authority(
             "accepted solution columns disagree with local authority",
         ));
     }
-    PortableAcceptedResultV2::new(input, manifest, accepted_result, evidence)
+    PortableAcceptedResult::new(input, manifest, accepted_result, evidence)
         .map_err(|error| invalid_result(error.to_string()))
 }
 
@@ -4007,10 +6820,16 @@ fn load_stored_accepted_result(
 fn validate_counterfactual_base_authority(
     connection: &Connection,
     request: &CounterfactualJobRequestV1,
+    verified_base: &StoredAcceptedResultV2,
 ) -> Result<(), StoreError> {
     let semantics = &request.semantics;
     let base = load_stored_accepted_result(connection, semantics.base.solution_id)
         .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if &base != verified_base {
+        return Err(StoreError::AcceptedResultChanged(
+            semantics.base.solution_id,
+        ));
+    }
     let base = &base.portable;
     if base.accepted_result.checksum != semantics.base.result_checksum
         || base.run_input.run_id != semantics.base_run_id
@@ -4047,6 +6866,7 @@ fn validate_counterfactual_capacity(connection: &Connection) -> Result<(), Store
 fn start_counterfactual_job_transaction(
     connection: &mut Connection,
     request: &CounterfactualJobRequestV1,
+    verified_base: &StoredAcceptedResultV2,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<StartedCounterfactualJobV1, StoreError> {
     request
@@ -4077,6 +6897,7 @@ fn start_counterfactual_job_transaction(
                 request_id: request.request_id,
             });
         }
+        validate_counterfactual_base_authority(&transaction, request, verified_base)?;
         transaction.commit()?;
         return Ok(StartedCounterfactualJobV1 {
             record,
@@ -4098,10 +6919,11 @@ fn start_counterfactual_job_transaction(
             return Err(StoreError::IdentityCollision(identity));
         }
     }
-    validate_counterfactual_base_authority(&transaction, request)?;
+    validate_counterfactual_base_authority(&transaction, request, verified_base)?;
     let queued = CounterfactualJobRecordV1::new(
         request.clone(),
         CounterfactualJobState::Queued,
+        None,
         None,
         None,
         None,
@@ -4192,7 +7014,7 @@ fn load_counterfactual_run_ownership(
 fn validate_counterfactual_derived_input(
     connection: &Connection,
     current: &CounterfactualJobRecordV1,
-    input: &RunInputV1,
+    input: &RunInput,
     started_at: Rfc3339Timestamp,
 ) -> Result<(), StoreError> {
     let semantics = &current.request.semantics;
@@ -4202,6 +7024,7 @@ fn validate_counterfactual_derived_input(
     let base = load_stored_accepted_result(connection, semantics.base.solution_id)
         .map_err(|error| invalid_counterfactual(error.to_string()))?;
     let base_input = &base.portable.run_input;
+    validate_inherited_counterfactual_source_bindings(connection, base_input, input)?;
     let mut expected_options = base_input.solve_options.clone();
     expected_options.backend = BackendSelection::Specific(base_input.backend_id.clone());
     expected_options.time_limit_milliseconds = semantics.total_budget_milliseconds;
@@ -4213,6 +7036,7 @@ fn validate_counterfactual_derived_input(
         || input.snapshot_document_hash != semantics.snapshot_document_hash
         || input.pack_id != base_input.pack_id
         || input.pack_schema_version != base_input.pack_schema_version
+        || input.objective_context != base_input.objective_context
         || input.planning_ir_schema_version != base_input.planning_ir_schema_version
         || input.compiler_version != base_input.compiler_version
         || input.backend_id != base_input.backend_id
@@ -4228,6 +7052,61 @@ fn validate_counterfactual_derived_input(
     {
         return Err(invalid_counterfactual(
             "derived solve input disagrees with counterfactual authority",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_inherited_counterfactual_source_bindings(
+    connection: &Connection,
+    base_input: &RunInput,
+    derived_input: &RunInput,
+) -> Result<(), StoreError> {
+    let base_binding = load_source_asset_bindings(connection, base_input.run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let derived_binding = load_source_asset_bindings(connection, derived_input.run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if base_binding != derived_binding {
+        return Err(invalid_counterfactual(
+            "derived source asset custody is not inherited verbatim",
+        ));
+    }
+    let Some(binding) = base_binding else {
+        // Legacy NULL custody is distinct from an explicit empty capture. It
+        // remains valid solve custody but makes diagnostic copy unavailable.
+        return Ok(());
+    };
+    let (origin_input, _, _, _) = load_run_input_record(connection, binding.origin_run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if binding.origin_run_id != base_input.run_id
+        || binding.origin_run_input_checksum != base_input.checksum
+    {
+        return Err(invalid_counterfactual(
+            "derived source custody does not bind the original base input",
+        ));
+    }
+    let source = load_exact_historical_scenario_revision(
+        connection,
+        binding.scenario_id,
+        checked_revision(binding.scenario_revision)
+            .map_err(|error| invalid_counterfactual(error.to_string()))?,
+    )
+    .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let (wrapper_hash, _) = hash_serialized_json(&source)?;
+    binding
+        .validate_source(&origin_input, &wrapper_hash)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if binding.scenario_id != base_input.scenario_id
+        || binding.scenario_revision != base_input.scenario_revision
+        || binding.snapshot_id != base_input.snapshot_id
+        || binding.source_document_hash != base_input.snapshot_document_hash
+        || binding.scenario_id != derived_input.scenario_id
+        || binding.scenario_revision != derived_input.scenario_revision
+        || binding.snapshot_id != derived_input.snapshot_id
+        || binding.source_document_hash != derived_input.snapshot_document_hash
+    {
+        return Err(invalid_counterfactual(
+            "derived source custody does not bind the shared immutable source",
         ));
     }
     Ok(())
@@ -4261,6 +7140,14 @@ fn start_counterfactual_run_transaction(
             "derived solve request disagrees with counterfactual job",
         ));
     }
+    let inherited_source_asset_bindings: Option<String> = transaction
+        .query_row(
+            "SELECT source_asset_bindings_json FROM solve_runs WHERE id = ?1",
+            [current.request.semantics.base_run_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
     if let Some(ownership) = load_counterfactual_run_ownership(&transaction, job_id)? {
         if ownership.run_id != request.run_id || ownership.request_id != request.request_id {
             return Err(StoreError::CounterfactualTransitionConflict(job_id));
@@ -4268,7 +7155,11 @@ fn start_counterfactual_run_transaction(
         let started = start_solve_run_in_transaction(
             &transaction,
             request,
+            None,
+            None,
+            None,
             snapshot_policy,
+            SourceAssetBindingsMode::Inherit(inherited_source_asset_bindings.clone()),
             #[cfg(debug_assertions)]
             failpoint,
         )?;
@@ -4297,7 +7188,11 @@ fn start_counterfactual_run_transaction(
     let started = start_solve_run_in_transaction(
         &transaction,
         request,
+        None,
+        None,
+        None,
         snapshot_policy,
+        SourceAssetBindingsMode::Inherit(inherited_source_asset_bindings),
         #[cfg(debug_assertions)]
         failpoint,
     )?;
@@ -4339,36 +7234,41 @@ fn start_counterfactual_run_transaction(
 fn load_local_terminal_run(
     connection: &Connection,
     run_id: SolveRunId,
-) -> Result<(RunInputV1, RunManifestV1), StoreError> {
+) -> Result<(RunInput, RunManifest), StoreError> {
+    let retained = load_existing_solve_run(connection, run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let manifest = retained
+        .manifest
+        .ok_or_else(|| invalid_counterfactual("derived run is not terminal"))?;
     let loaded = load_solve_input_row(connection, run_id)
         .map_err(|error| invalid_counterfactual(error.to_string()))?;
-    let (input, status, manifest_json, started_at) = load_run_input_record(connection, run_id)
-        .map_err(|error| invalid_counterfactual(error.to_string()))?;
-    let manifest_json =
-        manifest_json.ok_or_else(|| invalid_counterfactual("derived run is not terminal"))?;
-    let manifest = RunManifestV1::from_json(manifest_json.as_bytes())
-        .map_err(|error| invalid_counterfactual(error.to_string()))?;
-    if loaded.input != input
+    if loaded.input != retained.input
         || manifest.run_id != run_id
-        || manifest.run_input_checksum != input.checksum
-        || manifest.started_at != started_at
-        || status != terminal_status(&manifest.outcome)?
-        || status == "quarantined"
+        || manifest.run_input_checksum != retained.input.checksum
     {
         return Err(invalid_counterfactual(
             "derived run columns disagree with local terminal authority",
         ));
     }
-    Ok((input, manifest))
+    Ok((retained.input, manifest))
 }
 
 fn validate_counterfactual_completion_authority(
     connection: &Connection,
-    result: &CounterfactualResultV1,
+    result: &CounterfactualResult,
 ) -> Result<(), StoreError> {
     result
         .validate()
         .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let ownership = load_counterfactual_run_ownership(connection, result.request.job_id)?
+        .ok_or_else(|| invalid_counterfactual("completed counterfactual has no owned run"))?;
+    if ownership.run_id != result.run_input.run_id
+        || ownership.request_id != result.run_input.request_id
+    {
+        return Err(invalid_counterfactual(
+            "counterfactual result belongs to a different derived run",
+        ));
+    }
     let base = load_stored_accepted_result(connection, result.request.semantics.base.solution_id)
         .map_err(|error| invalid_counterfactual(error.to_string()))?;
     let base = &base.portable;
@@ -4389,6 +7289,23 @@ fn validate_counterfactual_completion_authority(
             "counterfactual result disagrees with local derived-run authority",
         ));
     }
+    validate_inherited_counterfactual_source_bindings(connection, &base.run_input, &derived_input)?;
+    validate_counterfactual_conclusion_authority(
+        connection,
+        result,
+        base,
+        &derived_input,
+        &derived_manifest,
+    )
+}
+
+fn validate_counterfactual_conclusion_authority(
+    connection: &Connection,
+    result: &CounterfactualResult,
+    base: &PortableAcceptedResult,
+    derived_input: &RunInput,
+    derived_manifest: &RunManifest,
+) -> Result<(), StoreError> {
     match &result.conclusion {
         CounterfactualConclusionV1::VerifiedAlternative {
             alternative,
@@ -4434,11 +7351,34 @@ fn validate_counterfactual_completion_authority(
             }
         }
         CounterfactualConclusionV1::ProvenImpossible => {
-            return Err(invalid_counterfactual(
-                "counterfactual impossibility requires independent typed proof authority",
-            ));
+            let evidence = load_run_infeasibility_evidence_in_transaction(
+                connection,
+                result.run_input.run_id,
+            )?
+            .ok_or_else(|| {
+                invalid_counterfactual("proven impossibility requires retained local evidence")
+            })?;
+            if evidence.condition.as_ref() != Some(&result.request.condition)
+                || evidence.diagnostic.is_none()
+            {
+                return Err(invalid_counterfactual(
+                    "proven impossibility lacks complete exact-condition evidence",
+                ));
+            }
+            evidence
+                .validate_binding(derived_input, derived_manifest)
+                .map_err(|error| invalid_counterfactual(error.to_string()))?;
         }
         CounterfactualConclusionV1::NotDistinguishedWithinBudget => {
+            if let Some(evidence) =
+                load_run_infeasibility_evidence_in_transaction(connection, result.run_input.run_id)?
+                && (evidence.condition.as_ref() != Some(&result.request.condition)
+                    || evidence.diagnostic.is_some())
+            {
+                return Err(invalid_counterfactual(
+                    "counterfactual no-result evidence disagrees with its conclusion",
+                ));
+            }
             let has_accepted_solution: bool = connection.query_row(
                 "SELECT EXISTS(SELECT 1 FROM solutions WHERE solve_run_id = ?1 AND accepted = 1 AND status = 'verified')",
                 [result.run_input.run_id.to_string()],
@@ -4453,9 +7393,100 @@ fn validate_counterfactual_completion_authority(
     }
     Ok(())
 }
+
+fn validate_persisted_counterfactual_terminal_authority(
+    connection: &Connection,
+    record: &CounterfactualJobRecordV1,
+) -> Result<(), StoreError> {
+    let Some(authority) = &record.terminal_authority else {
+        return Ok(());
+    };
+    let ownership = load_counterfactual_run_ownership(connection, record.request.job_id)?
+        .ok_or_else(|| invalid_counterfactual("terminal authority has no owned derived run"))?;
+    let (input, manifest, evidence) = match authority {
+        CounterfactualTerminalAuthorityV1::TimelyInfeasibility {
+            run_id,
+            run_manifest_checksum,
+            evidence_checksum,
+        } => {
+            if record.state != CounterfactualJobState::Completed
+                || record
+                    .result
+                    .as_ref()
+                    .is_none_or(|result| result.run_input.run_id != *run_id)
+                || ownership.run_id != *run_id
+            {
+                return Err(invalid_counterfactual(
+                    "timely terminal authority state or ownership is invalid",
+                ));
+            }
+            let (input, manifest) = load_local_terminal_run(connection, *run_id)?;
+            let evidence = load_run_infeasibility_evidence_in_transaction(connection, *run_id)?
+                .ok_or_else(|| {
+                    invalid_counterfactual("timely terminal authority lacks evidence")
+                })?;
+            if manifest.checksum != *run_manifest_checksum
+                || evidence.checksum != *evidence_checksum
+            {
+                return Err(invalid_counterfactual(
+                    "timely terminal authority references changed local data",
+                ));
+            }
+            (input, manifest, Some(evidence))
+        }
+        CounterfactualTerminalAuthorityV1::VerificationAlarm {
+            run_id,
+            run_manifest_checksum,
+            ..
+        } => {
+            if record.state != CounterfactualJobState::Failed
+                || record.result.is_some()
+                || !record
+                    .error
+                    .is_some_and(|error| error.kind == CounterfactualFailureKind::InvalidCandidate)
+                || ownership.run_id != *run_id
+            {
+                return Err(invalid_counterfactual(
+                    "verification-alarm authority state or ownership is invalid",
+                ));
+            }
+            let (input, manifest) = load_local_terminal_run(connection, *run_id)?;
+            if manifest.checksum != *run_manifest_checksum {
+                return Err(invalid_counterfactual(
+                    "verification-alarm authority references changed local data",
+                ));
+            }
+            (input, manifest, None)
+        }
+    };
+    authority
+        .validate_binding(&input, &manifest, evidence.as_ref())
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    Ok(())
+}
+fn validate_counterfactual_infeasibility_timing(
+    input: &RunInput,
+    manifest: &RunManifest,
+) -> Result<(), StoreError> {
+    if solve_recovery_deadline(input, manifest.started_at)
+        .is_some_and(|deadline| manifest.finished_at.as_timestamp() > deadline)
+    {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "counterfactual infeasibility completion is past the persistence cutoff".to_owned(),
+        ));
+    }
+    if solve_recovery_deadline(input, manifest.started_at)
+        .is_some_and(|deadline| jiff::Timestamp::now() >= deadline)
+    {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "counterfactual infeasibility persistence is past the terminal cutoff".to_owned(),
+        ));
+    }
+    Ok(())
+}
 fn validate_counterfactual_normal_completion_timing(
-    input: &RunInputV1,
-    manifest: &RunManifestV1,
+    input: &RunInput,
+    manifest: &RunManifest,
 ) -> Result<(), StoreError> {
     let elapsed = manifest.elapsed_milliseconds.ok_or_else(|| {
         StoreError::InvalidPersistedResult(
@@ -4480,10 +7511,80 @@ fn validate_counterfactual_normal_completion_timing(
     Ok(())
 }
 
+fn validate_counterfactual_no_result_evidence(
+    transaction: &rusqlite::Transaction<'_>,
+    current: &CounterfactualJobRecordV1,
+    input: &RunInput,
+    manifest: &RunManifest,
+    result: &CounterfactualResult,
+    evidence: &RunInfeasibilityEvidenceV1,
+) -> Result<(), StoreError> {
+    if !matches!(
+        &manifest.outcome,
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::Infeasible
+        }
+    ) {
+        return Err(StoreError::InvalidPersistedInfeasibilityEvidence(
+            "counterfactual proof requires an infeasible no-result manifest".to_owned(),
+        ));
+    }
+    evidence
+        .validate_binding(input, manifest)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if evidence.condition.as_ref() != Some(&current.request.condition) {
+        return Err(invalid_counterfactual(
+            "counterfactual evidence condition is not the exact requested condition",
+        ));
+    }
+    validate_run_source_asset_binding(transaction, input)?;
+    if evidence.original.observed_at.as_timestamp() > manifest.finished_at.as_timestamp() {
+        return Err(invalid_counterfactual(
+            "counterfactual evidence was observed after terminal completion",
+        ));
+    }
+    validate_counterfactual_infeasibility_timing(input, manifest)?;
+    match &result.conclusion {
+        CounterfactualConclusionV1::ProvenImpossible if evidence.diagnostic.is_none() => Err(
+            invalid_counterfactual("proven impossibility requires complete local diagnostic proof"),
+        ),
+        CounterfactualConclusionV1::NotDistinguishedWithinBudget
+            if evidence.diagnostic.is_some() =>
+        {
+            Err(invalid_counterfactual(
+                "complete local diagnostic proof must produce ProvenImpossible",
+            ))
+        }
+        CounterfactualConclusionV1::ProvenImpossible
+        | CounterfactualConclusionV1::NotDistinguishedWithinBudget => Ok(()),
+        CounterfactualConclusionV1::VerifiedAlternative { .. } => Err(invalid_counterfactual(
+            "infeasibility evidence cannot accompany an accepted result",
+        )),
+    }
+}
+
+fn persisted_counterfactual_cancellation(
+    current: &CounterfactualJobRecordV1,
+) -> Result<Option<CounterfactualCancellationObservationV1>, StoreError> {
+    match (current.cancel_request_id, current.cancel_requested_at) {
+        (None, None) => Ok(None),
+        (Some(cancel_request_id), Some(cancel_requested_at)) => {
+            Ok(Some(CounterfactualCancellationObservationV1 {
+                cancel_request_id,
+                cancel_requested_at,
+            }))
+        }
+        _ => Err(invalid_counterfactual(
+            "counterfactual cancellation marker is only partially persisted",
+        )),
+    }
+}
+
 fn finalize_counterfactual_run_transaction(
     connection: &mut Connection,
     job_id: CounterfactualJobId,
-    finalization: &CounterfactualRunFinalizationV1,
+    finalization: CounterfactualRunFinalizationV1,
+    expected_cancellation: Option<&CounterfactualCancellationObservationV1>,
     recover_cancelled_job: bool,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<CounterfactualJobRecordV1, StoreError> {
@@ -4492,6 +7593,7 @@ fn finalize_counterfactual_run_transaction(
         &transaction,
         job_id,
         finalization,
+        expected_cancellation,
         recover_cancelled_job,
         #[cfg(debug_assertions)]
         failpoint,
@@ -4504,7 +7606,8 @@ fn finalize_counterfactual_run_transaction(
 fn finalize_counterfactual_run_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     job_id: CounterfactualJobId,
-    finalization: &CounterfactualRunFinalizationV1,
+    finalization: CounterfactualRunFinalizationV1,
+    expected_cancellation: Option<&CounterfactualCancellationObservationV1>,
     recover_cancelled_job: bool,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<CounterfactualJobRecordV1, StoreError> {
@@ -4513,13 +7616,13 @@ fn finalize_counterfactual_run_in_transaction(
         .ok_or(StoreError::CounterfactualTransitionConflict(job_id))?;
     if recover_cancelled_job
         && !matches!(
-            finalization,
+            &finalization,
             CounterfactualRunFinalizationV1::Interrupted { .. }
         )
     {
         return Err(StoreError::CounterfactualTransitionConflict(job_id));
     }
-    let manifest = match finalization {
+    let manifest = match &finalization {
         CounterfactualRunFinalizationV1::CompletedAccepted { manifest, .. }
         | CounterfactualRunFinalizationV1::CompletedNoResult { manifest, .. }
         | CounterfactualRunFinalizationV1::Quarantined { manifest, .. }
@@ -4527,6 +7630,36 @@ fn finalize_counterfactual_run_in_transaction(
         | CounterfactualRunFinalizationV1::Cancelled { manifest }
         | CounterfactualRunFinalizationV1::Interrupted { manifest } => manifest,
     };
+    let actual_cancellation = persisted_counterfactual_cancellation(&current)?;
+    let expected_matches = expected_cancellation == actual_cancellation.as_ref();
+    let marked_alarm_finalization = matches!(
+        &finalization,
+        CounterfactualRunFinalizationV1::Quarantined { manifest, .. }
+            if manifest.clock_failure.is_some()
+                && matches!(
+                    &manifest.outcome,
+                    RunTerminalOutcomeV1::VerificationAlarm { .. }
+                )
+    );
+    if !expected_matches
+        || (!marked_alarm_finalization
+            && actual_cancellation.as_ref().is_some_and(|cancellation| {
+                cancellation.cancel_requested_at.as_timestamp()
+                    > manifest.finished_at.as_timestamp()
+            }))
+    {
+        let cancellation = actual_cancellation
+            .or_else(|| expected_cancellation.cloned())
+            .ok_or_else(|| {
+                invalid_counterfactual(
+                    "counterfactual cancellation observation changed without a marker",
+                )
+            })?;
+        return Err(StoreError::StaleCounterfactualFinalizationObservation {
+            cancellation,
+            finalization: Box::new(finalization),
+        });
+    }
     if current.state != CounterfactualJobState::Running
         || current.finished_at.is_some()
         || manifest.run_id != ownership.run_id
@@ -4545,7 +7678,7 @@ fn finalize_counterfactual_run_in_transaction(
     }
     validate_counterfactual_derived_input(transaction, &current, &input, started_at)?;
 
-    let transition = match finalization {
+    let transition = match &finalization {
         CounterfactualRunFinalizationV1::CompletedAccepted {
             accepted_result,
             evidence,
@@ -4573,10 +7706,20 @@ fn finalize_counterfactual_run_in_transaction(
                 result: result.clone(),
             }
         }
-        CounterfactualRunFinalizationV1::CompletedNoResult { manifest, result } => {
-            if current.cancel_request_id.is_some()
-                || current.cancel_requested_at.is_some()
-                || result.request != current.request
+        CounterfactualRunFinalizationV1::CompletedNoResult {
+            manifest,
+            result,
+            infeasibility_evidence,
+        } => {
+            let evidence_ref = infeasibility_evidence.as_deref();
+            let cancellation_before_original =
+                actual_cancellation.as_ref().is_some_and(|cancellation| {
+                    evidence_ref.is_some_and(|evidence| {
+                        cancellation.cancel_requested_at.as_timestamp()
+                            <= evidence.original.observed_at.as_timestamp()
+                    })
+                });
+            if result.request != current.request
                 || result.run_input != input
                 || &result.run_manifest != manifest
                 || !matches!(
@@ -4585,11 +7728,46 @@ fn finalize_counterfactual_run_in_transaction(
                         status: SolveStatus::Infeasible | SolveStatus::NoSolutionWithinLimit
                     }
                 )
+                || cancellation_before_original
+                || (evidence_ref.is_none() && actual_cancellation.is_some())
             {
                 return Err(StoreError::CounterfactualTransitionConflict(job_id));
             }
-            validate_counterfactual_normal_completion_timing(&input, manifest)?;
-            finalize_terminal_run_in_transaction(transaction, manifest)?;
+            let evidence_json = if let Some(evidence) = evidence_ref {
+                validate_counterfactual_no_result_evidence(
+                    transaction,
+                    &current,
+                    &input,
+                    manifest,
+                    result,
+                    evidence,
+                )?;
+                Some(
+                    serialize_bounded_json(
+                        evidence,
+                        eutheto_domain_ir::MAX_RUN_INFEASIBILITY_EVIDENCE_BYTES,
+                        "counterfactual infeasibility evidence",
+                    )
+                    .map_err(|error| invalid_counterfactual(error.to_string()))?,
+                )
+            } else {
+                if matches!(
+                    &result.conclusion,
+                    CounterfactualConclusionV1::ProvenImpossible
+                ) {
+                    return Err(invalid_counterfactual(
+                        "proven impossibility requires retained local evidence",
+                    ));
+                }
+                validate_counterfactual_normal_completion_timing(&input, manifest)?;
+                None
+            };
+            finalize_terminal_run_in_transaction(
+                transaction,
+                manifest,
+                evidence_ref,
+                evidence_json.as_deref(),
+            )?;
             CounterfactualJobTransitionV1::Completed {
                 result: result.clone(),
             }
@@ -4599,9 +7777,7 @@ fn finalize_counterfactual_run_in_transaction(
             candidate_diagnostics,
             error,
         } => {
-            if current.cancel_request_id.is_some()
-                || current.cancel_requested_at.is_some()
-                || error.kind != CounterfactualFailureKind::InvalidCandidate
+            if error.kind != CounterfactualFailureKind::InvalidCandidate
                 || !matches!(
                     &manifest.outcome,
                     RunTerminalOutcomeV1::VerificationAlarm { .. }
@@ -4648,7 +7824,7 @@ fn finalize_counterfactual_run_in_transaction(
             {
                 return Err(StoreError::CounterfactualTransitionConflict(job_id));
             }
-            finalize_terminal_run_in_transaction(transaction, manifest)?;
+            finalize_terminal_run_in_transaction(transaction, manifest, None, None)?;
             CounterfactualJobTransitionV1::Failed {
                 finished_at: manifest.finished_at,
                 error: *error,
@@ -4666,7 +7842,7 @@ fn finalize_counterfactual_run_in_transaction(
             {
                 return Err(StoreError::CounterfactualTransitionConflict(job_id));
             }
-            finalize_terminal_run_in_transaction(transaction, manifest)?;
+            finalize_terminal_run_in_transaction(transaction, manifest, None, None)?;
             CounterfactualJobTransitionV1::Cancelled {
                 finished_at: manifest.finished_at,
             }
@@ -4682,7 +7858,7 @@ fn finalize_counterfactual_run_in_transaction(
             {
                 return Err(StoreError::CounterfactualTransitionConflict(job_id));
             }
-            finalize_terminal_run_in_transaction(transaction, manifest)?;
+            finalize_terminal_run_in_transaction(transaction, manifest, None, None)?;
             if recover_cancelled_job {
                 CounterfactualJobTransitionV1::Cancelled {
                     finished_at: manifest.finished_at,
@@ -4703,6 +7879,70 @@ fn finalize_counterfactual_run_in_transaction(
         failpoint,
     )?;
     Ok(stored)
+}
+fn derive_counterfactual_terminal_authority(
+    connection: &Connection,
+    current: &CounterfactualJobRecordV1,
+    transition: &CounterfactualJobTransitionV1,
+) -> Result<Option<CounterfactualTerminalAuthorityV1>, StoreError> {
+    let Some(ownership) = load_counterfactual_run_ownership(connection, current.request.job_id)?
+    else {
+        return Ok(None);
+    };
+    match transition {
+        CounterfactualJobTransitionV1::Completed { result } => {
+            if !matches!(
+                &result.run_manifest.outcome,
+                RunTerminalOutcomeV1::NoResult {
+                    status: SolveStatus::Infeasible
+                }
+            ) {
+                return Ok(None);
+            }
+            let Some(evidence) =
+                load_run_infeasibility_evidence_in_transaction(connection, ownership.run_id)?
+            else {
+                return Ok(None);
+            };
+            if evidence.condition.as_ref() != Some(&current.request.condition) {
+                return Ok(None);
+            }
+            if current
+                .cancel_requested_at
+                .is_some_and(|cancelled_at| cancelled_at <= evidence.original.observed_at)
+            {
+                return Ok(None);
+            }
+            Ok(Some(
+                CounterfactualTerminalAuthorityV1::TimelyInfeasibility {
+                    run_id: ownership.run_id,
+                    run_manifest_checksum: result.run_manifest.checksum.clone(),
+                    evidence_checksum: evidence.checksum,
+                },
+            ))
+        }
+        CounterfactualJobTransitionV1::Failed { error, .. } => {
+            if error.kind != CounterfactualFailureKind::InvalidCandidate {
+                return Ok(None);
+            }
+            let (_, manifest) = load_local_terminal_run(connection, ownership.run_id)?;
+            if matches!(
+                manifest.outcome,
+                RunTerminalOutcomeV1::VerificationAlarm { .. }
+            ) {
+                Ok(Some(CounterfactualTerminalAuthorityV1::VerificationAlarm {
+                    run_id: ownership.run_id,
+                    run_manifest_checksum: manifest.checksum,
+                    clock_failure: manifest.clock_failure,
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+        CounterfactualJobTransitionV1::Running { .. }
+        | CounterfactualJobTransitionV1::Cancelled { .. }
+        | CounterfactualJobTransitionV1::Interrupted { .. } => Ok(None),
+    }
 }
 
 // Keeping the exhaustive lifecycle matrix together makes legal edges and idempotency auditable.
@@ -4733,6 +7973,7 @@ fn build_counterfactual_transition_target(
                 None,
                 None,
                 None,
+                None,
             )
         }
         CounterfactualJobTransitionV1::Completed { result } => {
@@ -4743,7 +7984,14 @@ fn build_counterfactual_transition_target(
                     current.request.job_id,
                 ));
             }
-            if current.cancel_request_id.is_some() {
+            let authority =
+                derive_counterfactual_terminal_authority(connection, current, transition)?;
+            if current.cancel_request_id.is_some()
+                && !matches!(
+                    authority,
+                    Some(CounterfactualTerminalAuthorityV1::TimelyInfeasibility { .. })
+                )
+            {
                 return Err(StoreError::CounterfactualTransitionConflict(
                     current.request.job_id,
                 ));
@@ -4754,10 +8002,11 @@ fn build_counterfactual_transition_target(
                 CounterfactualJobState::Completed,
                 current.started_at,
                 Some(result.run_manifest.finished_at),
-                None,
-                None,
+                current.cancel_request_id,
+                current.cancel_requested_at,
                 Some(result.as_ref().clone()),
                 None,
+                authority,
             )
         }
         CounterfactualJobTransitionV1::Failed { finished_at, error } => {
@@ -4784,7 +8033,14 @@ fn build_counterfactual_transition_target(
                     current.request.job_id,
                 ));
             }
-            if current.cancel_request_id.is_some() {
+            let authority =
+                derive_counterfactual_terminal_authority(connection, current, transition)?;
+            if current.cancel_request_id.is_some()
+                && !matches!(
+                    authority,
+                    Some(CounterfactualTerminalAuthorityV1::VerificationAlarm { .. })
+                )
+            {
                 return Err(StoreError::CounterfactualTransitionConflict(
                     current.request.job_id,
                 ));
@@ -4794,10 +8050,11 @@ fn build_counterfactual_transition_target(
                 CounterfactualJobState::Failed,
                 current.started_at,
                 Some(*finished_at),
-                None,
-                None,
+                current.cancel_request_id,
+                current.cancel_requested_at,
                 None,
                 Some(*error),
+                authority,
             )
         }
         CounterfactualJobTransitionV1::Cancelled { finished_at } => {
@@ -4822,6 +8079,7 @@ fn build_counterfactual_transition_target(
                 current.cancel_requested_at,
                 None,
                 None,
+                None,
             )
         }
         CounterfactualJobTransitionV1::Interrupted { finished_at } => {
@@ -4842,6 +8100,7 @@ fn build_counterfactual_transition_target(
                 CounterfactualJobState::Interrupted,
                 current.started_at,
                 Some(*finished_at),
+                None,
                 None,
                 None,
                 None,
@@ -4887,7 +8146,8 @@ fn transition_counterfactual_job_in_transaction(
     allow_derived_ownership: bool,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<CounterfactualJobRecordV1, StoreError> {
-    let current = load_counterfactual_job_row(transaction, job_id)?;
+    let current =
+        load_counterfactual_job_row_internal(transaction, job_id, allow_derived_ownership)?;
     if !allow_derived_ownership
         && load_counterfactual_run_ownership(transaction, job_id)?.is_some()
         && !matches!(transition, CounterfactualJobTransitionV1::Running { .. })
@@ -4910,24 +8170,44 @@ fn transition_counterfactual_job_in_transaction(
         .map(|value| serialize_checked_json(value, "counterfactual error"))
         .transpose()
         .map_err(invalid_counterfactual)?;
+    let terminal_authority_json = target
+        .terminal_authority
+        .as_ref()
+        .map(|value| serialize_checked_json(value, "counterfactual terminal authority"))
+        .transpose()
+        .map_err(invalid_counterfactual)?;
     let changed = match target.state {
-        CounterfactualJobState::Running
-        | CounterfactualJobState::Completed
-        | CounterfactualJobState::Failed
-        | CounterfactualJobState::Interrupted => transaction.execute(
-            "UPDATE counterfactual_jobs SET state = ?2, started_at = ?3, finished_at = ?4, result_json = ?5, evidence_json = NULL, error_json = ?6 WHERE id = ?1 AND state = ?7 AND cancel_request_id IS NULL AND cancel_requested_at IS NULL",
-            params![
-                job_id.to_string(),
-                counterfactual_state_name(target.state),
-                target.started_at.map(|value| value.to_string()),
-                target.finished_at.map(|value| value.to_string()),
-                result_json,
-                error_json,
-                counterfactual_state_name(current.state),
-            ],
-        )?,
+        CounterfactualJobState::Running | CounterfactualJobState::Interrupted => {
+            transaction.execute(
+                "UPDATE counterfactual_jobs SET state = ?2, started_at = ?3, finished_at = ?4, result_json = ?5, evidence_json = NULL, error_json = ?6, terminal_authority_json = NULL WHERE id = ?1 AND state = ?7 AND cancel_request_id IS NULL AND cancel_requested_at IS NULL",
+                params![
+                    job_id.to_string(),
+                    counterfactual_state_name(target.state),
+                    target.started_at.map(|value| value.to_string()),
+                    target.finished_at.map(|value| value.to_string()),
+                    result_json,
+                    error_json,
+                    counterfactual_state_name(current.state),
+                ],
+            )?
+        }
+        CounterfactualJobState::Completed | CounterfactualJobState::Failed => {
+            transaction.execute(
+                "UPDATE counterfactual_jobs SET state = ?2, started_at = ?3, finished_at = ?4, result_json = ?5, evidence_json = NULL, error_json = ?6, terminal_authority_json = ?7 WHERE id = ?1 AND state = ?8",
+                params![
+                    job_id.to_string(),
+                    counterfactual_state_name(target.state),
+                    target.started_at.map(|value| value.to_string()),
+                    target.finished_at.map(|value| value.to_string()),
+                    result_json,
+                    error_json,
+                    terminal_authority_json,
+                    counterfactual_state_name(current.state),
+                ],
+            )?
+        }
         CounterfactualJobState::Cancelled => transaction.execute(
-            "UPDATE counterfactual_jobs SET state = 'cancelled', started_at = ?2, finished_at = ?3, result_json = NULL, evidence_json = NULL, error_json = NULL WHERE id = ?1 AND state = 'running' AND cancel_request_id = ?4 AND cancel_requested_at = ?5",
+            "UPDATE counterfactual_jobs SET state = 'cancelled', started_at = ?2, finished_at = ?3, result_json = NULL, evidence_json = NULL, error_json = NULL, terminal_authority_json = NULL WHERE id = ?1 AND state = 'running' AND cancel_request_id = ?4 AND cancel_requested_at = ?5",
             params![
                 job_id.to_string(),
                 target.started_at.map(|value| value.to_string()),
@@ -5007,6 +8287,7 @@ fn request_counterfactual_cancel_transaction(
             Some(requested_at),
             None,
             None,
+            None,
         ),
         CounterfactualJobState::Running => CounterfactualJobRecordV1::new(
             current.request.clone(),
@@ -5015,6 +8296,7 @@ fn request_counterfactual_cancel_transaction(
             None,
             Some(cancel_request_id),
             Some(requested_at),
+            None,
             None,
             None,
         ),
@@ -5867,6 +9149,15 @@ fn initialize_schema(
         blake3::hash(COUNTERFACTUAL_RUN_OWNERSHIP_MIGRATION.as_bytes())
             .to_hex()
             .to_string(),
+        blake3::hash(COUNTERFACTUAL_COMPLETED_OWNERSHIP_MIGRATION.as_bytes())
+            .to_hex()
+            .to_string(),
+        blake3::hash(VERIFIED_CHECKPOINTS_MIGRATION.as_bytes())
+            .to_hex()
+            .to_string(),
+        blake3::hash(INFEASIBILITY_CUSTODY_MIGRATION.as_bytes())
+            .to_hex()
+            .to_string(),
     ];
     let mut applied = Vec::new();
     let mut retained_backup_path = None;
@@ -5962,6 +9253,25 @@ fn initialize_schema(
             5 => {
                 transaction.execute_batch(COUNTERFACTUAL_RUN_OWNERSHIP_MIGRATION)?;
             }
+            6 => {
+                transaction.execute_batch(COUNTERFACTUAL_COMPLETED_OWNERSHIP_MIGRATION)?;
+                let unowned_completion: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM counterfactual_jobs WHERE state = 'completed' AND (derived_run_id IS NULL OR derived_request_id IS NULL))",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if unowned_completion {
+                    return Err(invalid_counterfactual(
+                        "completed counterfactual has no recoverable derived run",
+                    ));
+                }
+            }
+            7 => {
+                transaction.execute_batch(VERIFIED_CHECKPOINTS_MIGRATION)?;
+            }
+            8 => {
+                transaction.execute_batch(INFEASIBILITY_CUSTODY_MIGRATION)?;
+            }
             _ => {
                 return Err(StoreError::Integrity(
                     "database migration sequence is invalid".to_owned(),
@@ -5974,6 +9284,9 @@ fn initialize_schema(
             3 => V3_MIGRATION_NAME,
             4 => V4_MIGRATION_NAME,
             5 => V5_MIGRATION_NAME,
+            6 => V6_MIGRATION_NAME,
+            7 => V7_MIGRATION_NAME,
+            8 => V8_MIGRATION_NAME,
             _ => unreachable!(),
         };
         transaction.execute(
@@ -5995,7 +9308,7 @@ fn initialize_schema(
 fn verify_migration_registry(
     connection: &Connection,
     pragma_version: u32,
-    checksums: &[String; 5],
+    checksums: &[String; 8],
 ) -> Result<(), StoreError> {
     let has_registry: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations')",
@@ -6044,6 +9357,9 @@ fn verify_migration_registry(
         V3_MIGRATION_NAME,
         V4_MIGRATION_NAME,
         V5_MIGRATION_NAME,
+        V6_MIGRATION_NAME,
+        V7_MIGRATION_NAME,
+        V8_MIGRATION_NAME,
     ];
     for (index, (version, name, checksum)) in rows.iter().enumerate() {
         let expected_version = u32::try_from(index + 1).map_err(|_| StoreError::NumericRange)?;
@@ -6303,7 +9619,7 @@ fn recover_running_v2_runs(connection: &mut Connection) -> Result<Vec<SolveRunId
         if status != "running" || stored_manifest.is_some() || now < recovery_deadline {
             continue;
         }
-        let Ok(manifest) = RunManifestV1::new(
+        let Ok(manifest) = RunManifest::new(
             run_id,
             input.checksum,
             RunTerminalOutcomeV1::Interrupted,
@@ -6318,7 +9634,7 @@ fn recover_running_v2_runs(connection: &mut Connection) -> Result<Vec<SolveRunId
             continue;
         };
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        finalize_terminal_run_in_transaction(&transaction, &manifest)?;
+        finalize_terminal_run_in_transaction(&transaction, &manifest, None, None)?;
         transaction.commit()?;
         interrupted.push(run_id);
     }
@@ -6391,8 +9707,9 @@ fn recover_expired_counterfactual_jobs(
                 ));
             }
             validate_counterfactual_derived_input(&transaction, &record, &input, started_at)?;
+            let expected_cancellation = persisted_counterfactual_cancellation(&record)?;
             let cancelled = record.cancel_request_id.is_some();
-            let manifest = RunManifestV1::new(
+            let manifest = RunManifest::new(
                 input.run_id,
                 input.checksum,
                 RunTerminalOutcomeV1::Interrupted,
@@ -6409,7 +9726,8 @@ fn recover_expired_counterfactual_jobs(
             finalize_counterfactual_run_in_transaction(
                 &transaction,
                 job_id,
-                &finalization,
+                finalization,
+                expected_cancellation.as_ref(),
                 cancelled,
                 #[cfg(debug_assertions)]
                 &recovery_failpoint,
@@ -6516,30 +9834,100 @@ fn scenario_archived_at(
     parse_optional_timestamp(archived_at, "scenario archived_at")
 }
 
+// Keep SQL byte admission beside decoding; a split risks allocating retained payloads too early.
+#[allow(clippy::too_many_lines)]
 fn load_project(
     connection: &Connection,
     scenario_id: ScenarioId,
 ) -> Result<StoredProject, StoreError> {
+    let document_limit =
+        i64::try_from(MAX_SCENARIO_DOCUMENT_BYTES).map_err(|_| StoreError::NumericRange)?;
+    // Native optional wrappers may exceed a portable entry's cap; asset custody then
+    // records Unavailable without blocking an otherwise valid ordinary solve.
+    let json_limit = i64::try_from(eutheto_export::PORTABLE_LIMITS.max_total_uncompressed_bytes)
+        .map_err(|_| StoreError::NumericRange)?;
+    let aggregate_limit =
+        i64::try_from(eutheto_export::PORTABLE_LIMITS.max_total_uncompressed_bytes)
+            .map_err(|_| StoreError::NumericRange)?;
+    let string_limit = i64::try_from(eutheto_export::PORTABLE_LIMITS.max_string_bytes)
+        .map_err(|_| StoreError::NumericRange)?;
+    let string_limit_bytes = u64::try_from(eutheto_export::PORTABLE_LIMITS.max_string_bytes)
+        .map_err(|_| StoreError::NumericRange)?;
     let row = connection
         .query_row(
-            "SELECT id, domain_pack_id, domain_schema_version, title, description, revision, created_at, updated_at, last_opened_at, archived_at, document_json, portable_required_capabilities_json, portable_semantic_extensions_json, portable_extensions_json FROM scenarios WHERE id = ?1",
-            [scenario_id.to_string()],
+            "WITH measured AS (
+                 SELECT *,
+                        length(CAST(title AS BLOB)) AS title_bytes,
+                        COALESCE(length(CAST(description AS BLOB)), 0) AS description_bytes,
+                        length(CAST(document_json AS BLOB)) AS document_bytes,
+                        length(CAST(portable_required_capabilities_json AS BLOB)) AS required_bytes,
+                        length(CAST(portable_semantic_extensions_json AS BLOB)) AS semantic_bytes,
+                        length(CAST(portable_extensions_json AS BLOB)) AS extensions_bytes,
+                        length(CAST(domain_pack_id AS BLOB)) <= ?5
+                        AND length(CAST(created_at AS BLOB)) <= 64
+                        AND length(CAST(updated_at AS BLOB)) <= 64
+                        AND COALESCE(length(CAST(last_opened_at AS BLOB)), 0) <= 64
+                        AND COALESCE(length(CAST(archived_at AS BLOB)), 0) <= 64
+                            AS metadata_within_limits
+                 FROM scenarios WHERE id = ?1
+             ),
+             admitted AS (
+                 SELECT *,
+                        metadata_within_limits AND title_bytes <= ?5 AND description_bytes <= ?5
+                        AND document_bytes <= ?2
+                        AND required_bytes <= ?3
+                        AND semantic_bytes <= ?3
+                        AND extensions_bytes <= ?3
+                        AND document_bytes + required_bytes + semantic_bytes + extensions_bytes <= ?4
+                            AS source_within_limits
+                 FROM measured
+             )
+             SELECT id, CASE WHEN source_within_limits THEN domain_pack_id ELSE NULL END, domain_schema_version,
+                    CASE WHEN source_within_limits THEN title ELSE NULL END,
+                    CASE WHEN source_within_limits THEN description ELSE NULL END,
+                    revision,
+                    CASE WHEN source_within_limits THEN created_at ELSE NULL END,
+                    CASE WHEN source_within_limits THEN updated_at ELSE NULL END,
+                    CASE WHEN source_within_limits THEN last_opened_at ELSE NULL END,
+                    CASE WHEN source_within_limits THEN archived_at ELSE NULL END,
+                    title_bytes, description_bytes,
+                    document_bytes, required_bytes, semantic_bytes, extensions_bytes,
+                    CASE WHEN source_within_limits THEN document_json ELSE NULL END,
+                    CASE WHEN source_within_limits THEN portable_required_capabilities_json ELSE NULL END,
+                    CASE WHEN source_within_limits THEN portable_semantic_extensions_json ELSE NULL END,
+                    CASE WHEN source_within_limits THEN portable_extensions_json ELSE NULL END,
+                    metadata_within_limits
+             FROM admitted",
+            params![
+                scenario_id.to_string(),
+                document_limit,
+                json_limit,
+                aggregate_limit,
+                string_limit
+            ],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(1)?,
                     row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, i64>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, String>(13)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, i64>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
+                    row.get::<_, Option<String>>(18)?,
+                    row.get::<_, Option<String>>(19)?,
+                    row.get::<_, bool>(20)?,
                 ))
             },
         )
@@ -6555,14 +9943,85 @@ fn load_project(
         updated_at,
         last_opened_at,
         archived_at,
+        title_length,
+        description_length,
+        document_length,
+        required_length,
+        semantic_length,
+        extensions_length,
         document_json,
         required_capabilities_json,
         semantic_extensions_json,
         extensions_json,
+        metadata_admitted,
     )) = row
     else {
         return Err(StoreError::ScenarioNotFound(scenario_id));
     };
+    if !metadata_admitted {
+        return Err(StoreError::Integrity(
+            "stored scenario scalar metadata exceeds its byte limit".to_owned(),
+        ));
+    }
+    let title_length = u64::try_from(title_length).map_err(|_| {
+        StoreError::Integrity("stored scenario title byte length is invalid".to_owned())
+    })?;
+    let description_length = u64::try_from(description_length).map_err(|_| {
+        StoreError::Integrity("stored scenario description byte length is invalid".to_owned())
+    })?;
+    if title_length > string_limit_bytes || description_length > string_limit_bytes {
+        return Err(StoreError::Integrity(
+            "stored scenario metadata text exceeds its byte limit".to_owned(),
+        ));
+    }
+    let document_length = u64::try_from(document_length).map_err(|_| {
+        StoreError::Integrity("stored scenario document byte length is invalid".to_owned())
+    })?;
+    let required_length = u64::try_from(required_length).map_err(|_| {
+        StoreError::Integrity("stored scenario wrapper byte length is invalid".to_owned())
+    })?;
+    let semantic_length = u64::try_from(semantic_length).map_err(|_| {
+        StoreError::Integrity("stored scenario wrapper byte length is invalid".to_owned())
+    })?;
+    let extensions_length = u64::try_from(extensions_length).map_err(|_| {
+        StoreError::Integrity("stored scenario wrapper byte length is invalid".to_owned())
+    })?;
+    if document_length > MAX_SCENARIO_DOCUMENT_BYTES
+        || [required_length, semantic_length, extensions_length]
+            .into_iter()
+            .any(|length| length > eutheto_export::PORTABLE_LIMITS.max_total_uncompressed_bytes)
+    {
+        return Err(StoreError::Integrity(
+            "stored scenario source component exceeds its byte limit".to_owned(),
+        ));
+    }
+    if document_length + required_length + semantic_length + extensions_length
+        > eutheto_export::PORTABLE_LIMITS.max_total_uncompressed_bytes
+    {
+        return Err(StoreError::Integrity(
+            "stored scenario source exceeds its aggregate byte limit".to_owned(),
+        ));
+    }
+    let pack =
+        pack.ok_or_else(|| StoreError::Integrity("stored scenario pack is missing".to_owned()))?;
+    let created_at = created_at
+        .ok_or_else(|| StoreError::Integrity("stored scenario created_at is missing".to_owned()))?;
+    let updated_at = updated_at
+        .ok_or_else(|| StoreError::Integrity("stored scenario updated_at is missing".to_owned()))?;
+    let title = title
+        .ok_or_else(|| StoreError::Integrity("stored scenario title is missing".to_owned()))?;
+    let document_json = document_json.ok_or_else(|| {
+        StoreError::Integrity("stored scenario source was not admitted".to_owned())
+    })?;
+    let required_capabilities_json = required_capabilities_json.ok_or_else(|| {
+        StoreError::Integrity("stored scenario source was not admitted".to_owned())
+    })?;
+    let semantic_extensions_json = semantic_extensions_json.ok_or_else(|| {
+        StoreError::Integrity("stored scenario source was not admitted".to_owned())
+    })?;
+    let extensions_json = extensions_json.ok_or_else(|| {
+        StoreError::Integrity("stored scenario source was not admitted".to_owned())
+    })?;
     let id = id
         .parse()
         .map_err(|error| StoreError::Integrity(format!("invalid stored scenario id: {error}")))?;
@@ -6606,10 +10065,24 @@ fn load_project(
 fn load_retained_scenario_revisions(
     connection: &Connection,
 ) -> Result<Vec<StoredScenarioRevision>, StoreError> {
-    let result_dependencies = retained_result_dependencies(connection)?;
-    let internal_dependencies = retained_scenario_dependencies(connection)?;
+    let strict_results = retained_result_dependencies(connection)?;
+    let native_dependencies = native_archival_dependencies(connection)?;
+    let strict_dependencies = retained_scenario_dependencies(connection)?;
+    let mut internal_dependencies = strict_dependencies.clone();
+    internal_dependencies.extend(native_dependencies.iter().copied());
     let current = scenario_revisions(connection)?;
     let retained = read_retained_scenario_revision_rows(connection)?;
+    for dependency in &strict_dependencies {
+        if current.get(&dependency.scenario_id) != Some(&dependency.scenario_revision)
+            && !retained.contains_key(dependency)
+        {
+            return Err(StoreError::Integrity(format!(
+                "retained dependency requires unavailable scenario {} revision {}",
+                dependency.scenario_id,
+                dependency.scenario_revision.value()
+            )));
+        }
+    }
     for identity in retained.keys() {
         if !internal_dependencies.contains(identity) {
             return Err(StoreError::Integrity(
@@ -6618,18 +10091,21 @@ fn load_retained_scenario_revisions(
         }
     }
     let mut historical = Vec::new();
-    for dependency in result_dependencies {
+    for dependency in strict_results.union(&native_dependencies) {
         if current.get(&dependency.scenario_id) == Some(&dependency.scenario_revision) {
             continue;
         }
-        let scenario = retained.get(&dependency).cloned().ok_or_else(|| {
-            StoreError::Integrity(format!(
+        if let Some(scenario) = retained.get(dependency) {
+            historical.push(StoredScenarioRevision {
+                scenario: scenario.clone(),
+            });
+        } else if strict_results.contains(dependency) {
+            return Err(StoreError::Integrity(format!(
                 "retained result requires unavailable scenario {} revision {}",
                 dependency.scenario_id,
                 dependency.scenario_revision.value()
-            ))
-        })?;
-        historical.push(StoredScenarioRevision { scenario });
+            )));
+        }
     }
     Ok(historical)
 }
@@ -6660,21 +10136,31 @@ fn synchronize_retained_scenario_revisions(
         insert_retained_scenario_revision(transaction, scenario)?;
     }
 
-    let dependencies = retained_scenario_dependencies(transaction)?;
+    let strict_dependencies = retained_scenario_dependencies(transaction)?;
+    let mut dependencies = native_archival_dependencies(transaction)?;
+    dependencies.extend(strict_dependencies.iter().copied());
     let retained = read_retained_scenario_revision_rows(transaction)?;
     for dependency in &dependencies {
         if retained.contains_key(dependency) {
             continue;
         }
-        let project =
-            load_project(transaction, dependency.scenario_id).map_err(|error| match error {
-                StoreError::ScenarioNotFound(_) => StoreError::InvalidStagedApply(format!(
+        let project = match load_project(transaction, dependency.scenario_id) {
+            Ok(project) => project,
+            Err(StoreError::ScenarioNotFound(_)) if !strict_dependencies.contains(dependency) => {
+                continue;
+            }
+            Err(StoreError::ScenarioNotFound(_)) => {
+                return Err(StoreError::InvalidStagedApply(format!(
                     "retained result requires missing scenario {}",
                     dependency.scenario_id
-                )),
-                other => other,
-            })?;
+                )));
+            }
+            Err(error) => return Err(error),
+        };
         if project.summary.revision != dependency.scenario_revision {
+            if !strict_dependencies.contains(dependency) {
+                continue;
+            }
             return Err(StoreError::InvalidStagedApply(format!(
                 "retained result requires unavailable scenario {} revision {}",
                 dependency.scenario_id,
@@ -6708,7 +10194,9 @@ fn retain_current_project_revision_if_required(
         scenario_id: project.summary.id,
         scenario_revision: project.summary.revision,
     };
-    if retained_scenario_dependencies(transaction)?.contains(&identity) {
+    if retained_scenario_dependencies(transaction)?.contains(&identity)
+        || native_archival_dependencies(transaction)?.contains(&identity)
+    {
         insert_retained_scenario_revision(
             transaction,
             &historical_scenario_from_project(project.clone()),
@@ -6809,6 +10297,28 @@ fn read_retained_scenario_revision_rows(
     Ok(revisions)
 }
 
+fn native_archival_dependencies(
+    connection: &Connection,
+) -> Result<BTreeSet<ScenarioRevisionReference>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT scenario_id, scenario_revision FROM solutions
+         WHERE NOT (accepted = 1 AND status = 'verified')
+         ORDER BY scenario_id, scenario_revision",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut dependencies = BTreeSet::new();
+    while let Some(row) = rows.next()? {
+        let scenario_id: String = row.get(0)?;
+        dependencies.insert(ScenarioRevisionReference {
+            scenario_id: scenario_id.parse().map_err(|error| {
+                StoreError::Integrity(format!("invalid native archive scenario identity: {error}"))
+            })?,
+            scenario_revision: checked_revision(i64_to_u64(row.get(1)?)?)?,
+        });
+    }
+    Ok(dependencies)
+}
+
 fn retained_result_dependencies(
     connection: &Connection,
 ) -> Result<BTreeSet<ScenarioRevisionReference>, StoreError> {
@@ -6854,6 +10364,24 @@ fn retained_scenario_dependencies(
         "SELECT run_input_json FROM solve_runs
          WHERE status = 'running' AND run_input_json IS NOT NULL
          ORDER BY run_input_json",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let json: String = row.get(0)?;
+        let input = parse_run_input(json.as_bytes())?;
+        dependencies.insert(ScenarioRevisionReference {
+            scenario_id: input.scenario_id,
+            scenario_revision: checked_revision(input.scenario_revision)?,
+        });
+    }
+    drop(rows);
+    drop(statement);
+    let mut statement = connection.prepare(
+        "SELECT r.run_input_json
+         FROM solve_runs r
+         JOIN run_infeasibility_evidence e ON e.run_id = r.id
+         WHERE r.run_input_json IS NOT NULL
+         ORDER BY r.run_input_json",
     )?;
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
@@ -6914,12 +10442,563 @@ fn history_state(
     ))
 }
 
+fn capture_custody_stamp(
+    transaction: &rusqlite::Transaction<'_>,
+    project: &StoredProject,
+    scenario_id: ScenarioId,
+    receipt: Option<PrivateHistoryBinding>,
+    accepted_source: Option<&AcceptedSourceExpectationV1>,
+    control: Option<&OperationControl>,
+) -> Result<ScenarioCustodyStamp, StoreError> {
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let (cursor_sequence, branch_generation, max_sequence) =
+        history_state(transaction, scenario_id)?;
+    history_page_availability(
+        transaction,
+        &scenario_id.to_string(),
+        cursor_sequence,
+        branch_generation,
+        max_sequence,
+    )?;
+    validate_applied_history_prefix(transaction, &scenario_id.to_string(), cursor_sequence)?;
+    let accepted_source = accepted_source
+        .map(|expected| {
+            capture_accepted_source_binding(transaction, scenario_id, expected, control)
+        })
+        .transpose()?;
+    let document_json = serialize_document(&project.document)?;
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    Ok(ScenarioCustodyStamp {
+        scenario_id,
+        revision: project.summary.revision,
+        document_hash: blake3::hash(document_json.as_bytes()).to_hex().to_string(),
+        cursor_sequence,
+        branch_generation,
+        receipt,
+        accepted_source,
+    })
+}
+
+fn capture_accepted_source_binding(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_id: ScenarioId,
+    expected: &AcceptedSourceExpectationV1,
+    control: Option<&OperationControl>,
+) -> Result<AcceptedSourceBinding, StoreError> {
+    if expected.scenario_id != scenario_id {
+        return Err(StoreError::AcceptedResultChanged(expected.solution_id));
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let accepted = load_stored_accepted_result(transaction, expected.solution_id)
+        .map_err(|_| StoreError::AcceptedResultChanged(expected.solution_id))?;
+    if !accepted_source_matches(&accepted, expected) {
+        return Err(StoreError::AcceptedResultChanged(expected.solution_id));
+    }
+    let tuple = (
+        &accepted.portable.accepted_result,
+        &accepted.portable.run_input,
+        &accepted.portable.run_manifest,
+        &accepted.portable.evidence,
+    );
+    let canonical = eutheto_export::canonical_json(&tuple)
+        .map_err(|error| invalid_result(error.to_string()))?;
+    if u64::try_from(canonical.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(invalid_result(
+            "accepted source tuple exceeds its JSON limit",
+        ));
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    Ok(AcceptedSourceBinding {
+        expected: expected.clone(),
+        canonical_digest: blake3::hash(&canonical).to_hex().to_string(),
+    })
+}
+
+fn accepted_source_matches(
+    accepted: &StoredAcceptedResultV2,
+    expected: &AcceptedSourceExpectationV1,
+) -> bool {
+    let portable = &accepted.portable;
+    portable.scenario_id == expected.scenario_id
+        && portable.result_id == expected.solution_id
+        && portable.accepted_result.solution.solution_id == expected.solution_id
+        && portable.accepted_result.solution.scenario_id == expected.scenario_id
+        && portable.accepted_result.checksum == expected.result_checksum
+        && portable.run_input.scenario_id == expected.scenario_id
+        && portable.run_input.run_id == expected.run_id
+        && portable.run_input.checksum == expected.run_input_checksum
+        && portable.run_manifest.run_id == expected.run_id
+        && portable.run_manifest.checksum == expected.run_manifest_checksum
+        && portable.checksum == expected.portable_checksum
+}
+
+fn recheck_custody_stamp(
+    transaction: &rusqlite::Transaction<'_>,
+    document: &ScenarioDocument,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    stamp: &ScenarioCustodyStamp,
+    control: Option<&OperationControl>,
+) -> Result<(), StoreError> {
+    if stamp.scenario_id != scenario_id || stamp.revision != expected_revision {
+        return Err(StoreError::StaleScenarioCustody);
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let document_json = serialize_document(document)?;
+    if blake3::hash(document_json.as_bytes()).to_hex().to_string() != stamp.document_hash {
+        return Err(StoreError::StaleScenarioCustody);
+    }
+    let (cursor, generation, max_sequence) = history_state(transaction, scenario_id)?;
+    if cursor != stamp.cursor_sequence || generation != stamp.branch_generation {
+        return Err(StoreError::StaleScenarioCustody);
+    }
+    history_page_availability(
+        transaction,
+        &scenario_id.to_string(),
+        cursor,
+        generation,
+        max_sequence,
+    )?;
+    validate_applied_history_prefix(transaction, &scenario_id.to_string(), cursor)?;
+    if let Some(binding) = &stamp.receipt {
+        verify_private_history_binding(
+            transaction,
+            scenario_id,
+            cursor,
+            generation,
+            binding,
+            control,
+        )?;
+    }
+    if let Some(binding) = &stamp.accepted_source {
+        let current =
+            capture_accepted_source_binding(transaction, scenario_id, &binding.expected, control)
+                .map_err(|error| match error {
+                StoreError::OperationCancelled => error,
+                _ => StoreError::StaleScenarioCustody,
+            })?;
+        if current != *binding {
+            return Err(StoreError::StaleScenarioCustody);
+        }
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    Ok(())
+}
+
+fn validate_applied_history_prefix(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_key: &str,
+    cursor: u64,
+) -> Result<(), StoreError> {
+    let (count, distinct_count, minimum, maximum): (i64, i64, Option<i64>, Option<i64>) =
+        transaction.query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT history_sequence), MIN(history_sequence), MAX(history_sequence)
+             FROM command_journal WHERE scenario_id = ?1 AND history_sequence <= ?2",
+            params![scenario_key, u64_to_i64(cursor)?],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    let expected = i64::try_from(cursor).map_err(|_| StoreError::NumericRange)?;
+    if count != expected
+        || distinct_count != expected
+        || (cursor == 0 && (minimum.is_some() || maximum.is_some()))
+        || (cursor > 0 && (minimum != Some(1) || maximum != Some(expected)))
+    {
+        return Err(StoreError::Integrity(
+            "applied history is not a retained sequence prefix".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn private_history_digest(
+    command_json: &str,
+    inverse_json: Option<&str>,
+    actor_json: &str,
+    source: &str,
+    summary: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for value in [
+        Some(command_json),
+        inverse_json,
+        Some(actor_json),
+        Some(source),
+        Some(summary),
+    ] {
+        if let Some(value) = value {
+            hasher.update(&[1]);
+            hasher.update(&(value.len() as u64).to_le_bytes());
+            hasher.update(value.as_bytes());
+        } else {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+#[allow(clippy::too_many_lines)]
+fn load_private_history_receipt(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_id: ScenarioId,
+    command_id: CommandId,
+    cursor: u64,
+    generation: u64,
+    control: Option<&OperationControl>,
+) -> Result<Option<(PrivateHistoryBinding, HistoryEntry)>, StoreError> {
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let metadata: Option<(String, String, i64, i64, i64, i64)> = transaction
+        .query_row(
+            "SELECT id, command_type, history_sequence, branch_generation,
+                    length(CAST(command_json AS BLOB)), COALESCE(length(CAST(inverse_json AS BLOB)), 0)
+             FROM command_journal WHERE scenario_id = ?1 AND id = ?2",
+            params![scenario_id.to_string(), command_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((id_text, command_type, sequence, row_generation, forward_bytes, inverse_bytes)) =
+        metadata
+    else {
+        return Ok(None);
+    };
+    let id: CommandId = id_text
+        .parse()
+        .map_err(|error| StoreError::Integrity(format!("invalid stored command id: {error}")))?;
+    let sequence = i64_to_u64(sequence)?;
+    let row_generation = i64_to_u64(row_generation)?;
+    if id != command_id || sequence > cursor || row_generation > generation {
+        return Ok(None);
+    }
+    if command_type != NATIVE_PRIVATE_HISTORY_COMMAND_TYPE {
+        return Err(StoreError::Integrity(
+            "selected private receipt is a retained non-private command".to_owned(),
+        ));
+    }
+    if i64_to_u64(forward_bytes)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+        || i64_to_u64(inverse_bytes)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+    {
+        return Err(StoreError::PrivateHistoryPayloadTooLarge);
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let row = transaction.query_row(
+        "SELECT id, revision_before, revision_after, command_type, command_json, inverse_json,
+                actor_json, source, summary, created_at, history_sequence, branch_generation
+         FROM command_journal WHERE scenario_id = ?1 AND id = ?2",
+        params![scenario_id.to_string(), command_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+            ))
+        },
+    )?;
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let (
+        id_text,
+        revision_before,
+        revision_after,
+        command_type,
+        command_json,
+        inverse_json,
+        actor_json,
+        source,
+        summary,
+        created_at,
+        history_sequence,
+        branch_generation,
+    ) = row;
+    if command_json.len() > MAX_PRIVATE_HISTORY_ENTRY_BYTES
+        || inverse_json
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_PRIVATE_HISTORY_ENTRY_BYTES)
+    {
+        return Err(StoreError::PrivateHistoryPayloadTooLarge);
+    }
+    let payload_digest = private_history_digest(
+        &command_json,
+        inverse_json.as_deref(),
+        &actor_json,
+        &source,
+        &summary,
+    );
+    let entry = parse_private_history_entry(
+        id_text.as_str(),
+        revision_before,
+        revision_after,
+        command_type,
+        &command_json,
+        inverse_json.as_deref(),
+        &actor_json,
+        &source,
+        summary,
+        created_at.as_str(),
+        history_sequence,
+        branch_generation,
+        cursor,
+    )?;
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let binding = PrivateHistoryBinding {
+        command_id,
+        history_sequence: sequence,
+        branch_generation: entry.branch_generation,
+        revision_before: entry.revision_before,
+        revision_after: entry.revision_after,
+        payload_digest,
+    };
+    Ok(Some((binding, entry)))
+}
+fn load_related_history_entry(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_id: ScenarioId,
+    command_id: CommandId,
+    cursor: u64,
+    generation: u64,
+    control: Option<&OperationControl>,
+) -> Result<Option<HistoryEntry>, StoreError> {
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let metadata: Option<(String, i64, i64, i64, i64)> = transaction
+        .query_row(
+            "SELECT id, history_sequence, branch_generation,
+                    length(CAST(command_json AS BLOB)), COALESCE(length(CAST(inverse_json AS BLOB)), 0)
+             FROM command_journal WHERE scenario_id = ?1 AND id = ?2",
+            params![scenario_id.to_string(), command_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((id_text, sequence, row_generation, forward_bytes, inverse_bytes)) = metadata else {
+        return Ok(None);
+    };
+    let stored_id: CommandId = id_text
+        .parse()
+        .map_err(|error| StoreError::Integrity(format!("invalid stored command id: {error}")))?;
+    let sequence = i64_to_u64(sequence)?;
+    let row_generation = i64_to_u64(row_generation)?;
+    if stored_id != command_id || sequence > cursor || row_generation > generation {
+        return Ok(None);
+    }
+    if i64_to_u64(forward_bytes)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+        || i64_to_u64(inverse_bytes)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+    {
+        return Err(StoreError::PrivateHistoryPayloadTooLarge);
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let entry = load_history_entry(transaction, scenario_id, sequence, cursor)?;
+    if entry.id != command_id || entry.branch_generation != row_generation {
+        return Ok(None);
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    Ok(Some(entry))
+}
+
+fn verify_private_history_binding(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_id: ScenarioId,
+    cursor: u64,
+    generation: u64,
+    expected: &PrivateHistoryBinding,
+    control: Option<&OperationControl>,
+) -> Result<(), StoreError> {
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let metadata: Option<(String, i64, i64, i64, i64, i64, i64)> = transaction
+        .query_row(
+            "SELECT command_type, history_sequence, branch_generation, revision_before,
+                    revision_after, length(CAST(command_json AS BLOB)),
+                    COALESCE(length(CAST(inverse_json AS BLOB)), 0)
+             FROM command_journal WHERE scenario_id = ?1 AND id = ?2",
+            params![scenario_id.to_string(), expected.command_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        command_type,
+        sequence,
+        row_generation,
+        revision_before,
+        revision_after,
+        forward_bytes,
+        inverse_bytes,
+    )) = metadata
+    else {
+        return Err(StoreError::StaleScenarioCustody);
+    };
+    if command_type != NATIVE_PRIVATE_HISTORY_COMMAND_TYPE
+        || i64_to_u64(sequence)? != expected.history_sequence
+        || expected.history_sequence > cursor
+        || i64_to_u64(row_generation)? != expected.branch_generation
+        || expected.branch_generation > generation
+        || i64_to_u64(revision_before)? != expected.revision_before.value()
+        || i64_to_u64(revision_after)? != expected.revision_after.value()
+        || i64_to_u64(forward_bytes)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+        || i64_to_u64(inverse_bytes)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+    {
+        return Err(StoreError::StaleScenarioCustody);
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    let (command_json, inverse_json, actor_json, source, summary): (
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+    ) = transaction.query_row(
+        "SELECT command_json, inverse_json, actor_json, source, summary
+         FROM command_journal WHERE scenario_id = ?1 AND id = ?2",
+        params![scenario_id.to_string(), expected.command_id.to_string()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    if private_history_digest(
+        &command_json,
+        inverse_json.as_deref(),
+        &actor_json,
+        &source,
+        &summary,
+    ) != expected.payload_digest
+    {
+        return Err(StoreError::StaleScenarioCustody);
+    }
+    if let Some(control) = control {
+        check_operation_control(control)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_private_history_entry(
+    id: &str,
+    revision_before: i64,
+    revision_after: i64,
+    command_type: String,
+    command_json: &str,
+    inverse_json: Option<&str>,
+    actor_json: &str,
+    source: &str,
+    summary: String,
+    created_at: &str,
+    history_sequence: i64,
+    branch_generation: i64,
+    cursor: u64,
+) -> Result<HistoryEntry, StoreError> {
+    Ok(HistoryEntry {
+        id: id.parse().map_err(|error| {
+            StoreError::Integrity(format!("invalid stored command id: {error}"))
+        })?,
+        revision_before: checked_revision(i64_to_u64(revision_before)?)?,
+        revision_after: checked_revision(i64_to_u64(revision_after)?)?,
+        command_type,
+        command: serde_json::from_str(command_json)?,
+        inverse: inverse_json.map(serde_json::from_str).transpose()?,
+        actor: serde_json::from_str(actor_json)?,
+        source: parse_command_source(source)?,
+        summary,
+        created_at: parse_timestamp(created_at, "journal created_at")?,
+        history_sequence: i64_to_u64(history_sequence)?,
+        branch_generation: i64_to_u64(branch_generation)?,
+        applied: i64_to_u64(history_sequence)? <= cursor,
+    })
+}
+
 fn load_history_entry(
     transaction: &rusqlite::Transaction<'_>,
     scenario_id: ScenarioId,
     sequence: u64,
     cursor: u64,
 ) -> Result<HistoryEntry, StoreError> {
+    let sizes: Option<(String, i64, i64)> = transaction
+        .query_row(
+            "SELECT command_type, length(CAST(command_json AS BLOB)),
+                    COALESCE(length(CAST(inverse_json AS BLOB)), 0)
+             FROM command_journal WHERE scenario_id = ?1 AND history_sequence = ?2
+             ORDER BY branch_generation DESC LIMIT 1",
+            params![scenario_id.to_string(), u64_to_i64(sequence)?],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some(sizes) = sizes else {
+        return Err(StoreError::Integrity(
+            "history cursor references a missing journal entry".to_owned(),
+        ));
+    };
+    if sizes.0 == NATIVE_PRIVATE_HISTORY_COMMAND_TYPE
+        && (i64_to_u64(sizes.1)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64
+            || i64_to_u64(sizes.2)? > MAX_PRIVATE_HISTORY_ENTRY_BYTES as u64)
+    {
+        return Err(StoreError::PrivateHistoryPayloadTooLarge);
+    }
     let mut statement = transaction.prepare(
         "SELECT id, revision_before, revision_after, command_type, command_json, inverse_json, actor_json, source, summary, created_at, history_sequence, branch_generation FROM command_journal WHERE scenario_id = ?1 AND history_sequence = ?2 ORDER BY branch_generation DESC LIMIT 1",
     )?;
@@ -7086,14 +11165,22 @@ fn document_projection(document: &ScenarioDocument) -> DocumentProjection {
     }
 }
 
-fn duplicate_project_contents(
+fn duplicate_project_contents<F>(
     source: StoredProject,
     new_id: ScenarioId,
     mapping: &BTreeMap<Uuid, Uuid>,
     occupied: &BTreeSet<Uuid>,
     title: &str,
     timestamp: Rfc3339Timestamp,
-) -> Result<(ScenarioDocument, PortableWrapperMetadata), StoreError> {
+    post_remap: F,
+) -> Result<(ScenarioDocument, PortableWrapperMetadata), StoreError>
+where
+    F: FnOnce(
+        &ScenarioDocument,
+        &mut ScenarioDocument,
+        &BTreeMap<Uuid, Uuid>,
+    ) -> Result<(), StoreError>,
+{
     let owned = collect_project_owned_uuids(
         &source.document,
         &source.portable.semantic_extensions,
@@ -7151,13 +11238,14 @@ fn duplicate_project_contents(
     reject_stale_declared_references(&document_extensions, mapping)?;
     reject_stale_declared_references(&portable_extensions, mapping)?;
 
-    let mut document = source.document;
+    let mut document = source.document.clone();
     document.scenario_id = new_id;
     title.clone_into(&mut document.metadata.title);
     document.metadata.created_at = timestamp;
     document.metadata.updated_at = timestamp;
     document.domain = serde_json::from_value(domain)?;
     document.extensions = serde_json::from_value(document_extensions)?;
+    post_remap(&source.document, &mut document, mapping)?;
     let mut portable = source.portable;
     portable.semantic_extensions = serde_json::from_value(semantic_extensions)?;
     portable.extensions = serde_json::from_value(portable_extensions)?;
@@ -7444,6 +11532,7 @@ fn rewrite_declared_references(
                 rewrite_declared_references(value, mapping)?;
             }
         }
+        Value::Object(_) if DomainEntityRef::matches_json(value) => {}
         Value::Object(values) => {
             for (key, value) in values {
                 match declared_reference_kind(key) {
@@ -7558,6 +11647,7 @@ fn reject_stale_declared_references(
                 reject_stale_declared_references(value, mapping)?;
             }
         }
+        Value::Object(_) if DomainEntityRef::matches_json(value) => {}
         Value::Object(values) => {
             for (key, value) in values {
                 match declared_reference_kind(key) {
@@ -7824,6 +11914,13 @@ fn store_opaque_staged_results(
         validate_stored_portable_json(&value, "staged retained result")?;
         let id = extract_result_id(&value)
             .map_err(|error| StoreError::InvalidStagedApply(error.to_string()))?;
+        if let Some(existing) = load_native_archival_result(transaction, id)? {
+            let existing: Value = serde_json::from_slice(&existing)?;
+            if existing != value {
+                return Err(StoreError::IdentityCollision(id));
+            }
+            continue;
+        }
         if let Some(existing) = canonical_by_id.get(&id) {
             if existing != &bytes {
                 return Err(StoreError::IdentityCollision(id));
@@ -8257,11 +12354,20 @@ fn delete_scenario_referencing_supplemental(
         let key: String = row.get(1)?;
         let bytes: Vec<u8> = row.get(2)?;
         let value: Value = serde_json::from_slice(&bytes)?;
-        let scenario_references = extract_scenario_references(&value).map_err(|error| {
-            StoreError::Integrity(format!(
-                "stored supplemental record has invalid scenario references: {error}"
-            ))
-        })?;
+        let scenario_references = if section == SupplementalSectionKind::Results.as_str()
+            && is_archival_result(&value)
+                .map_err(|error| StoreError::Integrity(error.to_string()))?
+        {
+            BTreeSet::from([extract_result_dependency(&value)
+                .map_err(|error| StoreError::Integrity(error.to_string()))?
+                .scenario_id])
+        } else {
+            extract_scenario_references(&value).map_err(|error| {
+                StoreError::Integrity(format!(
+                    "stored supplemental record has invalid scenario references: {error}"
+                ))
+            })?
+        };
         if scenario_references.contains(&scenario_id) {
             referencing_records.push((section, key));
         }
@@ -8348,6 +12454,144 @@ fn canonical_result_ids(connection: &Connection) -> Result<Vec<Uuid>, StoreError
         .collect()
 }
 
+fn native_archival_result_ids(connection: &Connection) -> Result<Vec<Uuid>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id FROM solutions WHERE NOT (accepted = 1 AND status = 'verified') ORDER BY id",
+    )?;
+    statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .map(|row| {
+            Uuid::parse_str(&row?).map_err(|error| {
+                StoreError::InvalidPersistedResult(format!("invalid native archive ID: {error}"))
+            })
+        })
+        .collect()
+}
+
+const NATIVE_ARCHIVAL_RESULT_QUERY: &str =
+    "SELECT id, scenario_id, scenario_revision, solve_run_id, status, accepted, created_at,
+            normalized_solution_json, score_json, verification_report_json,
+            explanation_index_json, evidence_json
+     FROM solutions WHERE NOT (accepted = 1 AND status = 'verified')
+       AND (?1 IS NULL OR scenario_id = ?1) AND (?2 IS NULL OR id = ?2) ORDER BY id";
+
+fn load_native_archival_results(
+    connection: &Connection,
+    selection: NativeArchivalSelection,
+) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
+    let scenario_id = match selection {
+        NativeArchivalSelection::Exclude => return Ok(BTreeMap::new()),
+        NativeArchivalSelection::Scenario(id) => Some(id.to_string()),
+        NativeArchivalSelection::All => None,
+    };
+    let mut statement = connection.prepare(NATIVE_ARCHIVAL_RESULT_QUERY)?;
+    let mut rows = statement.query(params![scenario_id, Option::<String>::None])?;
+    let mut results = BTreeMap::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        results.insert(format!("{id}.json"), project_native_archival_result(row)?);
+    }
+    Ok(results)
+}
+
+fn load_native_archival_result(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    let mut statement = connection.prepare(NATIVE_ARCHIVAL_RESULT_QUERY)?;
+    let mut rows = statement.query(params![Option::<String>::None, id.to_string()])?;
+    rows.next()?.map(project_native_archival_result).transpose()
+}
+
+fn project_native_archival_result(row: &rusqlite::Row<'_>) -> Result<Vec<u8>, StoreError> {
+    let invalid = |message: &str| {
+        StoreError::InvalidPersistedResult(format!("native archival result {message}"))
+    };
+    let limits = PortableJsonLimits {
+        max_depth: eutheto_export::PORTABLE_LIMITS.max_json_depth,
+        max_string_bytes: eutheto_export::PORTABLE_LIMITS.max_string_bytes,
+        max_collection_items: eutheto_export::PORTABLE_LIMITS.max_collection_items,
+    };
+    // SQLite owns these borrowed bytes. Admit the complete raw row before allocating JSON trees.
+    let mut total_bytes = 0_u64;
+    for index in 0..12 {
+        if let ValueRef::Text(bytes) | ValueRef::Blob(bytes) = row.get_ref(index)? {
+            let length = u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?;
+            if length > eutheto_export::PORTABLE_LIMITS.max_json_bytes {
+                return Err(invalid("column exceeds the JSON byte limit"));
+            }
+            total_bytes = total_bytes
+                .checked_add(length)
+                .ok_or(StoreError::NumericRange)?;
+        }
+    }
+    if total_bytes > eutheto_export::PORTABLE_LIMITS.max_json_bytes {
+        return Err(invalid("columns exceed the aggregate JSON byte limit"));
+    }
+    for index in 7..12 {
+        match row.get_ref(index)? {
+            ValueRef::Null if index >= 10 => {}
+            ValueRef::Text(bytes) => {
+                validate_nonsecret_portable_json_bytes(bytes, &limits).map_err(|error| {
+                    invalid(&format!("raw JSON violates portable policy: {error}"))
+                })?;
+            }
+            _ => return Err(invalid("has an invalid JSON column type")),
+        }
+    }
+    let result_id: String = row.get(0)?;
+    let scenario_id: String = row.get(1)?;
+    let revision = i64_to_u64(row.get(2)?)?;
+    let run_id: String = row.get(3)?;
+    let status: String = row.get(4)?;
+    let accepted = match row.get::<_, i64>(5)? {
+        0 => false,
+        1 => true,
+        _ => return Err(invalid("has an invalid accepted flag")),
+    };
+    let created_at: String = row.get(6)?;
+    let mut archive = serde_json::Map::from_iter([
+        ("resultId".to_owned(), Value::String(result_id.clone())),
+        ("scenarioId".to_owned(), Value::String(scenario_id.clone())),
+        ("scenarioRevision".to_owned(), Value::from(revision)),
+        ("solveRunId".to_owned(), Value::String(run_id)),
+        ("status".to_owned(), Value::String(status)),
+        ("accepted".to_owned(), Value::Bool(accepted)),
+        ("createdAt".to_owned(), Value::String(created_at)),
+    ]);
+    for (index, field) in [
+        (7, "normalizedSolution"),
+        (8, "score"),
+        (9, "verificationReport"),
+        (10, "explanationIndex"),
+        (11, "evidence"),
+    ] {
+        if let ValueRef::Text(bytes) = row.get_ref(index)? {
+            archive.insert(field.to_owned(), serde_json::from_slice(bytes)?);
+        }
+    }
+    let value = Value::Object(serde_json::Map::from_iter([
+        (
+            "format".to_owned(),
+            Value::String(ARCHIVAL_RESULT_FORMAT.to_owned()),
+        ),
+        ("schemaVersion".to_owned(), Value::from(1)),
+        ("resultId".to_owned(), Value::String(result_id)),
+        ("scenarioId".to_owned(), Value::String(scenario_id)),
+        ("scenarioRevision".to_owned(), Value::from(revision)),
+        ("archive".to_owned(), Value::Object(archive)),
+    ]));
+    is_archival_result(&value).map_err(|error| invalid(&error.to_string()))?;
+    validate_stored_portable_json(&value, "native archival result")?;
+    let bytes = serde_json::to_vec(&value)?;
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(invalid("wrapper exceeds the JSON byte limit"));
+    }
+    Ok(bytes)
+}
+
 fn load_canonical_accepted_results(
     connection: &Connection,
 ) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
@@ -8391,8 +12635,8 @@ fn extend_supplemental_identities<'a>(
 fn load_supplemental_identities(
     connection: &Connection,
 ) -> Result<BTreeSet<SupplementalIdentity>, StoreError> {
-    let mut statement = connection
-        .prepare("SELECT section, key, value FROM portable_sections ORDER BY section, key")?;
+    let mut statement =
+        connection.prepare("SELECT section, key FROM portable_sections ORDER BY section, key")?;
     let mut rows = statement.query([])?;
     let mut identities = BTreeSet::new();
     while let Some(row) = rows.next()? {
@@ -8406,6 +12650,12 @@ fn load_supplemental_identities(
         identities.insert(SupplementalIdentity {
             section: SupplementalSectionKind::Results,
             key: result_id.to_string(),
+        });
+    }
+    for result_id in native_archival_result_ids(connection)? {
+        identities.insert(SupplementalIdentity {
+            section: SupplementalSectionKind::Results,
+            key: format!("{result_id}.json"),
         });
     }
     Ok(identities)
@@ -8444,7 +12694,13 @@ fn load_supplemental_identity_owners(
             register_supplemental_identity_owner(&mut owners, identity, &owner)?;
         }
         if let Some(value) = value {
-            for identity in collect_self_declared_uuids(&value) {
+            let identities = if section == SupplementalSectionKind::Results {
+                collect_result_owned_uuids(&value)
+                    .map_err(|error| StoreError::Integrity(error.to_string()))?
+            } else {
+                collect_self_declared_uuids(&value)
+            };
+            for identity in identities {
                 register_supplemental_identity_owner(&mut owners, identity, &owner)?;
             }
         }
@@ -8738,7 +12994,7 @@ fn load_all_settings(
 
 fn load_portable_sections(
     connection: &Connection,
-) -> Result<PortableSupplementalSections, StoreError> {
+) -> Result<(PortableSupplementalSections, BTreeSet<SolutionId>), StoreError> {
     let mut statement = connection.prepare(
         "SELECT section, key, value, asset_media_type, asset_redistribution_permitted FROM portable_sections ORDER BY section, key",
     )?;
@@ -8806,6 +13062,7 @@ fn load_portable_sections(
     }
     drop(rows);
     drop(statement);
+    let mut canonical_result_ids = BTreeSet::new();
     let mut opaque_ids = BTreeSet::new();
     for bytes in sections.results.values() {
         let value: Value = serde_json::from_slice(bytes)?;
@@ -8817,14 +13074,19 @@ fn load_portable_sections(
         }
     }
     for (key, bytes) in load_canonical_accepted_results(connection)? {
-        let result_id = Uuid::parse_str(&key).map_err(|error| {
-            StoreError::InvalidPersistedResult(format!("invalid result identity: {error}"))
-        })?;
-        if opaque_ids.contains(&result_id) || sections.results.insert(key, bytes).is_some() {
-            return Err(StoreError::IdentityCollision(result_id));
+        let result_id = Uuid::parse_str(&key)
+            .map(SolutionId::from_uuid)
+            .map_err(|error| {
+                StoreError::InvalidPersistedResult(format!("invalid result identity: {error}"))
+            })?;
+        if opaque_ids.contains(&result_id.as_uuid())
+            || !canonical_result_ids.insert(result_id)
+            || sections.results.insert(key, bytes).is_some()
+        {
+            return Err(StoreError::IdentityCollision(result_id.as_uuid()));
         }
     }
-    Ok(sections)
+    Ok((sections, canonical_result_ids))
 }
 
 fn ensure_absent_asset_metadata(

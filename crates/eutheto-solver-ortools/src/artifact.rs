@@ -20,7 +20,7 @@ const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const WORKER_IDENTITY: &str = "eutheto-ortools-worker";
 const WORKER_BACKEND_ID: &str = "ortools-cp-sat";
 const WORKER_VERSION: &str = "0.1.0";
-const CAPABILITIES: [&str; 7] = [
+const CAPABILITIES: [&str; 8] = [
     "cp-sat",
     "deterministic-time",
     "intermediate-solutions",
@@ -28,6 +28,7 @@ const CAPABILITIES: [&str; 7] = [
     "progress",
     "solution-projection",
     "solution-stats",
+    "sufficient-assumptions",
 ];
 
 /// A complete manifest-authenticated worker runtime closure.
@@ -158,6 +159,10 @@ impl VerifiedWorkerArtifact {
                 runtime_files,
             },
         })
+    }
+
+    pub(crate) const fn manifest_sha256(&self) -> &[u8; 32] {
+        self.executable.manifest_sha256()
     }
 
     pub(crate) fn executable(&self) -> VerifiedExecutable {

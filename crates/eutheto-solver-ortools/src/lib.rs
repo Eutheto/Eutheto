@@ -386,11 +386,9 @@ where
         directory.path(),
         !request.executable.runtime_files.is_empty(),
     );
-    let child = match command.spawn() {
+    let child = match spawn_worker(&mut command, &budget).await {
         Ok(value) => value,
-        Err(error) => {
-            return Err(prelaunch_failure(io_error("spawning worker", &error)));
-        }
+        Err(error) => return Err(prelaunch_failure(error)),
     };
     let mut process = ProcessGuard::new(child, directory);
     if let Err(error) = budget_checkpoint(&budget) {
@@ -966,6 +964,27 @@ fn worker_command(path: &Path, cwd: &Path, has_runtime_files: bool) -> CommandWr
     #[cfg(windows)]
     command.wrap(JobObject);
     command
+}
+
+async fn spawn_worker(
+    command: &mut CommandWrap,
+    budget: &SolveBudgetView,
+) -> Result<Box<dyn ChildWrapper>, SupervisorError> {
+    loop {
+        budget_checkpoint(budget)?;
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            // A concurrent fork can retain our closed staging writer until exec.
+            // Only kernel launch admission is retried; no worker image has started.
+            // https://github.com/rust-lang/rust/issues/114554
+            #[cfg(target_os = "linux")]
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
+                tokio::time::sleep(CANCELLATION_POLL_INTERVAL.min(budget.remaining_duration()))
+                    .await;
+            }
+            Err(error) => return Err(io_error("spawning worker", &error)),
+        }
+    }
 }
 
 fn private_worker_tempdir() -> io::Result<TempDir> {
@@ -1693,6 +1712,110 @@ mod tests {
             assert_eq!(directory_mode, 0o700);
             assert_eq!(executable_mode, 0o700);
         }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn held_worker_writer()
+    -> Result<(tempfile::TempDir, std::path::PathBuf, std::fs::File), Box<dyn Error>> {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = private_worker_tempdir()?;
+        let path = directory.path().join("worker");
+        let mut writer = std::fs::File::create_new(&path)?;
+        writer.write_all(b"#!/bin/sh\nexit 0\n")?;
+        writer.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+        // dup and fork retain the same writable open-file description.
+        let inherited_writer = writer.try_clone()?;
+        drop(writer);
+        Ok((directory, path, inherited_writer))
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn launch_admission_waits_for_writer_or_original_control() -> Result<(), Box<dyn Error>> {
+        enum End {
+            Released,
+            Cancelled,
+            Expired,
+        }
+        for end in [End::Released, End::Cancelled, End::Expired] {
+            let (directory, path, inherited_writer) = held_worker_writer()?;
+            let mut command = worker_command(&path, directory.path(), false);
+            let failure = command
+                .spawn()
+                .err()
+                .ok_or("retained writable descriptor unexpectedly allowed execution")?;
+            assert_eq!(failure.kind(), std::io::ErrorKind::ExecutableFileBusy);
+            let clock = FixedMonotonicClock::default();
+            let cancellation = CancellationToken::new();
+            let parent = ParentSolveBudget::new(
+                DurationMillis::new(1_000)?,
+                Arc::new(clock.clone()),
+                cancellation.clone(),
+            )?;
+            let view = parent.phase_view();
+            let admission = super::spawn_worker(&mut command, &view);
+            tokio::pin!(admission);
+            // Poll through the first rejected exec; no timing assumption establishes waiting.
+            let waiting =
+                std::future::poll_fn(|context| match Future::poll(admission.as_mut(), context) {
+                    std::task::Poll::Pending => std::task::Poll::Ready(true),
+                    std::task::Poll::Ready(_) => std::task::Poll::Ready(false),
+                })
+                .await;
+            assert!(waiting, "launch must await the writer or original control");
+            match end {
+                End::Released => {
+                    let closer = std::thread::spawn(move || drop(inherited_writer));
+                    let mut child = admission.await?;
+                    assert!(child.wait().await?.success());
+                    closer.join().map_err(|_| "writer closer panicked")?;
+                }
+                End::Cancelled => {
+                    cancellation.cancel();
+                    assert!(matches!(admission.await, Err(SupervisorError::Cancelled)));
+                    drop(inherited_writer);
+                }
+                End::Expired => {
+                    clock.advance(Duration::from_secs(1))?;
+                    assert!(matches!(
+                        admission.await,
+                        Err(SupervisorError::DeadlineExceeded)
+                    ));
+                    drop(inherited_writer);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn launch_admission_preserves_nonbusy_io_failure() -> Result<(), Box<dyn Error>> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (directory, path, writer) = held_worker_writer()?;
+        drop(writer);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1_000)?,
+            Arc::new(FixedMonotonicClock::default()),
+            CancellationToken::new(),
+        )?;
+        let result = super::spawn_worker(
+            &mut worker_command(&path, directory.path(), false),
+            &parent.phase_view(),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(SupervisorError::Io {
+                operation: "spawning worker",
+                kind: std::io::ErrorKind::PermissionDenied,
+            })
+        ));
         Ok(())
     }
 

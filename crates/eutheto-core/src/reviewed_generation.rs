@@ -2,7 +2,7 @@
 
 use super::{
     CancelOnDrop, EuthetoApp, SetupSourceV2, check_cancelled, join_error, reconciliation_error,
-    setup_invalid, store_error, validation_error,
+    setup_domain_error, setup_invalid, store_error, validation_error,
 };
 use eutheto_command::{
     AppliedCommand, apply_reconciled_command_with_registry, preflight_setup_command,
@@ -39,6 +39,7 @@ struct PreparedGeneration {
     applied: AppliedCommand,
     forward_json: Value,
     inverse_json: Option<Value>,
+    protected: Option<super::super::manual::ProtectedEffectWrite>,
 }
 
 impl EuthetoApp {
@@ -73,24 +74,38 @@ impl EuthetoApp {
     /// # Errors
     /// Rejects stale/replaced sources, changed hashes, invalid drafts, empty stored reconciliation,
     /// interrupted work and ordinary replay/journal limits without a partial mutation.
+    #[allow(clippy::too_many_lines)]
     pub async fn apply_reviewed_generation(
         &self,
         request: WorkforceGenerationApplyRequestV1,
         cancellation: CancellationToken,
     ) -> Result<CommandResult, AppError> {
-        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+        let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
         self.preflight_reviewed_generation(&request, &cancellation)?;
-        let project = self
+        let captured = self
             .capture_setup_project(
                 request.scenario_id,
                 Some(request.expected_revision),
                 &cancellation,
             )
             .await?;
+        let (project, custody_stamp) = self
+            .store
+            .capture_scenario_custody(
+                request.scenario_id,
+                request.expected_revision,
+                captured.document,
+                eutheto_types::OperationControl::Cancellation(cancellation.clone()),
+                None,
+            )
+            .await
+            .map_err(store_error)?;
         let registry = Arc::clone(&self.pack_registry);
+        let preparation_registry = Arc::clone(&registry);
         let preparation_token = cancellation.clone();
         let (request, prepared) = tokio::task::spawn_blocking(move || {
-            let prepared = prepare_generation(project, &request, &registry, &preparation_token)?;
+            let prepared =
+                prepare_generation(project, &request, &preparation_registry, &preparation_token)?;
             Ok::<_, AppError>((request, prepared))
         })
         .await
@@ -110,10 +125,18 @@ impl EuthetoApp {
                 } else {
                     RedoBranchPolicy::Reject
                 },
-                cancellation,
+                custody_stamp,
+                eutheto_types::OperationControl::Cancellation(cancellation),
                 move |current| {
                     // Library replacement can change source authority without taking this scenario lock.
-                    if current != &prepared.original {
+                    let PreparedGeneration {
+                        original,
+                        mut applied,
+                        forward_json,
+                        inverse_json,
+                        protected,
+                    } = prepared;
+                    if current != &original {
                         return Err(StoreError::CommandApplication {
                             code: "scenario.setup_source_changed".to_owned(),
                             message: "The captured scenario was replaced; review generation again."
@@ -121,21 +144,48 @@ impl EuthetoApp {
                             field_path: None,
                         });
                     }
-                    let mut applied = prepared.applied;
                     applied.document.metadata.updated_at = applied_at;
+                    let mut output = applied.result;
+                    let (command_type, command, inverse, actor, summary) =
+                        if let Some(protected) = protected {
+                            output
+                                .change_set
+                                .changes
+                                .extend(protected.change_set.changes);
+                            output.validation_delta = super::super::validation_delta(
+                                &super::super::validate(&original, &registry),
+                                &super::super::validate(&applied.document, &registry),
+                            );
+                            output.inverse = None;
+                            (
+                                eutheto_store::NATIVE_PRIVATE_HISTORY_COMMAND_TYPE.to_owned(),
+                                protected.command,
+                                protected.inverse,
+                                super::super::private_actor(request.actor),
+                                "Updated private Workforce selection".to_owned(),
+                            )
+                        } else {
+                            (
+                                applied.command_type,
+                                forward_json,
+                                inverse_json,
+                                request.actor,
+                                applied.summary,
+                            )
+                        };
                     Ok(CommandWrite {
                         document: applied.document,
                         journal: JournalWrite {
-                            command_type: applied.command_type,
-                            command: prepared.forward_json,
+                            command_type,
+                            command,
                             command_id: request.command_id,
-                            inverse: prepared.inverse_json,
-                            actor: request.actor,
+                            inverse,
+                            actor,
                             source: CommandSource::Desktop,
-                            summary: applied.summary,
+                            summary,
                             created_at: applied_at,
                         },
-                        output: applied.result,
+                        output,
                     })
                 },
             )
@@ -161,8 +211,7 @@ fn prepare_generation(
         SetupSourceV2::Stored => None,
         SetupSourceV2::CommandPreview { command } => Some(command),
     };
-    let mut changed_hash = false;
-    let command = apply_reconciled_command_with_registry(
+    let mut command = apply_reconciled_command_with_registry(
         &project.document,
         request.expected_revision,
         draft,
@@ -171,27 +220,10 @@ fn prepare_generation(
         |prospective, _| {
             let preview = preview_generation(&project.document, prospective, cancellation)
                 .map_err(temporal_error)?;
-            if preview.prospective_hash != request.prospective_hash {
-                changed_hash = true;
-                return Err(DomainPackError::InvalidPayload {
-                    path: "/prospectiveHash".to_owned(),
-                    message: "reviewed prospective document does not match".to_owned(),
-                });
-            }
             Ok(preview.reconciliation)
         },
     )
-    .map_err(|error| {
-        if changed_hash {
-            validation_error(
-                "workforce.generation_review_changed",
-                "/prospectiveHash",
-                "The prospective scenario differs from the reviewed generation; review it again.",
-            )
-        } else {
-            reconciliation_error(error, draft)
-        }
-    })?
+    .map_err(|error| reconciliation_error(error, draft))?
     .ok_or_else(|| {
         validation_error(
             "workforce.generation_no_changes",
@@ -214,11 +246,31 @@ fn prepare_generation(
         .map_err(StoreError::Json)
         .map_err(store_error)?;
     check_cancelled(cancellation)?;
+    let control = eutheto_types::OperationControl::Cancellation(cancellation.clone());
+    let protected = super::super::manual::finalize_base_change(
+        &project.document,
+        &mut command.applied.document,
+        &forward_json,
+        inverse_json.as_ref(),
+        Some(&control),
+    )
+    .map_err(store_error)?;
+    let finalized = preview_generation(&project.document, &command.applied.document, cancellation)
+        .map_err(temporal_error)
+        .map_err(setup_domain_error)?;
+    if finalized.prospective_hash != request.prospective_hash {
+        return Err(validation_error(
+            "workforce.generation_review_changed",
+            "/prospectiveHash",
+            "The prospective scenario differs from the reviewed generation; review it again.",
+        ));
+    }
     Ok(PreparedGeneration {
         original: project.document,
         applied: command.applied,
         forward_json,
         inverse_json,
+        protected,
     })
 }
 

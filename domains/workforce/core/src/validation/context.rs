@@ -6,8 +6,8 @@ use crate::ids::{
     ShiftTemplateId, TeamId, WorkCalendarId, WorkloadBucketId,
 };
 use crate::model::{
-    AssignmentType, Availability, BaseSchedule, CoverageRequirement, Location, Person,
-    PersonSelection, Qualification, Scope, ShiftOrigin, ShiftTemplate, Team, WorkCalendar,
+    AssignmentType, Availability, BaseSchedule, CoverageRequirement, Location, ManualSelection,
+    Person, PersonSelection, Qualification, Scope, ShiftOrigin, ShiftTemplate, Team, WorkCalendar,
     WorkforceDomainV1, WorkforceEntity, WorkforceScorePolicy, WorkloadBucket,
 };
 use crate::temporal::{ResolvedShift, ResolvedShiftOrigin, TemporalError, resolve_validated_shift};
@@ -60,6 +60,7 @@ impl<'a> Context<'a> {
         let mut dates = BTreeSet::new();
         let mut score_policy = None;
         let mut has_base = false;
+        let mut has_manual = false;
         for (id, entity) in &domain.entities {
             control.map_or(Ok(()), OperationControl::check)?;
             require(
@@ -79,6 +80,14 @@ impl<'a> Context<'a> {
                 WorkforceEntity::BaseSchedule(_) => {
                     require(!has_base, "entities", "only one base schedule is allowed")?;
                     has_base = true;
+                }
+                WorkforceEntity::ManualSelection(_) => {
+                    require(
+                        !has_manual,
+                        "entities",
+                        "only one manual selection is allowed",
+                    )?;
+                    has_manual = true;
                 }
                 WorkforceEntity::ShiftTemplate(template) => {
                     require(
@@ -141,6 +150,13 @@ impl<'a> Context<'a> {
     pub(super) fn checkpoint(&self) -> Result {
         self.budget.borrow_mut().step()?;
         Ok(())
+    }
+
+    pub(super) fn manual_selection_record(&self, record: &ManualSelection) -> Result {
+        crate::assignment_rules::baseline::validate_manual_selection_record(
+            record,
+            &mut self.budget.borrow_mut(),
+        )
     }
 
     pub(super) fn person(&self, id: PersonId) -> Result<&Person> {

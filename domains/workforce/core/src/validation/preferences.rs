@@ -10,6 +10,7 @@ use crate::model::{
 };
 
 impl Context<'_> {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn preference(&self, preference: &WorkforcePreference) -> Result {
         let (_, active, scope, _, preference_weight) = preference.header();
         prefix(self.scope(scope, active), "scope")?;
@@ -50,6 +51,7 @@ impl Context<'_> {
             WorkforcePreference::AssignmentTarget { calendar_id, .. } => {
                 self.calendar(*calendar_id)?;
             }
+            WorkforcePreference::WeekendTarget { .. } => {}
             WorkforcePreference::WorkloadBalance {
                 workload_policy_id, ..
             } => {
@@ -74,9 +76,15 @@ impl Context<'_> {
                 self.consecutive_preference(mode, assignment_type_ids, active)?;
             }
             WorkforcePreference::Adjacency {
-                base_schedule_id, ..
+                active,
+                base_schedule_id,
+                ..
+            } => {
+                if *active {
+                    self.base_schedule(*base_schedule_id)?;
+                }
             }
-            | WorkforcePreference::BaseStability {
+            WorkforcePreference::BaseStability {
                 base_schedule_id, ..
             } => {
                 self.base_schedule(*base_schedule_id)?;

@@ -41,6 +41,8 @@ export interface EntityPickerQueryProps extends PlannerFieldProps {
   /** Rotate synchronously on source, context, query or page changes and on retry. */
   readonly requestKey: string;
   readonly query: string;
+  /** Browse/paginate native records whose kind does not support text search. */
+  readonly searchDisabled?: boolean;
   readonly page: EntityPickerPage;
 }
 

@@ -62,7 +62,36 @@ pub fn project_candidate(
     solution_id: SolutionId,
     limits: PlanningIrLimitsV1,
 ) -> Result<NormalizedSolution, ProjectionError> {
-    validate(problem, limits).map_err(ProjectionError::InvalidProblem)?;
+    project_candidate_inner(problem, candidate, solution_id, limits, true)
+}
+
+/// Projects an assignment through an already admitted immutable planning model.
+///
+/// The caller must retain the [`PreparedPlanningModel`](crate::PreparedPlanningModel) that
+/// authenticated the model hash. This path preserves candidate/domain checks but does not repeat
+/// whole-IR validation while reviewing a diagnostic witness.
+///
+/// # Errors
+/// Returns candidate, projection, arithmetic, or output-limit failures.
+pub fn project_candidate_admitted(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+    solution_id: SolutionId,
+    limits: PlanningIrLimitsV1,
+) -> Result<NormalizedSolution, ProjectionError> {
+    project_candidate_inner(problem, candidate, solution_id, limits, false)
+}
+
+fn project_candidate_inner(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+    solution_id: SolutionId,
+    limits: PlanningIrLimitsV1,
+    validate_problem: bool,
+) -> Result<NormalizedSolution, ProjectionError> {
+    if validate_problem {
+        validate(problem, limits).map_err(ProjectionError::InvalidProblem)?;
+    }
     let bool_ids: BTreeSet<_> = problem
         .variables
         .iter()

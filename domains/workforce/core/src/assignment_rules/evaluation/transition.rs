@@ -1,9 +1,14 @@
+use std::collections::BTreeMap;
+
 use super::super::{
     AssignmentRuleError,
     budget::{OperationBudget, add, count},
     input::AssignmentInput,
 };
-use super::{Selected, Summary, TransitionWitness, Witness, invalid, predicates};
+use super::{
+    HealthDirection, HealthObservation, HealthObservationKind, HealthUnits, Selected, Summary,
+    TransitionWitness, Witness, invalid, predicates,
+};
 use crate::{
     ids::LocationId,
     model::{AssignmentPair, Scope, WorkforceEntity, WorkforceRule},
@@ -11,7 +16,6 @@ use crate::{
 };
 use eutheto_types::{EntityId, Rfc3339Timestamp};
 use jiff::SignedDuration;
-use std::collections::BTreeMap;
 
 struct Matching<'a> {
     shift: &'a ResolvedShift,
@@ -159,6 +163,9 @@ fn evaluate_person(
             let applicable = count(targets.len() - first_target)?;
             summary.checked = add(summary.checked, applicable)?;
             let required = SignedDuration::from_secs(i64::from(required_minutes) * 60);
+            let required_nanos = i128::from(required_minutes)
+                .checked_mul(60_000_000_000)
+                .ok_or_else(invalid)?;
             for target in &targets[first_target..] {
                 budget.step()?;
                 let actual = source
@@ -168,26 +175,64 @@ fn evaluate_person(
                     .instant
                     .as_timestamp()
                     .duration_until(target.shift.interval.starts_at.instant.as_timestamp());
-                if actual >= required {
+                let actual_nanos = i128::from(actual.as_secs())
+                    .checked_mul(1_000_000_000)
+                    .and_then(|value| value.checked_add(i128::from(actual.subsec_nanos())))
+                    .ok_or_else(invalid)?;
+                let failed = actual < required;
+                if summary.collecting_health() {
+                    summary.record_health(
+                        HealthObservation {
+                            kind: HealthObservationKind::TransitionTime,
+                            rule_id: None,
+                            coverage_owner: None,
+                            person_id: Some(person_id),
+                            shift_id: Some(source.shift.id),
+                            other_shift_id: Some(target.shift.id),
+                            period: None,
+                            units: HealthUnits::Minutes,
+                            direction: HealthDirection::Minimum,
+                            threshold: Some(required_nanos),
+                            observed: Some(actual_nanos),
+                            satisfied: Some(!failed),
+                            minimum_rank: None,
+                            affected_pairs: vec![
+                                AssignmentPair {
+                                    person_id,
+                                    shift_id: source.shift.id,
+                                },
+                                AssignmentPair {
+                                    person_id,
+                                    shift_id: target.shift.id,
+                                },
+                            ],
+                            affected_pair_count: 2,
+                            affected_pairs_truncated: false,
+                        },
+                        budget,
+                    )?;
+                }
+                if failed {
+                    let mut witness = Witness::pair(
+                        AssignmentPair {
+                            person_id,
+                            shift_id: source.shift.id,
+                        },
+                        owner,
+                        "rule",
+                        "transition_time",
+                    );
+                    witness.other_shift = Some(target.shift.id);
+                    witness.transition = Some(TransitionWitness {
+                        source_location: source.location,
+                        target_location,
+                        required_minutes,
+                        actual,
+                    });
+                    summary.failure(&witness, &witness, None, "direct", budget)?;
+                } else if !summary.collecting_health() {
                     break;
                 }
-                let mut witness = Witness::pair(
-                    AssignmentPair {
-                        person_id,
-                        shift_id: source.shift.id,
-                    },
-                    owner,
-                    "rule",
-                    "transition_time",
-                );
-                witness.other_shift = Some(target.shift.id);
-                witness.transition = Some(TransitionWitness {
-                    source_location: source.location,
-                    target_location,
-                    required_minutes,
-                    actual,
-                });
-                summary.failure(&witness)?;
             }
         }
     }

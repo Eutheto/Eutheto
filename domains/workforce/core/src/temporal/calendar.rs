@@ -17,6 +17,13 @@ use jiff::{
     tz::{Offset, TimeZone},
 };
 
+/// Charges inspection and prospective output without replacing the caller's operation control.
+#[derive(Clone, Copy)]
+pub(crate) enum CalendarStep {
+    Inspect,
+    RetainWindow,
+}
+
 /// Resolves whole calendar windows intersecting the explicit half-open instant range.
 /// The scenario horizon does not clip or otherwise constrain this query.
 ///
@@ -31,27 +38,30 @@ pub fn resolve_calendar(
     cancellation: &CancellationToken,
 ) -> Result<Vec<CalendarWindow>, TemporalError> {
     let calendar = validated_calendar(document, calendar_id, cancellation)?;
-    resolve_calendar_for_calendar(document, calendar_id, &calendar, range, cancellation)
+    resolve_calendar_for_calendar(document, calendar_id, &calendar, range, &mut |_| {
+        check_cancelled(cancellation)
+    })
 }
 
 /// Resolves calendar windows after the caller has validated and retained the typed calendar.
 ///
 /// Assignment-rule operations use this to avoid revalidating the complete source document for
 /// every selected interval.
-pub(crate) fn resolve_calendar_for_calendar(
+pub(crate) fn resolve_calendar_for_calendar<E: From<TemporalError>>(
     document: &ScenarioDocument,
     calendar_id: WorkCalendarId,
     calendar: &WorkCalendar,
     range: Horizon,
-    cancellation: &CancellationToken,
-) -> Result<Vec<CalendarWindow>, TemporalError> {
-    check_cancelled(cancellation)?;
+    checkpoint: &mut impl FnMut(CalendarStep) -> Result<(), E>,
+) -> Result<Vec<CalendarWindow>, E> {
+    checkpoint(CalendarStep::Inspect)?;
     if range.start >= range.end {
         return Err(issue(
             TemporalIssueKind::InvalidQuery,
             Some(calendar_id.into()),
             None,
-        ));
+        )
+        .into());
     }
     if let CalendarPeriod::Custom { intervals } = &calendar.period {
         return custom_windows(
@@ -59,7 +69,7 @@ pub(crate) fn resolve_calendar_for_calendar(
             calendar_id,
             &document.settings,
             Some(range),
-            cancellation,
+            checkpoint,
         );
     }
     let period = RegularPeriod::from_calendar(calendar);
@@ -93,7 +103,7 @@ pub(crate) fn resolve_calendar_for_calendar(
     }
     let mut windows = Vec::new();
     while date.to_datetime(period.time) < upper {
-        check_cancelled(cancellation)?;
+        checkpoint(CalendarStep::Inspect)?;
         let next = add_days(date, period.days, calendar_id)?;
         let start = date.to_datetime(period.time);
         let end = next.to_datetime(period.time);
@@ -106,12 +116,12 @@ pub(crate) fn resolve_calendar_for_calendar(
                 interval: resolve_interval(start, end, &document.settings, calendar_id.into())?,
             };
             if intersects(window, range) {
-                push_window(&mut windows, window)?;
+                push_window(&mut windows, window, checkpoint)?;
             }
         }
         date = next;
     }
-    check_cancelled(cancellation)?;
+    checkpoint(CalendarStep::Inspect)?;
     Ok(windows)
 }
 
@@ -129,27 +139,29 @@ pub fn reporting_window(
     cancellation: &CancellationToken,
 ) -> Result<Option<CalendarWindow>, TemporalError> {
     let calendar = validated_calendar(document, calendar_id, cancellation)?;
-    reporting_window_for_calendar(document, calendar_id, &calendar, date, cancellation)
+    reporting_window_for_calendar(document, calendar_id, &calendar, date, &mut |_| {
+        check_cancelled(cancellation)
+    })
 }
 
 /// Finds the window owning a reporting date after the caller has validated and retained
 /// the typed calendar. Assignment-rule operations use this to avoid revalidating the
 /// complete source document for every distinct reporting date.
-pub(crate) fn reporting_window_for_calendar(
+pub(crate) fn reporting_window_for_calendar<E: From<TemporalError>>(
     document: &ScenarioDocument,
     calendar_id: WorkCalendarId,
     calendar: &WorkCalendar,
     date: Date,
-    cancellation: &CancellationToken,
-) -> Result<Option<CalendarWindow>, TemporalError> {
-    check_cancelled(cancellation)?;
+    checkpoint: &mut impl FnMut(CalendarStep) -> Result<(), E>,
+) -> Result<Option<CalendarWindow>, E> {
+    checkpoint(CalendarStep::Inspect)?;
     if let CalendarPeriod::Custom { intervals } = &calendar.period {
         return custom_reporting_window(
             intervals,
             calendar_id,
             &document.settings,
             date,
-            cancellation,
+            checkpoint,
         );
     }
     let period = RegularPeriod::from_calendar(calendar);
@@ -161,7 +173,7 @@ pub(crate) fn reporting_window_for_calendar(
         &document.settings,
         calendar_id.into(),
     )?;
-    check_cancelled(cancellation)?;
+    checkpoint(CalendarStep::RetainWindow)?;
     Ok(Some(CalendarWindow {
         calendar_id,
         interval,
@@ -274,32 +286,35 @@ fn intersects(window: CalendarWindow, range: Horizon) -> bool {
     window.interval.starts_at.instant < range.end && range.start < window.interval.ends_at.instant
 }
 
-fn push_window(
+fn push_window<E: From<TemporalError>>(
     windows: &mut Vec<CalendarWindow>,
     window: CalendarWindow,
-) -> Result<(), TemporalError> {
+    checkpoint: &mut impl FnMut(CalendarStep) -> Result<(), E>,
+) -> Result<(), E> {
     if windows.len() == MAX_CALENDAR_WINDOWS {
         return Err(issue(
             TemporalIssueKind::CalendarLimit,
             Some(window.calendar_id.into()),
             None,
-        ));
+        )
+        .into());
     }
+    checkpoint(CalendarStep::RetainWindow)?;
     windows.push(window);
     Ok(())
 }
 
-fn custom_reporting_window(
+fn custom_reporting_window<E: From<TemporalError>>(
     intervals: &[LocalInterval],
     calendar_id: WorkCalendarId,
     settings: &ScenarioSettings,
     date: Date,
-    cancellation: &CancellationToken,
-) -> Result<Option<CalendarWindow>, TemporalError> {
+    checkpoint: &mut impl FnMut(CalendarStep) -> Result<(), E>,
+) -> Result<Option<CalendarWindow>, E> {
     let mut previous: Option<ResolvedInterval> = None;
     let mut owner = None;
     for local in intervals {
-        check_cancelled(cancellation)?;
+        checkpoint(CalendarStep::Inspect)?;
         let interval = resolve_interval(
             local.starts_at.as_datetime(),
             local.ends_at.as_datetime(),
@@ -312,14 +327,16 @@ fn custom_reporting_window(
                     TemporalIssueKind::CalendarOverlap,
                     Some(calendar_id.into()),
                     None,
-                ));
+                )
+                .into());
             }
             if previous.starts_at.instant > interval.starts_at.instant {
                 return Err(issue(
                     TemporalIssueKind::CalendarOrder,
                     Some(calendar_id.into()),
                     None,
-                ));
+                )
+                .into());
             }
         }
         previous = Some(interval);
@@ -337,26 +354,28 @@ fn custom_reporting_window(
                     TemporalIssueKind::AmbiguousReportingDate,
                     Some(calendar_id.into()),
                     Some(date),
-                ));
+                )
+                .into());
             }
+            checkpoint(CalendarStep::RetainWindow)?;
             owner = Some(window);
         }
     }
-    check_cancelled(cancellation)?;
+    checkpoint(CalendarStep::Inspect)?;
     Ok(owner)
 }
 
-fn custom_windows(
+fn custom_windows<E: From<TemporalError>>(
     intervals: &[LocalInterval],
     calendar_id: WorkCalendarId,
     settings: &ScenarioSettings,
     range: Option<Horizon>,
-    cancellation: &CancellationToken,
-) -> Result<Vec<CalendarWindow>, TemporalError> {
+    checkpoint: &mut impl FnMut(CalendarStep) -> Result<(), E>,
+) -> Result<Vec<CalendarWindow>, E> {
     let mut windows = Vec::new();
     let mut previous: Option<ResolvedInterval> = None;
     for local in intervals {
-        check_cancelled(cancellation)?;
+        checkpoint(CalendarStep::Inspect)?;
         let interval = resolve_interval(
             local.starts_at.as_datetime(),
             local.ends_at.as_datetime(),
@@ -371,14 +390,16 @@ fn custom_windows(
                     TemporalIssueKind::CalendarOverlap,
                     Some(calendar_id.into()),
                     None,
-                ));
+                )
+                .into());
             }
             if previous.starts_at.instant > interval.starts_at.instant {
                 return Err(issue(
                     TemporalIssueKind::CalendarOrder,
                     Some(calendar_id.into()),
                     None,
-                ));
+                )
+                .into());
             }
         }
         previous = Some(interval);
@@ -387,9 +408,105 @@ fn custom_windows(
             interval,
         };
         if range.is_none_or(|range| intersects(window, range)) {
-            push_window(&mut windows, window)?;
+            push_window(&mut windows, window, checkpoint)?;
         }
     }
-    check_cancelled(cancellation)?;
+    checkpoint(CalendarStep::Inspect)?;
     Ok(windows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assignment_rules::{
+        AssignmentRuleError, AssignmentRuleLimit, budget::OperationBudget,
+    };
+    use eutheto_types::{DurationMillis, FixedMonotonicClock, OperationControl, ParentSolveBudget};
+    use std::{error::Error, sync::Arc, time::Duration};
+
+    #[test]
+    fn calendar_scans_preserve_deadlines_and_charge_before_retaining_windows()
+    -> Result<(), Box<dyn Error>> {
+        let mut document = crate::test_support::fixture()?;
+        document.settings.time_zone = "UTC".parse()?;
+        let range = Horizon::new(
+            "2026-11-01T00:00:00Z".parse()?,
+            "2026-11-03T00:00:00Z".parse()?,
+        )?;
+        let custom = CalendarPeriod::Custom {
+            intervals: vec![
+                LocalInterval {
+                    starts_at: "2026-11-01T00:00:00".parse()?,
+                    ends_at: "2026-11-02T00:00:00".parse()?,
+                },
+                LocalInterval {
+                    starts_at: "2026-11-02T00:00:00".parse()?,
+                    ends_at: "2026-11-03T00:00:00".parse()?,
+                },
+            ],
+        };
+        for period in [
+            CalendarPeriod::Day {
+                start_time: Time::MIN,
+            },
+            custom,
+        ] {
+            let calendar = WorkCalendar {
+                id: crate::test_support::id(2).parse()?,
+                name: "Calendar".to_owned(),
+                period,
+            };
+            for reporting in [false, true] {
+                let clock = Arc::new(FixedMonotonicClock::default());
+                let token = CancellationToken::new();
+                let parent =
+                    ParentSolveBudget::new(DurationMillis::new(1)?, clock.clone(), token.clone())?;
+                let control = OperationControl::Solve(parent.phase_view());
+                let mut budget = OperationBudget::evaluation(Some(&control));
+                let mut expire = |step| {
+                    if matches!(step, CalendarStep::RetainWindow) {
+                        assert_eq!(clock.set(Duration::from_millis(1)), Ok(()));
+                    }
+                    budget.calendar_step(step)
+                };
+                let result = if reporting {
+                    reporting_window_for_calendar(
+                        &document,
+                        calendar.id,
+                        &calendar,
+                        "2026-11-01".parse()?,
+                        &mut expire,
+                    )
+                    .map(|window| usize::from(window.is_some()))
+                } else {
+                    resolve_calendar_for_calendar(
+                        &document,
+                        calendar.id,
+                        &calendar,
+                        range,
+                        &mut expire,
+                    )
+                    .map(|windows| windows.len())
+                };
+                assert_eq!(result, Err(AssignmentRuleError::BudgetExpired));
+                assert!(!token.is_cancelled());
+            }
+            let mut budget = OperationBudget::evaluation(None);
+            budget.reserve(0, 0, 16 * 1024 * 1024)?;
+            let result = resolve_calendar_for_calendar(
+                &document,
+                calendar.id,
+                &calendar,
+                range,
+                &mut |step| budget.calendar_step(step),
+            );
+            assert_eq!(
+                result,
+                Err(AssignmentRuleError::LimitExceeded(
+                    AssignmentRuleLimit::Bytes
+                )),
+            );
+        }
+        Ok(())
+    }
 }

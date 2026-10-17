@@ -5,7 +5,7 @@ use super::super::{
     reporting::{ReportingPeriod, ReportingWindows},
 };
 use super::{Selected, Summary, Witness, invalid, predicates};
-use crate::model::WorkforceRule;
+use crate::model::{AssignmentPair, WorkforceRule};
 use eutheto_types::{PersonId, ScenarioDocument};
 use std::collections::BTreeMap;
 
@@ -61,7 +61,7 @@ pub(super) fn evaluate(
     for ((person_id, period), (actual, first_shift)) in grouped {
         budget.step()?;
         let mut witness = Witness::pair(
-            crate::model::AssignmentPair {
+            AssignmentPair {
                 person_id,
                 shift_id: first_shift,
             },
@@ -77,7 +77,63 @@ pub(super) fn evaluate(
             end: period.end,
         });
         witness.period = Some((period.start, period.end));
-        summary.predicate(actual > u64::from(*maximum), &witness, budget)?;
+        let failed = actual > u64::from(*maximum);
+        let members = if failed && summary.collecting_repair() {
+            association_members(
+                document,
+                input,
+                selected,
+                person_id,
+                scope,
+                *calendar_id,
+                period,
+                &mut periods,
+                budget,
+            )?
+        } else {
+            Vec::new()
+        };
+        let collect_repair = summary.collecting_repair();
+        summary.predicate_with_members(
+            failed,
+            &witness,
+            collect_repair.then_some(members),
+            "maximum_assignment_count",
+            budget,
+        )?;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn association_members(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    person_id: PersonId,
+    scope: &crate::model::Scope,
+    calendar_id: crate::ids::WorkCalendarId,
+    period: ReportingPeriod,
+    periods: &mut ReportingWindows,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<AssignmentPair>, AssignmentRuleError> {
+    let mut members = Vec::new();
+    if let Some(associations) = selected.associations() {
+        for pair in associations {
+            budget.step()?;
+            if pair.person_id != person_id {
+                continue;
+            }
+            let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
+            let metadata = input.metadata(shift)?;
+            if predicates::shift_matches(shift, &metadata, scope, budget)?
+                && periods.resolve(document, input, calendar_id, shift.reporting_date, budget)?
+                    == Some(period)
+            {
+                budget.reserve(0, 1, 48)?;
+                members.push(*pair);
+            }
+        }
+    }
+    Ok(members)
 }

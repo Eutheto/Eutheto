@@ -1878,6 +1878,78 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "assignments": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "personId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "shiftId": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "personId",
+                        "shiftId"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 10000,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "externalStartingPlan"
+                  },
+                  "name": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "originalImport": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pairContentHash": {
+                        "maxLength": 64,
+                        "minLength": 64,
+                        "type": "string"
+                      },
+                      "sourceBlake3": {
+                        "maxLength": 64,
+                        "minLength": 64,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "sourceBlake3",
+                      "pairContentHash"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "schemaVersion",
+                  "id",
+                  "name",
+                  "assignments",
+                  "originalImport"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
                   "id": {
                     "format": "uuid",
                     "type": "string"
@@ -2191,6 +2263,18 @@
                               "properties": {
                                 "kind": {
                                   "const": "weightedEqualShare"
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "equalShare"
                                 }
                               },
                               "required": [
@@ -4463,6 +4547,206 @@
                     "type": "string"
                   },
                   "kind": {
+                    "const": "weekendTarget"
+                  },
+                  "priority": {
+                    "oneOf": [
+                      {
+                        "const": "low"
+                      },
+                      {
+                        "const": "normal"
+                      },
+                      {
+                        "const": "high"
+                      },
+                      {
+                        "const": "veryHigh"
+                      }
+                    ]
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "assignmentTypeIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "categories": {
+                        "items": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "locationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "people": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "all"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "selected"
+                              },
+                              "personIds": {
+                                "items": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personIds"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "allTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "anyTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "filter"
+                              }
+                            },
+                            "required": [
+                              "allTags",
+                              "anyTags",
+                              "kind"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "type": "object"
+                      },
+                      "teamIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "weekdays": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "const": "monday"
+                            },
+                            {
+                              "const": "tuesday"
+                            },
+                            {
+                              "const": "wednesday"
+                            },
+                            {
+                              "const": "thursday"
+                            },
+                            {
+                              "const": "friday"
+                            },
+                            {
+                              "const": "saturday"
+                            },
+                            {
+                              "const": "sunday"
+                            }
+                          ]
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "people"
+                    ],
+                    "type": "object"
+                  },
+                  "targetCount": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "weight": {
+                    "maximum": 1000000,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "active",
+                  "id",
+                  "kind",
+                  "priority",
+                  "scope",
+                  "targetCount",
+                  "weight"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
                     "const": "workloadBalance"
                   },
                   "priority": {
@@ -5897,6 +6181,21 @@
               }
             },
             "targetCount": 1,
+            "weight": 1
+          }
+        },
+        {
+          "preference": {
+            "active": true,
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "kind": "weekendTarget",
+            "priority": "normal",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "targetCount": 2,
             "weight": 1
           }
         },
@@ -7790,6 +8089,187 @@
                   "active": {
                     "type": "boolean"
                   },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "maximumWorkedWeekends"
+                  },
+                  "maximum": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "assignmentTypeIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "categories": {
+                        "items": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "locationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "people": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "all"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "selected"
+                              },
+                              "personIds": {
+                                "items": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personIds"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "allTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "anyTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "filter"
+                              }
+                            },
+                            "required": [
+                              "allTags",
+                              "anyTags",
+                              "kind"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "type": "object"
+                      },
+                      "teamIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "weekdays": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "const": "monday"
+                            },
+                            {
+                              "const": "tuesday"
+                            },
+                            {
+                              "const": "wednesday"
+                            },
+                            {
+                              "const": "thursday"
+                            },
+                            {
+                              "const": "friday"
+                            },
+                            {
+                              "const": "saturday"
+                            },
+                            {
+                              "const": "sunday"
+                            }
+                          ]
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "people"
+                    ],
+                    "type": "object"
+                  },
+                  "strength": {
+                    "const": "required"
+                  }
+                },
+                "required": [
+                  "active",
+                  "id",
+                  "kind",
+                  "maximum",
+                  "scope",
+                  "strength"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
                   "calendarId": {
                     "format": "uuid",
                     "type": "string"
@@ -7965,6 +8445,246 @@
                   "id",
                   "kind",
                   "maximum",
+                  "scope",
+                  "strength"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "calendarId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "workloadQuota"
+                  },
+                  "maximum": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "measure": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "assignmentCount"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "bucketId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "bucketMinutes"
+                          }
+                        },
+                        "required": [
+                          "bucketId",
+                          "kind"
+                        ],
+                        "type": "object"
+                      }
+                    ],
+                    "type": "object"
+                  },
+                  "membership": {
+                    "oneOf": [
+                      {
+                        "const": "reportingDate"
+                      },
+                      {
+                        "const": "startInstant"
+                      },
+                      {
+                        "const": "intersection"
+                      }
+                    ]
+                  },
+                  "minimum": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "assignmentTypeIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "categories": {
+                        "items": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "locationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "people": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "all"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "selected"
+                              },
+                              "personIds": {
+                                "items": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personIds"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "allTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "anyTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "filter"
+                              }
+                            },
+                            "required": [
+                              "allTags",
+                              "anyTags",
+                              "kind"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "type": "object"
+                      },
+                      "teamIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "weekdays": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "const": "monday"
+                            },
+                            {
+                              "const": "tuesday"
+                            },
+                            {
+                              "const": "wednesday"
+                            },
+                            {
+                              "const": "thursday"
+                            },
+                            {
+                              "const": "friday"
+                            },
+                            {
+                              "const": "saturday"
+                            },
+                            {
+                              "const": "sunday"
+                            }
+                          ]
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "people"
+                    ],
+                    "type": "object"
+                  },
+                  "strength": {
+                    "const": "required"
+                  }
+                },
+                "required": [
+                  "active",
+                  "calendarId",
+                  "id",
+                  "kind",
+                  "measure",
+                  "membership",
+                  "minimum",
                   "scope",
                   "strength"
                 ],
@@ -8198,6 +8918,9 @@
                 "additionalProperties": false,
                 "properties": {
                   "active": {
+                    "type": "boolean"
+                  },
+                  "assigned": {
                     "type": "boolean"
                   },
                   "id": {
@@ -8896,6 +9619,20 @@
             "mode": {
               "kind": "workedDays"
             },
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "strength": "required"
+          }
+        },
+        {
+          "rule": {
+            "active": true,
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "kind": "maximumWorkedWeekends",
+            "maximum": 1,
             "scope": {
               "people": {
                 "kind": "all"
@@ -11822,6 +12559,78 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "assignments": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "personId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "shiftId": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "personId",
+                        "shiftId"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 10000,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "externalStartingPlan"
+                  },
+                  "name": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "originalImport": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pairContentHash": {
+                        "maxLength": 64,
+                        "minLength": 64,
+                        "type": "string"
+                      },
+                      "sourceBlake3": {
+                        "maxLength": 64,
+                        "minLength": 64,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "sourceBlake3",
+                      "pairContentHash"
+                    ],
+                    "type": "object"
+                  },
+                  "schemaVersion": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "schemaVersion",
+                  "id",
+                  "name",
+                  "assignments",
+                  "originalImport"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
                   "id": {
                     "format": "uuid",
                     "type": "string"
@@ -12135,6 +12944,18 @@
                               "properties": {
                                 "kind": {
                                   "const": "weightedEqualShare"
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "equalShare"
                                 }
                               },
                               "required": [
@@ -14295,6 +15116,206 @@
                     "type": "string"
                   },
                   "kind": {
+                    "const": "weekendTarget"
+                  },
+                  "priority": {
+                    "oneOf": [
+                      {
+                        "const": "low"
+                      },
+                      {
+                        "const": "normal"
+                      },
+                      {
+                        "const": "high"
+                      },
+                      {
+                        "const": "veryHigh"
+                      }
+                    ]
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "assignmentTypeIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "categories": {
+                        "items": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "locationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "people": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "all"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "selected"
+                              },
+                              "personIds": {
+                                "items": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personIds"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "allTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "anyTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "filter"
+                              }
+                            },
+                            "required": [
+                              "allTags",
+                              "anyTags",
+                              "kind"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "type": "object"
+                      },
+                      "teamIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "weekdays": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "const": "monday"
+                            },
+                            {
+                              "const": "tuesday"
+                            },
+                            {
+                              "const": "wednesday"
+                            },
+                            {
+                              "const": "thursday"
+                            },
+                            {
+                              "const": "friday"
+                            },
+                            {
+                              "const": "saturday"
+                            },
+                            {
+                              "const": "sunday"
+                            }
+                          ]
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "people"
+                    ],
+                    "type": "object"
+                  },
+                  "targetCount": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "weight": {
+                    "maximum": 1000000,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "active",
+                  "id",
+                  "kind",
+                  "priority",
+                  "scope",
+                  "targetCount",
+                  "weight"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
                     "const": "workloadBalance"
                   },
                   "priority": {
@@ -15729,6 +16750,21 @@
               }
             },
             "targetCount": 1,
+            "weight": 1
+          }
+        },
+        {
+          "preference": {
+            "active": true,
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "kind": "weekendTarget",
+            "priority": "normal",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "targetCount": 2,
             "weight": 1
           }
         },
@@ -17622,6 +18658,187 @@
                   "active": {
                     "type": "boolean"
                   },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "maximumWorkedWeekends"
+                  },
+                  "maximum": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "assignmentTypeIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "categories": {
+                        "items": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "locationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "people": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "all"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "selected"
+                              },
+                              "personIds": {
+                                "items": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personIds"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "allTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "anyTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "filter"
+                              }
+                            },
+                            "required": [
+                              "allTags",
+                              "anyTags",
+                              "kind"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "type": "object"
+                      },
+                      "teamIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "weekdays": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "const": "monday"
+                            },
+                            {
+                              "const": "tuesday"
+                            },
+                            {
+                              "const": "wednesday"
+                            },
+                            {
+                              "const": "thursday"
+                            },
+                            {
+                              "const": "friday"
+                            },
+                            {
+                              "const": "saturday"
+                            },
+                            {
+                              "const": "sunday"
+                            }
+                          ]
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "people"
+                    ],
+                    "type": "object"
+                  },
+                  "strength": {
+                    "const": "required"
+                  }
+                },
+                "required": [
+                  "active",
+                  "id",
+                  "kind",
+                  "maximum",
+                  "scope",
+                  "strength"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
                   "calendarId": {
                     "format": "uuid",
                     "type": "string"
@@ -17797,6 +19014,246 @@
                   "id",
                   "kind",
                   "maximum",
+                  "scope",
+                  "strength"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "calendarId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "workloadQuota"
+                  },
+                  "maximum": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "measure": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "assignmentCount"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "bucketId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "bucketMinutes"
+                          }
+                        },
+                        "required": [
+                          "bucketId",
+                          "kind"
+                        ],
+                        "type": "object"
+                      }
+                    ],
+                    "type": "object"
+                  },
+                  "membership": {
+                    "oneOf": [
+                      {
+                        "const": "reportingDate"
+                      },
+                      {
+                        "const": "startInstant"
+                      },
+                      {
+                        "const": "intersection"
+                      }
+                    ]
+                  },
+                  "minimum": {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "assignmentTypeIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "categories": {
+                        "items": {
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "locationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "people": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "all"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "selected"
+                              },
+                              "personIds": {
+                                "items": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "personIds"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "allTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "anyTags": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 10000,
+                                "minItems": 0,
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "filter"
+                              }
+                            },
+                            "required": [
+                              "allTags",
+                              "anyTags",
+                              "kind"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "type": "object"
+                      },
+                      "teamIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "weekdays": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "const": "monday"
+                            },
+                            {
+                              "const": "tuesday"
+                            },
+                            {
+                              "const": "wednesday"
+                            },
+                            {
+                              "const": "thursday"
+                            },
+                            {
+                              "const": "friday"
+                            },
+                            {
+                              "const": "saturday"
+                            },
+                            {
+                              "const": "sunday"
+                            }
+                          ]
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "people"
+                    ],
+                    "type": "object"
+                  },
+                  "strength": {
+                    "const": "required"
+                  }
+                },
+                "required": [
+                  "active",
+                  "calendarId",
+                  "id",
+                  "kind",
+                  "measure",
+                  "membership",
+                  "minimum",
                   "scope",
                   "strength"
                 ],
@@ -18030,6 +19487,9 @@
                 "additionalProperties": false,
                 "properties": {
                   "active": {
+                    "type": "boolean"
+                  },
+                  "assigned": {
                     "type": "boolean"
                   },
                   "id": {
@@ -18739,6 +20199,20 @@
         {
           "rule": {
             "active": true,
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "kind": "maximumWorkedWeekends",
+            "maximum": 1,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "strength": "required"
+          }
+        },
+        {
+          "rule": {
+            "active": true,
             "calendarId": "018f7b40-a000-7000-8000-000000000002",
             "id": "018f7b40-a000-7000-8000-00000000001e",
             "kind": "maximumAssignmentCount",
@@ -18910,5 +20384,5 @@
     }
   },
   "packId": "official.workforce",
-  "schemaVersion": 4
+  "schemaVersion": 5
 }

@@ -39,19 +39,39 @@ fn legacy_status_json_uses_the_single_cli_result_envelope() -> Result<(), Box<dy
 #[test]
 fn file_solve_requires_destination_before_input_or_database_access() -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
+    for repair_args in [vec![], vec!["--repair-from", "original.json"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
+            .args(["--format", "json", "--data-dir"])
+            .arg(directory.path())
+            .args(["solve", "scenario.eutheto"])
+            .args(repair_args)
+            .output()?;
+
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_slice(&output.stderr)?;
+        assert_eq!(value["apiVersion"], "eutheto/cli-result/v1");
+        assert_eq!(value["command"], "solve");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "solve.output_required");
+        assert!(fs::read_dir(directory.path())?.next().is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn solve_cancel_still_refuses_service_mode_without_database_access() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
         .args(["--format", "json", "--data-dir"])
         .arg(directory.path())
-        .args(["solve", "scenario.eutheto"])
+        .args(["solve", "cancel", "job-not-used"])
         .output()?;
-
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(6));
     assert!(output.stdout.is_empty());
     let value: Value = serde_json::from_slice(&output.stderr)?;
-    assert_eq!(value["apiVersion"], "eutheto/cli-result/v1");
     assert_eq!(value["command"], "solve");
-    assert_eq!(value["ok"], false);
-    assert_eq!(value["error"]["code"], "solve.output_required");
+    assert_eq!(value["error"]["code"], "solve.operation_unavailable");
     assert!(fs::read_dir(directory.path())?.next().is_none());
     Ok(())
 }

@@ -6,8 +6,7 @@ use super::{
 use crate::{
     ids::{ShiftId, WorkCalendarId, WorkloadBucketId},
     model::{
-        AssignmentLock, CalendarPeriod, OverlappingContribution, WindowMembership, WorkWindow,
-        WorkloadMeasurement,
+        AssignmentLock, OverlappingContribution, WindowMembership, WorkWindow, WorkloadMeasurement,
     },
     temporal::{CalendarWindow, ResolvedShift, resolve_calendar_for_calendar},
 };
@@ -52,6 +51,51 @@ pub(super) enum HoursAggregate {
     Union { segments: Vec<HoursSegment> },
 }
 
+impl HoursAggregate {
+    fn has_fractional(&self) -> bool {
+        match self {
+            Self::Sum { terms } => terms.iter().any(|term| term.remainder != 0),
+            Self::Union { segments } => segments.iter().any(|segment| segment.remainder != 0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum HoursPlanKind {
+    MaximumHours,
+    WorkloadQuota,
+}
+
+#[derive(Clone, Copy)]
+enum HoursHelperFact {
+    Carry,
+    Fractional,
+    UnionSegment,
+}
+
+const fn helper_message(kind: HoursPlanKind, helper: HoursHelperFact) -> &'static str {
+    match (kind, helper) {
+        (HoursPlanKind::MaximumHours, HoursHelperFact::Carry) => {
+            "official.workforce.maximum_hours.carry"
+        }
+        (HoursPlanKind::MaximumHours, HoursHelperFact::Fractional) => {
+            "official.workforce.maximum_hours.fractional"
+        }
+        (HoursPlanKind::MaximumHours, HoursHelperFact::UnionSegment) => {
+            "official.workforce.maximum_hours.union_segment"
+        }
+        (HoursPlanKind::WorkloadQuota, HoursHelperFact::Carry) => {
+            "official.workforce.workload_quota.carry"
+        }
+        (HoursPlanKind::WorkloadQuota, HoursHelperFact::Fractional) => {
+            "official.workforce.workload_quota.fractional"
+        }
+        (HoursPlanKind::WorkloadQuota, HoursHelperFact::UnionSegment) => {
+            "official.workforce.workload_quota.union_segment"
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct HoursPlan {
     pub rule: RuleId,
@@ -59,35 +103,40 @@ pub(super) struct HoursPlan {
     pub bucket_id: WorkloadBucketId,
     pub measurement: WorkloadMeasurement,
     pub contribution: OverlappingContribution,
-    pub maximum_minutes: u32,
+    pub minimum_minutes: u32,
+    pub maximum_minutes: Option<u32>,
+    pub kind: HoursPlanKind,
     pub window: HoursWindow,
     pub aggregate: HoursAggregate,
 }
-
-#[derive(Clone, Copy)]
-struct Member<'a> {
-    index: usize,
-    shift: &'a ResolvedShift,
+fn requires_lower(hours: &HoursPlan) -> bool {
+    hours.kind == HoursPlanKind::WorkloadQuota || hours.minimum_minutes > 0
 }
 
 #[derive(Clone, Copy)]
-struct IntervalMember {
-    index: usize,
-    start: Rfc3339Timestamp,
-    end: Rfc3339Timestamp,
-    scheduled: SignedDuration,
+pub(super) struct Member<'a> {
+    pub(super) index: usize,
+    pub(super) shift: &'a ResolvedShift,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct IntervalMember {
+    pub(super) index: usize,
+    pub(super) start: Rfc3339Timestamp,
+    pub(super) end: Rfc3339Timestamp,
+    pub(super) scheduled: SignedDuration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct WindowKey {
-    calendar_id: Option<WorkCalendarId>,
-    start: Rfc3339Timestamp,
-    end: Rfc3339Timestamp,
-    duration_minutes: Option<u32>,
+pub(super) struct WindowKey {
+    pub(super) calendar_id: Option<WorkCalendarId>,
+    pub(super) start: Rfc3339Timestamp,
+    pub(super) end: Rfc3339Timestamp,
+    pub(super) duration_minutes: Option<u32>,
 }
 
 impl WindowKey {
-    fn window(self, membership: WindowMembership) -> HoursWindow {
+    pub(super) fn window(self, membership: WindowMembership) -> HoursWindow {
         HoursWindow {
             calendar_id: self.calendar_id,
             start: self.start,
@@ -193,7 +242,7 @@ pub(super) fn plan(
             if aggregate_empty(&aggregate) {
                 continue;
             }
-            validate_aggregate(&aggregate, limits, *maximum_minutes)?;
+            validate_aggregate(&aggregate, limits, 0, Some(*maximum_minutes))?;
             budget.reserve(1, 8, 768)?;
             plan.hours.push(HoursPlan {
                 rule: *id,
@@ -201,7 +250,9 @@ pub(super) fn plan(
                 bucket_id: *bucket_id,
                 measurement: bucket.measurement,
                 contribution: bucket.overlapping_contribution,
-                maximum_minutes: *maximum_minutes,
+                minimum_minutes: 0,
+                maximum_minutes: Some(*maximum_minutes),
+                kind: HoursPlanKind::MaximumHours,
                 window,
                 aggregate,
             });
@@ -397,20 +448,12 @@ fn calendar_windows(
     else {
         return Err(invalid());
     };
-    let scan_cost = match &calendar.period {
-        CalendarPeriod::Custom { intervals } => count(intervals.len())?,
-        _ => 1,
-    };
     let mut grouped = BTreeMap::<WindowKey, Vec<IntervalMember>>::new();
     let mut periods = super::super::reporting::ReportingWindows::new();
     for member in members {
         budget.step()?;
         let shift_start = member.shift.interval.starts_at.instant;
         let shift_end = member.shift.interval.ends_at.instant;
-        if membership != WindowMembership::ReportingDate {
-            // Even a sparse query resolves every configured custom interval.
-            budget.steps(scan_cost)?;
-        }
         match membership {
             WindowMembership::ReportingDate => {
                 let Some(period) = periods.resolve(
@@ -452,7 +495,7 @@ fn calendar_windows(
                     calendar_id,
                     calendar,
                     range,
-                    &cancellation_for(budget),
+                    &mut |step| budget.calendar_step(step),
                 )?;
                 budget.steps(count(windows.len())?)?;
                 for window in windows {
@@ -487,7 +530,7 @@ fn calendar_windows(
                     calendar_id,
                     calendar,
                     range,
-                    &cancellation_for(budget),
+                    &mut |step| budget.calendar_step(step),
                 )?;
                 budget.steps(count(windows.len())?)?;
                 for window in windows {
@@ -515,14 +558,7 @@ fn calendar_windows(
     grouped_aggregates(grouped, membership, measurement, contribution, budget)
 }
 
-fn cancellation_for(budget: &OperationBudget<'_>) -> eutheto_types::CancellationToken {
-    match budget.control() {
-        Some(eutheto_types::OperationControl::Cancellation(token)) => token.clone(),
-        _ => eutheto_types::CancellationToken::new(),
-    }
-}
-
-fn calendar_key(window: CalendarWindow) -> WindowKey {
+pub(super) fn calendar_key(window: CalendarWindow) -> WindowKey {
     WindowKey {
         calendar_id: Some(window.calendar_id),
         start: window.interval.starts_at.instant,
@@ -630,7 +666,7 @@ fn rolling_windows(
     Ok(result)
 }
 
-fn grouped_aggregates(
+pub(super) fn grouped_aggregates(
     grouped: BTreeMap<WindowKey, Vec<IntervalMember>>,
     membership: WindowMembership,
     measurement: WorkloadMeasurement,
@@ -649,7 +685,7 @@ fn grouped_aggregates(
     Ok(result)
 }
 
-fn aggregate_intervals(
+pub(super) fn aggregate_intervals(
     intervals: &[IntervalMember],
     membership: WindowMembership,
     measurement: WorkloadMeasurement,
@@ -737,7 +773,7 @@ fn aggregate_intervals(
     }
 }
 
-fn insert_interval(
+pub(super) fn insert_interval(
     grouped: &mut BTreeMap<WindowKey, Vec<IntervalMember>>,
     key: WindowKey,
     interval: IntervalMember,
@@ -748,7 +784,7 @@ fn insert_interval(
     Ok(())
 }
 
-fn add_boundary(
+pub(super) fn add_boundary(
     starts: &mut BTreeSet<Rfc3339Timestamp>,
     instant: Rfc3339Timestamp,
     budget: &mut OperationBudget<'_>,
@@ -758,7 +794,7 @@ fn add_boundary(
     Ok(())
 }
 
-fn clip(
+pub(super) fn clip(
     shift_start: Rfc3339Timestamp,
     shift_end: Rfc3339Timestamp,
     window_start: Rfc3339Timestamp,
@@ -769,7 +805,7 @@ fn clip(
     (start < end).then_some((start, end))
 }
 
-fn offset(
+pub(super) fn offset(
     instant: Rfc3339Timestamp,
     seconds: i64,
     nanos: i64,
@@ -782,7 +818,7 @@ fn offset(
         .map_err(|_| invalid())
 }
 
-fn split_duration(duration: SignedDuration) -> Result<(i64, i64), AssignmentRuleError> {
+pub(super) fn split_duration(duration: SignedDuration) -> Result<(i64, i64), AssignmentRuleError> {
     let total = i128::from(duration.as_secs())
         .checked_mul(NANOS_PER_SECOND)
         .and_then(|value| value.checked_add(i128::from(duration.subsec_nanos())))
@@ -797,10 +833,11 @@ fn split_duration(duration: SignedDuration) -> Result<(i64, i64), AssignmentRule
     Ok((seconds, remainder))
 }
 
-fn validate_aggregate(
+pub(super) fn validate_aggregate(
     aggregate: &HoursAggregate,
     limits: PlanningIrLimitsV1,
-    maximum_minutes: u32,
+    minimum_minutes: u32,
+    maximum_minutes: Option<u32>,
 ) -> Result<(), AssignmentRuleError> {
     let coefficient_limit = limits
         .max_abs_coefficient
@@ -811,13 +848,16 @@ fn validate_aggregate(
     if coefficient_limit < 0 || value_limit < 0 {
         return Err(invalid());
     }
-    let target = i64::from(maximum_minutes)
-        .checked_mul(60)
-        .ok_or_else(invalid)?;
-    if target.unsigned_abs() > value_limit.cast_unsigned() {
-        return Err(AssignmentRuleError::LimitExceeded(
-            AssignmentRuleLimit::PerRecord,
-        ));
+    for minutes in [Some(minimum_minutes), maximum_minutes]
+        .into_iter()
+        .flatten()
+    {
+        let target = i64::from(minutes).checked_mul(60).ok_or_else(invalid)?;
+        if target.unsigned_abs() > value_limit.cast_unsigned() {
+            return Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::PerRecord,
+            ));
+        }
     }
     let check = |seconds: i64, remainder: i64| -> Result<(), AssignmentRuleError> {
         if seconds.unsigned_abs() > coefficient_limit.cast_unsigned()
@@ -948,26 +988,41 @@ pub(crate) fn shape(plan: &Plan) -> Result<HoursShape, AssignmentRuleError> {
     Ok(shape)
 }
 
+#[allow(clippy::too_many_lines)]
 fn add_window_shape(
     shape: &mut HoursShape,
     hours: &HoursPlan,
     terms: &[HoursTerm],
     segments: Option<&[HoursSegment]>,
 ) -> Result<(), AssignmentRuleError> {
+    let (lower, upper, seconds) = if let Some(segments) = segments {
+        aggregate_term_counts_segments(segments)?
+    } else {
+        aggregate_term_counts(terms)?
+    };
+    let helpers = if lower == 0 { 0 } else { 2 };
     let segment_count = count(segments.map_or(0, <[HoursSegment]>::len))?;
     shape.helper_variables = shape
         .helper_variables
-        .checked_add(2)
+        .checked_add(helpers)
         .and_then(|value| value.checked_add(segment_count))
         .ok_or_else(arithmetic)?;
-    shape.constraints = shape.constraints.checked_add(3).ok_or_else(arithmetic)?;
-    shape.provenance = shape.provenance.checked_add(5).ok_or_else(arithmetic)?;
-    let mut references = 2_u64; // carry and fractional variable provenance references
+    let comparisons =
+        helpers + u64::from(requires_lower(hours)) + u64::from(hours.maximum_minutes.is_some());
+    shape.constraints = shape
+        .constraints
+        .checked_add(comparisons)
+        .ok_or_else(arithmetic)?;
+    shape.provenance = shape
+        .provenance
+        .checked_add(comparisons + helpers)
+        .ok_or_else(arithmetic)?;
+    let mut references = helpers; // helper variable provenance references
     let mut component_edges = 0_u64;
     let mut fact_references = hours_fact_references(hours, false)?
-        .checked_mul(2)
+        .checked_mul(helpers)
         .ok_or_else(arithmetic)?;
-    let (lower, upper, seconds) = if let Some(segments) = segments {
+    if let Some(segments) = segments {
         for segment in segments {
             let members = count(segment.members.len())?;
             shape.constraints = shape
@@ -996,40 +1051,45 @@ fn add_window_shape(
                 )
                 .ok_or_else(arithmetic)?;
         }
-        aggregate_term_counts_segments(segments)?
-    } else {
-        aggregate_term_counts(terms)?
-    };
+    }
+    let floor = seconds
+        .checked_sub(u64::from(helpers != 0))
+        .ok_or_else(arithmetic)?;
     references = references
-        .checked_add(
-            lower
-                .checked_add(upper)
-                .and_then(|value| value.checked_add(seconds))
-                .ok_or_else(arithmetic)?,
-        )
-        .and_then(|value| value.checked_add(3)) // three aggregate constraint provenance references
+        .checked_add(lower)
+        .and_then(|value| value.checked_add(upper))
+        .and_then(|value| value.checked_add(if requires_lower(hours) { floor } else { 0 }))
+        .and_then(|value| {
+            value.checked_add(if hours.maximum_minutes.is_some() {
+                seconds
+            } else {
+                0
+            })
+        })
+        .and_then(|value| value.checked_add(comparisons))
         .ok_or_else(arithmetic)?;
     component_edges = component_edges
-        .checked_add(
-            lower
-                .checked_sub(1)
-                .and_then(|value| {
-                    upper
-                        .checked_sub(1)
-                        .and_then(|upper| value.checked_add(upper))
-                })
-                .and_then(|value| {
-                    seconds
-                        .checked_sub(1)
-                        .and_then(|seconds| value.checked_add(seconds))
-                })
-                .ok_or_else(arithmetic)?,
-        )
+        .checked_add(lower.saturating_sub(1))
+        .and_then(|value| value.checked_add(upper.saturating_sub(1)))
+        .and_then(|value| {
+            value.checked_add(if requires_lower(hours) {
+                floor.saturating_sub(1)
+            } else {
+                0
+            })
+        })
+        .and_then(|value| {
+            value.checked_add(if hours.maximum_minutes.is_some() {
+                seconds.saturating_sub(1)
+            } else {
+                0
+            })
+        })
         .ok_or_else(arithmetic)?;
     fact_references = fact_references
         .checked_add(
             hours_fact_references(hours, true)?
-                .checked_mul(3)
+                .checked_mul(comparisons)
                 .ok_or_else(arithmetic)?,
         )
         .ok_or_else(arithmetic)?;
@@ -1048,6 +1108,9 @@ fn add_window_shape(
 fn aggregate_term_counts(terms: &[HoursTerm]) -> Result<(u64, u64, u64), AssignmentRuleError> {
     let nonzero_remainders = count(terms.iter().filter(|term| term.remainder != 0).count())?;
     let nonzero_seconds = count(terms.iter().filter(|term| term.seconds != 0).count())?;
+    if nonzero_remainders == 0 {
+        return Ok((0, 0, nonzero_seconds));
+    }
     Ok((
         nonzero_remainders.checked_add(1).ok_or_else(arithmetic)?,
         nonzero_remainders.checked_add(2).ok_or_else(arithmetic)?,
@@ -1070,6 +1133,9 @@ fn aggregate_term_counts_segments(
             .filter(|segment| segment.seconds != 0)
             .count(),
     )?;
+    if nonzero_remainders == 0 {
+        return Ok((0, 0, nonzero_seconds));
+    }
     Ok((
         nonzero_remainders.checked_add(1).ok_or_else(arithmetic)?,
         nonzero_remainders.checked_add(2).ok_or_else(arithmetic)?,
@@ -1079,7 +1145,10 @@ fn aggregate_term_counts_segments(
 
 fn hours_fact_references(hours: &HoursPlan, component: bool) -> Result<u64, AssignmentRuleError> {
     let entities = 2 + u64::from(hours.window.calendar_id.is_some());
-    let parameters = 6 + u64::from(component);
+    let parameters = 5
+        + u64::from(hours.maximum_minutes.is_some())
+        + u64::from(matches!(hours.kind, HoursPlanKind::WorkloadQuota))
+        + u64::from(component);
     entities
         .checked_add(parameters)
         .and_then(|value| value.checked_add(1))
@@ -1177,14 +1246,22 @@ fn check_hours_record_limits(
         .min(defaults.max_metadata_text_bytes);
     let entity_refs = 2 + u64::from(hours.window.calendar_id.is_some());
     within(entity_refs, max_entity_refs, AssignmentRuleLimit::PerRecord)?;
-    within(6, max_parameters, AssignmentRuleLimit::PerRecord)?;
-    within(7, max_parameters, AssignmentRuleLimit::PerRecord)?;
+    let parameters = 5
+        + u64::from(matches!(hours.kind, HoursPlanKind::WorkloadQuota))
+        + u64::from(hours.maximum_minutes.is_some());
+    within(parameters, max_parameters, AssignmentRuleLimit::PerRecord)?;
+    within(
+        parameters + 1,
+        max_parameters,
+        AssignmentRuleLimit::PerRecord,
+    )?;
     within(36, max_metadata_text, AssignmentRuleLimit::PerRecord)?;
     for message in [
         "official.workforce.maximum_hours",
-        "official.workforce.maximum_hours.carry",
-        "official.workforce.maximum_hours.fractional",
-        "official.workforce.maximum_hours.union_segment",
+        "official.workforce.workload_quota",
+        helper_message(hours.kind, HoursHelperFact::Carry),
+        helper_message(hours.kind, HoursHelperFact::Fractional),
+        helper_message(hours.kind, HoursHelperFact::UnionSegment),
     ] {
         within(
             count(message.len())?,
@@ -1195,6 +1272,7 @@ fn check_hours_record_limits(
     for key in [
         "component",
         "maximum_minutes",
+        "minimum_minutes",
         "measurement",
         "membership",
         "overlapping_contribution",
@@ -1233,13 +1311,22 @@ fn check_hours_record_limits(
         max_parameter_text,
         AssignmentRuleLimit::PerRecord,
     )?;
-    check_coefficient(-1_000_000_000, limits)?;
-    check_coefficient(-MAX_NANOS_REMAINDER, limits)?;
+    let fractional = hours.aggregate.has_fractional();
+    if fractional {
+        check_coefficient(-1_000_000_000, limits)?;
+        check_coefficient(-MAX_NANOS_REMAINDER, limits)?;
+    }
     check_coefficient(1, limits)?;
-    let target = i64::from(hours.maximum_minutes)
+    let minimum_target = i64::from(hours.minimum_minutes)
         .checked_mul(60)
         .ok_or_else(arithmetic)?;
-    check_value(target, limits)?;
+    check_value(minimum_target, limits)?;
+    if let Some(maximum_minutes) = hours.maximum_minutes {
+        let target = i64::from(maximum_minutes)
+            .checked_mul(60)
+            .ok_or_else(arithmetic)?;
+        check_value(target, limits)?;
+    }
     let check_term = |seconds: i64, remainder: i64| -> Result<(), AssignmentRuleError> {
         check_coefficient(seconds, limits)?;
         check_coefficient(remainder, limits)?;
@@ -1259,10 +1346,12 @@ fn check_hours_record_limits(
             check_expression(lower)?;
             check_expression(upper)?;
             check_expression(seconds)?;
-            check_value(
-                i64::try_from(terms.len()).map_err(|_| arithmetic())?,
-                limits,
-            )?;
+            if fractional {
+                check_value(
+                    i64::try_from(terms.len()).map_err(|_| arithmetic())?,
+                    limits,
+                )?;
+            }
         }
         HoursAggregate::Union { segments } => {
             check_value(
@@ -1348,26 +1437,42 @@ fn check_hours_expression_ranges(
             (carry_max, seconds_min, seconds_max, remainders_max)
         }
     };
-    check_expression_range(
-        -NANOS_PER_SECOND
-            .checked_mul(carry_max)
-            .ok_or_else(arithmetic)?,
-        remainders_max,
-        0,
-        limits,
-    )?;
-    let target = i64::from(hours.maximum_minutes)
+    let fractional = hours.aggregate.has_fractional();
+    let carry_max = if fractional { carry_max } else { 0 };
+    if fractional {
+        check_expression_range(
+            -NANOS_PER_SECOND
+                .checked_mul(carry_max)
+                .ok_or_else(arithmetic)?,
+            remainders_max,
+            0,
+            limits,
+        )?;
+    }
+    let minimum_target = i64::from(hours.minimum_minutes)
         .checked_mul(60)
         .ok_or_else(arithmetic)?;
     check_expression_range(
         seconds_min,
-        seconds_max
-            .checked_add(carry_max)
-            .and_then(|maximum| maximum.checked_add(1))
-            .ok_or_else(arithmetic)?,
-        target,
+        seconds_max.checked_add(carry_max).ok_or_else(arithmetic)?,
+        minimum_target,
         limits,
-    )
+    )?;
+    if let Some(maximum_minutes) = hours.maximum_minutes {
+        let target = i64::from(maximum_minutes)
+            .checked_mul(60)
+            .ok_or_else(arithmetic)?;
+        check_expression_range(
+            seconds_min,
+            seconds_max
+                .checked_add(carry_max)
+                .and_then(|maximum| maximum.checked_add(i128::from(fractional)))
+                .ok_or_else(arithmetic)?,
+            target,
+            limits,
+        )?;
+    }
+    Ok(())
 }
 
 fn check_coefficient(value: i64, limits: PlanningIrLimitsV1) -> Result<(), AssignmentRuleError> {
@@ -1446,16 +1551,29 @@ struct MeasuredParameters<'a> {
 
 impl Serialize for MeasuredParameters<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(6 + usize::from(self.component.is_some())))?;
+        let quota = matches!(self.hours.kind, HoursPlanKind::WorkloadQuota);
+        let count = 5
+            + usize::from(self.component.is_some())
+            + usize::from(self.hours.maximum_minutes.is_some())
+            + usize::from(quota);
+        let mut map = serializer.serialize_map(Some(count))?;
         if let Some(component) = self.component {
             let component =
                 i64::try_from(component).map_err(|_| serde::ser::Error::custom("component"))?;
             map.serialize_entry("component", &MeasuredParameter::Integer(component))?;
         }
-        map.serialize_entry(
-            "maximum_minutes",
-            &MeasuredParameter::Integer(i64::from(self.hours.maximum_minutes)),
-        )?;
+        if quota {
+            map.serialize_entry(
+                "minimum_minutes",
+                &MeasuredParameter::Integer(i64::from(self.hours.minimum_minutes)),
+            )?;
+        }
+        if let Some(maximum_minutes) = self.hours.maximum_minutes {
+            map.serialize_entry(
+                "maximum_minutes",
+                &MeasuredParameter::Integer(i64::from(maximum_minutes)),
+            )?;
+        }
         map.serialize_entry(
             "measurement",
             &MeasuredParameter::Text(MeasuredText::Static(measurement_name(
@@ -1677,11 +1795,13 @@ enum MeasuredTermSource<'a> {
     SegmentUpper(usize),
     Sum {
         terms: &'a [HoursTerm],
+        carry: bool,
         remainder: bool,
         fractional: bool,
     },
     Union {
         segments: &'a [HoursSegment],
+        carry: bool,
         remainder: bool,
         fractional: bool,
     },
@@ -1695,36 +1815,40 @@ impl MeasuredTermSource<'_> {
             Self::SegmentUpper(members) => 1 + members,
             Self::Sum {
                 terms,
+                carry,
                 remainder,
                 fractional,
             } => {
-                1 + terms
-                    .iter()
-                    .filter(|term| {
-                        if *remainder {
-                            term.remainder != 0
-                        } else {
-                            term.seconds != 0
-                        }
-                    })
-                    .count()
+                usize::from(*carry)
+                    + terms
+                        .iter()
+                        .filter(|term| {
+                            if *remainder {
+                                term.remainder != 0
+                            } else {
+                                term.seconds != 0
+                            }
+                        })
+                        .count()
                     + usize::from(*fractional)
             }
             Self::Union {
                 segments,
+                carry,
                 remainder,
                 fractional,
             } => {
-                1 + segments
-                    .iter()
-                    .filter(|segment| {
-                        if *remainder {
-                            segment.remainder != 0
-                        } else {
-                            segment.seconds != 0
-                        }
-                    })
-                    .count()
+                usize::from(*carry)
+                    + segments
+                        .iter()
+                        .filter(|segment| {
+                            if *remainder {
+                                segment.remainder != 0
+                            } else {
+                                segment.seconds != 0
+                            }
+                        })
+                        .count()
                     + usize::from(*fractional)
             }
         }
@@ -1765,13 +1889,16 @@ impl Serialize for MeasuredTermSource<'_> {
             }
             Self::Sum {
                 terms,
+                carry,
                 remainder,
                 fractional,
             } => {
-                sequence.serialize_element(&MeasuredTerm {
-                    variable: MEASURED_INT_ID,
-                    coefficient: if *remainder { -1_000_000_000 } else { 1 },
-                })?;
+                if *carry {
+                    sequence.serialize_element(&MeasuredTerm {
+                        variable: MEASURED_INT_ID,
+                        coefficient: if *remainder { -1_000_000_000 } else { 1 },
+                    })?;
+                }
                 for term in *terms {
                     let coefficient = if *remainder {
                         term.remainder
@@ -1794,13 +1921,16 @@ impl Serialize for MeasuredTermSource<'_> {
             }
             Self::Union {
                 segments,
+                carry,
                 remainder,
                 fractional,
             } => {
-                sequence.serialize_element(&MeasuredTerm {
-                    variable: MEASURED_INT_ID,
-                    coefficient: if *remainder { -1_000_000_000 } else { 1 },
-                })?;
+                if *carry {
+                    sequence.serialize_element(&MeasuredTerm {
+                        variable: MEASURED_INT_ID,
+                        coefficient: if *remainder { -1_000_000_000 } else { 1 },
+                    })?;
+                }
                 for segment in *segments {
                     let coefficient = if *remainder {
                         segment.remainder
@@ -1967,36 +2097,35 @@ fn charge_hours(
     mode: ChargeMode,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
+    let carry = hours.aggregate.has_fractional();
+    if carry {
+        let length = match &hours.aggregate {
+            HoursAggregate::Sum { terms } => terms.len(),
+            HoursAggregate::Union { segments } => segments.len(),
+        };
+        let carry_max = i64::try_from(length).map_err(|_| arithmetic())?;
+        for (maximum, helper) in [
+            (carry_max, HoursHelperFact::Carry),
+            (1, HoursHelperFact::Fractional),
+        ] {
+            charge_record(&measured_variable(maximum), 1, mode, budget)?;
+            charge_record(
+                &MeasuredFact {
+                    kind: MeasuredFactKind::Hours {
+                        hours,
+                        component: None,
+                        message: helper_message(hours.kind, helper),
+                    },
+                },
+                hours_fact_references(hours, false)?,
+                mode,
+                budget,
+            )?;
+        }
+    }
     match &hours.aggregate {
         HoursAggregate::Sum { terms } => {
-            let carry_max = i64::try_from(terms.len()).map_err(|_| arithmetic())?;
-            charge_record(&measured_variable(carry_max), 1, mode, budget)?;
-            charge_record(
-                &MeasuredFact {
-                    kind: MeasuredFactKind::Hours {
-                        hours,
-                        component: None,
-                        message: "official.workforce.maximum_hours.carry",
-                    },
-                },
-                hours_fact_references(hours, false)?,
-                mode,
-                budget,
-            )?;
-            charge_record(&measured_variable(1), 1, mode, budget)?;
-            charge_record(
-                &MeasuredFact {
-                    kind: MeasuredFactKind::Hours {
-                        hours,
-                        component: None,
-                        message: "official.workforce.maximum_hours.fractional",
-                    },
-                },
-                hours_fact_references(hours, false)?,
-                mode,
-                budget,
-            )?;
-            charge_sum_constraints(hours, terms, None, mode, budget)?;
+            charge_sum_constraints(hours, terms, None, carry, mode, budget)?;
         }
         HoursAggregate::Union { segments } => {
             for (segment_index, segment) in segments.iter().enumerate() {
@@ -2006,7 +2135,7 @@ fn charge_hours(
                         kind: MeasuredFactKind::Hours {
                             hours,
                             component: Some(segment_index),
-                            message: "official.workforce.maximum_hours.union_segment",
+                            message: helper_message(hours.kind, HoursHelperFact::UnionSegment),
                         },
                     },
                     hours_fact_references(hours, true)?,
@@ -2045,7 +2174,7 @@ fn charge_hours(
                     budget,
                 )?;
             }
-            charge_sum_constraints(hours, &[], Some(segments), mode, budget)?;
+            charge_sum_constraints(hours, &[], Some(segments), carry, mode, budget)?;
         }
     }
     Ok(())
@@ -2062,7 +2191,10 @@ fn charge_aggregate_fact(
             kind: MeasuredFactKind::Hours {
                 hours,
                 component: Some(component),
-                message: "official.workforce.maximum_hours",
+                message: match hours.kind {
+                    HoursPlanKind::MaximumHours => "official.workforce.maximum_hours",
+                    HoursPlanKind::WorkloadQuota => "official.workforce.workload_quota",
+                },
             },
         },
         hours_fact_references(hours, true)?,
@@ -2071,71 +2203,82 @@ fn charge_aggregate_fact(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn charge_sum_constraints(
     hours: &HoursPlan,
     terms: &[HoursTerm],
     segments: Option<&[HoursSegment]>,
+    carry: bool,
     mode: ChargeMode,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
-    let (lower, upper, seconds) = if let Some(segments) = segments {
+    let (lower, upper, floor, seconds) = if let Some(segments) = segments {
         (
             MeasuredTermSource::Union {
                 segments,
+                carry,
                 remainder: true,
                 fractional: false,
             },
             MeasuredTermSource::Union {
                 segments,
+                carry,
                 remainder: true,
-                fractional: true,
+                fractional: carry,
             },
             MeasuredTermSource::Union {
                 segments,
+                carry,
                 remainder: false,
-                fractional: true,
+                fractional: false,
+            },
+            MeasuredTermSource::Union {
+                segments,
+                carry,
+                remainder: false,
+                fractional: carry,
             },
         )
     } else {
         (
             MeasuredTermSource::Sum {
                 terms,
+                carry,
                 remainder: true,
                 fractional: false,
             },
             MeasuredTermSource::Sum {
                 terms,
+                carry,
                 remainder: true,
-                fractional: true,
+                fractional: carry,
             },
             MeasuredTermSource::Sum {
                 terms,
+                carry,
                 remainder: false,
-                fractional: true,
+                fractional: false,
+            },
+            MeasuredTermSource::Sum {
+                terms,
+                carry,
+                remainder: false,
+                fractional: carry,
             },
         )
     };
     let aggregate_component = segments.map_or(0, <[HoursSegment]>::len);
-    let lower_component = if segments.is_some() {
-        aggregate_component
-    } else {
-        0
-    };
-    let upper_component = if segments.is_some() {
-        aggregate_component
-    } else {
-        1
-    };
-    let seconds_component = if segments.is_some() {
-        aggregate_component
+    let floor_component = if segments.is_some() {
+        aggregate_component + 1
     } else {
         2
     };
-    let lower_refs = u64::try_from(lower.length())
-        .map_err(|_| arithmetic())?
-        .checked_add(1)
-        .ok_or_else(arithmetic)?;
-    let upper_refs = u64::try_from(upper.length())
+    let seconds_component = if segments.is_some() {
+        aggregate_component + 1
+    } else {
+        3
+    };
+    let floor_refs = u64::try_from(floor.length())
         .map_err(|_| arithmetic())?
         .checked_add(1)
         .ok_or_else(arithmetic)?;
@@ -2143,36 +2286,63 @@ fn charge_sum_constraints(
         .map_err(|_| arithmetic())?
         .checked_add(1)
         .ok_or_else(arithmetic)?;
-    charge_aggregate_fact(hours, lower_component, mode, budget)?;
-    charge_record(
-        &measured_constraint(lower, ComparisonOp::GreaterOrEqual, 0, None),
-        lower_refs
-            .checked_add(hours_fact_references(hours, true)?)
-            .ok_or_else(arithmetic)?,
-        mode,
-        budget,
-    )?;
-    charge_aggregate_fact(hours, upper_component, mode, budget)?;
-    charge_record(
-        &measured_constraint(upper, ComparisonOp::LessOrEqual, 0, None),
-        upper_refs
-            .checked_add(hours_fact_references(hours, true)?)
-            .ok_or_else(arithmetic)?,
-        mode,
-        budget,
-    )?;
-    let target = i64::from(hours.maximum_minutes)
-        .checked_mul(60)
-        .ok_or_else(arithmetic)?;
-    charge_aggregate_fact(hours, seconds_component, mode, budget)?;
-    charge_record(
-        &measured_constraint(seconds, ComparisonOp::LessOrEqual, target, None),
-        seconds_refs
-            .checked_add(hours_fact_references(hours, true)?)
-            .ok_or_else(arithmetic)?,
-        mode,
-        budget,
-    )
+    if carry {
+        let lower_refs = u64::try_from(lower.length())
+            .map_err(|_| arithmetic())?
+            .checked_add(1)
+            .ok_or_else(arithmetic)?;
+        let upper_refs = u64::try_from(upper.length())
+            .map_err(|_| arithmetic())?
+            .checked_add(1)
+            .ok_or_else(arithmetic)?;
+        charge_aggregate_fact(hours, 0, mode, budget)?;
+        charge_record(
+            &measured_constraint(lower, ComparisonOp::GreaterOrEqual, 0, None),
+            lower_refs
+                .checked_add(hours_fact_references(hours, true)?)
+                .ok_or_else(arithmetic)?,
+            mode,
+            budget,
+        )?;
+        charge_aggregate_fact(hours, 1, mode, budget)?;
+        charge_record(
+            &measured_constraint(upper, ComparisonOp::LessOrEqual, 0, None),
+            upper_refs
+                .checked_add(hours_fact_references(hours, true)?)
+                .ok_or_else(arithmetic)?,
+            mode,
+            budget,
+        )?;
+    }
+    if requires_lower(hours) {
+        let target = i64::from(hours.minimum_minutes)
+            .checked_mul(60)
+            .ok_or_else(arithmetic)?;
+        charge_aggregate_fact(hours, floor_component, mode, budget)?;
+        charge_record(
+            &measured_constraint(floor, ComparisonOp::GreaterOrEqual, target, None),
+            floor_refs
+                .checked_add(hours_fact_references(hours, true)?)
+                .ok_or_else(arithmetic)?,
+            mode,
+            budget,
+        )?;
+    }
+    if let Some(maximum_minutes) = hours.maximum_minutes {
+        let target = i64::from(maximum_minutes)
+            .checked_mul(60)
+            .ok_or_else(arithmetic)?;
+        charge_aggregate_fact(hours, seconds_component, mode, budget)?;
+        charge_record(
+            &measured_constraint(seconds, ComparisonOp::LessOrEqual, target, None),
+            seconds_refs
+                .checked_add(hours_fact_references(hours, true)?)
+                .ok_or_else(arithmetic)?,
+            mode,
+            budget,
+        )?;
+    }
+    Ok(())
 }
 
 /// Preflight the contribution-only hours records, including channel helpers.
@@ -2423,7 +2593,7 @@ pub(crate) fn compile(
                         hours,
                         fact_id.clone(),
                         parent.clone(),
-                        "official.workforce.maximum_hours.union_segment",
+                        helper_message(hours.kind, HoursHelperFact::UnionSegment),
                         Some(segment_index),
                         budget,
                     )?);
@@ -2535,24 +2705,15 @@ fn emit_sum(
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,
 ) -> Result<(), AssignmentRuleError> {
-    if limits
-        .max_abs_coefficient
-        .min(PlanningIrLimitsV1::DEFAULT.max_abs_coefficient)
-        < i64::try_from(NANOS_PER_SECOND).map_err(|_| arithmetic())?
-    {
-        return Err(AssignmentRuleError::LimitExceeded(
-            AssignmentRuleLimit::PerRecord,
-        ));
-    }
-    let carry_max = i64::try_from(terms.len()).map_err(|_| arithmetic())?;
     let coefficient_limit = limits
         .max_abs_coefficient
         .min(PlanningIrLimitsV1::DEFAULT.max_abs_coefficient);
-    let carry_max_i128 = i128::from(carry_max);
     let mut early_seconds_min = 0_i128;
     let mut early_seconds_max = 0_i128;
     let mut early_remainders_max = 0_i128;
+    let mut fractional = false;
     for (_, seconds, remainder) in terms {
+        fractional |= *remainder != 0;
         if i128::from(*seconds).abs() > i128::from(coefficient_limit)
             || i128::from(*remainder).abs() > i128::from(coefficient_limit)
         {
@@ -2571,231 +2732,292 @@ fn emit_sum(
             .checked_add(i128::from(*remainder))
             .ok_or_else(arithmetic)?;
     }
-    check_expression_range(
-        -NANOS_PER_SECOND * carry_max_i128,
-        early_remainders_max,
-        0,
-        limits,
-    )?;
-    let early_target = i64::from(hours.maximum_minutes)
+    let carry_max = if fractional {
+        i64::try_from(terms.len()).map_err(|_| arithmetic())?
+    } else {
+        0
+    };
+    let carry_max_i128 = i128::from(carry_max);
+    if fractional {
+        if coefficient_limit < i64::try_from(NANOS_PER_SECOND).map_err(|_| arithmetic())? {
+            return Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::PerRecord,
+            ));
+        }
+        check_expression_range(
+            -NANOS_PER_SECOND * carry_max_i128,
+            early_remainders_max,
+            0,
+            limits,
+        )?;
+    }
+    let minimum_target = i64::from(hours.minimum_minutes)
         .checked_mul(60)
         .ok_or_else(arithmetic)?;
     check_expression_range(
         early_seconds_min,
         early_seconds_max
             .checked_add(carry_max_i128)
-            .and_then(|maximum| maximum.checked_add(1))
             .ok_or_else(arithmetic)?,
-        early_target,
+        minimum_target,
         limits,
     )?;
-    let carry_id = IntVariableId::new(identities.derive(
-        IdentityKind::Integer,
-        &(
-            "maximum_hours_carry",
-            hours.rule,
-            hours.person,
-            hours.bucket_id,
-            hours.window.start,
-            hours.window.end,
-            window_index,
-            segment_count,
-        ),
-        budget,
-    )?)
-    .map_err(|_| invalid_id())?;
-    let carry_fact_id = ProvenanceId::new(identities.derive(
-        IdentityKind::Provenance,
-        &(
-            "maximum_hours_carry_fact",
-            hours.rule,
-            hours.person,
-            hours.bucket_id,
-            hours.window.start,
-            hours.window.end,
-            window_index,
-            segment_count,
-        ),
-        budget,
-    )?)
-    .map_err(|_| invalid_id())?;
-    budget.reserve(1, 6, 512)?;
-    provenance.push(hours_fact(
-        hours,
-        carry_fact_id.clone(),
-        parent.clone(),
-        "official.workforce.maximum_hours.carry",
-        None,
-        budget,
-    )?);
-    variables.push(Variable::Integer(IntVariable {
-        id: carry_id.clone(),
-        domain: IntDomain {
-            inclusive_ranges: vec![InclusiveRange {
-                start: 0,
-                end: carry_max,
-            }],
-        },
-        provenance: carry_fact_id.clone(),
-    }));
-    // An integral-second cap cannot admit even one extra nanosecond. The 0/1 integer
-    // charges one whole second iff the Euclidean remainder is positive.
-    let fractional_id = IntVariableId::new(identities.derive(
-        IdentityKind::Integer,
-        &(
-            "maximum_hours_fractional",
-            hours.rule,
-            hours.person,
-            hours.bucket_id,
-            hours.window.start,
-            hours.window.end,
-            window_index,
-            segment_count,
-        ),
-        budget,
-    )?)
-    .map_err(|_| invalid_id())?;
-    let fractional_fact_id = ProvenanceId::new(identities.derive(
-        IdentityKind::Provenance,
-        &(
-            "maximum_hours_fractional_fact",
-            hours.rule,
-            hours.person,
-            hours.bucket_id,
-            hours.window.start,
-            hours.window.end,
-            window_index,
-            segment_count,
-        ),
-        budget,
-    )?)
-    .map_err(|_| invalid_id())?;
-    budget.reserve(1, 6, 512)?;
-    provenance.push(hours_fact(
-        hours,
-        fractional_fact_id.clone(),
-        parent.clone(),
-        "official.workforce.maximum_hours.fractional",
-        None,
-        budget,
-    )?);
-    variables.push(Variable::Integer(IntVariable {
-        id: fractional_id.clone(),
-        domain: IntDomain {
-            inclusive_ranges: vec![InclusiveRange { start: 0, end: 1 }],
-        },
-        provenance: fractional_fact_id,
-    }));
-    let mut remainder_terms = vec![LinearTerm {
-        variable: carry_id.clone(),
-        coefficient: -1_000_000_000,
-    }];
-    let mut seconds_terms = vec![LinearTerm {
-        variable: carry_id,
-        coefficient: 1,
-    }];
-    let mut seconds_min = 0_i128;
-    let mut seconds_max = 0_i128;
-    let mut remainders_max = 0_i128;
-    for (variable, seconds, remainder) in terms {
-        remainder_terms.push(LinearTerm {
-            variable: variable.clone(),
-            coefficient: *remainder,
-        });
-        seconds_terms.push(LinearTerm {
-            variable: variable.clone(),
-            coefficient: *seconds,
-        });
-        let value = i128::from(*seconds);
-        seconds_min = seconds_min
-            .checked_add(value.min(0))
+    if let Some(maximum_minutes) = hours.maximum_minutes {
+        let target = i64::from(maximum_minutes)
+            .checked_mul(60)
             .ok_or_else(arithmetic)?;
-        seconds_max = seconds_max
-            .checked_add(value.max(0))
-            .ok_or_else(arithmetic)?;
-        remainders_max = remainders_max
-            .checked_add(i128::from(*remainder))
-            .ok_or_else(arithmetic)?;
+        check_expression_range(
+            early_seconds_min,
+            early_seconds_max
+                .checked_add(carry_max_i128)
+                .and_then(|maximum| maximum.checked_add(i128::from(fractional)))
+                .ok_or_else(arithmetic)?,
+            target,
+            limits,
+        )?;
     }
-    let remainder_lower_terms = remainder_terms.clone();
-    remainder_terms.push(LinearTerm {
-        variable: fractional_id.clone(),
-        coefficient: -MAX_NANOS_REMAINDER,
-    });
-    seconds_terms.push(LinearTerm {
-        variable: fractional_id,
-        coefficient: 1,
-    });
-    let carry_max_i128 = i128::from(carry_max);
-    check_expression_range(
-        -NANOS_PER_SECOND * carry_max_i128,
-        remainders_max,
-        0,
-        limits,
-    )?;
-    let target = i64::from(hours.maximum_minutes)
-        .checked_mul(60)
-        .ok_or_else(arithmetic)?;
-    check_expression_range(
-        seconds_min,
-        seconds_max
-            .checked_add(carry_max_i128)
-            .and_then(|maximum| maximum.checked_add(1))
-            .ok_or_else(arithmetic)?,
-        target,
-        limits,
-    )?;
-    emit_constraint(
-        hours,
-        window_index,
-        0,
-        0,
-        "remainder_lower",
-        Constraint::LinearComparison(LinearComparison {
-            expression: linear(remainder_lower_terms, 0)?,
-            op: ComparisonOp::GreaterOrEqual,
-            rhs: 0,
-        }),
-        parent.clone(),
-        identities,
-        constraints,
-        provenance,
-        budget,
-    )?;
-    emit_constraint(
-        hours,
-        window_index,
-        1,
-        0,
-        "remainder_upper",
-        Constraint::LinearComparison(LinearComparison {
-            expression: linear(remainder_terms, 0)?,
-            op: ComparisonOp::LessOrEqual,
-            rhs: 0,
-        }),
-        parent.clone(),
-        identities,
-        constraints,
-        provenance,
-        budget,
-    )?;
-    emit_constraint(
-        hours,
-        window_index,
-        2,
-        0,
-        "seconds_upper",
-        Constraint::LinearComparison(LinearComparison {
-            expression: linear(seconds_terms, 0)?,
-            op: ComparisonOp::LessOrEqual,
-            rhs: target,
-        }),
-        parent,
-        identities,
-        constraints,
-        provenance,
-        budget,
-    )?;
+    // Integral coefficients need neither Euclidean carry nor a fractional upper-cap bit.
+    let auxiliary = if fractional {
+        let carry_id = IntVariableId::new(identities.derive(
+            IdentityKind::Integer,
+            &(
+                "maximum_hours_carry",
+                hours.rule,
+                hours.person,
+                hours.bucket_id,
+                hours.window.start,
+                hours.window.end,
+                window_index,
+                segment_count,
+            ),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        let carry_fact_id = ProvenanceId::new(identities.derive(
+            IdentityKind::Provenance,
+            &(
+                "maximum_hours_carry_fact",
+                hours.rule,
+                hours.person,
+                hours.bucket_id,
+                hours.window.start,
+                hours.window.end,
+                window_index,
+                segment_count,
+            ),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        budget.reserve(1, 6, 512)?;
+        provenance.push(hours_fact(
+            hours,
+            carry_fact_id.clone(),
+            parent.clone(),
+            helper_message(hours.kind, HoursHelperFact::Carry),
+            None,
+            budget,
+        )?);
+        variables.push(Variable::Integer(IntVariable {
+            id: carry_id.clone(),
+            domain: IntDomain {
+                inclusive_ranges: vec![InclusiveRange {
+                    start: 0,
+                    end: carry_max,
+                }],
+            },
+            provenance: carry_fact_id.clone(),
+        }));
+        // An integral-second cap cannot admit even one extra nanosecond. The 0/1 integer
+        // requires one extra second whenever the Euclidean remainder is positive.
+        let fractional_id = IntVariableId::new(identities.derive(
+            IdentityKind::Integer,
+            &(
+                "maximum_hours_fractional",
+                hours.rule,
+                hours.person,
+                hours.bucket_id,
+                hours.window.start,
+                hours.window.end,
+                window_index,
+                segment_count,
+            ),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        let fractional_fact_id = ProvenanceId::new(identities.derive(
+            IdentityKind::Provenance,
+            &(
+                "maximum_hours_fractional_fact",
+                hours.rule,
+                hours.person,
+                hours.bucket_id,
+                hours.window.start,
+                hours.window.end,
+                window_index,
+                segment_count,
+            ),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        budget.reserve(1, 6, 512)?;
+        provenance.push(hours_fact(
+            hours,
+            fractional_fact_id.clone(),
+            parent.clone(),
+            helper_message(hours.kind, HoursHelperFact::Fractional),
+            None,
+            budget,
+        )?);
+        variables.push(Variable::Integer(IntVariable {
+            id: fractional_id.clone(),
+            domain: IntDomain {
+                inclusive_ranges: vec![InclusiveRange { start: 0, end: 1 }],
+            },
+            provenance: fractional_fact_id,
+        }));
+        Some((carry_id, fractional_id))
+    } else {
+        None
+    };
+    let mut remainder_terms = Vec::new();
+    let mut floor_terms = requires_lower(hours).then(Vec::new);
+    let mut seconds_terms = Vec::new();
+    if let Some((carry_id, _)) = &auxiliary {
+        remainder_terms.push(LinearTerm {
+            variable: carry_id.clone(),
+            coefficient: -1_000_000_000,
+        });
+        if let Some(floor_terms) = floor_terms.as_mut() {
+            floor_terms.push(LinearTerm {
+                variable: carry_id.clone(),
+                coefficient: 1,
+            });
+        }
+        if hours.maximum_minutes.is_some() {
+            seconds_terms.push(LinearTerm {
+                variable: carry_id.clone(),
+                coefficient: 1,
+            });
+        }
+    }
+    for (variable, seconds, remainder) in terms {
+        if *remainder != 0 {
+            remainder_terms.push(LinearTerm {
+                variable: variable.clone(),
+                coefficient: *remainder,
+            });
+        }
+        if *seconds != 0 {
+            if let Some(floor_terms) = floor_terms.as_mut() {
+                floor_terms.push(LinearTerm {
+                    variable: variable.clone(),
+                    coefficient: *seconds,
+                });
+            }
+            if hours.maximum_minutes.is_some() {
+                seconds_terms.push(LinearTerm {
+                    variable: variable.clone(),
+                    coefficient: *seconds,
+                });
+            }
+        }
+    }
+    if let Some((_, fractional_id)) = auxiliary {
+        let remainder_lower_terms = remainder_terms.clone();
+        if hours.maximum_minutes.is_some() {
+            seconds_terms.push(LinearTerm {
+                variable: fractional_id.clone(),
+                coefficient: 1,
+            });
+        }
+        remainder_terms.push(LinearTerm {
+            variable: fractional_id,
+            coefficient: -MAX_NANOS_REMAINDER,
+        });
+        emit_constraint(
+            hours,
+            window_index,
+            0,
+            0,
+            "remainder_lower",
+            Constraint::LinearComparison(LinearComparison {
+                expression: linear(remainder_lower_terms, 0)?,
+                op: ComparisonOp::GreaterOrEqual,
+                rhs: 0,
+            }),
+            parent.clone(),
+            identities,
+            constraints,
+            provenance,
+            budget,
+        )?;
+        emit_constraint(
+            hours,
+            window_index,
+            1,
+            0,
+            "remainder_upper",
+            Constraint::LinearComparison(LinearComparison {
+                expression: linear(remainder_terms, 0)?,
+                op: ComparisonOp::LessOrEqual,
+                rhs: 0,
+            }),
+            parent.clone(),
+            identities,
+            constraints,
+            provenance,
+            budget,
+        )?;
+    }
+    if let Some(floor_terms) = floor_terms {
+        emit_constraint(
+            hours,
+            window_index,
+            if let Some(segments) = segment_count {
+                segments + 1
+            } else {
+                2
+            },
+            0,
+            "seconds_lower",
+            Constraint::LinearComparison(LinearComparison {
+                expression: linear(floor_terms, 0)?,
+                op: ComparisonOp::GreaterOrEqual,
+                rhs: minimum_target,
+            }),
+            parent.clone(),
+            identities,
+            constraints,
+            provenance,
+            budget,
+        )?;
+    }
+    if let Some(maximum_minutes) = hours.maximum_minutes {
+        let target = i64::from(maximum_minutes)
+            .checked_mul(60)
+            .ok_or_else(arithmetic)?;
+        emit_constraint(
+            hours,
+            window_index,
+            if let Some(segments) = segment_count {
+                segments + 1
+            } else {
+                3
+            },
+            0,
+            "seconds_upper",
+            Constraint::LinearComparison(LinearComparison {
+                expression: linear(seconds_terms, 0)?,
+                op: ComparisonOp::LessOrEqual,
+                rhs: target,
+            }),
+            parent,
+            identities,
+            constraints,
+            provenance,
+            budget,
+        )?;
+    }
     Ok(())
 }
 
@@ -2853,7 +3075,10 @@ fn emit_constraint(
         hours,
         fact_id.clone(),
         parent,
-        "official.workforce.maximum_hours",
+        match hours.kind {
+            HoursPlanKind::MaximumHours => "official.workforce.maximum_hours",
+            HoursPlanKind::WorkloadQuota => "official.workforce.workload_quota",
+        },
         Some(component_index),
         budget,
     )?);
@@ -2884,10 +3109,18 @@ fn hours_fact(
     }
     refs.sort_unstable();
     let mut parameters = BTreeMap::new();
-    parameters.insert(
-        "maximum_minutes".to_owned(),
-        ProvenanceParameter::Integer(i64::from(hours.maximum_minutes)),
-    );
+    if matches!(hours.kind, HoursPlanKind::WorkloadQuota) {
+        parameters.insert(
+            "minimum_minutes".to_owned(),
+            ProvenanceParameter::Integer(i64::from(hours.minimum_minutes)),
+        );
+    }
+    if let Some(maximum_minutes) = hours.maximum_minutes {
+        parameters.insert(
+            "maximum_minutes".to_owned(),
+            ProvenanceParameter::Integer(i64::from(maximum_minutes)),
+        );
+    }
     parameters.insert(
         "window_start".to_owned(),
         ProvenanceParameter::Text(hours.window.start.to_string()),
@@ -2985,4 +3218,244 @@ fn invalid_id() -> AssignmentRuleError {
 
 fn arithmetic() -> AssignmentRuleError {
     AssignmentRuleError::InvalidConstruction(AssignmentConstructionIssue::ArithmeticOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_calendar_compilation_charges_one_scan() -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = crate::test_support::fixture()?;
+        document
+            .domain
+            .entities
+            .remove(&crate::test_support::id(6).parse()?);
+        document.domain.locked_assignments.clear();
+        let calendar_id: WorkCalendarId = crate::test_support::id(2).parse()?;
+        let start: jiff::civil::Date = "2026-10-01".parse()?;
+        let intervals = (0..100)
+            .map(|day| {
+                Ok(crate::model::LocalInterval {
+                    starts_at: eutheto_types::LocalWallTime::from_datetime(
+                        start
+                            .checked_add(jiff::Span::new().days(day))?
+                            .to_datetime(jiff::civil::Time::MIN),
+                    ),
+                    ends_at: eutheto_types::LocalWallTime::from_datetime(
+                        start
+                            .checked_add(jiff::Span::new().days(day + 1))?
+                            .to_datetime(jiff::civil::Time::MIN),
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, jiff::Error>>()?;
+        document
+            .domain
+            .entities
+            .get_mut(&calendar_id.as_entity_id())
+            .ok_or("calendar")?["period"] =
+            serde_json::to_value(crate::model::CalendarPeriod::Custom { intervals })?;
+        let input = AssignmentInput::new(&document, &mut OperationBudget::evaluation(None))?;
+        let shift = input.shifts.first().ok_or("shift")?;
+        for membership in [
+            WindowMembership::StartInstant,
+            WindowMembership::Intersection,
+        ] {
+            let mut budget = OperationBudget::evaluation(None);
+            // Enough for one 100-interval scan and one member's aggregation, not two scans.
+            budget.steps(crate::assignment_rules::MAX_WORK_STEPS - 150)?;
+            let windows = calendar_windows(
+                &document,
+                &input,
+                &[Member { index: 0, shift }],
+                calendar_id,
+                membership,
+                WorkloadMeasurement::ElapsedMinutes,
+                OverlappingContribution::Sum,
+                &mut budget,
+            )?;
+            assert_eq!(windows.len(), 1);
+            assert_eq!(windows[0].0.start, "2026-11-01T04:00:00Z".parse()?);
+            assert_eq!(windows[0].0.end, "2026-11-02T05:00:00Z".parse()?);
+            let HoursAggregate::Sum { terms } = &windows[0].1 else {
+                return Err("expected elapsed sum".into());
+            };
+            assert_eq!(terms.len(), 1);
+            assert_eq!(terms[0].seconds, 7200);
+            assert_eq!(terms[0].remainder, 0);
+        }
+        Ok(())
+    }
+
+    fn hours_plan(
+        kind: HoursPlanKind,
+        contribution: OverlappingContribution,
+        fractional: bool,
+    ) -> Result<Plan, Box<dyn std::error::Error>> {
+        let rule = crate::test_support::id(20).parse()?;
+        let remainder = i64::from(fractional);
+        let mut aggregate = match contribution {
+            OverlappingContribution::Sum => HoursAggregate::Sum {
+                terms: vec![
+                    HoursTerm {
+                        index: 0,
+                        seconds: 3600,
+                        remainder: 0,
+                    },
+                    HoursTerm {
+                        index: 1,
+                        seconds: 3600,
+                        remainder,
+                    },
+                ],
+            },
+            OverlappingContribution::Union => HoursAggregate::Union {
+                segments: vec![
+                    HoursSegment {
+                        start: "2026-11-01T08:00:00Z".parse()?,
+                        end: "2026-11-01T08:30:00Z".parse()?,
+                        seconds: 1800,
+                        remainder: 0,
+                        members: vec![0],
+                    },
+                    HoursSegment {
+                        start: "2026-11-01T08:30:00Z".parse()?,
+                        end: "2026-11-01T09:00:00Z".parse()?,
+                        seconds: 1800,
+                        remainder: 0,
+                        members: vec![0, 1],
+                    },
+                    HoursSegment {
+                        start: "2026-11-01T09:00:00Z".parse()?,
+                        end: if fractional {
+                            "2026-11-01T09:30:00.000000001Z"
+                        } else {
+                            "2026-11-01T09:30:00Z"
+                        }
+                        .parse()?,
+                        seconds: 1800,
+                        remainder,
+                        members: vec![1],
+                    },
+                ],
+            },
+        };
+        if let HoursAggregate::Union { segments } = &mut aggregate {
+            for index in 2..9 {
+                segments.push(HoursSegment {
+                    start: format!(
+                        "2026-11-01T{:02}:{:02}:00Z",
+                        10 + (index - 2) / 2,
+                        (index - 2) % 2 * 30,
+                    )
+                    .parse()?,
+                    end: format!(
+                        "2026-11-01T{:02}:{:02}:00Z",
+                        10 + (index - 1) / 2,
+                        (index - 1) % 2 * 30,
+                    )
+                    .parse()?,
+                    seconds: 1800,
+                    remainder: 0,
+                    members: vec![index],
+                });
+            }
+        }
+        let plan = Plan {
+            definitions: Vec::new(),
+            constraints: Vec::new(),
+            weekends: Vec::new(),
+            parents: BTreeMap::new(),
+            hours: vec![HoursPlan {
+                rule,
+                person: crate::test_support::id(1).parse()?,
+                bucket_id: crate::test_support::id(3).parse()?,
+                measurement: WorkloadMeasurement::ElapsedMinutes,
+                contribution,
+                minimum_minutes: 0,
+                maximum_minutes: Some(90),
+                kind,
+                window: HoursWindow {
+                    calendar_id: Some(crate::test_support::id(2).parse()?),
+                    start: "2026-11-01T00:00:00Z".parse()?,
+                    end: "2026-11-02T00:00:00Z".parse()?,
+                    duration_minutes: None,
+                    membership: WindowMembership::Intersection,
+                },
+                aggregate,
+            }],
+        };
+        Ok(plan)
+    }
+
+    #[test]
+    fn measured_hours_cover_every_emitted_record() -> Result<(), Box<dyn std::error::Error>> {
+        for kind in [HoursPlanKind::MaximumHours, HoursPlanKind::WorkloadQuota] {
+            for contribution in [OverlappingContribution::Sum, OverlappingContribution::Union] {
+                for fractional in [false, true] {
+                    let plan = hours_plan(kind, contribution, fractional)?;
+                    let limits = PlanningIrLimitsV1::DEFAULT;
+                    let shape = checked_shape(&plan, limits)?;
+                    let mut budget = OperationBudget::analysis(None, limits);
+                    preflight_contribution(&plan, &mut budget, limits)?;
+                    preflight_complete_ir(&plan, &mut budget, limits)?;
+                    budget.reserve_ir_retention()?;
+                    let source_count = match contribution {
+                        OverlappingContribution::Sum => 2,
+                        OverlappingContribution::Union => 9,
+                    };
+                    let source = (0..source_count)
+                        .map(|index| {
+                            Ok((
+                                index,
+                                IntVariableId::new(format!("official.workforce.int.{index:064x}"))?,
+                            ))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, Box<dyn std::error::Error>>>()?;
+                    let parents = BTreeMap::from([(
+                        plan.hours[0].rule,
+                        ProvenanceId::new(MEASURED_PROVENANCE_ID)?,
+                    )]);
+                    let mut variables = Vec::new();
+                    let mut constraints = Vec::new();
+                    let mut provenance = Vec::new();
+                    compile(
+                        &plan,
+                        &source,
+                        &parents,
+                        &mut PlanningIdentities::default(),
+                        &mut variables,
+                        &mut constraints,
+                        &mut provenance,
+                        &mut budget,
+                        limits,
+                    )?;
+                    let mut actual_bytes = 0;
+                    for variable in &variables {
+                        actual_bytes =
+                            add(actual_bytes, count(serde_json::to_vec(variable)?.len())?)?;
+                    }
+                    for constraint in &constraints {
+                        actual_bytes =
+                            add(actual_bytes, count(serde_json::to_vec(constraint)?.len())?)?;
+                    }
+                    for fact in &provenance {
+                        actual_bytes = add(actual_bytes, count(serde_json::to_vec(fact)?.len())?)?;
+                    }
+                    assert_eq!(budget.reserved_ir_bytes(), actual_bytes);
+                    assert_eq!(shape.helper_variables, count(variables.len())?);
+                    assert_eq!(
+                        shape.constraints - shape.pair_indices * 2,
+                        count(constraints.len())?
+                    );
+                    assert_eq!(
+                        shape.provenance - shape.pair_indices,
+                        count(provenance.len())?
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }

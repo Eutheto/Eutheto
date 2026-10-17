@@ -277,9 +277,13 @@ Phase 05 completes the people CSV importer required by the Phase 06 setup flow; 
 ```text
 detect_people_csv(input, limits) -> PeopleCsvDetection
 preview_people_csv(scenario_revision, input_digest, mapping, identity_decisions) -> PeopleImportPreview
-apply_people_csv_import(scenario_id, expected_revision, preview_id, request_id) -> CommandBatchResult
-people_csv_rejected_rows(preview_id) -> BoundedRejectedRowReport
+apply_csv_import(scenario_id, expected_revision, preview_id, request_id) -> CsvApplyOutcome
+csv_report(preview_id) -> BoundedCsvReport
 ```
+
+Phase 07 shares apply/report custody with assignment imports; the retained preview
+family selects reconstruction and report rows. People detection, mapping, preview
+and rejection semantics remain family-specific.
 
 The desktop adapter passes an explicitly granted file to the same bounded byte-stream service that a headless caller can use; Vue never performs the authoritative parse. Detection recognizes CSV structure and encoding without executing cell content, rejects unsupported/binary input, and enforces configured byte, row, column, cell, and report limits. Parsing is streaming and cancellable.
 
@@ -343,9 +347,7 @@ The generated JSON Schema and migration fixtures are authoritative. This checked
       { "id": "q-physician", "name": "Physician" },
       { "id": "q-call", "name": "Overnight call eligible" }
     ],
-    "locations": [
-      { "id": "loc-main", "name": "Main clinic" }
-    ],
+    "locations": [{ "id": "loc-main", "name": "Main clinic" }],
     "assignmentTypes": [
       {
         "id": "type-clinic-am",
@@ -397,9 +399,7 @@ The generated JSON Schema and migration fixtures are authoritative. This checked
         "coverage": {
           "minimum": 2,
           "maximum": 2,
-          "qualificationSets": [
-            { "minimum": 2, "allOf": ["q-physician"] }
-          ]
+          "qualificationSets": [{ "minimum": 2, "allOf": ["q-physician"] }]
         }
       },
       {
@@ -422,9 +422,7 @@ The generated JSON Schema and migration fixtures are authoritative. This checked
         "coverage": {
           "minimum": 1,
           "maximum": 1,
-          "qualificationSets": [
-            { "minimum": 1, "allOf": ["q-call"] }
-          ]
+          "qualificationSets": [{ "minimum": 1, "allOf": ["q-call"] }]
         }
       }
     ],
@@ -503,6 +501,8 @@ The generated JSON Schema and migration fixtures are authoritative. This checked
 ```
 
 Expected behavior is deterministic generation of September instances in `America/Chicago`; static rejection of ineligible pairs; exactly two clinicians per clinic and one per overnight call; no call→clinic pair with less than 600 elapsed minutes; relevant rolling 14-day windows; no more than two consecutive overnight calls; Jones Friday preference and weighted call balance after required rules; stable person/shift projection; and independent verification of all enabled rules. Phase 05 must implement the slice rules and parse/preserve the later rules/preferences; Phase 07 makes every expected behavior above executable before the workforce MVP gate.
+
+**Maintainer-approved Appendix-F expectation correction (Phase07 CLI verification):** preserve the full local September 10 absence and every authored rule. This exact three-person example is infeasible: Smith's absence overlaps the September 9 overnight call and September 10 clinic; whoever among Jones and Patel covers that call has only 120 minutes before the clinic, below the Required 600-minute rest. Only one clinician remains for exact-two clinic coverage. The current corpus must therefore expect infeasible with no accepted roster or score, not weaken the absence or any Required rule to obtain 74 assignments. Local readiness is not a feasibility proof, and a backend infeasibility result does not itself establish a mapped native conflict core.
 
 ## Acceptance fixture corpus
 
@@ -668,19 +668,19 @@ Phase 05 exits only when workforce schema/migrations/entities are versioned; ini
 
 ## Risks and failure handling
 
-| Risk or failure | Required behavior |
-|---|---|
-| DST local time is ambiguous/nonexistent | Apply explicit scenario policy or require review; never infer silently. |
-| Person name collision/import similarity | Match stable external ID or require explicit user mapping; names never become identity. |
-| Static preprocessing removes a pair | Retain exact qualification/availability rejection provenance. |
-| Obvious coverage impossible | Return actionable full-validation issue before solve; solving remains the authority for nonobvious infeasibility. |
-| Compiler/verifier disagree | Quarantine candidate, fail run as correctness alarm, retain bounded diagnostics. |
-| Later rule appears in Phase 05 document | Preserve it but report backend/phase unsupported before solve; never drop or treat it satisfied. |
-| Rolling-window generation explodes | Enforce model limits and generate only membership-changing boundary windows when implemented. |
-| Fairness harms unequal-contract staff | Use explicit workload weights/targets; never default to equal raw counts without user choice. |
-| Hard lock is invalid/overlapping/rest-conflicting | Full validation identifies exact locks and rule evidence before solving. |
-| Multiple valid schedules | Assert semantic invariants/score, not an arbitrary exact assignment. |
-| Domain preset is mistaken for legal compliance | Show non-authoritative disclaimer and user responsibility; no certified-compliance claim. |
+| Risk or failure                                   | Required behavior                                                                                                 |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| DST local time is ambiguous/nonexistent           | Apply explicit scenario policy or require review; never infer silently.                                           |
+| Person name collision/import similarity           | Match stable external ID or require explicit user mapping; names never become identity.                           |
+| Static preprocessing removes a pair               | Retain exact qualification/availability rejection provenance.                                                     |
+| Obvious coverage impossible                       | Return actionable full-validation issue before solve; solving remains the authority for nonobvious infeasibility. |
+| Compiler/verifier disagree                        | Quarantine candidate, fail run as correctness alarm, retain bounded diagnostics.                                  |
+| Later rule appears in Phase 05 document           | Preserve it but report backend/phase unsupported before solve; never drop or treat it satisfied.                  |
+| Rolling-window generation explodes                | Enforce model limits and generate only membership-changing boundary windows when implemented.                     |
+| Fairness harms unequal-contract staff             | Use explicit workload weights/targets; never default to equal raw counts without user choice.                     |
+| Hard lock is invalid/overlapping/rest-conflicting | Full validation identifies exact locks and rule evidence before solving.                                          |
+| Multiple valid schedules                          | Assert semantic invariants/score, not an arbitrary exact assignment.                                              |
+| Domain preset is mistaken for legal compliance    | Show non-authoritative disclaimer and user responsibility; no certified-compliance claim.                         |
 
 ## Deferred and non-goals
 

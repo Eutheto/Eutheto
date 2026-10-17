@@ -1,8 +1,10 @@
 use crate::{
     assignment_rules::{
-        AssignmentRuleError, build_workforce_share_result, compile_workforce, operation_error,
-        project_workforce_candidate, render_workforce_evidence, score_workforce_solution,
+        AssignmentRuleError, build_workforce_share_result, compile_counterfactual,
+        compile_infeasibility, compile_workforce, operation_error, project_workforce_candidate,
+        render_workforce_evidence, render_workforce_repair, score_workforce_solution,
         validate_input_bounds, validate_workforce_full, verify_workforce_solution,
+        workforce_comparison_enrichment, workforce_diagnostic_verification_scope,
         workforce_verification_scope,
     },
     commands,
@@ -15,20 +17,21 @@ use crate::{
 };
 use eutheto_domain_api::{
     AiToolDescriptor, CommandDescriptor, CompileContext, CounterfactualCompileContext,
-    DomainBatchCommand, DomainCapability, DomainCatalog, DomainMutation, DomainPack,
-    DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
-    DomainValidationReport, LicenseMetadata, LocalizedText, PortableImportContext,
-    SchemaVersionDescriptor, ShareResultOptions,
+    DiagnosticCopyContext, DiagnosticVerificationScope, DomainBatchCommand, DomainCapability,
+    DomainCatalog, DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError,
+    DomainShareResult, DomainUiManifest, DomainValidationReport, InfeasibilityCompileContext,
+    LicenseMetadata, LocalizedText, PortableImportContext, SchemaVersionDescriptor,
+    ShareResultOptions,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
-    ExplanationCapability, NormalizedSolution, ScoreVector, VerificationContextV1,
+    AcceptedResult, ComparisonEnrichmentV2, CounterfactualConditionV1, EvidenceRenderRequestV2,
+    EvidenceRenderResultV1, ExplanationCapability, NormalizedSolution, PortableAcceptedResult,
+    PreparedComparisonV2, RunObjectiveContext, ScoreVector, VerificationContextV1,
     VerificationReport, VerificationScope,
 };
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
-    CancellationToken, PackId, PortableDomainDocument, ScenarioDocument, ScenarioDomain,
-    SemanticCapability, SolutionId,
+    CancellationToken, PackId, PortableDomainDocument, ScenarioDocument, ScenarioDomain, SolutionId,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -36,8 +39,9 @@ use std::collections::BTreeSet;
 
 /// Real Workforce domain hooks, available for conformance without production registration.
 ///
-/// The current executable subset rejects active later-rule/preferences and hard/soft locks.
-/// Views and the five later explanation kinds are explicitly unsupported, not fabricated.
+/// The accepted-result schedule view is a read-only projection of the exact accepted document and
+/// solution. Typed explanation capabilities remain explicit in the descriptor; comparison
+/// enrichments project the exact accepted sources, not current-head labels or solver authority.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WorkforcePack;
 
@@ -64,9 +68,11 @@ impl DomainPack for WorkforcePack {
                 DomainCapability::Projection,
                 DomainCapability::Verification,
                 DomainCapability::Scoring,
+                DomainCapability::InfeasibilityDiagnostics,
                 DomainCapability::PortableData,
                 DomainCapability::ShareResult,
                 DomainCapability::AiTools,
+                DomainCapability::UiManifest,
             ]
             .into_iter()
             .collect(),
@@ -76,17 +82,17 @@ impl DomainPack for WorkforcePack {
             },
             explanation_capabilities: [
                 ExplanationCapability::Validation,
+                ExplanationCapability::Infeasibility,
                 ExplanationCapability::Assignment,
+                ExplanationCapability::Counterfactual,
+                ExplanationCapability::SolutionDifference,
+                ExplanationCapability::Repair,
+                ExplanationCapability::OptimalityStatus,
             ]
             .into_iter()
             .collect(),
-            portable_capabilities: [SemanticCapability {
-                id: "official.workforce.portable".to_owned(),
-                version: 1,
-            }]
-            .into_iter()
-            .collect(),
-            share_result_schema_version: 1,
+            portable_capabilities: portable::capabilities(true),
+            share_result_schema_version: 2,
             documentation_url: None,
             license: LicenseMetadata {
                 spdx_expression: "Apache-2.0".to_owned(),
@@ -189,6 +195,59 @@ impl DomainPack for WorkforcePack {
             .map_err(|error| operation_error(&error))
     }
 
+    fn comparison_enrichment<'a>(
+        &self,
+        base_document: &ScenarioDocument,
+        base: &'a PortableAcceptedResult,
+        candidate_document: &ScenarioDocument,
+        candidate: &'a PortableAcceptedResult,
+        prepared: &PreparedComparisonV2<'_>,
+        control: Option<&eutheto_types::OperationControl>,
+    ) -> Result<ComparisonEnrichmentV2<'a>, DomainPackError> {
+        workforce_comparison_enrichment(
+            base_document,
+            base,
+            candidate_document,
+            candidate,
+            prepared,
+            control,
+        )
+    }
+
+    fn compile_counterfactual(
+        &self,
+        document: &ScenarioDocument,
+        condition: &CounterfactualConditionV1,
+        context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        compile_counterfactual(document, condition, context)
+    }
+
+    fn compile_infeasibility(
+        &self,
+        document: &ScenarioDocument,
+        context: &InfeasibilityCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        compile_infeasibility(document, context)
+    }
+
+    fn diagnostic_verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<DiagnosticVerificationScope, DomainPackError> {
+        workforce_diagnostic_verification_scope(document, scenario_revision, control)
+    }
+
+    fn prepare_diagnostic_copy_changes(
+        &self,
+        source: &ScenarioDocument,
+        context: &DiagnosticCopyContext<'_>,
+    ) -> Result<DomainBatchCommand, DomainPackError> {
+        commands::prepare_diagnostic_copy_changes(source, context)
+    }
+
     fn project(
         &self,
         problem: &PlanningProblem,
@@ -220,6 +279,7 @@ impl DomainPack for WorkforcePack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&RunObjectiveContext>,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
         control: &eutheto_types::OperationControl,
@@ -228,6 +288,7 @@ impl DomainPack for WorkforcePack {
         verify_workforce_solution(
             document,
             solution,
+            objective_context,
             context,
             authoritative_score,
             Some(control),
@@ -238,10 +299,11 @@ impl DomainPack for WorkforcePack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&RunObjectiveContext>,
         control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
         control.check()?;
-        score_workforce_solution(document, solution, Some(control))
+        score_workforce_solution(document, solution, objective_context, Some(control))
     }
 
     fn export_portable(
@@ -274,9 +336,10 @@ impl DomainPack for WorkforcePack {
         &self,
         document: &ScenarioDocument,
         accepted: &AcceptedResult,
+        objective_context: Option<&RunObjectiveContext>,
         options: ShareResultOptions,
     ) -> Result<DomainShareResult, DomainPackError> {
-        build_workforce_share_result(document, accepted, options)
+        build_workforce_share_result(document, accepted, objective_context, options)
     }
 
     fn build_view(
@@ -284,26 +347,43 @@ impl DomainPack for WorkforcePack {
         input: eutheto_domain_api::DomainViewInput<'_>,
         control: &eutheto_types::OperationControl,
     ) -> Result<eutheto_domain_api::DomainViewOutput, DomainPackError> {
-        crate::setup::build_view(input, control)
+        if matches!(
+            &input,
+            eutheto_domain_api::DomainViewInput::AcceptedSolution { .. }
+        ) {
+            crate::result_view::build_view(input, control)
+        } else {
+            crate::setup::build_view(input, control)
+        }
     }
 
     fn render_evidence(
         &self,
         document: &ScenarioDocument,
-        request: &EvidenceRenderRequestV1,
+        request: &EvidenceRenderRequestV2,
+        objective_context: Option<&RunObjectiveContext>,
+        control: &eutheto_types::OperationControl,
     ) -> Result<EvidenceRenderResultV1, DomainPackError> {
-        render_workforce_evidence(document, request)
+        render_workforce_evidence(document, request, objective_context, control)
     }
 
-    fn compile_counterfactual(
+    fn render_repair_evidence(
         &self,
-        _document: &ScenarioDocument,
-        _condition: &CounterfactualConditionV1,
-        _context: &CounterfactualCompileContext<'_>,
-    ) -> Result<PlanningProblem, DomainPackError> {
-        Err(DomainPackError::UnsupportedExplanationCapability(
-            ExplanationCapability::Counterfactual,
-        ))
+        base_document: &ScenarioDocument,
+        base: &PortableAcceptedResult,
+        candidate_document: &ScenarioDocument,
+        candidate: &PortableAcceptedResult,
+        request: &EvidenceRenderRequestV2,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        render_workforce_repair(
+            base_document,
+            base,
+            candidate_document,
+            candidate,
+            request,
+            control,
+        )
     }
 }
 
@@ -318,6 +398,8 @@ struct GeneratedContract {
     portable_schema: Value,
     share_result_schema: Value,
     ai_tools: Vec<GeneratedAiTool>,
+    #[serde(default)]
+    result_views: Vec<Value>,
     ui_manifest: DomainUiManifest,
 }
 
@@ -342,12 +424,12 @@ struct GeneratedAiTool {
 fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
     let generated: GeneratedContract =
         serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON).map_err(|_| generated_error())?;
-    if generated.schema_version != 4
+    if generated.schema_version != 5
         || generated.pack.id != WORKFORCE_PACK_ID
         || generated.pack.pack_version != WORKFORCE_PACK_VERSION
         || generated.pack.latest_schema_version != 1
         || generated.pack.portable_schema_version != 1
-        || generated.pack.share_result_schema_version != 1
+        || generated.pack.share_result_schema_version != 2
         || !generated
             .commands
             .iter()
@@ -362,6 +444,9 @@ fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
                     .iter()
                     .copied(),
             )
+        || generated.result_views.len() != 1
+        || generated.result_views[0].get("id").and_then(Value::as_str)
+            != Some(crate::result_view::RESULT_VIEW_ID)
     {
         return Err(generated_error());
     }

@@ -8,11 +8,12 @@ use eutheto_domain_api::{
     ShareResultOptions,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, CounterfactualConditionV1, DomainAssignmentId, DomainEntityId,
-    DomainEntityKindId, DomainEntityRef, DomainEvidenceId, EvidenceRenderRequestV1,
-    EvidenceRenderResultV1, ExplanationCapability, NormalizedSolution, OptimizationDirection,
-    RequiredRuleBinding, RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue,
-    ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
+    AUTHORED_OBJECTIVE_PROFILE_ID, AcceptedResult, AssignmentValue, CounterfactualConditionV1,
+    DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef, DomainEvidenceId,
+    EvidenceRenderRequestV2, EvidenceRenderResultV1, ExplanationCapability, NormalizedSolution,
+    OptimizationDirection, RequiredRuleBinding, RuleEvaluation, RunObjectiveContext,
+    RunObjectiveOperation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue, ScoreVector,
+    VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
     VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
@@ -27,7 +28,7 @@ use eutheto_planning_ir::{
     feature_usage, summarize, validate,
 };
 use eutheto_types::{
-    ActorRef, CancellationToken, CommandEnvelope, CommandSource, DomainCommandEnvelope,
+    ActorRef, CancellationToken, CommandEnvelope, CommandSource, DomainCommandEnvelope, PackId,
     PortableDomainDocument, Revision, RuleId, ScenarioDocument, SolutionId,
 };
 use serde_json::json;
@@ -351,12 +352,14 @@ impl DomainPack for IntervalFixturePack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&RunObjectiveContext>,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
         control: &eutheto_types::OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
         control.check()?;
         validate_interval_verification_context(*self, document, solution, context)?;
+        validate_fixture_objective_context(document, objective_context)?;
         VerificationReport::new(
             context,
             evaluate_interval_rules(document, solution)?,
@@ -371,10 +374,11 @@ impl DomainPack for IntervalFixturePack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&RunObjectiveContext>,
         control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
         control.check()?;
-        authoritative_interval_score(document, solution)
+        authoritative_interval_score(document, solution, objective_context)
     }
 
     fn export_portable(
@@ -403,9 +407,10 @@ impl DomainPack for IntervalFixturePack {
         &self,
         document: &ScenarioDocument,
         accepted: &AcceptedResult,
+        objective_context: Option<&RunObjectiveContext>,
         options: ShareResultOptions,
     ) -> Result<DomainShareResult, DomainPackError> {
-        OfficialTestPack.build_share_result(document, accepted, options)
+        OfficialTestPack.build_share_result(document, accepted, objective_context, options)
     }
 
     fn build_view(
@@ -418,9 +423,13 @@ impl DomainPack for IntervalFixturePack {
 
     fn render_evidence(
         &self,
-        _document: &ScenarioDocument,
-        request: &EvidenceRenderRequestV1,
+        document: &ScenarioDocument,
+        request: &EvidenceRenderRequestV2,
+        objective_context: Option<&RunObjectiveContext>,
+        control: &eutheto_types::OperationControl,
     ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        control.check()?;
+        validate_fixture_objective_context(document, objective_context)?;
         Err(DomainPackError::UnsupportedExplanationCapability(
             explanation_capability(request.kind),
         ))
@@ -428,12 +437,65 @@ impl DomainPack for IntervalFixturePack {
 
     fn compile_counterfactual(
         &self,
-        _document: &ScenarioDocument,
+        document: &ScenarioDocument,
         _condition: &CounterfactualConditionV1,
-        _context: &CounterfactualCompileContext<'_>,
+        context: &CounterfactualCompileContext<'_>,
     ) -> Result<PlanningProblem, DomainPackError> {
+        if context.budget.is_cancelled() {
+            return Err(DomainPackError::Cancelled);
+        }
+        if context.budget.is_expired() {
+            return Err(DomainPackError::BudgetExpired);
+        }
+        context.compile_context.control.check()?;
+        validate_fixture_objective_context(
+            document,
+            context.compile_context.objective_context.as_ref(),
+        )?;
         Err(DomainPackError::UnsupportedExplanationCapability(
             ExplanationCapability::Counterfactual,
+        ))
+    }
+
+    fn compile_infeasibility(
+        &self,
+        document: &ScenarioDocument,
+        context: &eutheto_domain_api::InfeasibilityCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        if context.budget.is_cancelled() {
+            return Err(DomainPackError::Cancelled);
+        }
+        if context.budget.is_expired() {
+            return Err(DomainPackError::BudgetExpired);
+        }
+        context.compile_context.control.check()?;
+        validate_fixture_objective_context(
+            document,
+            context.compile_context.objective_context.as_ref(),
+        )?;
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn diagnostic_verification_scope(
+        &self,
+        _document: &ScenarioDocument,
+        _scenario_revision: u64,
+        _control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DiagnosticVerificationScope, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn prepare_diagnostic_copy_changes(
+        &self,
+        _source: &ScenarioDocument,
+        _context: &eutheto_domain_api::DiagnosticCopyContext<'_>,
+    ) -> Result<DomainBatchCommand, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics,
         ))
     }
 }
@@ -447,11 +509,7 @@ fn build_interval_problem(
     prune: bool,
 ) -> Result<PlanningProblem, DomainPackError> {
     context.control.check()?;
-    if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID
-        || document.domain_pack.schema_version != 1
-    {
-        return Err(contract("optional fixture document pack mismatch"));
-    }
+    validate_fixture_objective_context(document, context.objective_context.as_ref())?;
 
     let included: Vec<_> = OPTIONS
         .iter()
@@ -995,6 +1053,7 @@ fn fixture_selected_entities(
 fn authoritative_interval_score(
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
+    objective_context: Option<&RunObjectiveContext>,
 ) -> Result<ScoreVector, DomainPackError> {
     if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID
         || solution.pack_id != document.domain_pack.id
@@ -1015,6 +1074,7 @@ fn authoritative_interval_score(
     {
         return Err(contract("optional fixture assignment set mismatch"));
     }
+    validate_fixture_objective_context(document, objective_context)?;
 
     let assignments = solution
         .assignments
@@ -1049,9 +1109,7 @@ fn authoritative_interval_score(
                         .ok_or_else(|| contract("optional fixture feasibility overflow"))?;
                 }
             }
-            AssignmentValue::Boolean(_)
-            | AssignmentValue::Integer(_)
-            | AssignmentValue::Interval(_) => {
+            _ => {
                 feasibility = feasibility
                     .checked_add(1)
                     .ok_or_else(|| contract("optional fixture feasibility overflow"))?;
@@ -1190,13 +1248,43 @@ fn fixture_document() -> Result<ScenarioDocument, serde_json::Error> {
     }))
 }
 
-fn fixture_context() -> CompileContext {
-    CompileContext {
+fn authored_fixture_objective_context() -> Result<RunObjectiveContext, Box<dyn Error>> {
+    Ok(RunObjectiveContext::authored(PackId::new(
+        OFFICIAL_TEST_PACK_ID,
+    )?)?)
+}
+
+fn validate_fixture_objective_context(
+    document: &ScenarioDocument,
+    objective_context: Option<&RunObjectiveContext>,
+) -> Result<(), DomainPackError> {
+    if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID
+        || document.domain_pack.schema_version != 1
+    {
+        return Err(contract("optional fixture document pack mismatch"));
+    }
+    if let Some(context) = objective_context {
+        context
+            .validate_for(&document.domain_pack.id, document.scenario_id)
+            .map_err(contract)?;
+        if context.profile_id.as_str() != AUTHORED_OBJECTIVE_PROFILE_ID
+            || context.operation != RunObjectiveOperation::Optimize
+            || context.baseline.is_some()
+        {
+            return Err(contract("unsupported objective context"));
+        }
+    }
+    Ok(())
+}
+
+fn fixture_context() -> Result<CompileContext, Box<dyn Error>> {
+    Ok(CompileContext {
+        objective_context: Some(authored_fixture_objective_context()?),
         scenario_revision: 11,
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
-    }
+    })
 }
 fn fixture_verification_context(
     pack: &dyn DomainPack,
@@ -1597,15 +1685,18 @@ fn observe_fixture_candidate(
         SolutionId::from_str(SOLUTION_ID)?,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
+    let objective_context = authored_fixture_objective_context()?;
     let score = pack.score(
         document,
         &solution,
+        Some(&objective_context),
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let verification_context = fixture_verification_context(&pack, document, problem, &solution)?;
     let report = pack.verify(
         document,
         &solution,
+        Some(&objective_context),
         &verification_context,
         &score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -1746,7 +1837,7 @@ fn compile_and_assert_interval_problem(
 fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<dyn Error>> {
     let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
-    let context = fixture_context();
+    let context = fixture_context()?;
     let first = compile_and_assert_interval_problem(pack, &document, &context)?;
 
     let missing_presence = CandidateValues::default();
@@ -1776,12 +1867,14 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
     let absent_score = pack.score(
         &document,
         &absent,
+        context.objective_context.as_ref(),
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let absent_context = fixture_verification_context(&pack, &document, &first, &absent)?;
     let absent_report = pack.verify(
         &document,
         &absent,
+        context.objective_context.as_ref(),
         &absent_context,
         &absent_score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -1855,12 +1948,14 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
     let present_score = pack.score(
         &document,
         &present,
+        context.objective_context.as_ref(),
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let present_context = fixture_verification_context(&pack, &document, &first, &present)?;
     let present_report = pack.verify(
         &document,
         &present,
+        context.objective_context.as_ref(),
         &present_context,
         &present_score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -1904,12 +1999,14 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
     let overlap_score = pack.score(
         &document,
         &overlap,
+        context.objective_context.as_ref(),
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let overlap_context = fixture_verification_context(&pack, &document, &first, &overlap)?;
     let overlap_report = pack.verify(
         &document,
         &overlap,
+        context.objective_context.as_ref(),
         &overlap_context,
         &overlap_score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -1935,7 +2032,7 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
 fn deterministic_pruning_preserves_every_feasible_schedule_and_score() -> Result<(), Box<dyn Error>>
 {
     let document = fixture_document()?;
-    let context = fixture_context();
+    let context = fixture_context()?;
     let unpruned_pack = IntervalFixturePack::with_pruning(false);
     let pruned_pack = IntervalFixturePack::with_pruning(true);
     let unpruned = unpruned_pack.compile(&document, &context)?;
@@ -2044,7 +2141,7 @@ fn deterministic_pruning_preserves_every_feasible_schedule_and_score() -> Result
 fn conformance_rejects_one_sided_compiler_constraint_mutation() -> Result<(), Box<dyn Error>> {
     let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
-    let mut problem = pack.compile(&document, &fixture_context())?;
+    let mut problem = pack.compile(&document, &fixture_context()?)?;
     let record = problem
         .constraints
         .iter_mut()
@@ -2067,7 +2164,7 @@ fn conformance_rejects_one_sided_compiler_constraint_mutation() -> Result<(), Bo
 fn conformance_rejects_one_sided_verifier_rule_mutation() -> Result<(), Box<dyn Error>> {
     let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
-    let problem = pack.compile(&document, &fixture_context())?;
+    let problem = pack.compile(&document, &fixture_context()?)?;
     let mut observation = observe_fixture_candidate(pack, &document, &problem, 0b001)?;
     let early_rule = RuleId::from_str(FIXTURE_RULE_EARLY)?;
     let mut mutated_rules = observation.report.required_rule_results.clone();
@@ -2097,7 +2194,7 @@ fn conformance_rejects_one_sided_verifier_rule_mutation() -> Result<(), Box<dyn 
 fn conformance_rejects_one_sided_exact_projection_mutation() -> Result<(), Box<dyn Error>> {
     let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
-    let mut problem = pack.compile(&document, &fixture_context())?;
+    let mut problem = pack.compile(&document, &fixture_context()?)?;
     let projection_id = fixture_projection_id(OPTIONS[0])?;
     let projection = problem
         .projections
@@ -2120,7 +2217,7 @@ fn conformance_rejects_one_sided_exact_projection_mutation() -> Result<(), Box<d
 fn conformance_rejects_one_sided_in_bounds_score_mutation() -> Result<(), Box<dyn Error>> {
     let pack = IntervalFixturePack::with_pruning(false);
     let document = fixture_document()?;
-    let problem = pack.compile(&document, &fixture_context())?;
+    let problem = pack.compile(&document, &fixture_context()?)?;
     let mut observation = observe_fixture_candidate(pack, &document, &problem, 0)?;
     let mutated_value = 1_i64;
     assert!(mutated_value <= problem.objectives.levels[0].upper_bound);

@@ -2,7 +2,8 @@
 use super::operations::{
     OperationCancelledV1, OperationClaim, OperationContextV1, OperationControlRequestV1,
     OperationExecution, OperationPhaseV1, OperationPrepareRequestV1, OperationPreparedV1,
-    OperationPurposeV1, OperationReleasedV1, ProgressSink, require_version,
+    OperationPurposeV1, OperationReleasedV1, ProgressSink, ReleaseAcknowledgementV1,
+    require_version,
 };
 use super::{
     ApiError, ApiResult, DesktopState, SolutionApiResult, boundary_error, map_app_error, response,
@@ -51,7 +52,7 @@ struct ScenarioSetupViewRequestV2 {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FullValidationRequestV2 {
+struct FullValidationRequestV3 {
     request_id: RequestId,
     schema_version: u32,
     scenario_id: ScenarioId,
@@ -237,7 +238,59 @@ pub(super) fn operation_prepare<R: tauri::Runtime>(
     request: Option<Value>,
 ) -> ApiResult<OperationPreparedV1> {
     let request: OperationPrepareRequestV1 = decode_bounded(request, FRAME_BYTES)?;
+    let report_kind = match &request.purpose {
+        OperationPurposeV1::SharePreview => {
+            Some(crate::recipient_report::custody::CaptureKind::Recipient)
+        }
+        OperationPurposeV1::ExportPreview => {
+            Some(crate::recipient_report::custody::CaptureKind::Schedule)
+        }
+        _ => None,
+    };
+    let report_created = report_kind
+        .map(|kind| {
+            state
+                .recipient_reports
+                .reservation_instant()
+                .map(|created| (kind, created))
+        })
+        .transpose()?;
     let result = state.operations.prepare(window.label(), &request)?;
+    if let Some((kind, created)) = report_created {
+        let reservation = match request.context {
+            OperationContextV1::Scenario {
+                scenario_id,
+                expected_revision: Some(expected_revision),
+            } => state.recipient_reports.reserve(
+                window.label(),
+                result.operation_id,
+                crate::recipient_report::custody::Scope {
+                    scenario_id,
+                    expected_revision,
+                    kind,
+                },
+                created,
+            ),
+            _ => Err(boundary_error(
+                "operation.context_mismatch",
+                "A recipient preview requires an exact scenario revision.",
+                Some("/context"),
+            )
+            .into()),
+        };
+        if let Err(error) = reservation {
+            // No operation ID has escaped; retire the unclaimed operation as well.
+            let _ = state.operations.release(
+                window.label(),
+                &OperationControlRequestV1 {
+                    request_id: request.request_id,
+                    schema_version: 1,
+                    operation_id: result.operation_id,
+                },
+            );
+            return Err(error);
+        }
+    }
     Ok(response(request.request_id, None, Vec::new(), result))
 }
 #[allow(
@@ -266,6 +319,11 @@ pub(super) fn operation_release<R: tauri::Runtime>(
 ) -> ApiResult<OperationReleasedV1> {
     let request: OperationControlRequestV1 = decode_bounded(request, FRAME_BYTES)?;
     let result = state.operations.release(window.label(), &request)?;
+    if result.acknowledgement == ReleaseAcknowledgementV1::Released {
+        state
+            .recipient_reports
+            .release_reserved(window.label(), request.operation_id);
+    }
     Ok(response(request.request_id, None, Vec::new(), result))
 }
 
@@ -517,8 +575,14 @@ pub(super) async fn scenario_validate<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: FullValidationRequestV2 = decode_bounded(request, FRAME_BYTES)?;
-    version_two(request.schema_version)?;
+    let request: FullValidationRequestV3 = decode_bounded(request, FRAME_BYTES)?;
+    if request.schema_version != 3 {
+        return Err(Box::new(boundary_error(
+            "setup.version_unsupported",
+            "This setup request version is not supported.",
+            Some("/schemaVersion"),
+        )));
+    }
     let operation = claim(
         request.operation_id,
         request.request_id,
@@ -632,7 +696,7 @@ pub(super) async fn encode_response<T: Serialize + Send + 'static>(
     tauri::async_runtime::spawn_blocking(move || {
         let envelope = response(request_id, revision, Vec::new(), result);
         // Every quoted unsafe integer occupies at least16 bytes before its two added quotes.
-        let wire_limit = compact_limit + compact_limit / 8 + FRAME_BYTES;
+        let wire_limit = response_wire_limit(compact_limit);
         encode(&envelope, wire_limit, cancellation)
     })
     .await
@@ -643,6 +707,10 @@ pub(super) async fn encode_response<T: Serialize + Send + 'static>(
             None,
         ))
     })?
+}
+
+pub(super) const fn response_wire_limit(compact_limit: usize) -> usize {
+    compact_limit + compact_limit / 8 + FRAME_BYTES
 }
 
 struct SetupIntegerFormatter;

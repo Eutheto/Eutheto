@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-const ENTITY_KINDS: [WorkforceEntityKindV1; 13] = [
+const ENTITY_KINDS: [WorkforceEntityKindV1; 14] = [
     WorkforceEntityKindV1::Person,
     WorkforceEntityKindV1::Qualification,
     WorkforceEntityKindV1::Team,
@@ -27,6 +27,7 @@ const ENTITY_KINDS: [WorkforceEntityKindV1; 13] = [
     WorkforceEntityKindV1::Availability,
     WorkforceEntityKindV1::CoverageRequirement,
     WorkforceEntityKindV1::BaseSchedule,
+    WorkforceEntityKindV1::ExternalStartingPlan,
     WorkforceEntityKindV1::ScorePolicy,
 ];
 
@@ -59,6 +60,9 @@ pub(super) fn facts(
     };
     for (&id, record) in &document.domain.entities {
         budget.visit()?;
+        if record.get("kind").and_then(Value::as_str) == Some("manualSelection") {
+            continue;
+        }
         let (kind, _) = entities::header(id, record)?;
         let count = facts
             .entities
@@ -67,40 +71,7 @@ pub(super) fn facts(
             .ok_or_else(|| invalid("/domain/entities", "entity kind has no overview counter"))?;
         increment(&mut count.count)?;
         if kind == WorkforceEntityKindV1::Person {
-            let memberships = record
-                .get("eligibleAssignmentTypeIds")
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    invalid(
-                        "/domain/entities",
-                        "person configured assignment type memberships are invalid",
-                    )
-                })?;
-            if memberships.len() > MAX_REFERENCE_ITEMS {
-                return Err(invalid(
-                    "/domain/entities",
-                    "person configured assignment type memberships exceed their bound",
-                ));
-            }
-            let mut seen = BTreeSet::new();
-            for membership in memberships {
-                budget.visit()?;
-                let id = AssignmentTypeId::deserialize(membership).map_err(|_| {
-                    invalid(
-                        "/domain/entities",
-                        "configured assignment type identity is invalid",
-                    )
-                })?;
-                if !seen.insert(id) {
-                    return Err(invalid(
-                        "/domain/entities",
-                        "configured assignment type membership is duplicated",
-                    ));
-                }
-                // Count stored membership, including unresolved references. This is not
-                // an eligibility evaluation against dates, skills, activity or rules.
-                increment(&mut facts.configured_type_memberships)?;
-            }
+            count_memberships(record, &mut facts.configured_type_memberships, budget)?;
         }
     }
     for (&id, record) in &document.domain.rules {
@@ -139,6 +110,47 @@ pub(super) fn facts(
     }
     budget.visit()?;
     Ok(WorkforceSetupViewDataV1::Overview(facts))
+}
+
+fn count_memberships(
+    record: &Value,
+    count: &mut u32,
+    budget: &mut ProjectionBudget<'_>,
+) -> Result<()> {
+    let memberships = record
+        .get("eligibleAssignmentTypeIds")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            invalid(
+                "/domain/entities",
+                "person configured assignment type memberships are invalid",
+            )
+        })?;
+    if memberships.len() > MAX_REFERENCE_ITEMS {
+        return Err(invalid(
+            "/domain/entities",
+            "person configured assignment type memberships exceed their bound",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for membership in memberships {
+        budget.visit()?;
+        let id = AssignmentTypeId::deserialize(membership).map_err(|_| {
+            invalid(
+                "/domain/entities",
+                "configured assignment type identity is invalid",
+            )
+        })?;
+        if !seen.insert(id) {
+            return Err(invalid(
+                "/domain/entities",
+                "configured assignment type membership is duplicated",
+            ));
+        }
+        // Stored membership is not eligibility against dates, skills, activity or rules.
+        increment(count)?;
+    }
+    Ok(())
 }
 
 fn date_windows(

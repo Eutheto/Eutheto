@@ -7,8 +7,6 @@ export const explanationMessages = {
   "action.edit": "Edit related item",
   "action.exportDiagnostic": "Export diagnostic",
   "action.inspect": "Inspect",
-  "action.paraphrase": "Paraphrase",
-  "action.relaxCopy": "Relax in a copy",
   "action.retry": "Try again",
   "action.tryChange": "Try a change",
   "action.viewProof": "View proof",
@@ -30,10 +28,38 @@ export const explanationMessages = {
   "change.heading": "Verified changes",
   "change.removed": "Removed",
   "conflict.diagnosticExport": "Export deterministic diagnostic",
+  "conflict.exportDisclosure":
+    "Diagnostic JSON may include historical domain labels. It is a private local diagnostic, not a redacted or public Share Result artifact.",
+  "conflict.copyReviewAction": "Review a new diagnostic copy",
+  "conflict.copyReviewHeading": "Review a new copy with this mapped Required-rule group relaxed",
+  "conflict.copyReviewOriginal":
+    "Only this exact mapped group will be relaxed in the new copy. The original scenario remains untouched.",
+  "conflict.copyReviewLibraryRevision": "Current project-library revision reviewed",
+  "conflict.copyReviewConfirm": "Create a new copy with this group relaxed",
+  "conflict.copyReviewCancel": "Cancel copy review",
+  "conflict.copyReviewLoading": "Reading the current native project-library revision…",
+  "conflict.copyReviewInvalidated":
+    "The conflict source or project library changed. Review the copy again.",
+  "conflict.copyCreated": "Created diagnostic copy {title} ({scenarioId}).",
+  "conflict.copyCurrentLibrary": "The new copy is recorded at project-library revision {revision}.",
+  "conflict.copyUndoGuidance":
+    "Undo only the copy: open its History and choose Undo scenario change once. This leaves the original unchanged.",
+  "conflict.exporting": "Preparing the native diagnostic export…",
+  "conflict.exported":
+    "Diagnostic report saved for source revision {sourceRevision}; native observed current revision {observedCurrentRevision}.",
+  "conflict.exportMetadata":
+    "The native receipt contains metadata only. Report contents and destination remain with the native application.",
+  "conflict.copyWorking": "Creating the native diagnostic copy…",
+  "conflict.actionFinalizing": "The native operation settled; its result is being finalized.",
+  "conflict.actionCancelRequested":
+    "Cancellation was requested; waiting for the native operation's actual outcome.",
+  "conflict.copyCancelled":
+    "The diagnostic copy was cancelled before a native receipt was returned.",
+  "conflict.exportCancelled":
+    "The diagnostic export was cancelled before a native receipt was returned.",
   "conflict.empty": "No mapped conflict evidence is available.",
   "conflict.heading": "These required rules cannot all be satisfied together",
   "conflict.minimal": "Proven minimal conflict",
-  "conflict.paraphrase": "Paraphrase does not change the deterministic evidence.",
   "conflict.sufficient": "Sufficient conflict",
   "counterfactual.cancelled": "The diagnostic optimization was cancelled.",
   "counterfactual.inconclusive": "No verified distinction was found within the diagnostic limit.",
@@ -63,14 +89,14 @@ export const explanationMessages = {
   "status.backendFailed": "Backend failed",
   "status.cancelled": "Solve cancelled",
   "status.feasible": "Verified feasible result ready",
-  "status.infeasible": "Infeasibility proven",
+  "status.infeasible": "Backend reports its compiled model infeasible",
   "status.invalidModel": "Invalid model",
   "status.limit": "No verified result within the limit",
   "status.optimal": "Verified optimal result ready",
   "status.ready": "Verified result ready",
   "status.time": "Finished in {milliseconds} ms",
   "status.unavailable": "Backend unavailable",
-  "status.unbounded": "Unbounded model proven",
+  "status.unbounded": "Backend reports its compiled model unbounded",
   "validation.empty": "No validation issues need attention.",
   "validation.heading": "Validation summary",
   "validation.findingsCount": "{total} validation issues: {displayed} shown, {omitted} omitted.",
@@ -104,7 +130,7 @@ export function explanationMessage(
   });
 }
 
-function verificationValueText(value: VerificationValue, locale?: string): string {
+export function verificationValueText(value: VerificationValue, locale?: string): string {
   switch (value.type) {
     case "boolean":
       return value.value ? "Yes" : "No";

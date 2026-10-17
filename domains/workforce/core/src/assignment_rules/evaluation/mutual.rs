@@ -162,7 +162,7 @@ fn overlapping_shifts(
                 rule_id,
                 overlap,
             );
-            summary.failure(&witness)?;
+            summary.failure(&witness, &witness, None, "direct", budget)?;
         }
     }
     Ok(())

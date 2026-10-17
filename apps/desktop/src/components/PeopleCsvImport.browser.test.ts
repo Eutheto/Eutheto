@@ -4,11 +4,7 @@ import { createPinia } from "pinia";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import * as generatedApi from "../api/generated";
-import type {
-  PeopleCsvMapping,
-  PeopleCsvPreviewV1,
-  PeopleCsvRejectedRowsV1,
-} from "../api/generated";
+import type { PeopleCsvMapping, PeopleCsvPreviewV1, CsvReportV1 } from "../api/generated";
 import App from "../App.vue";
 import { messages } from "../messages";
 import { createAppRouter } from "../router";
@@ -151,9 +147,9 @@ function configureNative() {
       1,
     ),
   );
-  vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "dispose").mockResolvedValue(undefined);
-  vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "discardPreview").mockResolvedValue(undefined);
-  vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "open").mockImplementation(() =>
+  vi.spyOn(generatedApi.CsvImportFlow.prototype, "dispose").mockResolvedValue(undefined);
+  vi.spyOn(generatedApi.CsvImportFlow.prototype, "discardPreview").mockResolvedValue(undefined);
+  vi.spyOn(generatedApi.CsvImportFlow.prototype, "open").mockImplementation(() =>
     portableOperation(
       response({
         schemaVersion: 1,
@@ -162,18 +158,21 @@ function configureNative() {
       }),
     ),
   );
-  vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "detect").mockImplementation(() =>
+  vi.spyOn(generatedApi.CsvImportFlow.prototype, "detect").mockImplementation(() =>
     portableOperation(
       response({
-        schemaVersion: 1,
-        dialects: [
-          { status: "candidate", dialect: "comma", source, consistentColumns: 2, samples: [] },
-        ],
+        family: "people",
+        data: {
+          schemaVersion: 1,
+          dialects: [
+            { status: "candidate", dialect: "comma", source, consistentColumns: 2, samples: [] },
+          ],
+        },
       }),
     ),
   );
-  const preview = vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "preview");
-  const apply = vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "apply");
+  const preview = vi.spyOn(generatedApi.CsvImportFlow.prototype, "previewPeople");
+  const apply = vi.spyOn(generatedApi.CsvImportFlow.prototype, "apply");
   return { library, preview, apply };
 }
 
@@ -292,16 +291,14 @@ describe("Routed CSV review transitions", () => {
       .element(screen.getByRole("button", { name: messages.csvImport.apply }))
       .toBeEnabled();
 
-    const report: PeopleCsvRejectedRowsV1 = {
+    const report: CsvReportV1 = {
       schemaVersion: 1,
       previewId,
       disposition: "reviewable",
       consumed: false,
-      rejectedRows: [{ record: 3, code: "missingName" }],
+      rows: { family: "people", rejectedRows: [{ record: 3, code: "missingName" }] },
     };
-    vi.spyOn(generatedApi.PeopleCsvFlow.prototype, "rejectedRows").mockResolvedValue(
-      response(report),
-    );
+    vi.spyOn(generatedApi.CsvImportFlow.prototype, "report").mockResolvedValue(response(report));
     await userEvent.click(screen.getByText(/Workload and targets/u));
     const edits = [
       () =>
@@ -411,8 +408,7 @@ describe("Routed CSV review transitions", () => {
         }),
       ),
     );
-    const receipt =
-      Promise.withResolvers<generatedApi.ApiResponseDto<generatedApi.PeopleCsvApplyV1>>();
+    const receipt = Promise.withResolvers<generatedApi.ApiResponseDto<generatedApi.CsvApplyV1>>();
     native.apply.mockImplementation(() => portableOperation(receipt.promise));
     await previewImport();
     expect(native.apply).not.toHaveBeenCalled();
@@ -432,7 +428,7 @@ describe("Routed CSV review transitions", () => {
           previewId,
           disposition: "reviewable",
           consumed: true,
-          rejectedRows: [],
+          rows: { family: "people", rejectedRows: [] },
         },
       }),
     );

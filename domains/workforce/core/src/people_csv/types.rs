@@ -194,6 +194,8 @@ pub enum CsvErrorCode {
     InvalidReview,
     StaleReview,
     InvalidBatch,
+    MatrixShape,
+    MatrixCellLimit,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

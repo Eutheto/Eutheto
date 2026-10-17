@@ -6,6 +6,7 @@
 //! UI, dynamic plugin, circuit, or path primitive.
 
 mod analysis;
+mod budget;
 mod canonical;
 mod ids;
 mod model;
@@ -13,6 +14,7 @@ mod projection;
 mod validation;
 
 pub use analysis::*;
+pub use budget::*;
 pub use canonical::*;
 pub use ids::*;
 pub use model::*;

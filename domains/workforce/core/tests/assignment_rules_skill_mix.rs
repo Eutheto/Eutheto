@@ -60,6 +60,7 @@ fn compiled_with_limits(
     compile_assignment_rules(
         document,
         &CompileContext {
+            objective_context: None,
             scenario_revision: 1,
             semantic_metadata: BTreeMap::new(),
             control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),

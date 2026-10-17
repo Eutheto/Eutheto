@@ -99,9 +99,9 @@ async fn run(arguments: Arguments, cancellation: &eutheto_types::CancellationTok
         Command::Generate => generation::generate(&root, false)?,
         Command::Check => {
             generation::generate(&root, true)?;
-            generation::load(&root)?;
+            let variants = generation::load(&root)?.fixtures.len();
             println!(
-                "Workforce corpus: deterministic generation, portable semantics and all13 variants verified"
+                "Workforce corpus: deterministic generation, portable semantics and all {variants} variants verified"
             );
         }
         Command::Synthetic {
@@ -155,7 +155,13 @@ async fn run(arguments: Arguments, cancellation: &eutheto_types::CancellationTok
             let image = image.canonicalize()?;
             let child_cancellation = cancellation.clone();
             let evidence = tokio::task::spawn_blocking(move || {
-                cli::exercise(&image, &corpus, &manifest_sha256, &child_cancellation)
+                cli::exercise(
+                    &root,
+                    &image,
+                    &corpus,
+                    &manifest_sha256,
+                    &child_cancellation,
+                )
             })
             .await??;
             anyhow::ensure!(!cancellation.is_cancelled(), "corpus operation interrupted");

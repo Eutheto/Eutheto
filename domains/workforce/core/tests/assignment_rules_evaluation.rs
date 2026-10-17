@@ -5,7 +5,7 @@ use eutheto_types::{CancellationToken, RuleId, ScenarioDocument};
 use eutheto_workforce::{
     assignment_rules::{
         AssignmentRuleError, AssignmentRuleEvaluation, AssignmentRuleLimit, SelectionIssueKind,
-        evaluate_assignment_rules,
+        evaluate_assignment_rules, workforce_verification_scope,
     },
     model::AssignmentPair,
 };
@@ -220,7 +220,23 @@ fn all_scope_dimensions_intersect_without_broadening_empty_matches() -> Result {
     rule(&mut value, 20, "eligibility");
     let full_scope = json!({"people":{"kind":"selected","personIds":[id(1)]},"teamIds":[id(30)],"assignmentTypeIds":[id(4)],"categories":["clinic"],"weekdays":["sunday"],"locationIds":[id(5)]});
     value["domain"]["rules"][id(20)]["scope"] = full_scope.clone();
-    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (2, 1));
+    let denied = run(&value, &[(1, 8)])?;
+    assert_eq!(totals(&denied, 20)?, (2, 1));
+    let evidence = evaluation(&denied, 20)?;
+    assert_eq!(
+        evidence.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_reason"
+        )?),
+        Some(&VerificationValue::Text(
+            "assignment_type_not_allowed".to_owned()
+        ))
+    );
+    for (kind, index) in [("person", 1), ("shift", 8), ("assignment_type", 4)] {
+        assert!(evidence.affected_entities.iter().any(|entity| {
+            entity.kind.as_str() == format!("official.workforce.{kind}")
+                && entity.id.as_str() == format!("official.workforce.{}", id(index))
+        }));
+    }
     for (field, replacement) in [
         ("teamIds", json!([id(31)])),
         ("categories", json!(["other"])),
@@ -375,6 +391,35 @@ fn different_partial_qualifications_cannot_alternate_for_any_expression() -> Res
     assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (2, 1));
     Ok(())
 }
+#[test]
+fn availability_type_and_location_restrictions_are_conjunctive() -> Result {
+    let mut value = base()?;
+    let mut alternate_type = value["domain"]["entities"][id(4)].clone();
+    alternate_type["id"] = json!(id(12));
+    alternate_type["name"] = json!("Other");
+    value["domain"]["entities"][id(12)] = alternate_type;
+    value["domain"]["entities"][id(13)] =
+        json!({"kind":"location","id":id(13),"name":"South","transitions":[]});
+    rule(&mut value, 20, "availability");
+    availability(
+        &mut value,
+        30,
+        "unavailable",
+        "2026-11-01T08:00:00Z",
+        "2026-11-01T10:00:00Z",
+    );
+    value["domain"]["entities"][id(30)]["assignmentTypeIds"] = json!([id(12)]);
+    value["domain"]["entities"][id(30)]["locationIds"] = json!([id(5)]);
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (0, 0));
+
+    value["domain"]["entities"][id(30)]["assignmentTypeIds"] = json!([id(4)]);
+    value["domain"]["entities"][id(30)]["locationIds"] = json!([id(13)]);
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (0, 0));
+
+    value["domain"]["entities"][id(30)]["locationIds"] = json!([id(5)]);
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 1));
+    Ok(())
+}
 
 #[test]
 fn distinct_available_only_records_are_conjunctive_and_windows_union() -> Result {
@@ -444,6 +489,49 @@ fn effective_range_clips_pre_effective_overnight_windows_and_full_shift_tails() 
     );
     Ok(())
 }
+#[test]
+fn recurring_availability_keeps_the_dst_tail_after_effective_clipping() -> Result {
+    let mut value = base()?;
+    value["settings"]["timeZone"] = json!("America/New_York");
+    value["settings"]["overlapPolicy"] = json!("earlier");
+    value["settings"]["horizon"] =
+        json!({"start":"2026-11-01T04:00:00Z","end":"2026-11-02T05:00:00Z"});
+    value["domain"]["entities"][id(8)]["startsAt"] = json!({
+        "instant":"2026-11-01T04:30:00Z",
+        "local":"2026-11-01T00:30:00",
+        "offsetSeconds":-14400
+    });
+    value["domain"]["entities"][id(8)]["endsAt"] = json!({
+        "instant":"2026-11-01T07:00:00Z",
+        "local":"2026-11-01T02:00:00",
+        "offsetSeconds":-18000
+    });
+    availability(
+        &mut value,
+        30,
+        "availableOnly",
+        "2026-11-01T00:00:00Z",
+        "2026-11-02T00:00:00Z",
+    );
+    value["domain"]["entities"][id(30)]["effectiveRange"] =
+        json!({"startDate":"2026-11-01","endDateExclusive":"2026-11-02"});
+    value["domain"]["entities"][id(30)]["timeWindow"] = json!({
+        "kind":"weekly",
+        "windows":[{
+            "weekdays":["saturday"],
+            "startTime":"23:00:00",
+            "endTime":"03:00:00",
+            "endDayOffset":1
+        }]
+    });
+    rule(&mut value, 20, "availability");
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 0));
+
+    value["domain"]["entities"][id(30)]["timeWindow"]["windows"][0]["endTime"] =
+        json!("01:59:59.999999999");
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 1));
+    Ok(())
+}
 
 #[test]
 fn unavailable_touching_endpoints_does_not_overlap() -> Result {
@@ -466,7 +554,27 @@ fn unavailable_touching_endpoints_does_not_overlap() -> Result {
     assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (2, 0));
     value["domain"]["entities"][id(30)]["timeWindow"]["endsAt"] =
         json!("2026-11-01T08:00:00.000000001Z");
-    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (2, 1));
+    let denied = run(&value, &[(1, 8)])?;
+    assert_eq!(totals(&denied, 20)?, (2, 1));
+    let evidence = evaluation(&denied, 20)?;
+    assert_eq!(
+        evidence.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_reason"
+        )?),
+        Some(&VerificationValue::Text("unavailable".to_owned()))
+    );
+    assert!(evidence.affected_entities.iter().any(|entity| {
+        entity.kind.as_str() == "official.workforce.availability"
+            && entity.id.as_str() == format!("official.workforce.{}", id(30))
+    }));
+    assert_eq!(
+        evidence.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_end"
+        )?),
+        Some(&VerificationValue::Text(
+            "2026-11-01T08:00:00.000000001Z".to_owned()
+        ))
+    );
     Ok(())
 }
 
@@ -565,6 +673,98 @@ fn coverage_requirement_dates_use_start_date_not_reporting_date() -> Result {
     value["domain"]["entities"][id(30)]["scope"]["startDateRange"] =
         json!({"startDate":"2026-11-02","endDateExclusive":"2026-11-03"});
     assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 0));
+    Ok(())
+}
+
+#[test]
+fn workload_quota_count_checks_empty_owned_days_and_keeps_zero_shift_witness() -> Result {
+    let mut value = base()?;
+    value["settings"]["horizon"]["end"] = json!("2026-11-03T00:00:00Z");
+    rule(&mut value, 20, "workloadQuota");
+    value["domain"]["rules"][id(20)]["calendarId"] = json!(id(2));
+    value["domain"]["rules"][id(20)]["membership"] = json!("reportingDate");
+    value["domain"]["rules"][id(20)]["measure"] = json!({"kind":"assignmentCount"});
+    value["domain"]["rules"][id(20)]["minimum"] = json!(1);
+    value["domain"]["rules"][id(20)]["maximum"] = json!(1);
+
+    let missing = run(&value, &[(1, 8)])?;
+    assert_eq!(totals(&missing, 20)?, (2, 1));
+    let witness = evaluation(&missing, 20)?;
+    assert!(
+        witness
+            .affected_entities
+            .iter()
+            .all(|entity| entity.kind.as_str() != "official.workforce.shift")
+    );
+    assert_eq!(
+        witness.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.workload_quota_actual_assignments"
+        )?),
+        Some(&VerificationValue::Integer(0))
+    );
+    assert_eq!(
+        witness.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.workload_quota_period_start"
+        )?),
+        Some(&VerificationValue::Text("2026-11-02T00:00:00Z".to_owned()))
+    );
+
+    another_shift(&mut value, 30, "2026-11-02T08:00:00", "2026-11-02T09:00:00");
+    assert_eq!(totals(&run(&value, &[(1, 8), (1, 30)])?, 20)?, (2, 0));
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (2, 1));
+    Ok(())
+}
+
+#[test]
+fn workload_quota_minute_exact_range_rejects_subsecond_shortfall_and_excess() -> Result {
+    let mut value = base()?;
+    rule(&mut value, 20, "workloadQuota");
+    value["domain"]["rules"][id(20)]["calendarId"] = json!(id(2));
+    value["domain"]["rules"][id(20)]["membership"] = json!("intersection");
+    value["domain"]["rules"][id(20)]["measure"] = json!({"kind":"bucketMinutes","bucketId":id(3)});
+    value["domain"]["rules"][id(20)]["minimum"] = json!(60);
+    value["domain"]["rules"][id(20)]["maximum"] = json!(60);
+
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "2026-11-01T08:00:00",
+        "2026-11-01T08:59:59.999999999",
+    );
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 1));
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "2026-11-01T08:00:00",
+        "2026-11-01T09:00:00",
+    );
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 0));
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "2026-11-01T08:00:00",
+        "2026-11-01T09:00:00.000000001",
+    );
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 1));
+    Ok(())
+}
+
+#[test]
+fn quota_intersection_owns_source_shift_tail_beyond_horizon_but_not_other_buckets() -> Result {
+    let mut value = base()?;
+    rule(&mut value, 20, "workloadQuota");
+    value["domain"]["rules"][id(20)]["calendarId"] = json!(id(2));
+    value["domain"]["rules"][id(20)]["membership"] = json!("intersection");
+    value["domain"]["rules"][id(20)]["measure"] = json!({"kind":"bucketMinutes","bucketId":id(3)});
+    value["domain"]["rules"][id(20)]["minimum"] = json!(60);
+    times(
+        &mut value["domain"]["entities"][id(8)],
+        "2026-11-01T23:00:00",
+        "2026-11-02T01:00:00",
+    );
+
+    assert_eq!(totals(&run(&value, &[])?, 20)?, (2, 2));
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (2, 0));
+
+    value["domain"]["entities"][id(4)]["workloadBucketIds"] = json!([]);
+    assert_eq!(totals(&run(&value, &[])?, 20)?, (1, 1));
     Ok(())
 }
 
@@ -722,20 +922,23 @@ fn required_partition_handles_consecutive_and_only_hard_locks() -> Result {
         }
     }
     let result = run(&value, &[])?;
-    assert_eq!(
-        result.obligations.handled,
-        [1, 20, 21, 30, 40]
-            .map(|index| id(index).parse())
-            .into_iter()
-            .collect::<std::result::Result<Vec<RuleId>, _>>()?
-    );
-    assert_eq!(
-        result.obligations.remaining,
-        [41].map(|index| id(index).parse())
-            .into_iter()
-            .collect::<std::result::Result<Vec<RuleId>, _>>()?
-    );
+    let required: Vec<RuleId> = [1, 20, 21, 30, 40]
+        .map(|index| id(index).parse())
+        .into_iter()
+        .collect::<std::result::Result<_, _>>()?;
+    assert_eq!(result.obligations.handled, required);
+    assert!(result.obligations.remaining.is_empty());
     assert_eq!(totals(&result, 40)?, (1, 1));
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let scope = workforce_verification_scope(&document, 1, None)?;
+    assert_eq!(
+        scope
+            .required_rules
+            .iter()
+            .map(|binding| binding.rule_id)
+            .collect::<Vec<_>>(),
+        required,
+    );
     Ok(())
 }
 
@@ -1356,5 +1559,89 @@ fn dense_equal_start_rest_counts_both_roles_with_one_canonical_witness() -> Resu
     assert_eq!(result.evaluations.len(), 2);
     pairs.reverse();
     assert_eq!(result.evaluations, run(&value, &pairs)?.evaluations);
+    Ok(())
+}
+
+#[test]
+fn worked_weekends_count_distinct_local_intervals_including_overnight_tails() -> Result {
+    let mut value = base()?;
+    value["settings"]["horizon"]["end"] = json!("2026-11-10T00:00:00Z");
+    rule(&mut value, 20, "maximumWorkedWeekends");
+    value["domain"]["rules"][id(20)]["maximum"] = json!(1);
+    another_shift(
+        &mut value,
+        30,
+        "2026-11-06T23:59:59",
+        "2026-11-07T00:00:00.000000001",
+    );
+    another_shift(&mut value, 31, "2026-11-08T09:00:00", "2026-11-08T10:00:00");
+    another_shift(&mut value, 32, "2026-11-09T00:00:00", "2026-11-09T01:00:00");
+    another_shift(&mut value, 33, "2026-11-06T23:00:00", "2026-11-07T00:00:00");
+    assert_eq!(
+        totals(&run(&value, &[(1, 30), (1, 31), (1, 32), (1, 33)])?, 20)?,
+        (1, 0)
+    );
+    let excessive = run(&value, &[(1, 8), (1, 30), (1, 31)])?;
+    assert_eq!(totals(&excessive, 20)?, (1, 1));
+    let record = evaluation(&excessive, 20)?;
+    assert_eq!(
+        record.observed.get(&VerificationFactId::new(
+            "official.workforce.fact.witness_count"
+        )?),
+        Some(&VerificationValue::Integer(2)),
+    );
+    assert_eq!(totals(&run(&value, &[(1, 8)])?, 20)?, (1, 0));
+    Ok(())
+}
+
+#[test]
+fn complete_required_admission_is_policy_independent_and_does_not_hide_unsatisfied_hard_locks()
+-> Result {
+    use eutheto_workforce::assignment_rules::evaluate_workforce_required_selection;
+
+    let mut value = base()?;
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(9));
+    rule(&mut value, 20, "coverage");
+    another_shift(&mut value, 30, "2026-11-01T11:00:00", "2026-11-01T12:00:00");
+    value["domain"]["entities"][id(30)]["coverage"]["count"] = json!(0);
+    value["domain"]["lockedAssignments"][id(14)] = json!({
+        "id":id(14), "personId":id(1), "shiftId":id(8), "state":{"kind":"hard"}
+    });
+    value["domain"]["lockedAssignments"][id(15)] = json!({
+        "id":id(15), "personId":id(1), "shiftId":id(30),
+        "state":{"kind":"soft","stabilityWeight":3}
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let complete = evaluate_workforce_required_selection(&document, &[pair(1, 8)?], None)?;
+    assert_eq!(
+        complete.obligations.handled,
+        [id(1).parse()?, id(14).parse()?, id(20).parse()?]
+    );
+    assert!(complete.obligations.remaining.is_empty());
+    assert!(
+        complete
+            .evaluations
+            .iter()
+            .all(|evaluation| evaluation.satisfied)
+    );
+    let rejected = evaluate_workforce_required_selection(&document, &[], None)?;
+    assert_eq!(rejected.obligations, complete.obligations);
+    assert_eq!(
+        rejected
+            .evaluations
+            .iter()
+            .filter(|evaluation| !evaluation.satisfied)
+            .map(|evaluation| evaluation.rule_id)
+            .collect::<Vec<_>>(),
+        [id(14).parse()?, id(20).parse()?]
+    );
+    assert!(evaluate_workforce_required_selection(&document, &[pair(999, 8)?], None).is_err());
+    assert!(
+        evaluate_workforce_required_selection(&document, &[pair(1, 8)?, pair(1, 8)?], None)
+            .is_err()
+    );
     Ok(())
 }

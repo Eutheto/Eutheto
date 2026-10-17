@@ -303,6 +303,52 @@
           },
           "maxContains": 1,
           "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "practitioner-workflow"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "id": {
+                    "const": "practitioner-infeasible"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "expected"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
         }
       ],
       "items": {
@@ -424,7 +470,9 @@
                   "dst-spring",
                   "dst-fall",
                   "large-supported",
-                  "large-pressure"
+                  "large-pressure",
+                  "practitioner-workflow",
+                  "practitioner-infeasible"
                 ],
                 "type": "string"
               },
@@ -554,12 +602,12 @@
         ],
         "type": "object"
       },
-      "maxItems": 13,
-      "minItems": 13,
+      "maxItems": 15,
+      "minItems": 15,
       "type": "array"
     },
     "corpusVersion": {
-      "const": 1
+      "const": 2
     },
     "format": {
       "const": "eutheto/workforce-corpus-expectations"
@@ -581,6 +629,6 @@
     "generatorSourceSha256",
     "cases"
   ],
-  "title": "Workforce corpus v1 expectations",
+  "title": "Workforce corpus v2 expectations",
   "type": "object"
 }

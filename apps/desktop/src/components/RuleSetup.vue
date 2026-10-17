@@ -3,10 +3,14 @@ import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
 import type {
+  WorkforceConsecutiveWorkMode,
   WorkforceDateRange,
   WorkforceSetupRuleCatalogEntry,
   WorkforceSetupRuleReference,
   WorkforceSetupScopePart,
+  WorkforceTimeWindow,
+  WorkforceWeekday,
+  WorkforceWorkloadPolicy,
 } from "../api/generated-domain-pack-contracts";
 import { formatNumber, messages } from "../messages";
 import {
@@ -91,6 +95,62 @@ const calendarCount = computed(
 const workloadBucketCount = computed(
   () => state.facts?.entities.find((item) => item.kind === "workloadBucket")?.count ?? 0,
 );
+const baseScheduleCount = computed(
+  () => state.facts?.entities.find((item) => item.kind === "baseSchedule")?.count ?? 0,
+);
+const coverageRequirementCount = computed(
+  () => state.facts?.entities.find((item) => item.kind === "coverageRequirement")?.count ?? 0,
+);
+const workloadPolicyEntries = computed<readonly WorkforceWorkloadPolicy[]>(() =>
+  Object.values(state.workloadPolicies.policies).sort((left, right) =>
+    left.id.localeCompare(right.id),
+  ),
+);
+function workloadPolicyTargetMode(policy: WorkforceWorkloadPolicy): string {
+  switch (policy.targetMode.kind) {
+    case "equalShare":
+      return "EqualShare";
+    case "weightedEqualShare":
+      return "Weighted equal share";
+    case "personTargets":
+      return "Person targets";
+    case "explicit":
+      return "Explicit targets";
+  }
+}
+function workloadPolicyPeerGroup(policy: WorkforceWorkloadPolicy): string {
+  const people =
+    policy.peerGroup.people.kind === "all"
+      ? "all people"
+      : policy.peerGroup.people.kind === "selected"
+        ? `${String(policy.peerGroup.people.personIds.length)} selected people`
+        : "tag-filtered people";
+  const teams =
+    policy.peerGroup.teamIds === undefined
+      ? ""
+      : ` and ${String(policy.peerGroup.teamIds.length)} teams`;
+  return `${people}${teams}`;
+}
+function workloadPolicySentence(policyId: string): string {
+  const policy = state.workloadPolicies.policies[policyId];
+  return policy === undefined
+    ? copy.fields.workloadPolicyInvalid
+    : copy.workloadBalanceSentence(
+        policy.id,
+        workloadPolicyTargetMode(policy),
+        workloadPolicyPeerGroup(policy),
+      );
+}
+const weekdays: readonly WorkforceWeekday[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+const consecutiveWorkWeekdayOptions: readonly WorkforceWeekday[] = ["saturday", "sunday"];
 watch(
   () => [state.editor?.id, state.editor?.raw.compatibleCategoryPairs.length] as const,
   ([id, length], previous) => {
@@ -167,6 +227,49 @@ function descriptorLabel(id: string): string {
     )?.descriptor.title.defaultText ?? id
   );
 }
+function descriptorDescription(id: string): string {
+  if (id === "official.workforce.rule.maximum-worked-weekends")
+    return copy.fields.maximumWorkedWeekendsHelp;
+  if (id === "official.workforce.preference.weekend-target")
+    return copy.fields.weekendTargetCountHelp;
+  return (
+    [...(state.catalog?.required ?? []), ...(state.catalog?.preferences ?? [])].find(
+      (entry) => entry.descriptor.id === id,
+    )?.descriptor.description.defaultText ?? id
+  );
+}
+function canCreateEntry(entry: WorkforceSetupRuleCatalogEntry): boolean {
+  if (!canReplace.value || state.facts === null) return false;
+  if (
+    (entry.descriptor.id === "official.workforce.preference.adjacency" ||
+      entry.descriptor.id === "official.workforce.preference.base-stability") &&
+    baseScheduleCount.value === 0
+  )
+    return false;
+  if (
+    entry.descriptor.id === "official.workforce.preference.preferred-coverage" &&
+    coverageRequirementCount.value === 0
+  )
+    return false;
+  return (
+    entry.descriptor.id !== "official.workforce.preference.workload-balance" ||
+    state.workloadPolicies.status === "ready"
+  );
+}
+function sourceUnavailableMessage(entry: WorkforceSetupRuleCatalogEntry): string | null {
+  if (
+    (entry.descriptor.id === "official.workforce.preference.adjacency" ||
+      entry.descriptor.id === "official.workforce.preference.base-stability") &&
+    baseScheduleCount.value === 0
+  )
+    return copy.fields.baseScheduleUnavailable;
+  if (
+    entry.descriptor.id === "official.workforce.preference.preferred-coverage" &&
+    coverageRequirementCount.value === 0
+  )
+    return copy.fields.coverageRequirementsUnavailable;
+  return null;
+}
 function nativeValue(value: unknown): string {
   return value === undefined ? recordsCopy.absent : JSON.stringify(value, null, 2);
 }
@@ -175,6 +278,165 @@ function fieldValue(value: object, field: string): unknown {
 }
 function text(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
+}
+function preferenceDirection(): "prefer" | "avoid" {
+  return state.editor?.raw.direction === "avoid" ? "avoid" : "prefer";
+}
+function groupDirection(): "together" | "separate" {
+  return state.editor?.raw.direction === "separate" ? "separate" : "together";
+}
+function updateGroupDirection(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "togetherSeparate") return;
+  vm.updateRaw({ ...raw, direction: value === "separate" ? "separate" : "together" });
+}
+function adjacencyMode(): "before" | "after" | "either" {
+  const mode = state.editor?.raw.mode;
+  return mode === "before" || mode === "after" ? mode : "either";
+}
+function updateAdjacencyMode(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "adjacency") return;
+  const mode = value === "before" || value === "after" || value === "either" ? value : "either";
+  vm.updateRaw({ ...raw, mode });
+}
+function updatePreferencePriority(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.class !== "preference") return;
+  const priority = (["low", "normal", "high", "veryHigh"] as const).find(
+    (candidate) => candidate === value,
+  );
+  if (priority !== undefined) vm.updateRaw({ ...raw, priority });
+}
+function updatePreferenceWeight(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.class !== "preference") return;
+  vm.updateRaw({ ...raw, weight: parseMaximumAssignmentCountDraft(value) });
+}
+function updatePreferenceDirection(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.class !== "preference") return;
+  vm.updateRaw({ ...raw, direction: value === "avoid" ? "avoid" : "prefer" });
+}
+function timeWindowKind(): "instant" | "weekly" {
+  return state.editor?.raw.timeWindow.kind === "instant" ? "instant" : "weekly";
+}
+function updateTimeWindowKind(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "time") return;
+  vm.updateRaw({
+    ...raw,
+    timeWindow:
+      value === "instant"
+        ? { kind: "instant", startsAt: "", endsAt: "" }
+        : {
+            kind: "weekly",
+            windows: [
+              {
+                key: nextTimeWindowKey([]),
+                weekdays: ["monday"],
+                startTime: "09:00:00",
+                endTime: "17:00:00",
+                endDayOffset: "0",
+              },
+            ],
+          },
+  });
+}
+function nextTimeWindowKey(windows: readonly { readonly key: string }[]): string {
+  const used = new Set(windows.map((window) => window.key));
+  let key: string;
+  do {
+    key = `time-window-${String(++rowSequence)}`;
+  } while (used.has(key));
+  return key;
+}
+function updateTimeWindowField(field: "startsAt" | "endsAt", value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || raw.timeWindow.kind !== "instant") return;
+  vm.updateRaw({ ...raw, timeWindow: { ...raw.timeWindow, [field]: value } });
+}
+function timeWindowRowId(key: string, field: string): string {
+  return `rule-${state.editor?.id ?? "none"}-${key}-${field}`;
+}
+function timeWindowWeekdayId(key: string, weekday: WorkforceWeekday): string {
+  return timeWindowRowId(key, `weekday-${weekday}`);
+}
+function updateWeeklyWindow(
+  key: string,
+  field: "startTime" | "endTime" | "endDayOffset",
+  value: string,
+): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || raw.timeWindow.kind !== "weekly") return;
+  vm.updateRaw({
+    ...raw,
+    timeWindow: {
+      ...raw.timeWindow,
+      windows: raw.timeWindow.windows.map((window) =>
+        window.key === key ? { ...window, [field]: value } : window,
+      ),
+    },
+  });
+}
+function toggleWeeklyWeekday(key: string, weekday: WorkforceWeekday, checked: boolean): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || raw.timeWindow.kind !== "weekly") return;
+  vm.updateRaw({
+    ...raw,
+    timeWindow: {
+      ...raw.timeWindow,
+      windows: raw.timeWindow.windows.map((window) => {
+        if (window.key !== key) return window;
+        const selected = new Set(window.weekdays);
+        if (checked) selected.add(weekday);
+        else selected.delete(weekday);
+        return {
+          ...window,
+          weekdays: weekdays.filter((candidate) => selected.has(candidate)),
+        };
+      }),
+    },
+  });
+}
+async function addWeeklyWindow(): Promise<void> {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || raw.timeWindow.kind !== "weekly") return;
+  const index = raw.timeWindow.windows.length;
+  const key = nextTimeWindowKey(raw.timeWindow.windows);
+  vm.updateRaw({
+    ...raw,
+    timeWindow: {
+      ...raw.timeWindow,
+      windows: [
+        ...raw.timeWindow.windows,
+        {
+          key,
+          weekdays: ["monday"],
+          startTime: "09:00:00",
+          endTime: "17:00:00",
+          endDayOffset: "0",
+        },
+      ],
+    },
+  });
+  await focusField(["timeWindow", "windows", String(index), "startTime"], ownership());
+}
+async function removeWeeklyWindow(index: number): Promise<void> {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || raw.timeWindow.kind !== "weekly") return;
+  vm.updateRaw({
+    ...raw,
+    timeWindow: {
+      ...raw.timeWindow,
+      windows: raw.timeWindow.windows.filter((_, at) => at !== index),
+    },
+  });
+  const next = Math.min(index, raw.timeWindow.windows.length - 2);
+  await focusField(
+    next < 0 ? ["timeWindow"] : ["timeWindow", "windows", String(next), "startTime"],
+    ownership(),
+  );
 }
 function updateMaximumHoursWindowKind(kind: string): void {
   const raw = state.editor?.raw;
@@ -211,7 +473,7 @@ function maximumConsecutiveModeKind(): "workedDays" | "assignments" {
 }
 function maximumConsecutiveBreakMinutesRaw(): string {
   const mode = state.editor?.raw.mode;
-  if (typeof mode !== "object" || mode.breakMinutes === undefined) return "";
+  if (typeof mode !== "object" || mode.kind !== "assignments") return "";
   return mode.breakMinutes.raw;
 }
 function mutualModeKind(): "sameShift" | "overlappingShifts" {
@@ -223,8 +485,8 @@ function updateMaximumConsecutiveMode(value: string): void {
   if (raw === undefined || locked.value || state.editor?.kind !== "maximumConsecutive") return;
   const mode = raw.mode;
   const breakMinutes =
-    typeof mode === "object" && mode.breakMinutes !== undefined
-      ? mode.breakMinutes
+    typeof mode === "object" && (mode.kind === "assignments" || mode.kind === "workedDays")
+      ? (mode.breakMinutes ?? parseMaximumAssignmentCountDraft(""))
       : parseMaximumAssignmentCountDraft("");
   vm.updateRaw({
     ...raw,
@@ -247,6 +509,65 @@ function updateMaximumConsecutiveBreakMinutes(value: string): void {
     },
   });
 }
+function consecutiveWorkModeKind(): "reportingDays" | "weekends" {
+  const mode = state.editor?.raw.mode;
+  return typeof mode === "object" && mode.kind === "weekends" ? "weekends" : "reportingDays";
+}
+function consecutiveWorkCalendarId(): string {
+  const mode = state.editor?.raw.mode;
+  return typeof mode === "object" && mode.kind === "weekends" ? mode.calendarId : "";
+}
+function consecutiveWorkWeekdays(): readonly WorkforceWeekday[] {
+  const mode = state.editor?.raw.mode;
+  return typeof mode === "object" && mode.kind === "weekends" ? mode.weekdays : [];
+}
+function updateConsecutiveWorkMode(value: string): void {
+  const raw = state.editor?.raw;
+  if (raw === undefined || locked.value || state.editor?.kind !== "consecutiveWork") return;
+  const mode = raw.mode;
+  vm.updateRaw({
+    ...raw,
+    mode:
+      value === "weekends"
+        ? typeof mode === "object" && mode.kind === "weekends"
+          ? mode
+          : { kind: "weekends" as const, calendarId: "", weekdays: [] }
+        : { kind: "reportingDays" as const },
+  });
+}
+function updateConsecutiveWorkCalendar(value: readonly string[]): void {
+  const raw = state.editor?.raw;
+  if (
+    raw === undefined ||
+    locked.value ||
+    state.editor?.kind !== "consecutiveWork" ||
+    typeof raw.mode !== "object" ||
+    raw.mode.kind !== "weekends"
+  )
+    return;
+  vm.updateRaw({ ...raw, mode: { ...raw.mode, calendarId: value[0] ?? "" } });
+}
+function toggleConsecutiveWorkWeekday(weekday: WorkforceWeekday, checked: boolean): void {
+  const raw = state.editor?.raw;
+  if (
+    raw === undefined ||
+    locked.value ||
+    state.editor?.kind !== "consecutiveWork" ||
+    typeof raw.mode !== "object" ||
+    raw.mode.kind !== "weekends"
+  )
+    return;
+  const selected = new Set(raw.mode.weekdays);
+  if (checked) selected.add(weekday);
+  else selected.delete(weekday);
+  vm.updateRaw({
+    ...raw,
+    mode: {
+      ...raw.mode,
+      weekdays: consecutiveWorkWeekdayOptions.filter((candidate) => selected.has(candidate)),
+    },
+  });
+}
 
 function maximumHoursWindowLabel(kind: "calendar" | "rolling", membership: string): string {
   const window = kind === "calendar" ? copy.fields.calendarWindow : copy.fields.rollingWindow;
@@ -257,6 +578,21 @@ function maximumHoursWindowLabel(kind: "calendar" | "rolling", membership: strin
         ? copy.fields.intersectionMembership
         : copy.fields.reportingDateMembership;
   return `${window} (${member})`;
+}
+function preferenceTimeWindowLabel(window: WorkforceTimeWindow): string {
+  return window.kind === "instant"
+    ? `${window.startsAt} – ${window.endsAt}`
+    : window.windows
+        .map(
+          (value) =>
+            `${value.weekdays.join(", ")} ${value.startTime}–${value.endTime} (+${String(value.endDayOffset)}d)`,
+        )
+        .join("; ");
+}
+function consecutiveWorkWeekdayLabel(mode: WorkforceConsecutiveWorkMode): string {
+  return mode.kind === "weekends"
+    ? mode.weekdays.map((weekday) => copy.fields[weekday]).join(", ")
+    : "";
 }
 function pairId(index: number, field: "firstCategory" | "secondCategory"): string | undefined {
   const id = state.editor?.id;
@@ -327,17 +663,38 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       kind: "rule-kind",
       strength: "rule-strength",
       active: "rule-active",
+      targetCount:
+        editor.kind === "weekendTarget"
+          ? "rule-weekend-target-count"
+          : "rule-assignment-target-count",
+      assignmentTypeIds:
+        editor.kind === "consecutiveWork"
+          ? "rule-consecutive-work-assignment-types"
+          : "rule-preference-assignment-types",
+      availabilityIds: "rule-preference-availabilities",
       bucketId: "rule-workload-bucket",
-      calendarId: "rule-calendar",
-      maximum: "rule-maximum",
+      workloadPolicyId: "rule-workload-policy",
+      calendarId:
+        editor.kind === "assignmentTarget"
+          ? "rule-assignment-target-calendar"
+          : editor.kind === "consecutiveWork"
+            ? "rule-consecutive-work-calendar"
+            : "rule-calendar",
+      measure: "rule-quota-measure",
+      membership: "rule-quota-membership",
+      minimum: "rule-quota-minimum",
+      maximum: editor.kind === "workloadQuota" ? "rule-quota-maximum" : "rule-maximum",
       maximumMinutes: "rule-maximum-minutes",
       window: "rule-window",
+      timeWindow: "rule-preference-time-window",
       minimumMinutes: "rule-minimum-rest",
       compatibleCategoryPairs: "rule-category-pairs",
       personId: "rule-fixed-person",
       shiftId: "rule-fixed-shift",
+      assigned: "rule-fixed-assigned",
       personIds: "rule-mutual-people",
-      locationIds: "rule-transition-locations",
+      locationIds:
+        editor.class === "preference" ? "rule-preference-locations" : "rule-transition-locations",
       mode: "rule-mutual-mode",
       qualificationMinimums: "rule-qualification-minimums",
     } as const;
@@ -347,8 +704,14 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
   }
   if (path.length === 1 && path[0] === "mode" && editor.kind === "maximumConsecutive")
     id = "rule-consecutive-mode";
+  if (path.length === 1 && path[0] === "mode" && editor.kind === "consecutiveWork")
+    id = "rule-consecutive-work-mode";
   if (path.length === 2 && path[0] === "mode" && path[1] === "breakMinutes")
     id = "rule-consecutive-break-minutes";
+  if (path.length === 2 && path[0] === "mode" && path[1] === "calendarId")
+    id = "rule-consecutive-work-calendar";
+  if (path.length >= 2 && path[0] === "mode" && path[1] === "weekdays")
+    id = "rule-consecutive-work-saturday";
   if (path.length === 2 && path[0] === "window") {
     const windowFields: Readonly<Record<string, string>> = {
       calendarId: "rule-calendar",
@@ -357,6 +720,41 @@ async function focusField(path: readonly string[], current: () => boolean): Prom
       kind: "rule-window-kind",
     };
     id = windowFields[path[1] ?? ""] ?? null;
+  }
+  if (path.length === 2 && path[0] === "measure" && path[1] === "bucketId")
+    id = "rule-workload-bucket";
+  if (path[0] === "timeWindow" && path[1] === "startsAt") id = "rule-preference-time-starts-at";
+  if (path[0] === "timeWindow" && path[1] === "endsAt") id = "rule-preference-time-ends-at";
+  if (
+    path[0] === "timeWindow" &&
+    path[1] === "windows" &&
+    /^\d+$/.test(path[2] ?? "") &&
+    (path[3] === "weekdays" ||
+      path[3] === "startTime" ||
+      path[3] === "endTime" ||
+      path[3] === "endDayOffset")
+  ) {
+    const index = Number(path[2]);
+    const windows = editor.raw.timeWindow.kind === "weekly" ? editor.raw.timeWindow.windows : [];
+    const window = Number.isSafeInteger(index) && index >= 0 ? windows[index] : undefined;
+    if (window === undefined) return false;
+    if (path[3] === "weekdays") {
+      let weekday = window.weekdays[0] ?? weekdays[0];
+      if (path.length === 5) {
+        const weekdayIndex = Number(path[4]);
+        if (!/^\d+$/.test(path[4] ?? "") || !Number.isSafeInteger(weekdayIndex) || weekdayIndex < 0)
+          return false;
+        weekday = weekdays[weekdayIndex];
+      } else if (path.length !== 4) return false;
+      if (weekday === undefined) return false;
+      id = timeWindowWeekdayId(window.key, weekday);
+    } else if (path.length === 4 && path[3] === "startTime")
+      id = timeWindowRowId(window.key, "start-time");
+    else if (path.length === 4 && path[3] === "endTime")
+      id = timeWindowRowId(window.key, "end-time");
+    else if (path.length === 4 && path[3] === "endDayOffset")
+      id = timeWindowRowId(window.key, "end-day-offset");
+    else return false;
   }
   if (
     path[0] === "compatibleCategoryPairs" &&
@@ -550,8 +948,16 @@ const navigationError = useValidationRoute(
   () => props.project,
   () => state.catalog !== null && state.facts !== null,
   async (target, current) => {
-    if (target.collection !== "rules" || !current() || !canReplace.value) return false;
-    const loading = vm.loadDetail({ class: "required", ruleId: target.id });
+    if (
+      (target.collection !== "rules" && target.collection !== "preferences") ||
+      !current() ||
+      !canReplace.value
+    )
+      return false;
+    const loading = vm.loadDetail({
+      class: target.collection === "preferences" ? "preference" : "required",
+      ruleId: target.id,
+    });
     const generation = state.draftGeneration;
     if (
       !(await loading) ||
@@ -615,14 +1021,10 @@ const navigationError = useValidationRoute(
             v-for="entry in state.catalog.required.filter((item) => vm.kindFor(item) !== null)"
             :key="entry.descriptor.id"
           >
-            <button
-              type="button"
-              :disabled="!canReplace || state.facts === null"
-              @click="createRule(entry)"
-            >
+            <button type="button" :disabled="!canCreateEntry(entry)" @click="createRule(entry)">
               {{ entry.descriptor.title.defaultText }}
             </button>
-            <p>{{ entry.descriptor.description.defaultText }}</p>
+            <p>{{ descriptorDescription(entry.descriptor.id) }}</p>
           </li>
         </ul>
         <details>
@@ -639,11 +1041,57 @@ const navigationError = useValidationRoute(
         <details>
           <summary>{{ copy.preferencesHeading }}</summary>
           <p>{{ copy.preferenceHint }}</p>
-          <ul>
-            <li v-for="entry in state.catalog.preferences" :key="entry.descriptor.id">
-              {{ entry.descriptor.title.defaultText }} — {{ copy.notImplemented }}
+          <ul class="field-stack">
+            <li
+              v-for="entry in state.catalog.preferences.filter((item) => vm.kindFor(item) !== null)"
+              :key="entry.descriptor.id"
+            >
+              <button type="button" :disabled="!canCreateEntry(entry)" @click="createRule(entry)">
+                {{ entry.descriptor.title.defaultText }}
+              </button>
+              <p>{{ descriptorDescription(entry.descriptor.id) }}</p>
+              <p v-if="sourceUnavailableMessage(entry)" role="status">
+                {{ sourceUnavailableMessage(entry) }}
+              </p>
+              <p
+                v-if="
+                  entry.descriptor.id === 'official.workforce.preference.workload-balance' &&
+                  state.workloadPolicies.status !== 'ready'
+                "
+                role="status"
+              >
+                {{
+                  state.workloadPolicies.status === "empty"
+                    ? copy.fields.workloadPoliciesEmpty
+                    : state.workloadPolicies.status === "error"
+                      ? copy.fields.workloadPoliciesError
+                      : copy.fields.workloadPoliciesLoading
+                }}
+                <RouterLink
+                  v-if="
+                    state.workloadPolicies.status === 'empty' ||
+                    state.workloadPolicies.status === 'error'
+                  "
+                  :to="{ name: 'project-score-policy', params: { scenarioId: project.scenarioId } }"
+                >
+                  {{ messages.scorePolicy.heading }}
+                </RouterLink>
+              </p>
             </li>
           </ul>
+          <details>
+            <summary>{{ copy.otherKinds }}</summary>
+            <ul>
+              <li
+                v-for="entry in state.catalog.preferences.filter(
+                  (item) => vm.kindFor(item) === null,
+                )"
+                :key="entry.descriptor.id"
+              >
+                {{ entry.descriptor.title.defaultText }} — {{ copy.notImplemented }}
+              </li>
+            </ul>
+          </details>
         </details>
         <button
           type="button"
@@ -733,7 +1181,12 @@ const navigationError = useValidationRoute(
             {{ copy.fields.kind }}: {{ kindLabel(state.editor.kind) }}
           </p>
           <p id="rule-strength" tabindex="-1">
-            {{ copy.strength }}: {{ copy.strengthAlwaysRequired }}
+            {{ copy.strength }}:
+            {{
+              state.editor.class === "preference"
+                ? copy.preferencesHeading
+                : copy.strengthAlwaysRequired
+            }}
           </p>
           <p>{{ copy.baseline }}: {{ formatNumber(state.editor.context.revision, locale) }}</p>
           <p v-if="dirty" role="status">{{ copy.unsaved }}</p>
@@ -879,6 +1332,871 @@ const navigationError = useValidationRoute(
               @preview="vm.inspectScope(part, $event)"
             />
             <fieldset
+              v-if="state.editor.class === 'preference'"
+              id="rule-preference-settings"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ copy.preferencesHeading }}</legend>
+              <p class="field-help">{{ copy.preferenceScopeHelp }}</p>
+              <div class="form-grid">
+                <div class="field-stack">
+                  <label for="rule-preference-priority">{{ copy.fields.priority }}</label>
+                  <select
+                    id="rule-preference-priority"
+                    :value="state.editor.raw.priority"
+                    :disabled="
+                      busy || stale || !state.editor.editing || state.editor.rebase !== null
+                    "
+                    :aria-invalid="Boolean(state.errors.priority) || undefined"
+                    aria-describedby="rule-preference-priority-error"
+                    @change="updatePreferencePriority(text($event))"
+                  >
+                    <option value="low">Low</option>
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                    <option value="veryHigh">Very high</option>
+                  </select>
+                  <p id="rule-preference-priority-error" class="text-danger" role="status">
+                    {{ state.errors.priority }}
+                  </p>
+                </div>
+                <div class="field-stack">
+                  <label for="rule-preference-weight">{{ copy.fields.weight }}</label>
+                  <p id="rule-preference-weight-help" class="field-help">
+                    {{ copy.fields.weightHelp }}
+                  </p>
+                  <input
+                    id="rule-preference-weight"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="state.editor.raw.weight.raw"
+                    :aria-invalid="Boolean(state.errors.weight) || undefined"
+                    aria-describedby="rule-preference-weight-help rule-preference-weight-error"
+                    @input="updatePreferenceWeight(text($event))"
+                  />
+                  <p id="rule-preference-weight-error" class="text-danger" role="status">
+                    {{ state.errors.weight }}
+                  </p>
+                </div>
+              </div>
+              <div v-if="state.editor.kind === 'workloadBalance'" class="field-stack">
+                <label for="rule-workload-policy">{{ copy.fields.workloadPolicy }}</label>
+                <p id="rule-workload-policy-help" class="field-help">
+                  {{ copy.fields.workloadPolicyHelp }}
+                </p>
+                <select
+                  id="rule-workload-policy"
+                  :value="state.editor.raw.workloadPolicyId"
+                  required
+                  :disabled="
+                    busy ||
+                    stale ||
+                    !state.editor.editing ||
+                    state.editor.rebase !== null ||
+                    state.workloadPolicies.status !== 'ready'
+                  "
+                  :aria-invalid="Boolean(state.errors.workloadPolicyId) || undefined"
+                  aria-describedby="rule-workload-policy-help rule-workload-policy-error"
+                  @change="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      workloadPolicyId: text($event),
+                    })
+                  "
+                >
+                  <option value="">{{ copy.fields.workloadPolicyChoose }}</option>
+                  <option
+                    v-for="policy in workloadPolicyEntries"
+                    :key="policy.id"
+                    :value="policy.id"
+                  >
+                    {{ policy.id }} · {{ workloadPolicyTargetMode(policy) }} ·
+                    {{ workloadPolicyPeerGroup(policy) }}
+                  </option>
+                </select>
+                <p id="rule-workload-policy-error" class="text-danger" role="status">
+                  {{ state.errors.workloadPolicyId }}
+                </p>
+                <p v-if="state.workloadPolicies.status === 'loading'" role="status">
+                  {{ copy.fields.workloadPoliciesLoading }}
+                </p>
+                <p v-else-if="state.workloadPolicies.status === 'empty'" role="status">
+                  {{ copy.fields.workloadPoliciesEmpty }}
+                  <RouterLink
+                    :to="{
+                      name: 'project-score-policy',
+                      params: { scenarioId: project.scenarioId },
+                    }"
+                  >
+                    {{ messages.scorePolicy.heading }}
+                  </RouterLink>
+                </p>
+                <p v-else-if="state.workloadPolicies.status === 'error'" role="alert">
+                  {{ copy.fields.workloadPoliciesError }}
+                  <button type="button" :disabled="busy" @click="vm.refresh">
+                    {{ copy.refresh }}
+                  </button>
+                </p>
+                <p class="field-help">{{ copy.workloadBalanceScopeHelp }}</p>
+              </div>
+              <div
+                v-if="
+                  state.editor.kind === 'time' ||
+                  state.editor.kind === 'assignmentType' ||
+                  state.editor.kind === 'location' ||
+                  state.editor.kind === 'adjacency'
+                "
+                class="field-stack"
+              >
+                <label for="rule-preference-direction">{{ copy.fields.direction }}</label>
+                <select
+                  id="rule-preference-direction"
+                  :value="preferenceDirection()"
+                  :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
+                  :aria-invalid="Boolean(state.errors.direction) || undefined"
+                  aria-describedby="rule-preference-direction-error"
+                  @change="updatePreferenceDirection(text($event))"
+                >
+                  <option value="prefer">{{ copy.fields.prefer }}</option>
+                  <option value="avoid">{{ copy.fields.avoid }}</option>
+                </select>
+                <p id="rule-preference-direction-error" class="text-danger" role="status">
+                  {{ state.errors.direction }}
+                </p>
+              </div>
+            </fieldset>
+            <fieldset
+              v-if="state.editor.kind === 'adjacency'"
+              id="rule-adjacency"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <WorkforceEntityPicker
+                id="rule-adjacency-base-schedule"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="baseSchedule"
+                :label="copy.fields.baseSchedule"
+                :description="copy.fields.baseScheduleHelp"
+                :model-value="
+                  state.editor.raw.baseScheduleId === '' ? [] : [state.editor.raw.baseScheduleId]
+                "
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.baseScheduleId === undefined
+                    ? {}
+                    : { error: state.errors.baseScheduleId }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, baseScheduleId: $event[0] ?? '' })
+                "
+              />
+              <p v-if="baseScheduleCount === 0" role="status">
+                {{ copy.fields.baseScheduleUnavailable }}
+              </p>
+              <div class="field-stack">
+                <label for="rule-adjacency-gap">{{ copy.fields.maximumGapMinutes }}</label>
+                <p id="rule-adjacency-gap-help" class="field-help">
+                  {{ copy.fields.maximumGapMinutesHelp }}
+                </p>
+                <input
+                  id="rule-adjacency-gap"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.maximumGapMinutes.raw"
+                  :aria-invalid="Boolean(state.errors.maximumGapMinutes) || undefined"
+                  aria-describedby="rule-adjacency-gap-help rule-adjacency-gap-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      maximumGapMinutes: parseMaximumAssignmentCountDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-adjacency-gap-error" class="text-danger" role="status">
+                  {{ state.errors.maximumGapMinutes }}
+                </p>
+              </div>
+              <div class="field-stack">
+                <label for="rule-adjacency-mode">{{ copy.fields.adjacencyMode }}</label>
+                <select
+                  id="rule-adjacency-mode"
+                  :value="adjacencyMode()"
+                  :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
+                  :aria-invalid="Boolean(state.errors.mode) || undefined"
+                  aria-describedby="rule-adjacency-mode-help rule-adjacency-mode-error"
+                  @change="updateAdjacencyMode(text($event))"
+                >
+                  <option value="before">{{ copy.fields.adjacencyBefore }}</option>
+                  <option value="after">{{ copy.fields.adjacencyAfter }}</option>
+                  <option value="either">{{ copy.fields.adjacencyEither }}</option>
+                </select>
+                <p id="rule-adjacency-mode-help" class="field-help">
+                  {{ copy.fields.adjacencyModeHelp }}
+                </p>
+                <p id="rule-adjacency-mode-error" class="text-danger" role="status">
+                  {{ state.errors.mode }}
+                </p>
+              </div>
+            </fieldset>
+            <fieldset
+              v-if="state.editor.kind === 'baseStability'"
+              id="rule-base-stability"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <WorkforceEntityPicker
+                id="rule-base-stability-base-schedule"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="baseSchedule"
+                :label="copy.fields.baseSchedule"
+                :description="copy.fields.baseScheduleHelp"
+                :model-value="
+                  state.editor.raw.baseScheduleId === '' ? [] : [state.editor.raw.baseScheduleId]
+                "
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.baseScheduleId === undefined
+                    ? {}
+                    : { error: state.errors.baseScheduleId }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, baseScheduleId: $event[0] ?? '' })
+                "
+              />
+              <p v-if="baseScheduleCount === 0" role="status">
+                {{ copy.fields.baseScheduleUnavailable }}
+              </p>
+            </fieldset>
+            <fieldset
+              v-if="state.editor.kind === 'togetherSeparate'"
+              id="rule-together-separate"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <WorkforceEntityPicker
+                id="rule-together-separate-people"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="person"
+                multiple
+                :label="copy.fields.togetherSeparatePeople"
+                :description="copy.fields.togetherSeparatePeopleHelp"
+                :model-value="state.editor.raw.personIds"
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.personIds === undefined
+                    ? {}
+                    : { error: state.errors.personIds }),
+                }"
+                @update:model-value="vm.updateRaw({ ...state.editor.raw, personIds: $event })"
+              />
+              <div class="field-stack">
+                <label for="rule-together-separate-direction">
+                  {{ copy.fields.groupDirection }}
+                </label>
+                <select
+                  id="rule-together-separate-direction"
+                  :value="groupDirection()"
+                  :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
+                  :aria-invalid="Boolean(state.errors.direction) || undefined"
+                  aria-describedby="rule-together-separate-direction-error"
+                  @change="updateGroupDirection(text($event))"
+                >
+                  <option value="together">{{ copy.fields.together }}</option>
+                  <option value="separate">{{ copy.fields.separate }}</option>
+                </select>
+                <p id="rule-together-separate-direction-error" class="text-danger" role="status">
+                  {{ state.errors.direction }}
+                </p>
+              </div>
+              <div class="field-stack">
+                <label for="rule-together-separate-mode">{{ copy.fields.mutualMode }}</label>
+                <select
+                  id="rule-together-separate-mode"
+                  :value="mutualModeKind()"
+                  :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
+                  :aria-invalid="Boolean(state.errors.mode) || undefined"
+                  aria-describedby="rule-together-separate-mode-error"
+                  @change="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      mode:
+                        text($event) === 'overlappingShifts' ? 'overlappingShifts' : 'sameShift',
+                    })
+                  "
+                >
+                  <option value="sameShift">{{ copy.fields.sameShift }}</option>
+                  <option value="overlappingShifts">{{ copy.fields.overlappingShifts }}</option>
+                </select>
+                <p id="rule-together-separate-mode-error" class="text-danger" role="status">
+                  {{ state.errors.mode }}
+                </p>
+              </div>
+            </fieldset>
+            <fieldset
+              v-if="state.editor.kind === 'preferredCoverage'"
+              id="rule-preferred-coverage"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <WorkforceEntityPicker
+                id="rule-preferred-coverage-requirements"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="coverageRequirement"
+                multiple
+                :label="copy.fields.coverageRequirements"
+                :description="copy.fields.coverageRequirementsHelp"
+                :model-value="state.editor.raw.coverageRequirementIds"
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.coverageRequirementIds === undefined
+                    ? {}
+                    : { error: state.errors.coverageRequirementIds }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, coverageRequirementIds: $event })
+                "
+              />
+              <p v-if="coverageRequirementCount === 0" role="status">
+                {{ copy.fields.coverageRequirementsUnavailable }}
+              </p>
+            </fieldset>
+            <template v-if="state.editor.kind === 'consecutiveWork'">
+              <fieldset
+                id="rule-consecutive-work"
+                tabindex="-1"
+                class="field-stack"
+                aria-describedby="rule-consecutive-work-help"
+              >
+                <legend>{{ kindLabel(state.editor.kind) }}</legend>
+                <p id="rule-consecutive-work-help" class="field-help">
+                  {{ copy.fields.maximumConsecutiveScopeHelp }}
+                </p>
+                <div class="field-stack">
+                  <label for="rule-consecutive-work-threshold">
+                    {{ copy.fields.consecutiveWorkThreshold }}
+                  </label>
+                  <p id="rule-consecutive-work-threshold-help" class="field-help">
+                    {{ copy.fields.consecutiveWorkThresholdHelp }}
+                  </p>
+                  <input
+                    id="rule-consecutive-work-threshold"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="state.editor.raw.threshold.raw"
+                    :aria-invalid="Boolean(state.errors.threshold) || undefined"
+                    aria-describedby="rule-consecutive-work-threshold-help rule-consecutive-work-threshold-error"
+                    @input="
+                      vm.updateRaw({
+                        ...state.editor.raw,
+                        threshold: parseMaximumAssignmentCountDraft(text($event)),
+                      })
+                    "
+                  />
+                  <p id="rule-consecutive-work-threshold-error" class="text-danger" role="status">
+                    {{ state.errors.threshold }}
+                  </p>
+                </div>
+                <div class="field-stack">
+                  <label for="rule-consecutive-work-mode">{{
+                    copy.fields.consecutiveWorkMode
+                  }}</label>
+                  <p id="rule-consecutive-work-mode-help" class="field-help">
+                    {{ copy.fields.consecutiveWorkModeHelp }}
+                  </p>
+                  <select
+                    id="rule-consecutive-work-mode"
+                    :value="consecutiveWorkModeKind()"
+                    :disabled="
+                      busy || stale || !state.editor.editing || state.editor.rebase !== null
+                    "
+                    :aria-invalid="Boolean(state.errors.mode) || undefined"
+                    aria-describedby="rule-consecutive-work-mode-help rule-consecutive-work-mode-error"
+                    @change="updateConsecutiveWorkMode(text($event))"
+                  >
+                    <option value="reportingDays">{{ copy.fields.reportingDays }}</option>
+                    <option value="weekends">{{ copy.fields.weekends }}</option>
+                  </select>
+                  <p id="rule-consecutive-work-mode-error" class="text-danger" role="status">
+                    {{ state.errors.mode }}
+                  </p>
+                </div>
+                <p v-if="consecutiveWorkModeKind() === 'reportingDays'" class="field-help">
+                  {{ copy.fields.reportingDaysHelp }}
+                </p>
+                <template v-else>
+                  <WorkforceEntityPicker
+                    id="rule-consecutive-work-calendar"
+                    :project="project"
+                    :library-epoch="home.state.libraryEpoch"
+                    kind="calendar"
+                    :label="copy.fields.consecutiveWorkCalendar"
+                    :description="copy.fields.consecutiveWorkCalendarHelp"
+                    :model-value="
+                      consecutiveWorkCalendarId() === '' ? [] : [consecutiveWorkCalendarId()]
+                    "
+                    :required="state.editor.raw.active"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :read-only="!state.editor.editing"
+                    v-bind="{
+                      ...(locale === undefined ? {} : { locale }),
+                      ...(state.errors['mode.calendarId'] === undefined
+                        ? {}
+                        : { error: state.errors['mode.calendarId'] }),
+                    }"
+                    @update:model-value="updateConsecutiveWorkCalendar($event)"
+                  />
+                  <p v-if="calendarCount === 0" role="status">{{ copy.noCalendars }}</p>
+                  <RouterLink
+                    v-if="calendarCount === 0"
+                    :to="{ name: 'project-work', params: { scenarioId: project.scenarioId } }"
+                  >
+                    {{ copy.manageCalendars }}
+                  </RouterLink>
+                  <fieldset
+                    id="rule-consecutive-work-weekdays"
+                    tabindex="-1"
+                    class="field-stack"
+                    :aria-invalid="Boolean(state.errors['mode.weekdays']) || undefined"
+                    aria-describedby="rule-consecutive-work-weekdays-help rule-consecutive-work-weekdays-error"
+                  >
+                    <legend>{{ copy.fields.consecutiveWorkWeekdays }}</legend>
+                    <p id="rule-consecutive-work-weekdays-help" class="field-help">
+                      {{ copy.fields.consecutiveWorkWeekdaysHelp }}
+                    </p>
+                    <label
+                      v-for="weekday in consecutiveWorkWeekdayOptions"
+                      :key="weekday"
+                      :for="`rule-consecutive-work-${weekday}`"
+                    >
+                      <input
+                        :id="`rule-consecutive-work-${weekday}`"
+                        type="checkbox"
+                        :checked="consecutiveWorkWeekdays().includes(weekday)"
+                        :disabled="
+                          busy || stale || !state.editor.editing || state.editor.rebase !== null
+                        "
+                        @change="
+                          toggleConsecutiveWorkWeekday(
+                            weekday,
+                            ($event.target as HTMLInputElement).checked,
+                          )
+                        "
+                      />
+                      {{ copy.fields[weekday] }}
+                    </label>
+                    <p id="rule-consecutive-work-weekdays-error" class="text-danger" role="status">
+                      {{ state.errors["mode.weekdays"] }}
+                    </p>
+                  </fieldset>
+                </template>
+              </fieldset>
+              <WorkforceEntityPicker
+                id="rule-consecutive-work-assignment-types"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="assignmentType"
+                multiple
+                :label="copy.fields.consecutiveWorkAssignmentTypes"
+                :description="copy.fields.consecutiveWorkAssignmentTypesHelp"
+                :model-value="state.editor.raw.assignmentTypeIds"
+                :required="state.editor.raw.active"
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.assignmentTypeIds === undefined
+                    ? {}
+                    : { error: state.errors.assignmentTypeIds }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, assignmentTypeIds: $event })
+                "
+              />
+            </template>
+            <template v-if="state.editor.kind === 'assignmentTarget'">
+              <WorkforceEntityPicker
+                id="rule-assignment-target-calendar"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="calendar"
+                :label="copy.fields.calendar"
+                :description="copy.fields.calendarHelp"
+                :model-value="
+                  state.editor.raw.calendarId === '' ? [] : [state.editor.raw.calendarId]
+                "
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors.calendarId === undefined
+                    ? {}
+                    : { error: state.errors.calendarId }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, calendarId: $event[0] ?? '' })
+                "
+              />
+              <p v-if="calendarCount === 0" role="status">{{ copy.noCalendars }}</p>
+              <RouterLink
+                v-if="calendarCount === 0"
+                :to="{ name: 'project-work', params: { scenarioId: project.scenarioId } }"
+              >
+                {{ copy.manageCalendars }}
+              </RouterLink>
+              <div class="field-stack">
+                <label for="rule-assignment-target-count">{{ copy.fields.targetCount }}</label>
+                <p id="rule-assignment-target-count-help" class="field-help">
+                  {{ copy.fields.targetCountHelp }}
+                </p>
+                <input
+                  id="rule-assignment-target-count"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.targetCount.raw"
+                  :aria-invalid="Boolean(state.errors.targetCount) || undefined"
+                  aria-describedby="rule-assignment-target-count-help rule-assignment-target-count-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      targetCount: parseMaximumAssignmentCountDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-assignment-target-count-error" class="text-danger" role="status">
+                  {{ state.errors.targetCount }}
+                </p>
+              </div>
+            </template>
+            <template v-if="state.editor.kind === 'weekendTarget'">
+              <fieldset id="rule-weekend-target" tabindex="-1" class="field-stack">
+                <legend>{{ kindLabel(state.editor.kind) }}</legend>
+                <p id="rule-weekend-target-help" class="field-help">
+                  {{ copy.fields.weekendTargetCountHelp }}
+                </p>
+                <label for="rule-weekend-target-count">
+                  {{ copy.fields.weekendTargetCount }}
+                </label>
+                <input
+                  id="rule-weekend-target-count"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.targetCount.raw"
+                  :aria-invalid="Boolean(state.errors.targetCount) || undefined"
+                  aria-describedby="rule-weekend-target-help rule-weekend-target-count-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      targetCount: parseMaximumAssignmentCountDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-weekend-target-count-error" class="text-danger" role="status">
+                  {{ state.errors.targetCount }}
+                </p>
+              </fieldset>
+            </template>
+            <WorkforceEntityPicker
+              v-if="state.editor.kind === 'assignmentType'"
+              id="rule-preference-assignment-types"
+              :project="project"
+              :library-epoch="home.state.libraryEpoch"
+              kind="assignmentType"
+              multiple
+              :label="copy.fields.assignmentTypes"
+              :description="copy.fields.assignmentTypesHelp"
+              :model-value="state.editor.raw.assignmentTypeIds"
+              :disabled="busy || stale || state.editor.rebase !== null"
+              :read-only="!state.editor.editing"
+              v-bind="{
+                ...(locale === undefined ? {} : { locale }),
+                ...(state.errors.assignmentTypeIds === undefined
+                  ? {}
+                  : { error: state.errors.assignmentTypeIds }),
+              }"
+              @update:model-value="vm.updateRaw({ ...state.editor.raw, assignmentTypeIds: $event })"
+            />
+            <WorkforceEntityPicker
+              v-if="state.editor.kind === 'location'"
+              id="rule-preference-locations"
+              :project="project"
+              :library-epoch="home.state.libraryEpoch"
+              kind="location"
+              multiple
+              :label="copy.fields.locations"
+              :description="copy.fields.locationsHelp"
+              :model-value="state.editor.raw.locationIds"
+              :disabled="busy || stale || state.editor.rebase !== null"
+              :read-only="!state.editor.editing"
+              v-bind="{
+                ...(locale === undefined ? {} : { locale }),
+                ...(state.errors.locationIds === undefined
+                  ? {}
+                  : { error: state.errors.locationIds }),
+              }"
+              @update:model-value="vm.updateRaw({ ...state.editor.raw, locationIds: $event })"
+            />
+            <WorkforceEntityPicker
+              v-if="state.editor.kind === 'requestedTimeOff'"
+              id="rule-preference-availabilities"
+              :project="project"
+              :library-epoch="home.state.libraryEpoch"
+              kind="availability"
+              multiple
+              :label="copy.fields.availabilities"
+              :description="copy.fields.availabilitiesHelp"
+              :model-value="state.editor.raw.availabilityIds"
+              :disabled="busy || stale || state.editor.rebase !== null"
+              :read-only="!state.editor.editing"
+              v-bind="{
+                ...(locale === undefined ? {} : { locale }),
+                ...(state.errors.availabilityIds === undefined
+                  ? {}
+                  : { error: state.errors.availabilityIds }),
+              }"
+              @update:model-value="vm.updateRaw({ ...state.editor.raw, availabilityIds: $event })"
+            />
+            <fieldset
+              v-if="state.editor.kind === 'time'"
+              id="rule-preference-time-window"
+              tabindex="-1"
+              class="field-stack"
+            >
+              <legend>{{ copy.fields.timeWindow }}</legend>
+              <p id="rule-preference-time-window-help" class="field-help">
+                {{ copy.fields.timeWindowHelp }}
+              </p>
+              <label for="rule-preference-time-window-kind">
+                {{ copy.fields.timeWindowKind }}
+              </label>
+              <select
+                id="rule-preference-time-window-kind"
+                :value="timeWindowKind()"
+                :disabled="busy || stale || !state.editor.editing || state.editor.rebase !== null"
+                :aria-invalid="Boolean(state.errors['timeWindow.kind']) || undefined"
+                aria-describedby="rule-preference-time-window-help rule-preference-time-window-kind-error"
+                @change="updateTimeWindowKind(text($event))"
+              >
+                <option value="instant">{{ copy.fields.instantWindow }}</option>
+                <option value="weekly">{{ copy.fields.weeklyWindow }}</option>
+              </select>
+              <p id="rule-preference-time-window-kind-error" class="text-danger" role="status">
+                {{ state.errors["timeWindow.kind"] }}
+              </p>
+              <div v-if="state.editor.raw.timeWindow.kind === 'instant'" class="form-grid">
+                <div class="field-stack">
+                  <label for="rule-preference-time-starts-at">{{ copy.fields.startsAt }}</label>
+                  <input
+                    id="rule-preference-time-starts-at"
+                    type="text"
+                    autocomplete="off"
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="state.editor.raw.timeWindow.startsAt"
+                    :aria-invalid="Boolean(state.errors['timeWindow.startsAt']) || undefined"
+                    aria-describedby="rule-preference-time-starts-at-error"
+                    @input="updateTimeWindowField('startsAt', text($event))"
+                  />
+                  <p id="rule-preference-time-starts-at-error" class="text-danger" role="status">
+                    {{ state.errors["timeWindow.startsAt"] }}
+                  </p>
+                </div>
+                <div class="field-stack">
+                  <label for="rule-preference-time-ends-at">{{ copy.fields.endsAt }}</label>
+                  <input
+                    id="rule-preference-time-ends-at"
+                    type="text"
+                    autocomplete="off"
+                    :readonly="!state.editor.editing"
+                    :disabled="busy || stale || state.editor.rebase !== null"
+                    :value="state.editor.raw.timeWindow.endsAt"
+                    :aria-invalid="Boolean(state.errors['timeWindow.endsAt']) || undefined"
+                    aria-describedby="rule-preference-time-ends-at-error"
+                    @input="updateTimeWindowField('endsAt', text($event))"
+                  />
+                  <p id="rule-preference-time-ends-at-error" class="text-danger" role="status">
+                    {{ state.errors["timeWindow.endsAt"] }}
+                  </p>
+                </div>
+              </div>
+              <template v-else>
+                <p v-if="state.editor.raw.timeWindow.windows.length === 0" role="status">
+                  {{ copy.timeWindowRequired }}
+                </p>
+                <fieldset
+                  v-for="(window, index) in state.editor.raw.timeWindow.windows"
+                  :id="timeWindowRowId(window.key, 'group')"
+                  :key="window.key"
+                  class="field-stack"
+                >
+                  <legend>{{ copy.fields.windowNumber(formatNumber(index + 1, locale)) }}</legend>
+                  <div class="field-stack">
+                    <span :id="timeWindowRowId(window.key, 'weekdays-help')" class="field-help">
+                      {{ copy.fields.weekdays }}
+                    </span>
+                    <div
+                      class="form-columns"
+                      role="group"
+                      :aria-labelledby="timeWindowRowId(window.key, 'weekdays-help')"
+                    >
+                      <label
+                        v-for="weekday in weekdays"
+                        :key="weekday"
+                        :for="timeWindowWeekdayId(window.key, weekday)"
+                      >
+                        <input
+                          :id="timeWindowWeekdayId(window.key, weekday)"
+                          type="checkbox"
+                          :checked="window.weekdays.includes(weekday)"
+                          :disabled="
+                            busy || stale || !state.editor.editing || state.editor.rebase !== null
+                          "
+                          @change="
+                            toggleWeeklyWeekday(
+                              window.key,
+                              weekday,
+                              ($event.target as HTMLInputElement).checked,
+                            )
+                          "
+                        />
+                        {{ copy.fields[weekday] }}
+                      </label>
+                    </div>
+                    <p class="text-danger" role="status">
+                      {{ state.errors[`timeWindow.windows.${index}.weekdays`] }}
+                    </p>
+                  </div>
+                  <div class="form-grid">
+                    <div class="field-stack">
+                      <label :for="timeWindowRowId(window.key, 'start-time')">
+                        {{ copy.fields.startTime }}
+                      </label>
+                      <input
+                        :id="timeWindowRowId(window.key, 'start-time')"
+                        type="text"
+                        :readonly="!state.editor.editing"
+                        :disabled="busy || stale || state.editor.rebase !== null"
+                        :value="window.startTime"
+                        :aria-invalid="
+                          Boolean(state.errors[`timeWindow.windows.${index}.startTime`]) ||
+                          undefined
+                        "
+                        :aria-describedby="timeWindowRowId(window.key, 'start-time-error')"
+                        @input="updateWeeklyWindow(window.key, 'startTime', text($event))"
+                      />
+                      <p
+                        :id="timeWindowRowId(window.key, 'start-time-error')"
+                        class="text-danger"
+                        role="status"
+                      >
+                        {{ state.errors[`timeWindow.windows.${index}.startTime`] }}
+                      </p>
+                    </div>
+                    <div class="field-stack">
+                      <label :for="timeWindowRowId(window.key, 'end-time')">
+                        {{ copy.fields.endTime }}
+                      </label>
+                      <input
+                        :id="timeWindowRowId(window.key, 'end-time')"
+                        type="text"
+                        :readonly="!state.editor.editing"
+                        :disabled="busy || stale || state.editor.rebase !== null"
+                        :value="window.endTime"
+                        :aria-invalid="
+                          Boolean(state.errors[`timeWindow.windows.${index}.endTime`]) || undefined
+                        "
+                        :aria-describedby="timeWindowRowId(window.key, 'end-time-error')"
+                        @input="updateWeeklyWindow(window.key, 'endTime', text($event))"
+                      />
+                      <p
+                        :id="timeWindowRowId(window.key, 'end-time-error')"
+                        class="text-danger"
+                        role="status"
+                      >
+                        {{ state.errors[`timeWindow.windows.${index}.endTime`] }}
+                      </p>
+                    </div>
+                    <div class="field-stack">
+                      <label :for="timeWindowRowId(window.key, 'end-day-offset')">
+                        {{ copy.fields.endDayOffset }}
+                      </label>
+                      <input
+                        :id="timeWindowRowId(window.key, 'end-day-offset')"
+                        type="text"
+                        inputmode="numeric"
+                        :readonly="!state.editor.editing"
+                        :disabled="busy || stale || state.editor.rebase !== null"
+                        :value="window.endDayOffset"
+                        :aria-invalid="
+                          Boolean(state.errors[`timeWindow.windows.${index}.endDayOffset`]) ||
+                          undefined
+                        "
+                        :aria-describedby="timeWindowRowId(window.key, 'end-day-offset-error')"
+                        @input="updateWeeklyWindow(window.key, 'endDayOffset', text($event))"
+                      />
+                      <p
+                        :id="timeWindowRowId(window.key, 'end-day-offset-error')"
+                        class="text-danger"
+                        role="status"
+                      >
+                        {{ state.errors[`timeWindow.windows.${index}.endDayOffset`] }}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    v-if="state.editor.editing"
+                    type="button"
+                    :disabled="locked"
+                    @click="removeWeeklyWindow(index)"
+                  >
+                    {{ copy.fields.removeTimeWindow }}
+                  </button>
+                </fieldset>
+                <button
+                  v-if="state.editor.editing"
+                  type="button"
+                  :disabled="locked"
+                  @click="addWeeklyWindow"
+                >
+                  {{ copy.fields.addTimeWindow }}
+                </button>
+              </template>
+            </fieldset>
+            <fieldset
               v-if="state.editor.kind === 'mutualAssignmentRestriction'"
               id="rule-mutual-assignment"
               tabindex="-1"
@@ -983,6 +2301,20 @@ const navigationError = useValidationRoute(
             >
               <legend>{{ kindLabel(state.editor.kind) }}</legend>
               <p class="field-help">{{ copy.fixedAssignmentScopeHelp }}</p>
+              <label for="rule-fixed-assigned">
+                {{ copy.fields.fixedAssignmentMode }}
+                <select
+                  id="rule-fixed-assigned"
+                  :value="state.editor.raw.assigned ? 'required' : 'excluded'"
+                  :disabled="locked"
+                  @change="
+                    vm.updateRaw({ ...state.editor.raw, assigned: text($event) === 'required' })
+                  "
+                >
+                  <option value="required">{{ copy.fields.fixedAssignmentRequired }}</option>
+                  <option value="excluded">{{ copy.fields.fixedAssignmentExcluded }}</option>
+                </select>
+              </label>
               <WorkforceEntityPicker
                 id="rule-fixed-person"
                 :project="project"
@@ -1048,18 +2380,99 @@ const navigationError = useValidationRoute(
                   copy.fixedAssignmentSentence(
                     state.editor.raw.personId || copy.absent,
                     state.editor.raw.shiftId || copy.absent,
+                    state.editor.raw.assigned,
                   )
                 }}
               </p>
             </fieldset>
-            <template v-if="state.editor.kind === 'maximumAssignmentCount'">
+            <template
+              v-if="
+                state.editor.kind === 'maximumAssignmentCount' ||
+                state.editor.kind === 'maximumWorkedWeekends'
+              "
+            >
+              <template v-if="state.editor.kind === 'maximumAssignmentCount'">
+                <WorkforceEntityPicker
+                  id="rule-calendar"
+                  :project="project"
+                  :library-epoch="home.state.libraryEpoch"
+                  kind="calendar"
+                  :label="copy.fields.calendar"
+                  :description="copy.fields.calendarHelp"
+                  :model-value="
+                    state.editor.raw.calendarId === '' ? [] : [state.editor.raw.calendarId]
+                  "
+                  required
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :read-only="!state.editor.editing"
+                  v-bind="{
+                    ...(locale === undefined ? {} : { locale }),
+                    ...(state.errors.calendarId === undefined
+                      ? {}
+                      : { error: state.errors.calendarId }),
+                  }"
+                  @update:model-value="
+                    vm.updateRaw({ ...state.editor.raw, calendarId: $event[0] ?? '' })
+                  "
+                />
+                <p v-if="calendarCount === 0" role="status">{{ copy.noCalendars }}</p>
+                <RouterLink
+                  v-if="calendarCount === 0"
+                  :to="{ name: 'project-work', params: { scenarioId: project.scenarioId } }"
+                >
+                  {{ copy.manageCalendars }}
+                </RouterLink>
+              </template>
+              <div class="field-stack">
+                <label for="rule-maximum">{{
+                  state.editor.kind === "maximumWorkedWeekends"
+                    ? copy.fields.maximumWorkedWeekends
+                    : copy.fields.maximum
+                }}</label>
+                <p id="rule-maximum-help" class="field-help">
+                  {{
+                    state.editor.kind === "maximumWorkedWeekends"
+                      ? copy.fields.maximumWorkedWeekendsHelp
+                      : copy.fields.maximumHelp
+                  }}
+                </p>
+                <input
+                  id="rule-maximum"
+                  type="text"
+                  inputmode="numeric"
+                  required
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.maximum.raw"
+                  :aria-invalid="Boolean(state.errors.maximum) || undefined"
+                  aria-describedby="rule-maximum-help rule-maximum-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      maximum: parseMaximumAssignmentCountDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-maximum-error" class="text-danger" role="status">
+                  {{ state.errors.maximum }}
+                </p>
+              </div>
+            </template>
+            <fieldset
+              v-if="state.editor.kind === 'workloadQuota'"
+              id="rule-quota"
+              class="field-stack"
+              aria-describedby="rule-quota-help"
+            >
+              <legend>{{ kindLabel(state.editor.kind) }}</legend>
+              <p id="rule-quota-help" class="field-help">{{ copy.fields.quotaHelp }}</p>
               <WorkforceEntityPicker
                 id="rule-calendar"
                 :project="project"
                 :library-epoch="home.state.libraryEpoch"
                 kind="calendar"
-                :label="copy.fields.calendar"
-                :description="copy.fields.calendarHelp"
+                :label="copy.fields.quotaCalendar"
+                :description="copy.fields.quotaCalendarHelp"
                 :model-value="
                   state.editor.raw.calendarId === '' ? [] : [state.editor.raw.calendarId]
                 "
@@ -1084,30 +2497,135 @@ const navigationError = useValidationRoute(
                 {{ copy.manageCalendars }}
               </RouterLink>
               <div class="field-stack">
-                <label for="rule-maximum">{{ copy.fields.maximum }}</label>
-                <p id="rule-maximum-help" class="field-help">{{ copy.fields.maximumHelp }}</p>
+                <label for="rule-quota-measure">{{ copy.fields.quotaMeasure }}</label>
+                <select
+                  id="rule-quota-measure"
+                  :value="state.editor.raw.quotaMeasure"
+                  :disabled="locked"
+                  @change="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      quotaMeasure:
+                        text($event) === 'bucketMinutes' ? 'bucketMinutes' : 'assignmentCount',
+                    })
+                  "
+                >
+                  <option value="assignmentCount">{{ copy.fields.quotaAssignments }}</option>
+                  <option value="bucketMinutes">{{ copy.fields.quotaMinutes }}</option>
+                </select>
+              </div>
+              <WorkforceEntityPicker
+                v-if="state.editor.raw.quotaMeasure === 'bucketMinutes'"
+                id="rule-workload-bucket"
+                :project="project"
+                :library-epoch="home.state.libraryEpoch"
+                kind="workloadBucket"
+                :label="copy.fields.workloadBucket"
+                :description="copy.fields.workloadBucketHelp"
+                :model-value="state.editor.raw.bucketId === '' ? [] : [state.editor.raw.bucketId]"
+                required
+                :disabled="busy || stale || state.editor.rebase !== null"
+                :read-only="!state.editor.editing"
+                v-bind="{
+                  ...(locale === undefined ? {} : { locale }),
+                  ...(state.errors['measure.bucketId'] === undefined
+                    ? {}
+                    : { error: state.errors['measure.bucketId'] }),
+                }"
+                @update:model-value="
+                  vm.updateRaw({ ...state.editor.raw, bucketId: $event[0] ?? '' })
+                "
+              />
+              <p
+                v-if="
+                  state.editor.raw.quotaMeasure === 'bucketMinutes' && workloadBucketCount === 0
+                "
+                role="status"
+              >
+                {{ copy.fields.noWorkloadBuckets }}
+              </p>
+              <div class="field-stack">
+                <label for="rule-quota-membership">{{ copy.fields.membership }}</label>
+                <select
+                  id="rule-quota-membership"
+                  :value="state.editor.raw.quotaMembership"
+                  :disabled="locked"
+                  :aria-invalid="Boolean(state.errors.membership) || undefined"
+                  aria-describedby="rule-quota-help rule-quota-membership-error"
+                  @change="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      quotaMembership:
+                        text($event) === 'startInstant'
+                          ? 'startInstant'
+                          : text($event) === 'intersection'
+                            ? 'intersection'
+                            : 'reportingDate',
+                    })
+                  "
+                >
+                  <option value="reportingDate">{{ copy.fields.reportingDateMembership }}</option>
+                  <option value="startInstant">{{ copy.fields.startInstantMembership }}</option>
+                  <option
+                    value="intersection"
+                    :disabled="state.editor.raw.quotaMeasure === 'assignmentCount'"
+                  >
+                    {{ copy.fields.intersectionMembership }}
+                  </option>
+                </select>
+                <p id="rule-quota-membership-error" class="text-danger" role="status">
+                  {{ state.errors.membership }}
+                </p>
+              </div>
+              <div class="field-stack">
+                <label for="rule-quota-minimum">{{ copy.fields.quotaMinimum }}</label>
                 <input
-                  id="rule-maximum"
+                  id="rule-quota-minimum"
                   type="text"
                   inputmode="numeric"
                   required
                   :readonly="!state.editor.editing"
                   :disabled="busy || stale || state.editor.rebase !== null"
-                  :value="state.editor.raw.maximum.raw"
-                  :aria-invalid="Boolean(state.errors.maximum) || undefined"
-                  aria-describedby="rule-maximum-help rule-maximum-error"
+                  :value="state.editor.raw.quotaMinimum.raw"
+                  :aria-invalid="Boolean(state.errors.minimum) || undefined"
+                  aria-describedby="rule-quota-help rule-quota-minimum-error"
                   @input="
                     vm.updateRaw({
                       ...state.editor.raw,
-                      maximum: parseMaximumAssignmentCountDraft(text($event)),
+                      quotaMinimum: parseMaximumAssignmentCountDraft(text($event)),
                     })
                   "
                 />
-                <p id="rule-maximum-error" class="text-danger" role="status">
+                <p id="rule-quota-minimum-error" class="text-danger" role="status">
+                  {{ state.errors.minimum }}
+                </p>
+              </div>
+              <div class="field-stack">
+                <label for="rule-quota-maximum">{{ copy.fields.quotaMaximum }}</label>
+                <p id="rule-quota-maximum-help" class="field-help">
+                  {{ copy.fields.quotaMaximumHelp }}
+                </p>
+                <input
+                  id="rule-quota-maximum"
+                  type="text"
+                  inputmode="numeric"
+                  :readonly="!state.editor.editing"
+                  :disabled="busy || stale || state.editor.rebase !== null"
+                  :value="state.editor.raw.quotaMaximum.raw"
+                  :aria-invalid="Boolean(state.errors.maximum) || undefined"
+                  aria-describedby="rule-quota-maximum-help rule-quota-maximum-error"
+                  @input="
+                    vm.updateRaw({
+                      ...state.editor.raw,
+                      quotaMaximum: parseMaximumAssignmentCountDraft(text($event)),
+                    })
+                  "
+                />
+                <p id="rule-quota-maximum-error" class="text-danger" role="status">
                   {{ state.errors.maximum }}
                 </p>
               </div>
-            </template>
+            </fieldset>
             <template v-if="state.editor.kind === 'maximumConsecutive'">
               <fieldset
                 id="rule-maximum-consecutive"
@@ -1719,6 +3237,29 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
+          <p v-if="state.reviewed.after?.kind === 'maximumWorkedWeekends'">
+            {{
+              copy.maximumWorkedWeekendsSentence(formatNumber(state.reviewed.after.maximum, locale))
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'workloadQuota'">
+            {{
+              copy.workloadQuotaSentence(
+                formatNumber(state.reviewed.after.minimum, locale),
+                state.reviewed.after.maximum === undefined
+                  ? null
+                  : formatNumber(state.reviewed.after.maximum, locale),
+                state.reviewed.after.measure.kind === "assignmentCount"
+                  ? copy.fields.quotaAssignments
+                  : copy.fields.quotaMinutes,
+                state.reviewed.after.membership === "startInstant"
+                  ? copy.fields.startInstantMembership
+                  : state.reviewed.after.membership === "intersection"
+                    ? copy.fields.intersectionMembership
+                    : copy.fields.reportingDateMembership,
+              )
+            }}
+          </p>
           <p v-if="state.reviewed.after?.kind === 'maximumConsecutive'">
             {{
               copy.maximumConsecutiveSentence(
@@ -1769,6 +3310,7 @@ const navigationError = useValidationRoute(
               copy.fixedAssignmentSentence(
                 state.reviewed.after.personId || copy.absent,
                 state.reviewed.after.shiftId || copy.absent,
+                state.reviewed.after.assigned ?? true,
               )
             }}
           </p>
@@ -1787,7 +3329,106 @@ const navigationError = useValidationRoute(
               )
             }}
           </p>
-          <p v-if="state.reviewed.after?.kind === 'maximumHours'">
+          <p v-if="state.reviewed.after?.kind === 'adjacency'">
+            {{
+              copy.preferenceAdjacencySentence(
+                state.reviewed.after.direction === "avoid" ? copy.fields.avoid : copy.fields.prefer,
+                state.reviewed.after.baseScheduleId,
+                formatNumber(state.reviewed.after.maximumGapMinutes, locale),
+                state.reviewed.after.mode,
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'baseStability'">
+            {{ copy.preferenceBaseStabilitySentence(state.reviewed.after.baseScheduleId) }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'togetherSeparate'">
+            {{
+              copy.preferenceTogetherSeparateSentence(
+                state.reviewed.after.direction === "together"
+                  ? copy.fields.together
+                  : copy.fields.separate,
+                state.reviewed.after.personIds.join(", "),
+                state.reviewed.after.mode,
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'preferredCoverage'">
+            {{
+              copy.preferencePreferredCoverageSentence(
+                state.reviewed.after.coverageRequirementIds.join(", "),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'time'">
+            {{
+              copy.preferenceTimeSentence(
+                state.reviewed.after.direction === "avoid" ? copy.fields.avoid : copy.fields.prefer,
+                preferenceTimeWindowLabel(state.reviewed.after.timeWindow),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'assignmentType'">
+            {{
+              copy.preferenceAssignmentTypeSentence(
+                state.reviewed.after.direction === "avoid" ? copy.fields.avoid : copy.fields.prefer,
+                formatNumber(state.reviewed.after.assignmentTypeIds.length, locale),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'consecutiveWork'">
+            {{
+              copy.preferenceConsecutiveWorkSentence(
+                formatNumber(state.reviewed.after.threshold, locale),
+                state.reviewed.after.mode.kind,
+                formatNumber(state.reviewed.after.assignmentTypeIds.length, locale),
+                state.reviewed.after.mode.kind === "weekends"
+                  ? state.reviewed.after.mode.calendarId
+                  : "",
+                consecutiveWorkWeekdayLabel(state.reviewed.after.mode),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'location'">
+            {{
+              copy.preferenceLocationSentence(
+                state.reviewed.after.direction === "avoid" ? copy.fields.avoid : copy.fields.prefer,
+                formatNumber(state.reviewed.after.locationIds.length, locale),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'requestedTimeOff'">
+            {{
+              copy.preferenceRequestedTimeOffSentence(
+                formatNumber(state.reviewed.after.availabilityIds.length, locale),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'assignmentTarget'">
+            {{
+              copy.preferenceAssignmentTargetSentence(
+                formatNumber(state.reviewed.after.targetCount, locale),
+                state.reviewed.after.calendarId,
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'weekendTarget'">
+            {{
+              copy.preferenceWeekendTargetSentence(
+                formatNumber(state.reviewed.after.targetCount, locale),
+              )
+            }}
+          </p>
+          <p v-if="state.reviewed.after?.kind === 'workloadBalance'">
+            {{ workloadPolicySentence(state.reviewed.after.workloadPolicyId) }}
+          </p>
+          <p
+            v-if="
+              state.reviewed.after?.kind === 'maximumHours' ||
+              (state.reviewed.after?.kind === 'workloadQuota' &&
+                state.reviewed.after.measure.kind === 'bucketMinutes')
+            "
+          >
             {{ copy.maximumHoursPreviewHelp }}
           </p>
           <p v-else>{{ copy.previewHelp }}</p>
@@ -1818,21 +3459,28 @@ const navigationError = useValidationRoute(
           <p v-if="state.reviewed.scopeError" role="alert">{{ state.reviewed.scopeError }}</p>
           <p v-if="!canApply && !busy && state.reviewed.after?.active" role="status">
             {{
-              state.reviewed.after?.kind === "fixedAssignment"
-                ? copy.fixedAssignmentScopeRequired
-                : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
-                    state.reviewed.mutualScopeProof === null
-                  ? copy.mutualAssignmentRestrictionScopeRequired
-                  : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
-                      state.reviewed.scopeError === copy.mutualAssignmentRestrictionPairRequired
-                    ? copy.mutualAssignmentRestrictionPairRequired
-                    : state.reviewed.after?.kind === "transitionTime" &&
-                        state.reviewed.transitionScopeProof === null
-                      ? copy.transitionTimeScopeRequired
-                      : state.reviewed.after?.kind === "transitionTime" &&
-                          state.reviewed.scopeError === copy.transitionTimePairRequired
-                        ? copy.transitionTimePairRequired
-                        : copy.activeScopeRequired
+              state.reviewed.after?.kind === "workloadQuota"
+                ? copy.quotaScopeRequired
+                : state.reviewed.after?.kind === "maximumWorkedWeekends"
+                  ? copy.maximumWorkedWeekendsScopeRequired
+                  : state.reviewed.after?.kind === "weekendTarget"
+                    ? copy.weekendTargetScopeRequired
+                    : state.reviewed.after?.kind === "fixedAssignment"
+                      ? copy.fixedAssignmentScopeRequired
+                      : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
+                          state.reviewed.mutualScopeProof === null
+                        ? copy.mutualAssignmentRestrictionScopeRequired
+                        : state.reviewed.after?.kind === "mutualAssignmentRestriction" &&
+                            state.reviewed.scopeError ===
+                              copy.mutualAssignmentRestrictionPairRequired
+                          ? copy.mutualAssignmentRestrictionPairRequired
+                          : state.reviewed.after?.kind === "transitionTime" &&
+                              state.reviewed.transitionScopeProof === null
+                            ? copy.transitionTimeScopeRequired
+                            : state.reviewed.after?.kind === "transitionTime" &&
+                                state.reviewed.scopeError === copy.transitionTimePairRequired
+                              ? copy.transitionTimePairRequired
+                              : copy.activeScopeRequired
             }}
           </p>
         </template>

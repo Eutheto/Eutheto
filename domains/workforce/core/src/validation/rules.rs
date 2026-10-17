@@ -5,6 +5,7 @@ use super::{
 use crate::model::{WindowMembership, WorkWindow, WorkforceRule, WorkloadMeasurement};
 
 impl Context<'_> {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn rule(&self, rule: &WorkforceRule) -> Result {
         let (_, active, scope) = rule.header();
         prefix(self.scope(scope, active), "scope")?;
@@ -12,7 +13,8 @@ impl Context<'_> {
             WorkforceRule::Eligibility { .. }
             | WorkforceRule::Availability { .. }
             | WorkforceRule::Coverage { .. }
-            | WorkforceRule::MaximumConsecutive { .. } => {}
+            | WorkforceRule::MaximumConsecutive { .. }
+            | WorkforceRule::MaximumWorkedWeekends { .. } => {}
             WorkforceRule::NoOverlap {
                 compatible_category_pairs,
                 ..
@@ -69,6 +71,39 @@ impl Context<'_> {
                             "reporting-date membership requires a calendar",
                         )?;
                         self.bucket_membership(*bucket_id, membership)?;
+                    }
+                }
+            }
+            WorkforceRule::WorkloadQuota(quota) => {
+                require(
+                    quota.maximum.is_none_or(|maximum| maximum >= quota.minimum),
+                    "maximum",
+                    "maximum must be greater than or equal to minimum",
+                )?;
+                match quota.measure {
+                    crate::model::WorkloadQuotaMeasure::AssignmentCount {} => {
+                        require(
+                            quota.membership != WindowMembership::Intersection,
+                            "membership",
+                            "assignment-count quotas support reporting-date or start-instant membership",
+                        )?;
+                        self.calendar(quota.calendar_id)?;
+                    }
+                    crate::model::WorkloadQuotaMeasure::BucketMinutes { bucket_id } => {
+                        let bucket = self.bucket(bucket_id)?;
+                        require(
+                            bucket.measurement != WorkloadMeasurement::AssignmentCount,
+                            "bucketId",
+                            "minute quotas require a minute-measurement bucket",
+                        )?;
+                        require(
+                            bucket.overlapping_contribution
+                                != crate::model::OverlappingContribution::Union
+                                || bucket.measurement == WorkloadMeasurement::ElapsedMinutes,
+                            "bucketId",
+                            "union quotas require elapsed-minute measurement",
+                        )?;
+                        self.workload_membership(bucket_id, quota.calendar_id, quota.membership)?;
                     }
                 }
             }

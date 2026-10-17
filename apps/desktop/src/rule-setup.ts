@@ -1,5 +1,6 @@
 import { computed, onScopeDispose, shallowReactive, watch } from "vue";
 import {
+  getScenarioEntity,
   getScenarioView,
   newUuidV7,
   searchScenarioEntities,
@@ -11,11 +12,14 @@ import {
   type SetupSourceV2,
 } from "./api/generated";
 import {
+  WORKFORCE_ADD_PREFERENCE_COMMAND_ID,
   WORKFORCE_ADD_RULE_COMMAND_ID,
+  WORKFORCE_REMOVE_PREFERENCE_COMMAND_ID,
   WORKFORCE_REMOVE_RULE_COMMAND_ID,
-  WORKFORCE_UPDATE_RULE_COMMAND_ID,
   WORKFORCE_SETUP_RULE_DETAIL_QUERY_ID,
   WORKFORCE_SETUP_RULE_PAGE_QUERY_ID,
+  WORKFORCE_UPDATE_PREFERENCE_COMMAND_ID,
+  WORKFORCE_UPDATE_RULE_COMMAND_ID,
   type WorkforceScope,
   type WorkforceSetupEntityContinuation,
   type WorkforceSetupFacts,
@@ -27,6 +31,7 @@ import {
   type WorkforceSetupRuleReference,
   type WorkforceSetupRuleScopeSummary,
   type WorkforceSetupScopePart,
+  type WorkforceWorkloadPolicy,
 } from "./api/generated-domain-pack-contracts";
 import {
   rebaseEntityDraft,
@@ -66,9 +71,16 @@ interface Context {
   readonly revision: number;
   readonly libraryEpoch: number;
 }
+interface WorkloadPolicyReadState {
+  readonly context: Context | null;
+  readonly status: "idle" | "loading" | "ready" | "empty" | "error";
+  readonly policies: Readonly<Record<string, WorkforceWorkloadPolicy>>;
+  readonly error: string | null;
+}
 interface RuleEditor {
   readonly context: Context;
   readonly id: string;
+  readonly class: WorkforceSetupRuleClass;
   readonly kind: EditableRuleKind;
   readonly base: EditableRule | null;
   readonly raw: RuleDraft;
@@ -143,12 +155,56 @@ const descriptorKinds: Readonly<Record<string, EditableRuleKind>> = {
   "official.workforce.rule.minimum-rest": "minimumRest",
   "official.workforce.rule.maximum-hours": "maximumHours",
   "official.workforce.rule.maximum-consecutive": "maximumConsecutive",
+  "official.workforce.rule.maximum-worked-weekends": "maximumWorkedWeekends",
   "official.workforce.rule.maximum-assignment-count": "maximumAssignmentCount",
+  "official.workforce.rule.workload-quota": "workloadQuota",
   "official.workforce.rule.required-skill-mix": "requiredSkillMix",
   "official.workforce.rule.fixed-assignment": "fixedAssignment",
   "official.workforce.rule.mutual-assignment-restriction": "mutualAssignmentRestriction",
   "official.workforce.rule.transition-time": "transitionTime",
+  "official.workforce.preference.time": "time",
+  "official.workforce.preference.assignment-type": "assignmentType",
+  "official.workforce.preference.location": "location",
+  "official.workforce.preference.requested-time-off": "requestedTimeOff",
+  "official.workforce.preference.assignment-target": "assignmentTarget",
+  "official.workforce.preference.workload-balance": "workloadBalance",
+  "official.workforce.preference.consecutive-work": "consecutiveWork",
+  "official.workforce.preference.adjacency": "adjacency",
+  "official.workforce.preference.base-stability": "baseStability",
+  "official.workforce.preference.together-separate": "togetherSeparate",
+  "official.workforce.preference.weekend-target": "weekendTarget",
+  "official.workforce.preference.preferred-coverage": "preferredCoverage",
 };
+const editableRecordKinds: Readonly<Record<string, true>> = {
+  eligibility: true,
+  availability: true,
+  coverage: true,
+  noOverlap: true,
+  minimumRest: true,
+  maximumConsecutive: true,
+  maximumWorkedWeekends: true,
+  maximumAssignmentCount: true,
+  workloadQuota: true,
+  requiredSkillMix: true,
+  fixedAssignment: true,
+  mutualAssignmentRestriction: true,
+  transitionTime: true,
+  time: true,
+  assignmentType: true,
+  location: true,
+  requestedTimeOff: true,
+  assignmentTarget: true,
+  workloadBalance: true,
+  consecutiveWork: true,
+  adjacency: true,
+  baseStability: true,
+  togetherSeparate: true,
+  weekendTarget: true,
+  preferredCoverage: true,
+};
+function editableKind(kind: string): EditableRuleKind | null {
+  return editableRecordKinds[kind] === true ? (kind as EditableRuleKind) : null;
+}
 function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
   return (
     left.active === right.active &&
@@ -156,17 +212,33 @@ function sameRuleDraft(left: RuleDraft, right: RuleDraft): boolean {
     sameField(left.beforeScope, right.beforeScope) &&
     sameField(left.afterScope, right.afterScope) &&
     left.calendarId === right.calendarId &&
+    sameField(left.targetCount, right.targetCount) &&
     left.bucketId === right.bucketId &&
     sameField(left.maximumMinutes, right.maximumMinutes) &&
+    sameField(left.maximumGapMinutes, right.maximumGapMinutes) &&
     sameField(left.window, right.window) &&
     sameField(left.maximum, right.maximum) &&
+    sameField(left.threshold, right.threshold) &&
+    left.quotaMeasure === right.quotaMeasure &&
+    left.quotaMembership === right.quotaMembership &&
+    sameField(left.quotaMinimum, right.quotaMinimum) &&
+    sameField(left.quotaMaximum, right.quotaMaximum) &&
     sameField(left.minimumRest, right.minimumRest) &&
     left.personId === right.personId &&
     sameField(left.personIds, right.personIds) &&
     sameField(left.locationIds, right.locationIds) &&
+    sameField(left.assignmentTypeIds, right.assignmentTypeIds) &&
+    sameField(left.availabilityIds, right.availabilityIds) &&
+    sameField(left.coverageRequirementIds, right.coverageRequirementIds) &&
+    left.baseScheduleId === right.baseScheduleId &&
     sameField(left.mode, right.mode) &&
     left.shiftId === right.shiftId &&
     sameField(left.compatibleCategoryPairs, right.compatibleCategoryPairs) &&
+    left.priority === right.priority &&
+    left.workloadPolicyId === right.workloadPolicyId &&
+    sameField(left.weight, right.weight) &&
+    left.direction === right.direction &&
+    sameField(left.timeWindow, right.timeWindow) &&
     left.qualificationMinimums.length === right.qualificationMinimums.length &&
     left.qualificationMinimums.every((row, index) => {
       const other = right.qualificationMinimums[index];
@@ -197,6 +269,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
   const state = shallowReactive<{
     catalog: WorkforceSetupRuleCatalog | null;
     facts: WorkforceSetupFacts | null;
+    workloadPolicies: WorkloadPolicyReadState;
     catalogLoading: boolean;
     catalogError: string | null;
     classFilter: WorkforceSetupRuleClass;
@@ -217,6 +290,12 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
   }>({
     catalog: null,
     facts: null,
+    workloadPolicies: {
+      context: null,
+      status: "idle",
+      policies: {},
+      error: null,
+    },
     catalogLoading: false,
     catalogError: null,
     classFilter: "required",
@@ -307,8 +386,10 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       home.state.mutation?.outcome === "outcomeUnknown"
     )
       return false;
-    if (reviewed.after === null || !reviewed.after.active) return true;
+    if (reviewed.after === null) return reviewed.action === "delete";
+    if (!reviewed.after.active) return true;
     const population = reviewed.summary?.population;
+    if (population === undefined) return false;
     if (
       reviewed.after.kind === "fixedAssignment" &&
       (reviewed.targetProof === null ||
@@ -335,12 +416,17 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       )
         return false;
     }
-    if (population === undefined || population.peopleCount === 0) return false;
+    if (reviewed.after.kind === "weekendTarget")
+      return population.kind === "ordinary" && population.peopleCount > 0;
+    if (reviewed.after.kind === "workloadBalance") return population.kind === "ordinary";
+    if (reviewed.after.kind === "workloadQuota" || reviewed.after.kind === "maximumWorkedWeekends")
+      return population.kind === "ordinary" && population.peopleCount > 0;
     return reviewed.after.kind === "minimumRest"
       ? population.kind === "minimumRest" &&
+          population.peopleCount > 0 &&
           population.beforeShiftCount > 0 &&
           population.afterShiftCount > 0
-      : population.kind === "ordinary" && population.shiftCount > 0;
+      : population.kind === "ordinary" && population.peopleCount > 0 && population.shiftCount > 0;
   });
 
   function invalidateEvidence(): void {
@@ -375,7 +461,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     return entry.support === "implemented" ? (descriptorKinds[entry.descriptor.id] ?? null) : null;
   }
   function reference(editor: RuleEditor): WorkforceSetupRuleReference {
-    return { class: "required", ruleId: editor.id };
+    return { class: editor.class, ruleId: editor.id };
   }
   function nativeErrors(failure: unknown, id: string): void {
     if (
@@ -397,8 +483,15 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       )
         continue;
       let field = item.field.replaceAll("/", ".").replace(/^\./, "");
-      const prefix = `domain.rules.${id}.`;
-      if (field.startsWith(prefix)) field = field.slice(prefix.length);
+      const prefixes = [
+        `domain.rules.${id}.`,
+        `domain.preferences.${id}.`,
+        "payload.rule.",
+        "payload.preference.",
+      ];
+      const prefix = prefixes.find((candidate) => field.startsWith(candidate));
+      if (prefix !== undefined) field = field.slice(prefix.length);
+      else continue;
       errors.set(field, item.message);
     }
     state.errors = Object.fromEntries(errors);
@@ -427,6 +520,66 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     } finally {
       if (ownsRead("catalog", read)) state.catalogLoading = false;
       finishRead("catalog", read);
+    }
+  }
+  async function loadWorkloadPolicies(): Promise<void> {
+    const read = beginRead("workload-policies");
+    state.workloadPolicies = {
+      context: read.context,
+      status: "loading",
+      policies: {},
+      error: null,
+    };
+    try {
+      const pageResponse = await searchScenarioEntities(read.scope, {
+        kind: "scorePolicy",
+        search: "",
+        limit: 50,
+        cursor: null,
+      }).result;
+      if (!ownsRead("workload-policies", read)) return;
+      const page = pageResponse.result.view.data.result.data;
+      if (
+        page.items.length > 50 ||
+        page.totalItems > 1 ||
+        page.items.some((item) => item.kind !== "scorePolicy")
+      )
+        throw new Error(messages.scorePolicy.singletonMismatch);
+      const singleton = page.items[0];
+      if (singleton === undefined) {
+        state.workloadPolicies = {
+          context: read.context,
+          status: "empty",
+          policies: {},
+          error: null,
+        };
+        return;
+      }
+      const detail = await getScenarioEntity(read.scope, {
+        kind: "scorePolicy",
+        entityId: singleton.entityId,
+      }).result;
+      if (!ownsRead("workload-policies", read)) return;
+      const value = detail.result.view.data.result.data;
+      if (value.kind !== "scorePolicy" || value.id !== singleton.entityId)
+        throw new Error(messages.scorePolicy.identityMismatch);
+      const policies = value.workloadPolicies;
+      state.workloadPolicies = {
+        context: read.context,
+        status: Object.keys(policies).length === 0 ? "empty" : "ready",
+        policies,
+        error: null,
+      };
+    } catch (failure) {
+      if (ownsRead("workload-policies", read))
+        state.workloadPolicies = {
+          context: read.context,
+          status: "error",
+          policies: {},
+          error: safeMessage(failure),
+        };
+    } finally {
+      finishRead("workload-policies", read);
     }
   }
   async function loadPage(
@@ -461,7 +614,7 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     }
   }
   async function refresh(): Promise<void> {
-    await Promise.all([loadCatalog(), loadPage()]);
+    await Promise.all([loadCatalog(), loadPage(), loadWorkloadPolicies()]);
   }
   function setFilter(ruleClass: WorkforceSetupRuleClass, kindId: string | null): void {
     state.classFilter = ruleClass;
@@ -489,11 +642,13 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       if (detail.class !== rule.class || detail.record.id !== rule.ruleId)
         throw new Error("The native rule did not match the requested identity.");
       state.detail = detail;
-      if (detail.class === "required") {
+      const kind = editableKind(detail.record.kind);
+      if (kind !== null) {
         state.editor = {
           context: read.context,
           id: detail.record.id,
-          kind: detail.record.kind,
+          class: detail.class,
+          kind,
           base: detail.record,
           raw: createRuleDraft(detail.record),
           editing: false,
@@ -512,11 +667,20 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
   }
   function createRule(entry: WorkforceSetupRuleCatalogEntry): boolean {
     const kind = kindFor(entry);
+    const ruleClass = state.catalog?.required.some(
+      (item) => item.descriptor.id === entry.descriptor.id,
+    )
+      ? "required"
+      : state.catalog?.preferences.some((item) => item.descriptor.id === entry.descriptor.id)
+        ? "preference"
+        : null;
+    if (!canReplace.value || kind === null || state.facts === null || ruleClass === null)
+      return false;
+    const entityCount = (entityKind: string): number =>
+      state.facts?.entities.find((entity) => entity.kind === entityKind)?.count ?? 0;
     if (
-      !canReplace.value ||
-      kind === null ||
-      state.facts === null ||
-      !state.catalog?.required.includes(entry)
+      ((kind === "adjacency" || kind === "baseStability") && entityCount("baseSchedule") === 0) ||
+      (kind === "preferredCoverage" && entityCount("coverageRequirement") === 0)
     )
       return false;
     discard();
@@ -529,12 +693,35 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               { key: newUuidV7(), minimum: "", allQualificationIds: [], anyQualificationIds: [] },
             ],
           }
-        : kind === "maximumConsecutive"
-          ? { ...raw, mode: { kind: "workedDays" as const } }
-          : raw;
+        : kind === "adjacency"
+          ? { ...raw, mode: "either" as const }
+          : kind === "togetherSeparate"
+            ? { ...raw, direction: "together" as const, mode: "sameShift" as const }
+            : kind === "maximumConsecutive"
+              ? { ...raw, mode: { kind: "workedDays" as const } }
+              : kind === "consecutiveWork"
+                ? { ...raw, mode: { kind: "reportingDays" as const } }
+                : kind === "time"
+                  ? {
+                      ...raw,
+                      timeWindow: {
+                        kind: "weekly" as const,
+                        windows: [
+                          {
+                            key: newUuidV7(),
+                            weekdays: ["monday"] as const,
+                            startTime: "09:00:00",
+                            endTime: "17:00:00",
+                            endDayOffset: "0",
+                          },
+                        ],
+                      },
+                    }
+                  : raw;
     state.editor = {
       context: context(),
       id: newUuidV7(),
+      class: ruleClass,
       kind,
       base: null,
       raw: initialRaw,
@@ -577,6 +764,18 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
           : { ...raw, afterScope: value },
     );
   }
+  function currentWorkloadPolicyIds(): readonly string[] | null {
+    const read = state.workloadPolicies;
+    if (read.status !== "ready" || read.context === null || !matches(read.context)) return null;
+    return Object.keys(read.policies);
+  }
+  function workloadPolicyReadMessage(): string {
+    const read = state.workloadPolicies;
+    if (read.status === "empty") return messages.ruleSetup.fields.workloadPoliciesEmpty;
+    if (read.status === "error")
+      return read.error ?? messages.ruleSetup.fields.workloadPoliciesError;
+    return messages.ruleSetup.fields.workloadPoliciesLoading;
+  }
 
   async function preview(action: ReviewedRule["action"]): Promise<boolean> {
     const editor = state.editor;
@@ -587,7 +786,18 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
     invalidateEvidence();
     state.errors = {};
     state.editorError = null;
-    const parsed = ruleDraftValue(editor.id, editor.kind, editor.raw);
+    const needsPolicyRead = editor.kind === "workloadBalance" && action !== "delete";
+    const workloadPolicyIds = needsPolicyRead ? currentWorkloadPolicyIds() : undefined;
+    const parsed = ruleDraftValue(
+      editor.id,
+      editor.kind,
+      editor.raw,
+      workloadPolicyIds ?? undefined,
+    );
+    if (needsPolicyRead && workloadPolicyIds === null) {
+      state.errors = { ...parsed.errors, workloadPolicyId: workloadPolicyReadMessage() };
+      return false;
+    }
     const after =
       action === "delete"
         ? null
@@ -598,17 +808,27 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       state.errors = parsed.errors;
       return false;
     }
+    const preference = editor.class === "preference";
     const command: ScenarioCommand = {
       type: "applyDomainCommand",
       payload:
         action === "delete"
-          ? { commandType: WORKFORCE_REMOVE_RULE_COMMAND_ID, payload: { ruleId: editor.id } }
+          ? {
+              commandType: preference
+                ? WORKFORCE_REMOVE_PREFERENCE_COMMAND_ID
+                : WORKFORCE_REMOVE_RULE_COMMAND_ID,
+              payload: preference ? { preferenceId: editor.id } : { ruleId: editor.id },
+            }
           : {
               commandType:
                 action === "create"
-                  ? WORKFORCE_ADD_RULE_COMMAND_ID
-                  : WORKFORCE_UPDATE_RULE_COMMAND_ID,
-              payload: { rule: after },
+                  ? preference
+                    ? WORKFORCE_ADD_PREFERENCE_COMMAND_ID
+                    : WORKFORCE_ADD_RULE_COMMAND_ID
+                  : preference
+                    ? WORKFORCE_UPDATE_PREFERENCE_COMMAND_ID
+                    : WORKFORCE_UPDATE_RULE_COMMAND_ID,
+              payload: preference ? { preference: after } : { rule: after },
             },
     };
     const generation = state.draftGeneration;
@@ -630,8 +850,8 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       mutualScopeProof: null as MutualAssignmentScopeProof | null,
       transitionScopeProof: null as TransitionTimeScopeProof | null,
     };
-    if (after === null) {
-      state.reviewed = { ...base, after: null, summary: null, scopeError: null };
+    if (after === null || (editor.class === "preference" && !after.active)) {
+      state.reviewed = { ...base, after, summary: null, scopeError: null };
       return true;
     }
     const read = beginRead("review-detail");
@@ -668,12 +888,12 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
           if (isCancelled() || !current()) return { ...detailResponse, result: null };
           const detail = detailResponse.result.view.data.result.data;
           if (
-            detail.class !== "required" ||
+            detail.class !== editor.class ||
             detail.record.id !== editor.id ||
             detail.record.kind !== editor.kind
           )
             throw new Error(
-              "The native proposed rule did not match the reviewed identity and kind.",
+              "The native proposed record did not match the reviewed identity and kind.",
             );
           const proposed = detail.record;
           let targetProof: FixedAssignmentTargetProof | null = null;
@@ -925,6 +1145,70 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
               };
             }
           }
+          if (editor.class === "preference") {
+            const scopeOperation = getScenarioView(
+              read.scope,
+              {
+                source,
+                query: {
+                  schemaVersion: 1,
+                  viewId: "official.workforce.setup.rule_scope",
+                  parameters: {
+                    rule: reference(editor),
+                    part: "main",
+                    axis: "people",
+                    limit: 1,
+                  },
+                },
+              },
+              report,
+            );
+            cancelCurrent = () => scopeOperation.cancel();
+            try {
+              const scopeResponse = await scopeOperation.result;
+              const inspection = scopeResponse.result.view.data.result.data;
+              if (
+                !sameField(inspection.rule, reference(editor)) ||
+                inspection.part !== "main" ||
+                inspection.population.axis !== "people"
+              )
+                throw new Error(messages.ruleSetup.preferenceScopeMismatch);
+              const summary: WorkforceSetupRuleScopeSummary = {
+                rule: reference(editor),
+                population: {
+                  kind: "ordinary",
+                  peopleCount: inspection.peopleCount,
+                  shiftCount: inspection.shiftCount,
+                },
+              };
+              return {
+                ...scopeResponse,
+                result: {
+                  ...base,
+                  after: proposed,
+                  summary,
+                  scopeError: null,
+                  targetProof,
+                  mutualScopeProof,
+                  transitionScopeProof,
+                },
+              };
+            } catch (failure) {
+              if (isOperationCancelled(failure)) throw failure;
+              return {
+                ...detailResponse,
+                result: {
+                  ...base,
+                  after: proposed,
+                  summary: null,
+                  scopeError: safeMessage(failure),
+                  targetProof,
+                  mutualScopeProof,
+                  transitionScopeProof,
+                },
+              };
+            }
+          }
           const summaryOperation = getScenarioView(
             read.scope,
             {
@@ -1060,26 +1344,27 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
         return;
       const detail = response.result.view.data.result.data;
       if (
-        detail.class !== "required" ||
+        detail.class !== editor.class ||
         detail.record.id !== editor.id ||
         detail.record.kind !== editor.kind
       )
         throw new Error("The current saved rule no longer has this identity and kind.");
+      const currentRecord = detail.record;
       state.detail = detail;
       if (!editor.editing) {
         invalidateDraft();
         state.editor = {
           ...editor,
           context: read.context,
-          base: detail.record,
-          raw: createRuleDraft(detail.record),
+          base: currentRecord,
+          raw: createRuleDraft(currentRecord),
           rebase: null,
           rebaseContext: null,
         };
       } else {
         acceptRebase(
           editor,
-          rebaseEntityDraft(editor.base, local, detail.record, editor.rebase),
+          rebaseEntityDraft(editor.base, local, currentRecord, editor.rebase),
           read.context,
           local,
         );
@@ -1123,20 +1408,91 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
                   maximumMinutes: createRuleDraft(merged.value).maximumMinutes,
                 },
               }
-            : field === "window" && choice === "current"
+            : field === "maximumGapMinutes" && choice === "current"
               ? {
                   ...editor,
-                  raw: { ...editor.raw, window: createRuleDraft(merged.value).window },
+                  raw: {
+                    ...editor.raw,
+                    maximumGapMinutes: createRuleDraft(merged.value).maximumGapMinutes,
+                  },
                 }
-              : field === "qualificationMinimums" && choice === "current"
+              : field === "baseScheduleId" && choice === "current"
                 ? {
                     ...editor,
                     raw: {
                       ...editor.raw,
-                      qualificationMinimums: createRuleDraft(merged.value).qualificationMinimums,
+                      baseScheduleId: createRuleDraft(merged.value).baseScheduleId,
                     },
                   }
-                : editor;
+                : field === "mode" && choice === "current"
+                  ? {
+                      ...editor,
+                      raw: { ...editor.raw, mode: createRuleDraft(merged.value).mode },
+                    }
+                  : field === "window" && choice === "current"
+                    ? {
+                        ...editor,
+                        raw: { ...editor.raw, window: createRuleDraft(merged.value).window },
+                      }
+                    : field === "qualificationMinimums" && choice === "current"
+                      ? {
+                          ...editor,
+                          raw: {
+                            ...editor.raw,
+                            qualificationMinimums: createRuleDraft(merged.value)
+                              .qualificationMinimums,
+                          },
+                        }
+                      : field === "personIds" && choice === "current"
+                        ? {
+                            ...editor,
+                            raw: {
+                              ...editor.raw,
+                              personIds: createRuleDraft(merged.value).personIds,
+                            },
+                          }
+                        : field === "coverageRequirementIds" && choice === "current"
+                          ? {
+                              ...editor,
+                              raw: {
+                                ...editor.raw,
+                                coverageRequirementIds: createRuleDraft(merged.value)
+                                  .coverageRequirementIds,
+                              },
+                            }
+                          : field === "workloadPolicyId" && choice === "current"
+                            ? {
+                                ...editor,
+                                raw: {
+                                  ...editor.raw,
+                                  workloadPolicyId: createRuleDraft(merged.value).workloadPolicyId,
+                                },
+                              }
+                            : field === "weight" && choice === "current"
+                              ? {
+                                  ...editor,
+                                  raw: {
+                                    ...editor.raw,
+                                    weight: createRuleDraft(merged.value).weight,
+                                  },
+                                }
+                              : field === "targetCount" && choice === "current"
+                                ? {
+                                    ...editor,
+                                    raw: {
+                                      ...editor.raw,
+                                      targetCount: createRuleDraft(merged.value).targetCount,
+                                    },
+                                  }
+                                : field === "timeWindow" && choice === "current"
+                                  ? {
+                                      ...editor,
+                                      raw: {
+                                        ...editor.raw,
+                                        timeWindow: createRuleDraft(merged.value).timeWindow,
+                                      },
+                                    }
+                                  : editor;
     acceptRebase(retained, merged, editor.rebaseContext, local);
   }
 
@@ -1403,6 +1759,12 @@ export function useRuleSetup(home: ProjectHomeController, project: () => Project
       state.catalogError = null;
       state.pageError = null;
       state.detailError = null;
+      state.workloadPolicies = {
+        context: null,
+        status: "idle",
+        policies: {},
+        error: null,
+      };
       if (current[0] !== previous[0]) discard();
       if (project().domainPackId === "official.workforce") void refresh();
     },

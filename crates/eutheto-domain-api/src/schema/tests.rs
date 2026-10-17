@@ -214,6 +214,32 @@ fn existing_numeric_uuid_prefix_const_and_closed_object_constraints_remain_in_fo
 }
 
 #[test]
+fn signed_u32_delta_wire_format_accepts_only_canonical_bounded_decimal_text()
+-> Result<(), DomainPackError> {
+    let schema = json!({
+        "type": "string", "format": "signed-u32-delta", "minLength": 1, "maxLength": 11
+    });
+    validate_contract_schema(&schema)?;
+    for value in ["0", "-1", "4294967295", "-4294967295"] {
+        validate(&schema, &json!(value))?;
+    }
+    for value in [
+        "",
+        "-0",
+        "01",
+        "-01",
+        "+1",
+        "4294967296",
+        "-4294967296",
+        "x",
+    ] {
+        assert!(validate(&schema, &json!(value)).is_err(), "{value}");
+    }
+    assert!(validate(&schema, &json!(-1)).is_err());
+    Ok(())
+}
+
+#[test]
 fn diagnostic_unions_admit_only_schema_authorized_scenario_references()
 -> Result<(), DomainPackError> {
     let schema = json!({

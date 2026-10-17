@@ -2,7 +2,9 @@ use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentRuleCompilation,
     AssignmentRuleError, AssignmentRuleLimit, AssignmentVariable,
     analysis::{Plan, PlannedConstraint, Predicate, consecutive, hours, predicate_shape, prepare},
+    authority::check_objective_context,
     budget::{OperationBudget, add, count, within},
+    compiler_weekend,
     identity::{IdentityKind, PlanningIdentities},
     input::AssignmentInput,
     reporting::ReportingPeriod,
@@ -39,7 +41,22 @@ pub fn compile_assignment_rules(
 ) -> Result<AssignmentRuleCompilation, AssignmentRuleError> {
     let limits = context.planning_limits;
     let mut budget = OperationBudget::analysis(Some(&context.control), limits);
-    let input = AssignmentInput::new(document, &mut budget)?;
+    check_objective_context(context.objective_context.as_ref(), document.scenario_id)
+        .map_err(AssignmentRuleError::InvalidDocument)?;
+    let input = AssignmentInput::new(document, &mut budget)?
+        .with_objective_context(
+            context.objective_context.as_ref(),
+            document.scenario_id,
+            &mut budget,
+        )
+        .map_err(AssignmentRuleError::InvalidDocument)?;
+    super::profile::snapshot_pairs(
+        &input,
+        document.scenario_id,
+        context.objective_context.as_ref(),
+        &mut budget,
+    )
+    .map_err(AssignmentRuleError::InvalidDocument)?;
     let (analysis, plan) = prepare(document, &input, &mut budget, limits)?;
     // Counts, per-record bounds, references and exact serialized contribution bytes are all
     // reserved before the first IR variable is allocated. The dry pass streams literal lists.
@@ -78,6 +95,7 @@ impl<'a> DecisionVariables<'a> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn construct(
     analysis: AssignmentAnalysis,
     plan: &Plan,
@@ -118,7 +136,20 @@ fn construct(
                 .clone(),
             _ => parents.get(&planned.rule).ok_or_else(invalid)?.clone(),
         };
-        if consecutive::is(planned) {
+        if compiler_weekend::is(planned) {
+            compiler_weekend::emit(
+                planned,
+                plan,
+                DecisionVariables::Contribution(&variables),
+                parent,
+                &mut identities,
+                &mut auxiliary_variables,
+                &mut constraints,
+                &mut provenance,
+                budget,
+                limits,
+            )?;
+        } else if consecutive::is(planned) {
             consecutive::emit(
                 planned,
                 plan,
@@ -237,14 +268,25 @@ fn constraint_body(
         for index in &planned.population {
             budget.step()?;
             let variable = variables.boolean(*index).ok_or_else(invalid)?;
-            literals.push(Literal::positive(variable.id.clone()));
+            let literal = match planned.predicate {
+                Predicate::FixedAssignment {
+                    assigned: false, ..
+                } => Literal::negative(variable.id.clone()),
+                _ => Literal::positive(variable.id.clone()),
+            };
+            literals.push(literal);
         }
     }
     // The Planning IR constructors canonically sort and deduplicate these lists.
     budget.sort_work(literals.len())?;
     budget.steps(count(literals.len())?)?;
     if planned.impossible {
-        return Ok(Constraint::bool_or(literals));
+        return Ok(match planned.predicate {
+            Predicate::FixedAssignment {
+                assigned: false, ..
+            } => Constraint::bool_and(literals),
+            _ => Constraint::bool_or(literals),
+        });
     }
     match planned.predicate {
         Predicate::Headcount { lower, upper, .. } => {
@@ -267,18 +309,39 @@ fn constraint_body(
             upper,
         )
         .map_err(|_| invalid()),
-        Predicate::MaximumAssignmentCount { maximum, .. } => {
-            let upper = u64::from(maximum).min(count(literals.len())?);
-            Constraint::cardinality(literals, 0, upper).map_err(|_| invalid())
+        Predicate::MaximumAssignmentCount { maximum, .. } => Constraint::cardinality(
+            literals,
+            0,
+            u64::from(maximum).min(count(planned.population.len())?),
+        )
+        .map_err(|_| invalid()),
+        Predicate::WorkloadQuota {
+            minimum,
+            maximum,
+            measure: crate::model::WorkloadQuotaMeasure::AssignmentCount {},
+            ..
+        } => {
+            let upper = maximum
+                .map_or(count(literals.len())?, u64::from)
+                .min(count(literals.len())?);
+            Constraint::cardinality(literals, u64::from(minimum), upper).map_err(|_| invalid())
         }
-        Predicate::MaximumConsecutive { .. } => Err(invalid()),
+        Predicate::WorkloadQuota {
+            measure: crate::model::WorkloadQuotaMeasure::BucketMinutes { .. },
+            ..
+        }
+        | Predicate::MaximumConsecutive { .. }
+        | Predicate::MaximumWorkedWeekends { .. } => Err(invalid()),
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
         | Predicate::MutualSameShift { .. }
         | Predicate::MutualOverlap { .. }
         | Predicate::MinimumRest { .. }
         | Predicate::TransitionTime { .. } => Ok(Constraint::at_most_one(literals)),
-        Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
+        Predicate::FixedAssignment {
+            assigned: false, ..
+        } => Ok(Constraint::bool_and(literals)),
+        Predicate::FixedAssignment { assigned: true, .. } | Predicate::HardLock { .. } => {
             Ok(Constraint::bool_or(literals))
         }
     }
@@ -355,6 +418,27 @@ fn derive_predicate(
             ),
             budget,
         ),
+        Predicate::WorkloadQuota {
+            person,
+            calendar_id,
+            period,
+            minimum,
+            maximum,
+            measure,
+        } => identities.derive(
+            kind,
+            &(
+                "workload_quota",
+                planned.rule,
+                person,
+                calendar_id,
+                period,
+                minimum,
+                maximum,
+                measure,
+            ),
+            budget,
+        ),
         Predicate::MaximumConsecutive { person, definition } => {
             let data = plan.definitions[definition]
                 .consecutive
@@ -373,6 +457,7 @@ fn derive_predicate(
                 budget,
             )
         }
+        Predicate::MaximumWorkedWeekends { .. } => Err(invalid()),
         Predicate::Overlap {
             person,
             first,
@@ -442,9 +527,22 @@ fn derive_predicate(
             ),
             budget,
         ),
-        Predicate::FixedAssignment { person, shift } => identities.derive(
+        Predicate::FixedAssignment {
+            person,
+            shift,
+            assigned,
+        } => identities.derive(
             kind,
-            &("fixed_assignment", planned.rule, person, shift),
+            &(
+                if assigned {
+                    "fixed_assignment"
+                } else {
+                    "fixed_assignment_excluded"
+                },
+                planned.rule,
+                person,
+                shift,
+            ),
             budget,
         ),
         Predicate::HardLock {
@@ -741,6 +839,25 @@ fn constraint_fact(
             maximum_count_payload(person, period, maximum, &mut parameters, budget)?,
             "official.workforce.maximum_assignment_count",
         ),
+        Predicate::WorkloadQuota {
+            person,
+            period,
+            minimum,
+            maximum,
+            measure,
+            ..
+        } => (
+            workload_quota_payload(
+                person,
+                period,
+                minimum,
+                maximum,
+                measure,
+                &mut parameters,
+                budget,
+            )?,
+            "official.workforce.workload_quota",
+        ),
         Predicate::MaximumConsecutive { person, definition } => {
             let data = plan.definitions[definition]
                 .consecutive
@@ -763,6 +880,7 @@ fn constraint_fact(
                 "official.workforce.maximum_consecutive",
             )
         }
+        Predicate::MaximumWorkedWeekends { .. } => return Err(invalid()),
         Predicate::Overlap {
             person,
             first,
@@ -825,13 +943,26 @@ fn constraint_fact(
             )?,
             "official.workforce.transition_time",
         ),
-        Predicate::FixedAssignment { person, shift } => (
-            vec![
-                entity("person", EntityId::from_uuid(person.as_uuid()))?,
-                entity("shift", shift.as_entity_id())?,
-            ],
-            "official.workforce.fixed_assignment",
-        ),
+        Predicate::FixedAssignment {
+            person,
+            shift,
+            assigned,
+        } => {
+            if !assigned {
+                parameters.insert("assigned".to_owned(), ProvenanceParameter::Boolean(false));
+            }
+            (
+                vec![
+                    entity("person", EntityId::from_uuid(person.as_uuid()))?,
+                    entity("shift", shift.as_entity_id())?,
+                ],
+                if assigned {
+                    "official.workforce.fixed_assignment"
+                } else {
+                    "official.workforce.fixed_assignment_excluded"
+                },
+            )
+        }
         Predicate::HardLock { person, shift, .. } => (
             vec![
                 entity("person", EntityId::from_uuid(person.as_uuid()))?,
@@ -891,6 +1022,53 @@ fn maximum_count_payload(
         entity("person", EntityId::from_uuid(person.as_uuid()))?,
         entity("calendar", period.calendar_id.as_entity_id())?,
     ])
+}
+fn workload_quota_payload(
+    person: PersonId,
+    period: ReportingPeriod,
+    minimum: u32,
+    maximum: Option<u32>,
+    measure: crate::model::WorkloadQuotaMeasure,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    budget.reserve(0, 5, 256)?;
+    parameters.insert(
+        "minimum".to_owned(),
+        ProvenanceParameter::Integer(i64::from(minimum)),
+    );
+    if let Some(maximum) = maximum {
+        parameters.insert(
+            "maximum".to_owned(),
+            ProvenanceParameter::Integer(i64::from(maximum)),
+        );
+    }
+    parameters.insert(
+        "period_start".to_owned(),
+        ProvenanceParameter::Text(period.start.to_string()),
+    );
+    parameters.insert(
+        "period_end".to_owned(),
+        ProvenanceParameter::Text(period.end.to_string()),
+    );
+    parameters.insert(
+        "measure".to_owned(),
+        ProvenanceParameter::Text(
+            match measure {
+                crate::model::WorkloadQuotaMeasure::AssignmentCount {} => "assignmentCount",
+                crate::model::WorkloadQuotaMeasure::BucketMinutes { .. } => "bucketMinutes",
+            }
+            .to_owned(),
+        ),
+    );
+    let mut refs = vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        entity("calendar", period.calendar_id.as_entity_id())?,
+    ];
+    if let crate::model::WorkloadQuotaMeasure::BucketMinutes { bucket_id } = measure {
+        refs.push(entity("workload_bucket", bucket_id.as_entity_id())?);
+    }
+    Ok(refs)
 }
 
 fn minimum_rest_payload(
@@ -1002,6 +1180,9 @@ enum MeasuredBody {
     BoolOr {
         literals: MeasuredLiterals,
     },
+    BoolAnd {
+        literals: MeasuredLiterals,
+    },
     AtMostOne {
         literals: MeasuredLiterals,
     },
@@ -1041,6 +1222,7 @@ pub(super) fn preflight(
     preflight_variable_facts(pairs, &placeholder, budget, limits)?;
     hours::preflight_contribution(plan, budget, limits)?;
     consecutive::preflight_contribution(plan, budget, limits)?;
+    compiler_weekend::preflight_contribution(plan, budget, limits)?;
     for (rule, kind) in &plan.parents {
         budget.step()?;
         budget.reserve(1, 0, 512)?;
@@ -1048,7 +1230,7 @@ pub(super) fn preflight(
     }
     preflight_hard_lock_facts(plan, &placeholder, budget, limits)?;
     for planned in &plan.constraints {
-        if consecutive::is(planned) {
+        if consecutive::is(planned) || compiler_weekend::is(planned) {
             continue;
         }
         budget.step()?;
@@ -1060,7 +1242,12 @@ pub(super) fn preflight(
         let literal_count = count(literals.0)?;
         budget.steps(literal_count)?;
         let body = if planned.impossible {
-            MeasuredBody::BoolOr { literals }
+            match planned.predicate {
+                Predicate::FixedAssignment {
+                    assigned: false, ..
+                } => MeasuredBody::BoolAnd { literals },
+                _ => MeasuredBody::BoolOr { literals },
+            }
         } else {
             match planned.predicate {
                 Predicate::Headcount { lower, upper, .. } => MeasuredBody::CardinalityRange {
@@ -1084,6 +1271,17 @@ pub(super) fn preflight(
                     min: u64::from(plan.definitions[definition].minima[minimum].minimum),
                     max: upper,
                 },
+                Predicate::WorkloadQuota {
+                    minimum,
+                    maximum,
+                    measure: crate::model::WorkloadQuotaMeasure::AssignmentCount {},
+                    ..
+                } => MeasuredBody::CardinalityRange {
+                    literals,
+                    min: u64::from(minimum),
+                    max: maximum.map_or(literal_count, u64::from).min(literal_count),
+                },
+                Predicate::WorkloadQuota { .. } => MeasuredBody::BoolOr { literals },
                 Predicate::MaximumAssignmentCount { maximum, .. } => {
                     MeasuredBody::CardinalityRange {
                         literals,
@@ -1091,14 +1289,19 @@ pub(super) fn preflight(
                         max: u64::from(maximum).min(literal_count),
                     }
                 }
-                Predicate::MaximumConsecutive { .. } => unreachable!(),
+                Predicate::MaximumConsecutive { .. } | Predicate::MaximumWorkedWeekends { .. } => {
+                    return Err(invalid());
+                }
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
                 | Predicate::MutualSameShift { .. }
                 | Predicate::MutualOverlap { .. }
                 | Predicate::MinimumRest { .. }
                 | Predicate::TransitionTime { .. } => MeasuredBody::AtMostOne { literals },
-                Predicate::FixedAssignment { .. } | Predicate::HardLock { .. } => {
+                Predicate::FixedAssignment {
+                    assigned: false, ..
+                } => MeasuredBody::BoolAnd { literals },
+                Predicate::FixedAssignment { assigned: true, .. } | Predicate::HardLock { .. } => {
                     MeasuredBody::BoolOr { literals }
                 }
             }

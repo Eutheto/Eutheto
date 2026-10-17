@@ -318,7 +318,7 @@ describe("root project controller", () => {
     expect(api.getScenarioHistoryPage).not.toHaveBeenCalled();
   });
 
-  it("clears an exact pre-dispatch disposal rejection without inventing an uncertain write", async () => {
+  it("clears exact pre-commit rejections while leaving unrelated failures uncertain", async () => {
     const home = createHome(fakeApi([project]));
     const execute = vi.fn<() => Promise<ApiResponseDto<{ revision: number }>>>();
     const operation = {
@@ -344,6 +344,14 @@ describe("root project controller", () => {
     };
     execute.mockRejectedValueOnce(closed);
     await expect(home.runOperation(operation)).rejects.toBe(closed);
+    expect(home.state.mutation).toBeNull();
+    const unchanged = {
+      category: "validation",
+      code: "solution.base_adoption_noop",
+      message: "This accepted result is already the current base.",
+    };
+    execute.mockRejectedValueOnce(unchanged);
+    await expect(home.runOperation(operation)).rejects.toBe(unchanged);
     expect(home.state.mutation).toBeNull();
     execute.mockResolvedValueOnce(response({ revision: project.revision + 1 }));
     await home.runOperation(operation);

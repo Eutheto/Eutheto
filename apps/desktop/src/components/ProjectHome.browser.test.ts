@@ -16,8 +16,15 @@ import {
 import type {
   ApiResponseDto,
   EmptyDto,
+  EvidenceMessageV1,
   PortableArtifactDto,
   PortableFilePreviewDto,
+  SetupOperation,
+  SolutionComparisonV2,
+  SolutionExplanationDtoV2,
+  SolutionListDtoV1,
+  SolutionSummaryDtoV1,
+  VerificationValue,
 } from "../api/generated";
 import * as generatedApi from "../api/generated";
 import App from "../App.vue";
@@ -57,6 +64,16 @@ const exportPreview: PortableFilePreviewDto = {
 function configureNative(library: ProjectSummary[] = [{ ...workforceProject }]): ProjectSummary[] {
   // Supply window identity for actual SDK scope constructors; mock only native API boundaries.
   const api = fakeApi(library);
+  vi.mocked(generatedApi.manualEdit).mockImplementation(() =>
+    portableOperation(
+      Promise.reject(
+        Object.assign(new Error("Adopt an original accepted result before manual editing."), {
+          category: "validation",
+          code: "manual.base_missing",
+        }),
+      ),
+    ),
+  );
   vi.mocked(generatedApi.listProjects).mockImplementation(() => api.listProjects("all"));
   vi.mocked(generatedApi.openProject).mockImplementation(api.openProject);
   vi.mocked(generatedApi.createProject).mockImplementation(api.createProject);
@@ -142,6 +159,268 @@ async function openReplacement() {
   await userEvent.click(trigger);
   const dialog = await screen.findByRole("dialog", { name: messages.portable.replaceTitle });
   return { trigger, dialog };
+}
+
+function mockWorkforceSetupResults(
+  results: readonly SolutionSummaryDtoV1[],
+  listRevision = 3,
+): void {
+  vi.mocked(generatedApi.getSolutionView).mockImplementation((input) => {
+    const summary = results.find((item) => item.result.solutionId === input.solutionId);
+    if (!summary || input.parameters?.kind !== "repairDiff") {
+      throw new Error("Unexpected result view in comparison fixture");
+    }
+    return Promise.resolve(
+      response(
+        {
+          schemaVersion: 1,
+          scenarioId: workforceProject.scenarioId,
+          currentRevision: listRevision,
+          scenarioRevision: summary.scenarioRevision,
+          result: summary.result,
+          view: {
+            viewId: "official.workforce.result.schedule",
+            data: {
+              schemaVersion: 1,
+              timeZone: "UTC",
+              result: {
+                kind: "repairDiff",
+                availability: "absent",
+                source: {
+                  scenarioId: workforceProject.scenarioId,
+                  solutionId: input.solutionId,
+                  sourceRevision: summary.scenarioRevision,
+                  sourceDocumentHash: "a".repeat(64),
+                  normalizedSolutionHash: "b".repeat(64),
+                },
+                baseline: null,
+                counts: null,
+                totalItems: null,
+                items: [],
+                continuation: null,
+              },
+            },
+          },
+        },
+        [],
+        listRevision,
+      ),
+    );
+  });
+  vi.mocked(generatedApi.getScenarioSummary).mockReturnValue(
+    portableOperation(
+      response({
+        schemaVersion: 2,
+        scenarioId: workforceProject.scenarioId,
+        revision: workforceProject.revision,
+        title: workforceProject.title,
+        structure: { entities: 0, rules: 0, preferences: 0, lockedAssignments: 0 },
+        fast: { counts: { errors: 0, warnings: 0, information: 0 }, issues: [], omitted: 0 },
+        full: { state: "notRun" },
+      }),
+    ),
+  );
+  vi.mocked(generatedApi.getScenarioView).mockReturnValue(
+    portableOperation(
+      response({
+        schemaVersion: 2,
+        scenarioId: workforceProject.scenarioId,
+        revision: workforceProject.revision,
+        view: {
+          viewId: "official.workforce.setup.overview",
+          data: {
+            schemaVersion: 1,
+            result: {
+              kind: "overview",
+              data: {
+                activePreferences: 0,
+                activeRequiredRules: 0,
+                configuredTypeMemberships: 0,
+                entities: [],
+                lockedAssignments: 0,
+                preferences: 0,
+                requiredRules: 0,
+                planningDates: { startDate: "2030-01-01", endDateExclusive: "2030-02-01" },
+                initialWorkWindow: { startDate: "2030-01-01", endDateExclusive: "2030-01-08" },
+                settings: {
+                  timeZone: "UTC",
+                  locale: "en-US",
+                  units: "metric",
+                  horizon: { start: "2030-01-01T00:00:00Z", end: "2030-02-01T00:00:00Z" },
+                  gapPolicy: "reject",
+                  overlapPolicy: "earlier",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ),
+  );
+  vi.mocked(generatedApi.listSolutions).mockImplementation(() =>
+    Promise.resolve(
+      response({
+        schemaVersion: 1,
+        scenarioId: workforceProject.scenarioId,
+        currentRevision: listRevision,
+        freshlyVerified: false,
+        solutions: results,
+      }),
+    ),
+  );
+}
+function acceptedSummary(
+  solutionId: string,
+  resultChecksum: string,
+  runId: string,
+  scenarioRevision: number,
+  selected = false,
+): SolutionSummaryDtoV1 {
+  return {
+    schemaVersion: 1,
+    result: { solutionId, resultChecksum },
+    runId,
+    scenarioId: workforceProject.scenarioId,
+    scenarioRevision,
+    currentRevision: workforceProject.revision,
+    stale: scenarioRevision !== workforceProject.revision,
+    selected,
+    status: "optimal",
+    score: { feasibility: "0", levels: [] },
+    verificationChecksum: "v".repeat(64),
+    finishedAt: "2030-01-01T12:00:00Z",
+  };
+}
+
+function comparisonFor(
+  base: SolutionSummaryDtoV1,
+  candidate: SolutionSummaryDtoV1,
+): SolutionComparisonV2 {
+  return {
+    schemaVersion: 2,
+    base: {
+      packId: "official.workforce",
+      scenarioId: base.scenarioId,
+      scenarioRevision: base.scenarioRevision,
+      documentHash: "a".repeat(64),
+      projectionVersion: 1,
+      verificationScopeChecksum: "b".repeat(64),
+      acceptedResult: base.result,
+    },
+    candidate: {
+      packId: "official.workforce",
+      scenarioId: candidate.scenarioId,
+      scenarioRevision: candidate.scenarioRevision,
+      documentHash: "a".repeat(64),
+      projectionVersion: 1,
+      verificationScopeChecksum: "b".repeat(64),
+      acceptedResult: candidate.result,
+    },
+    assignments: [],
+    rules: [],
+    score: { type: "unavailable", reason: "policyOrScopeMismatch" },
+    metrics: [],
+    protections: [],
+    runs: {
+      base: {
+        runId: base.runId,
+        runManifestChecksum: "d".repeat(64),
+        outcome: {
+          type: "accepted",
+          status: "optimal",
+          solutionId: base.result.solutionId,
+          acceptedResultChecksum: base.result.resultChecksum,
+          verificationChecksum: base.verificationChecksum,
+        },
+      },
+      candidate: {
+        runId: candidate.runId,
+        runManifestChecksum: "e".repeat(64),
+        outcome: {
+          type: "accepted",
+          status: "optimal",
+          solutionId: candidate.result.solutionId,
+          acceptedResultChecksum: candidate.result.resultChecksum,
+          verificationChecksum: candidate.verificationChecksum,
+        },
+      },
+    },
+    affectedEntities: [],
+    entityObservations: [],
+    checksum: "c".repeat(64),
+  };
+}
+
+function differenceResponse(
+  base: SolutionSummaryDtoV1,
+  candidate: SolutionSummaryDtoV1,
+  comparison = comparisonFor(base, candidate),
+  scenarioRevisions = [base.scenarioRevision, candidate.scenarioRevision],
+): ApiResponseDto<SolutionExplanationDtoV2> {
+  const evidenceChecksum = "f".repeat(64);
+  const currentRevision = workforceProject.revision;
+  return response(
+    {
+      schemaVersion: 2,
+      scenarioId: workforceProject.scenarioId,
+      currentRevision,
+      scenarioRevisions,
+      explanation: {
+        schemaVersion: 2,
+        evidence: {
+          schemaVersion: 2,
+          certainty: "deterministic",
+          evidence: { kind: "solutionDifference", comparison },
+          checksum: evidenceChecksum,
+        },
+        rendered: {
+          schemaVersion: 1,
+          kind: "solutionDifference",
+          evidenceChecksum,
+          messages: [],
+        },
+        checksum: "g".repeat(64),
+      },
+    },
+    [],
+    currentRevision,
+  );
+}
+function repairResponse(
+  base: SolutionSummaryDtoV1,
+  candidate: SolutionSummaryDtoV1,
+  scenarioRevisions = [candidate.scenarioRevision, base.scenarioRevision],
+  comparison = comparisonFor(base, candidate),
+  messages: readonly EvidenceMessageV1[] = [],
+  currentRevision = workforceProject.revision,
+): ApiResponseDto<SolutionExplanationDtoV2> {
+  const evidenceChecksum = "h".repeat(64);
+  return response(
+    {
+      schemaVersion: 2,
+      scenarioId: workforceProject.scenarioId,
+      currentRevision,
+      scenarioRevisions,
+      explanation: {
+        schemaVersion: 2,
+        evidence: {
+          schemaVersion: 2,
+          certainty: "deterministic",
+          evidence: { kind: "repair", repair: { comparison, causality: "notEstablished" } },
+          checksum: evidenceChecksum,
+        },
+        rendered: {
+          schemaVersion: 1,
+          kind: "repair",
+          evidenceChecksum,
+          messages,
+        },
+        checksum: "i".repeat(64),
+      },
+    },
+    [],
+    currentRevision,
+  );
 }
 
 function mockExportPreview(): void {
@@ -652,67 +931,1086 @@ describe("Real shell commands and route updates", () => {
 
   it("reports stale setup instead of combining facts from different revisions", async () => {
     configureNative();
-    vi.mocked(generatedApi.getScenarioSummary).mockReturnValue(
-      portableOperation(
-        response({
-          schemaVersion: 2,
-          scenarioId: workforceProject.scenarioId,
-          revision: workforceProject.revision,
-          title: workforceProject.title,
-          structure: { entities: 0, rules: 0, preferences: 0, lockedAssignments: 0 },
-          fast: { counts: { errors: 0, warnings: 0, information: 0 }, issues: [], omitted: 0 },
-          full: { state: "notRun" },
-        }),
-      ),
-    );
-    vi.mocked(generatedApi.getScenarioView).mockReturnValue(
-      portableOperation(
-        response({
-          schemaVersion: 2,
-          scenarioId: workforceProject.scenarioId,
-          revision: workforceProject.revision,
-          view: {
-            viewId: "official.workforce.setup.overview",
-            data: {
-              schemaVersion: 1,
-              result: {
-                kind: "overview",
-                data: {
-                  activePreferences: 0,
-                  activeRequiredRules: 0,
-                  configuredTypeMemberships: 0,
-                  entities: [],
-                  lockedAssignments: 0,
-                  preferences: 0,
-                  requiredRules: 0,
-                  planningDates: { startDate: "2030-01-01", endDateExclusive: "2030-02-01" },
-                  initialWorkWindow: { startDate: "2030-01-01", endDateExclusive: "2030-01-08" },
-                  settings: {
-                    timeZone: "UTC",
-                    locale: "en-US",
-                    units: "metric",
-                    horizon: { start: "2030-01-01T00:00:00Z", end: "2030-02-01T00:00:00Z" },
-                    gapPolicy: "reject",
-                    overlapPolicy: "earlier",
-                  },
-                },
-              },
-            },
-          },
-        }),
-      ),
-    );
-    vi.mocked(generatedApi.listSolutions).mockResolvedValue(
-      response({
-        schemaVersion: 1,
-        scenarioId: workforceProject.scenarioId,
-        currentRevision: workforceProject.revision + 1,
-        solutions: [],
-      }),
-    );
+    mockWorkforceSetupResults([], workforceProject.revision + 1);
     await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
     await expect.element(await screen.findByRole("alert")).toHaveTextContent(messages.setup.stale);
     expect(screen.queryByRole("heading", { name: messages.setup.calendarSummary })).toBeNull();
+  });
+
+  it.each([
+    ["mismatch", false],
+    ["conflict", false],
+    ["mismatch", true],
+    ["conflict", true],
+  ] as const)(
+    "revokes result consumers after native %s (selection recovery=%s)",
+    async (failure, recoveringSelection) => {
+      configureNative();
+      const accepted: SolutionSummaryDtoV1 = {
+        schemaVersion: 1,
+        result: {
+          solutionId: "01900000-0000-7000-8000-000000000020",
+          resultChecksum: "a".repeat(64),
+        },
+        scenarioId: workforceProject.scenarioId,
+        scenarioRevision: workforceProject.revision,
+        currentRevision: workforceProject.revision,
+        runId: "01900000-0000-7000-8000-000000000022",
+        stale: false,
+        selected: false,
+        status: "feasible",
+        score: { feasibility: "0", levels: [] },
+        verificationChecksum: "b".repeat(64),
+        finishedAt: "2030-01-01T12:00:00Z",
+      };
+      mockWorkforceSetupResults([accepted], workforceProject.revision);
+      await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+      const select = await screen.findByRole("button", {
+        name: messages.setup.selectResultForViewing(accepted.result.solutionId),
+      });
+      if (recoveringSelection) {
+        vi.mocked(generatedApi.selectSolution).mockRejectedValueOnce(
+          Object.assign(new Error("Selection acknowledgement was interrupted."), {
+            category: "cancelled",
+            code: "operation.cancelled",
+          }),
+        );
+        await userEvent.click(select);
+        await screen.findByRole("button", { name: messages.setup.refreshResults });
+      }
+      if (failure === "mismatch") {
+        vi.mocked(generatedApi.listSolutions).mockResolvedValueOnce(
+          response({
+            schemaVersion: 1,
+            scenarioId: workforceProject.scenarioId,
+            currentRevision: workforceProject.revision + 1,
+            freshlyVerified: false,
+            solutions: [accepted],
+          }),
+        );
+      } else {
+        vi.mocked(generatedApi.listSolutions).mockRejectedValueOnce(
+          Object.assign(new Error("The native revision changed."), {
+            category: "conflict",
+            code: "revision.conflict",
+          }),
+        );
+      }
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: recoveringSelection
+            ? messages.setup.refreshResults
+            : messages.setup.comparisonRefresh,
+        }),
+      );
+      await expect
+        .element(await screen.findByRole("alert"))
+        .toHaveTextContent(messages.setup.stale);
+      expect(screen.queryByRole("heading", { name: messages.setup.calendarSummary })).toBeNull();
+      expect(
+        screen.queryByRole("button", {
+          name: messages.setup.selectResultForViewing(accepted.result.solutionId),
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("refreshes an uncertain result selection before retrying and restores focus after native selection", async () => {
+    configureNative();
+    let notifyLibrary: (() => void) | undefined;
+    vi.mocked(generatedApi.onAppNotification).mockImplementation((listener) => {
+      notifyLibrary = () => {
+        listener({
+          type: "appNotification",
+          payload: {
+            context: {
+              eventVersion: 1,
+              timestamp: "2030-01-01T12:00:01Z",
+              requestId: null,
+              scenarioId: workforceProject.scenarioId,
+              revision: workforceProject.revision,
+              solveRunId: null,
+            },
+            code: "fixture.refresh",
+            message: "Project data refreshed.",
+          },
+        });
+      };
+      return Promise.resolve(() => {});
+    });
+    vi.mocked(generatedApi.getAppCapabilities).mockResolvedValue(
+      response({ availableCommands: ["solution_adopt_base"], unavailableCommands: [] }),
+    );
+    const firstId = "01900000-0000-7000-8000-000000000020";
+    const secondId = "01900000-0000-7000-8000-000000000021";
+    const result = (solutionId: string, selected: boolean): SolutionSummaryDtoV1 => ({
+      schemaVersion: 1,
+      result: { solutionId, resultChecksum: "a".repeat(64) },
+      scenarioId: workforceProject.scenarioId,
+      scenarioRevision: workforceProject.revision,
+      currentRevision: workforceProject.revision,
+      runId: "01900000-0000-7000-8000-000000000022",
+      stale: false,
+      selected,
+      status: "feasible",
+      score: { feasibility: "0", levels: [] },
+      verificationChecksum: "b".repeat(64),
+      finishedAt: "2030-01-01T12:00:00Z",
+    });
+    let selectedId = firstId;
+    mockWorkforceSetupResults([result(firstId, true), result(secondId, false)]);
+    vi.mocked(generatedApi.listSolutions).mockImplementation(() =>
+      Promise.resolve(
+        response({
+          schemaVersion: 1,
+          scenarioId: workforceProject.scenarioId,
+          currentRevision: workforceProject.revision,
+          freshlyVerified: false,
+          solutions: [
+            result(firstId, selectedId === firstId),
+            result(secondId, selectedId === secondId),
+          ],
+        }),
+      ),
+    );
+    vi.mocked(generatedApi.selectSolution)
+      .mockRejectedValueOnce(new Error("Response interrupted after commit"))
+      .mockImplementationOnce(() => {
+        selectedId = secondId;
+        return Promise.resolve(response(result(secondId, true), [], workforceProject.revision));
+      });
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const results = (await screen.findByText(messages.setup.selectionHelp)).closest("details");
+    if (results === null) throw new Error("Accepted-result details are missing.");
+    const select = await within(results).findByRole("button", {
+      name: messages.setup.selectResultForViewing(secondId),
+    });
+    await userEvent.click(select);
+    await expect
+      .element(await within(results).findByRole("alert"))
+      .toHaveTextContent(messages.setup.selectionRecovery);
+    await expect.element(select).toBeDisabled();
+    expect(generatedApi.selectSolution).toHaveBeenCalledTimes(1);
+    const pendingRefresh = Promise.withResolvers<ApiResponseDto<SolutionListDtoV1>>();
+    vi.mocked(generatedApi.listSolutions).mockReturnValueOnce(pendingRefresh.promise);
+    const refreshButton = within(results).getByRole("button", {
+      name: messages.setup.refreshResults,
+    });
+    await userEvent.click(refreshButton);
+    await expect.element(refreshButton).toBeDisabled();
+    await expect.element(select).toBeDisabled();
+    expect(generatedApi.selectSolution).toHaveBeenCalledTimes(1);
+    pendingRefresh.resolve(
+      response({
+        schemaVersion: 1,
+        scenarioId: workforceProject.scenarioId,
+        currentRevision: workforceProject.revision,
+        freshlyVerified: false,
+        solutions: [result(firstId, true), result(secondId, false)],
+      }),
+    );
+    await expect.poll(() => within(results).queryByRole("alert")).toBeNull();
+    await expect.element(select).toBeEnabled();
+    const row = select.closest("li");
+    if (!row) throw new Error("The accepted-result row is missing.");
+    const inspect = within(row).getByRole("button", { name: messages.acceptedSchedule.open });
+    await expect
+      .element(
+        within(row).getByRole("button", {
+          name: messages.setup.baseCapture.reviewResult(secondId),
+        }),
+      )
+      .toBeVisible();
+    const loadedSummary = await vi.mocked(generatedApi.getScenarioSummary).mock.results[0]?.value
+      .result;
+    if (loadedSummary === undefined) throw new Error("The initial native summary is missing.");
+    const delayedSummary = Promise.withResolvers<typeof loadedSummary>();
+    const summaryCalls = vi.mocked(generatedApi.getScenarioSummary).mock.calls.length;
+    vi.mocked(generatedApi.getScenarioSummary).mockReturnValueOnce(
+      portableOperation(delayedSummary.promise),
+    );
+    notifyLibrary?.();
+    await expect
+      .poll(() => vi.mocked(generatedApi.getScenarioSummary).mock.calls.length)
+      .toBe(summaryCalls + 1);
+    await userEvent.click(select);
+    await expect
+      .element(await within(results).findByText(messages.setup.selectionSucceeded(secondId)))
+      .toBeVisible();
+    expect(select.isConnected).toBe(false);
+    await expect.element(inspect).toHaveFocus();
+    expect(generatedApi.selectSolution).toHaveBeenNthCalledWith(2, {
+      scenarioId: workforceProject.scenarioId,
+      expectedRevision: workforceProject.revision,
+      solutionId: secondId,
+    });
+    expect(generatedApi.applyScenarioCommand).not.toHaveBeenCalled();
+    delayedSummary.resolve(loadedSummary);
+    await expect.poll(() => screen.queryByText(messages.setup.loading)).toBeNull();
+    expect(
+      within(results).queryByRole("button", {
+        name: messages.setup.selectResultForViewing(secondId),
+      }),
+    ).toBeNull();
+    await expect
+      .element(
+        within(results).getByRole("button", {
+          name: messages.setup.selectResultForViewing(firstId),
+        }),
+      )
+      .toBeEnabled();
+  });
+
+  it("preserves explicit Optimize intent when an initial manual-source read finishes later", async () => {
+    configureNative();
+    mockWorkforceSetupResults([]);
+    const pending = Promise.withResolvers<ApiResponseDto<generatedApi.ManualEditResultV1>>();
+    vi.mocked(generatedApi.manualEdit).mockReturnValue(portableOperation(pending.promise));
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const intent = await screen.findByRole("combobox", { name: "Next solve intent" });
+    await userEvent.selectOptions(intent, "optimize");
+    const sourceId = "01900000-0000-7000-8000-000000000063";
+    pending.resolve(
+      response(
+        {
+          kind: "read",
+          read: {
+            schemaVersion: 1,
+            source: {
+              scenarioId: workforceProject.scenarioId,
+              revision: workforceProject.revision,
+              documentHash: "a".repeat(64),
+              original: {
+                entity: { kind: "baseSchedule", id: sourceId },
+                pairContentHash: "b".repeat(64),
+                acceptedResult: { solutionId: sourceId, resultChecksum: "c".repeat(64) },
+                sourceScenarioId: workforceProject.scenarioId,
+                sourceRevision: workforceProject.revision,
+                sourceDocumentHash: "d".repeat(64),
+                sourceRunId: sourceId,
+                sourceRunInputChecksum: "e".repeat(64),
+                sourceRunManifestChecksum: "f".repeat(64),
+              },
+              currentManualId: sourceId,
+              currentManualChecksum: "1".repeat(64),
+              selectedCount: 0,
+              protectionCount: 0,
+              authoredOptimizeUnavailableReason: null,
+            },
+            offset: 0,
+            totalRows: 0,
+            nextOffset: null,
+            rows: [],
+          },
+        },
+        [],
+        workforceProject.revision,
+      ),
+    );
+    await screen.findByRole("heading", { name: "Current admitted manual B" });
+    await expect.element(intent).toHaveValue("optimize");
+  });
+
+  it("requires a result-specific review and explicit redo consent before saving a repair base", async () => {
+    configureNative();
+    const solutionId = "01900000-0000-7000-8000-000000000063";
+    const accepted: SolutionSummaryDtoV1 = {
+      schemaVersion: 1,
+      result: { solutionId, resultChecksum: "b".repeat(64) },
+      scenarioId: workforceProject.scenarioId,
+      scenarioRevision: workforceProject.revision - 1,
+      currentRevision: workforceProject.revision,
+      runId: "01900000-0000-7000-8000-000000000064",
+      stale: true,
+      selected: false,
+      status: "feasible",
+      score: { feasibility: "0", levels: [] },
+      verificationChecksum: "c".repeat(64),
+      finishedAt: "2030-01-01T12:00:00Z",
+    };
+    mockWorkforceSetupResults([accepted]);
+    vi.mocked(generatedApi.getAppCapabilities).mockResolvedValue(
+      response({ availableCommands: ["solution_adopt_base"], unavailableCommands: [] }),
+    );
+    const redoRejection = Object.assign(new Error("Redo branch exists"), {
+      category: "validation",
+      code: "history.redo_branch_requires_truncation",
+      fieldErrors: [
+        {
+          field: "/truncateRedo",
+          code: "history.redo_branch_requires_truncation",
+          message: "Redo branch exists",
+        },
+      ],
+    });
+    const pending =
+      Promise.withResolvers<Awaited<ReturnType<typeof generatedApi.adoptBaseSolution>>>();
+    vi.mocked(generatedApi.adoptBaseSolution)
+      .mockRejectedValueOnce(redoRejection)
+      .mockReturnValueOnce(pending.promise);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const results = (await screen.findByText(messages.setup.selectionHelp)).closest("details");
+    if (results === null) throw new Error("Accepted-result details are missing.");
+    const review = await within(results).findByRole("button", {
+      name: messages.setup.baseCapture.reviewResult(solutionId),
+    });
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+    await userEvent.click(review);
+    const confirm = within(results).getByRole("button", {
+      name: messages.setup.baseCapture.confirm,
+    });
+    await expect
+      .element(within(results).getByText(messages.setup.baseCapture.olderSource))
+      .toBeVisible();
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+    await userEvent.click(confirm);
+    await expect
+      .element(await within(results).findByText(messages.setup.baseCapture.redoWarning))
+      .toBeVisible();
+    expect(generatedApi.adoptBaseSolution).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      scenarioId: workforceProject.scenarioId,
+      expectedRevision: workforceProject.revision,
+      result: accepted.result,
+      actor: { actorId: null, displayName: messages.people.localActor },
+      truncateRedo: false,
+    });
+    await userEvent.click(
+      within(results).getByRole("button", { name: messages.setup.baseCapture.confirmRedo }),
+    );
+    await expect
+      .element(within(results).getByText(messages.setup.baseCapture.saving))
+      .toBeVisible();
+    await expect
+      .element(
+        within(results).getByRole("button", { name: messages.setup.baseCapture.confirmRedo }),
+      )
+      .toHaveAttribute("aria-disabled", "true");
+    expect(generatedApi.adoptBaseSolution).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(generatedApi.adoptBaseSolution).mock.calls[1]?.[0]).toMatchObject({
+      scenarioId: workforceProject.scenarioId,
+      expectedRevision: workforceProject.revision,
+      result: accepted.result,
+      truncateRedo: true,
+    });
+    expect(vi.mocked(generatedApi.adoptBaseSolution).mock.calls[1]?.[0].commandId).not.toBe(
+      vi.mocked(generatedApi.adoptBaseSolution).mock.calls[0]?.[0].commandId,
+    );
+  });
+  it("compares the exact latest pair at the candidate revision and discards a replaced pending pair", async () => {
+    configureNative();
+    const newest = acceptedSummary(
+      "01900000-0000-7000-8000-000000000030",
+      "1".repeat(64),
+      "01900000-0000-7000-8000-000000000040",
+      2,
+    );
+    const previous = acceptedSummary(
+      "01900000-0000-7000-8000-000000000031",
+      "2".repeat(64),
+      "01900000-0000-7000-8000-000000000041",
+      1,
+    );
+    const older = acceptedSummary(
+      "01900000-0000-7000-8000-000000000032",
+      "3".repeat(64),
+      "01900000-0000-7000-8000-000000000042",
+      1,
+      true,
+    );
+    const replacement = acceptedSummary(
+      "01900000-0000-7000-8000-000000000033",
+      "4".repeat(64),
+      "01900000-0000-7000-8000-000000000043",
+      3,
+    );
+    mockWorkforceSetupResults([newest, previous, older]);
+    const pending = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(portableOperation(pending.promise));
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+
+    const compare = await screen.findByRole("button", { name: messages.setup.compareResults });
+    compare.focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(compare).toHaveFocus();
+    const firstCall = vi.mocked(generatedApi.explainSolution).mock.calls[0];
+    expect(firstCall?.[0].context).toMatchObject({
+      kind: "scenario",
+      scenarioId: workforceProject.scenarioId,
+      expectedRevision: newest.scenarioRevision,
+    });
+    expect(firstCall?.[1]).toEqual({
+      schemaVersion: 1,
+      subject: { kind: "solutionDifference", left: previous.result, right: newest.result },
+    });
+
+    vi.mocked(generatedApi.listSolutions).mockResolvedValueOnce(
+      response({
+        schemaVersion: 1,
+        scenarioId: workforceProject.scenarioId,
+        currentRevision: workforceProject.revision,
+        freshlyVerified: false,
+        solutions: [replacement, newest, previous, older],
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: messages.setup.comparisonRefresh }));
+    pending.resolve(differenceResponse(previous, newest));
+    await expect
+      .poll(() => screen.queryByRole("heading", { name: "Accepted result comparison" }))
+      .toBeNull();
+
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(
+      portableOperation(differenceResponse(newest, replacement)),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: messages.setup.compareResults }),
+    );
+    await expect
+      .element(await screen.findByRole("heading", { name: "Accepted result comparison" }))
+      .toBeVisible();
+    await expect
+      .element(
+        screen.getByText(/Historical source results are not a fresh check of today's scenario/u),
+      )
+      .toBeVisible();
+    const secondCall = vi.mocked(generatedApi.explainSolution).mock.calls[1];
+    expect(secondCall?.[0].context.expectedRevision).toBe(replacement.scenarioRevision);
+    expect(secondCall?.[1].subject).toEqual({
+      kind: "solutionDifference",
+      left: newest.result,
+      right: replacement.result,
+    });
+    expect(generatedApi.selectSolution).not.toHaveBeenCalled();
+    expect(generatedApi.applyScenarioCommand).not.toHaveBeenCalled();
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+  });
+
+  it("keeps comparison unavailable below two results and retries a failed native explanation", async () => {
+    configureNative();
+    mockWorkforceSetupResults([]);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    await userEvent.click(await screen.findByText(messages.setup.resultsDetails));
+    const comparisonRegion = screen.getByRole("region", { name: "Compare saved results" });
+    expect(
+      within(comparisonRegion).queryByRole("button", { name: messages.setup.compareResults }),
+    ).toBeNull();
+    expect(within(comparisonRegion).getByText(messages.setup.comparisonNoPair)).toBeVisible();
+
+    const previous = acceptedSummary(
+      "01900000-0000-7000-8000-000000000050",
+      "5".repeat(64),
+      "01900000-0000-7000-8000-000000000051",
+      1,
+    );
+    const newest = acceptedSummary(
+      "01900000-0000-7000-8000-000000000052",
+      "6".repeat(64),
+      "01900000-0000-7000-8000-000000000053",
+      2,
+    );
+    vi.mocked(generatedApi.listSolutions).mockResolvedValueOnce(
+      response({
+        schemaVersion: 1 as const,
+        scenarioId: workforceProject.scenarioId,
+        currentRevision: workforceProject.revision,
+        freshlyVerified: false as const,
+        solutions: [previous],
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: messages.setup.comparisonRefresh }));
+    expect(
+      within(comparisonRegion).queryByRole("button", { name: messages.setup.compareResults }),
+    ).toBeNull();
+    expect(within(comparisonRegion).getByText(messages.setup.comparisonNoPair)).toBeVisible();
+
+    vi.mocked(generatedApi.listSolutions).mockResolvedValueOnce(
+      response({
+        schemaVersion: 1 as const,
+        scenarioId: workforceProject.scenarioId,
+        currentRevision: workforceProject.revision,
+        freshlyVerified: false as const,
+        solutions: [newest, previous],
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: messages.setup.comparisonRefresh }));
+    const compare = await screen.findByRole("button", { name: messages.setup.compareResults });
+    const failed = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(portableOperation(failed.promise));
+    await userEvent.click(compare);
+    failed.reject(new Error("Comparison read failed"));
+    await expect
+      .element(await within(comparisonRegion).findByRole("alert"))
+      .toHaveTextContent("The local project library could not complete that request.");
+    expect(within(comparisonRegion).queryByText("Comparison read failed")).toBeNull();
+    await expect.element(compare).toBeEnabled();
+
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(
+      portableOperation(differenceResponse(previous, newest)),
+    );
+    await userEvent.click(compare);
+    await expect
+      .element(
+        await within(comparisonRegion).findByRole("heading", {
+          name: "Accepted result comparison",
+        }),
+      )
+      .toBeVisible();
+    expect(generatedApi.explainSolution).toHaveBeenCalledTimes(2);
+    expect(generatedApi.selectSolution).not.toHaveBeenCalled();
+    expect(generatedApi.applyScenarioCommand).not.toHaveBeenCalled();
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+  });
+
+  it("rejects comparison evidence for another accepted result, run, or source ordering", async () => {
+    configureNative();
+    const previous = acceptedSummary(
+      "01900000-0000-7000-8000-000000000060",
+      "6".repeat(64),
+      "01900000-0000-7000-8000-000000000061",
+      1,
+    );
+    const newest = acceptedSummary(
+      "01900000-0000-7000-8000-000000000062",
+      "7".repeat(64),
+      "01900000-0000-7000-8000-000000000063",
+      2,
+    );
+    mockWorkforceSetupResults([newest, previous]);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const compare = await screen.findByRole("button", { name: messages.setup.compareResults });
+    const comparisonRegion = screen.getByRole("region", { name: "Compare saved results" });
+    const correct = comparisonFor(previous, newest);
+    const wrongBase = {
+      ...correct,
+      base: {
+        ...correct.base,
+        acceptedResult: { ...correct.base.acceptedResult, resultChecksum: "8".repeat(64) },
+      },
+    };
+    const wrongCandidate = {
+      ...correct,
+      candidate: {
+        ...correct.candidate,
+        acceptedResult: {
+          ...correct.candidate.acceptedResult,
+          solutionId: previous.result.solutionId,
+        },
+      },
+    };
+    const wrongRun = {
+      ...correct,
+      runs: {
+        ...correct.runs,
+        candidate: { ...correct.runs.candidate, runId: previous.runId },
+      },
+    };
+    const malformed = [
+      differenceResponse(previous, newest, wrongBase),
+      differenceResponse(previous, newest, wrongCandidate),
+      differenceResponse(previous, newest, wrongRun),
+      differenceResponse(previous, newest, correct, [
+        newest.scenarioRevision,
+        previous.scenarioRevision,
+      ]),
+    ];
+    for (const result of malformed) {
+      vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(portableOperation(result));
+      await userEvent.click(compare);
+      await expect
+        .element(await within(comparisonRegion).findByRole("alert"))
+        .toHaveTextContent(messages.setup.comparisonChanged);
+      expect(
+        within(comparisonRegion).queryByRole("heading", { name: "Accepted result comparison" }),
+      ).toBeNull();
+    }
+    expect(generatedApi.explainSolution).toHaveBeenCalledTimes(malformed.length);
+  });
+
+  it("cancels an in-flight comparison through its native operation and restores keyboard focus", async () => {
+    configureNative();
+    const previous = acceptedSummary(
+      "01900000-0000-7000-8000-000000000070",
+      "7".repeat(64),
+      "01900000-0000-7000-8000-000000000071",
+      1,
+    );
+    const newest = acceptedSummary(
+      "01900000-0000-7000-8000-000000000072",
+      "8".repeat(64),
+      "01900000-0000-7000-8000-000000000073",
+      2,
+    );
+    mockWorkforceSetupResults([newest, previous]);
+    const pending = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    const cancellationAck =
+      Promise.withResolvers<ApiResponseDto<generatedApi.OperationCancelledV1>>();
+    let operationCurrent = true;
+    const cancelOperation = vi.fn(() => cancellationAck.promise);
+    const operation: SetupOperation<SolutionExplanationDtoV2> = {
+      requestId: "01900000-0000-7000-8000-000000000074",
+      operationId: Promise.resolve("01900000-0000-7000-8000-000000000075"),
+      result: pending.promise,
+      cancel: cancelOperation,
+      release: vi.fn(() => {
+        operationCurrent = false;
+        return Promise.resolve(
+          response({ schemaVersion: 1 as const, acknowledgement: "released" as const }),
+        );
+      }),
+      isCurrent: () => operationCurrent,
+    };
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(operation);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+
+    const compare = await screen.findByRole("button", { name: messages.setup.compareResults });
+    compare.focus();
+    await userEvent.keyboard("{Enter}");
+    const cancel = await screen.findByRole("button", { name: messages.setup.comparisonCancel });
+    await userEvent.click(cancel);
+    await expect
+      .element(await screen.findByText(messages.setup.comparisonCancelling))
+      .toBeVisible();
+    expect(cancelOperation).toHaveBeenCalledOnce();
+    pending.reject(
+      Object.assign(new Error("Cancelled."), { code: "operation.cancelled", category: "protocol" }),
+    );
+    cancellationAck.resolve(
+      response({ schemaVersion: 1 as const, acknowledgement: "cancellationRequested" as const }),
+    );
+    await expect.element(await screen.findByText(messages.setup.comparisonCancelled)).toBeVisible();
+    await expect.element(compare).toHaveFocus();
+    expect(cancelOperation).toHaveBeenCalledOnce();
+    expect(generatedApi.selectSolution).not.toHaveBeenCalled();
+    expect(generatedApi.applyScenarioCommand).not.toHaveBeenCalled();
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+  });
+  it("reads Repair facts for the exact accepted pair and shows native parameters and bindings", async () => {
+    configureNative();
+    const candidate = acceptedSummary(
+      "01900000-0000-7000-8000-000000000080",
+      "8".repeat(64),
+      "01900000-0000-7000-8000-000000000081",
+      2,
+    );
+    const base = acceptedSummary(
+      "01900000-0000-7000-8000-000000000082",
+      "9".repeat(64),
+      "01900000-0000-7000-8000-000000000083",
+      1,
+    );
+    const parameterEntries: [string, VerificationValue][] = [];
+    for (const [prefix, start] of [
+      ["expected", 100],
+      ["observed", 200],
+    ] as const) {
+      for (let index = 0; index < 10; index += 1) {
+        parameterEntries.push([
+          `${prefix}.fact-${String(index).padStart(2, "0")}`,
+          { type: "integer", value: String(start + index) },
+        ]);
+      }
+    }
+    parameterEntries.push(
+      ["official.workforce.fact.baseline_admission", { type: "text", value: "notEstablished" }],
+      [
+        "official.workforce.fact.repair_frame",
+        { type: "text", value: "recordedBaselineToCandidate" },
+      ],
+      [
+        "official.workforce.fact.summary",
+        { type: "text", value: "Native saved-change fact summary." },
+      ],
+    );
+    parameterEntries.push(["untrusted", { type: "text", value: "<img src=x onerror=alert(1)>" }]);
+    const fact: EvidenceMessageV1 = {
+      messageKey: "unknown.native.fact",
+      parameters: Object.fromEntries(parameterEntries),
+      entities: [],
+      rules: [],
+      assignments: Array.from(
+        { length: 22 },
+        (_, index) => `official.workforce/assignment/shift-${String(index + 1).padStart(3, "0")}`,
+      ),
+      evidence: [],
+    };
+    mockWorkforceSetupResults([candidate, base]);
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(
+      portableOperation(repairResponse(base, candidate, undefined, undefined, [fact])),
+    );
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+
+    const trigger = await screen.findByRole("button", { name: "Explain saved-change facts" });
+    expect(screen.getByRole("button", { name: messages.setup.compareResults })).toBeVisible();
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog", { name: "Explanation" });
+    await within(dialog).findByText("Native saved-change fact summary.");
+    expect(within(dialog).getByText("expected.fact-00")).toBeVisible();
+    expect(within(dialog).getByText("100")).toBeVisible();
+    expect(within(dialog).getByText("observed.fact-00")).toBeVisible();
+    expect(within(dialog).getByText("200")).toBeVisible();
+    await userEvent.click(
+      within(
+        within(dialog).getByRole("navigation", {
+          name: "Evidence parameter pages for unknown.native.fact",
+        }),
+      ).getByRole("button", { name: "Next" }),
+    );
+    expect(within(dialog).getByText("official.workforce.fact.repair_frame")).toBeVisible();
+    expect(within(dialog).getByText("recordedBaselineToCandidate")).toBeVisible();
+    expect(within(dialog).getByText("official.workforce.fact.baseline_admission")).toBeVisible();
+    expect(within(dialog).getByText("notEstablished")).toBeVisible();
+    expect(within(dialog).getByText("official.workforce.fact.summary")).toBeVisible();
+    expect(within(dialog).getByText("official.workforce/assignment/shift-001")).toBeVisible();
+    expect(within(dialog).getByText("<img src=x onerror=alert(1)>")).toBeVisible();
+    expect(dialog.querySelector("img")).toBeNull();
+    expect(within(dialog).queryByText("official.workforce/assignment/shift-022")).toBeNull();
+    await userEvent.click(
+      within(
+        within(dialog).getByRole("navigation", {
+          name: "Assignment reference pages for unknown.native.fact",
+        }),
+      ).getByRole("button", { name: "Next" }),
+    );
+    expect(within(dialog).getByText("official.workforce/assignment/shift-022")).toBeVisible();
+    expect(within(dialog).getByText("Repair source bindings")).toBeVisible();
+    expect(within(dialog).getByText("[2, 1]")).toBeVisible();
+    expect(dialog).toHaveTextContent("Accepted base A");
+    expect(dialog).toHaveTextContent(base.result.solutionId);
+    expect(dialog).toHaveTextContent(base.runId);
+    expect(dialog).toHaveTextContent(candidate.result.solutionId);
+    expect(dialog).toHaveTextContent(candidate.runId);
+    expect(dialog).toHaveTextContent("A → C");
+    expect(dialog).toHaveTextContent("B → C");
+    expect(dialog).toHaveTextContent("notEstablished");
+    expect(dialog).toHaveTextContent("no unique cause");
+    expect(dialog).not.toHaveTextContent("fairness");
+
+    const call = vi.mocked(generatedApi.explainSolution).mock.calls[0];
+    expect(call?.[0].context.expectedRevision).toBe(candidate.scenarioRevision);
+    expect(call?.[1].subject).toEqual({
+      kind: "repair",
+      current: candidate.result,
+      base: base.result,
+    });
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => screen.queryByRole("dialog")).toBeNull();
+    await expect.element(trigger).toHaveFocus();
+    expect(generatedApi.selectSolution).not.toHaveBeenCalled();
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+    expect(generatedApi.applyScenarioCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects reversed or wrong Repair source vectors and accepted run identities", async () => {
+    configureNative();
+    const candidate = acceptedSummary(
+      "01900000-0000-7000-8000-000000000084",
+      "a".repeat(64),
+      "01900000-0000-7000-8000-000000000085",
+      2,
+    );
+    const base = acceptedSummary(
+      "01900000-0000-7000-8000-000000000086",
+      "b".repeat(64),
+      "01900000-0000-7000-8000-000000000087",
+      1,
+    );
+    const wrongRun = comparisonFor(base, candidate);
+    const wrongCandidateRun: SolutionComparisonV2 = {
+      ...wrongRun,
+      runs: {
+        ...wrongRun.runs,
+        candidate: { ...wrongRun.runs.candidate, runId: base.runId },
+      },
+    };
+    const wrongAcceptedBase = {
+      ...base,
+      result: { ...base.result, resultChecksum: "c".repeat(64) },
+    };
+    const wrongBase = comparisonFor(wrongAcceptedBase, candidate);
+    mockWorkforceSetupResults([candidate, base]);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const trigger = await screen.findByRole("button", { name: "Explain saved-change facts" });
+    const malformed = [
+      repairResponse(base, candidate, [base.scenarioRevision, candidate.scenarioRevision]),
+      repairResponse(base, candidate, [candidate.scenarioRevision + 1, base.scenarioRevision]),
+      repairResponse(
+        base,
+        candidate,
+        [candidate.scenarioRevision, base.scenarioRevision],
+        wrongBase,
+      ),
+      repairResponse(base, candidate, undefined, undefined, [], workforceProject.revision + 1),
+      repairResponse(
+        base,
+        candidate,
+        [candidate.scenarioRevision, base.scenarioRevision],
+        wrongCandidateRun,
+      ),
+    ];
+    for (const result of malformed) {
+      vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(portableOperation(result));
+      await userEvent.click(trigger);
+      const dialog = await screen.findByRole("dialog", { name: "Explanation" });
+      await expect
+        .element(await within(dialog).findByRole("alert"))
+        .toHaveTextContent(messages.setup.comparisonChanged);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      expect(
+        within(dialog).queryByRole("heading", { name: "Accepted result comparison" }),
+      ).toBeNull();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    }
+    expect(generatedApi.explainSolution).toHaveBeenCalledTimes(malformed.length);
+  });
+
+  it("does not publish a late Repair response after the accepted pair is refreshed", async () => {
+    configureNative();
+    const candidate = acceptedSummary(
+      "01900000-0000-7000-8000-000000000088",
+      "c".repeat(64),
+      "01900000-0000-7000-8000-000000000089",
+      2,
+    );
+    const base = acceptedSummary(
+      "01900000-0000-7000-8000-000000000090",
+      "d".repeat(64),
+      "01900000-0000-7000-8000-000000000091",
+      1,
+    );
+    const replacement = acceptedSummary(
+      "01900000-0000-7000-8000-000000000092",
+      "e".repeat(64),
+      "01900000-0000-7000-8000-000000000093",
+      3,
+    );
+    const pending = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    mockWorkforceSetupResults([candidate, base]);
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(portableOperation(pending.promise));
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const refreshSavedResults = await screen.findByRole("button", {
+      name: messages.setup.comparisonRefresh,
+    });
+    const trigger = await screen.findByRole("button", { name: "Explain saved-change facts" });
+    await userEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Explanation" });
+    vi.mocked(generatedApi.listSolutions).mockResolvedValueOnce(
+      response({
+        schemaVersion: 1,
+        scenarioId: workforceProject.scenarioId,
+        currentRevision: workforceProject.revision,
+        freshlyVerified: false,
+        solutions: [replacement, candidate, base],
+      }),
+    );
+    refreshSavedResults.click();
+    await expect
+      .poll(() => document.body.textContent.includes(replacement.result.solutionId))
+      .toBe(true);
+    expect(trigger).not.toHaveFocus();
+    pending.resolve(
+      repairResponse(base, candidate, undefined, undefined, [
+        {
+          messageKey: "late.fact",
+          parameters: {
+            "official.workforce.fact.summary": { type: "text", value: "Late pair fact." },
+          },
+          entities: [],
+          rules: [],
+          assignments: [],
+          evidence: [],
+        },
+      ]),
+    );
+    await expect.poll(() => screen.queryByText("Late pair fact.")).toBeNull();
+    await expect.poll(() => screen.queryByRole("dialog", { name: "Explanation" })).toBeNull();
+  });
+
+  it("does not publish a pending Repair result after project-library ownership changes", async () => {
+    const library = configureNative();
+    const candidate = acceptedSummary(
+      "01900000-0000-7000-8000-000000000106",
+      "4".repeat(64),
+      "01900000-0000-7000-8000-000000000107",
+      2,
+    );
+    const base = acceptedSummary(
+      "01900000-0000-7000-8000-000000000108",
+      "5".repeat(64),
+      "01900000-0000-7000-8000-000000000109",
+      1,
+    );
+    const pending = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    mockWorkforceSetupResults([candidate, base]);
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(portableOperation(pending.promise));
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const trigger = await screen.findByRole("button", { name: "Explain saved-change facts" });
+    await userEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Explanation" });
+    library[0] = { ...workforceProject, title: "Replaced roster" };
+    const notify = vi.mocked(generatedApi.onLibraryRefreshRequired).mock.calls[0]?.[0];
+    if (!notify) throw new Error("The application did not register native library notifications.");
+    notify({ reason: "event-subscription-lagged" });
+    await expect
+      .poll(() => vi.mocked(generatedApi.listSolutions).mock.calls.length)
+      .toBeGreaterThan(1);
+    expect(trigger).not.toHaveFocus();
+    pending.resolve(
+      repairResponse(base, candidate, undefined, undefined, [
+        {
+          messageKey: "late.library.fact",
+          parameters: {
+            "official.workforce.fact.summary": { type: "text", value: "Late library fact." },
+          },
+          entities: [],
+          rules: [],
+          assignments: [],
+          evidence: [],
+        },
+      ]),
+    );
+    await expect.poll(() => screen.queryByText("Late library fact.")).toBeNull();
+    await expect.poll(() => screen.queryByRole("dialog", { name: "Explanation" })).toBeNull();
+  });
+  it("does not publish Repair facts after native window ownership is lost", async () => {
+    configureNative();
+    const candidate = acceptedSummary(
+      "01900000-0000-7000-8000-000000000094",
+      "f".repeat(64),
+      "01900000-0000-7000-8000-000000000095",
+      2,
+    );
+    const base = acceptedSummary(
+      "01900000-0000-7000-8000-000000000096",
+      "1".repeat(64),
+      "01900000-0000-7000-8000-000000000097",
+      1,
+    );
+    const pending = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    let operationCurrent = true;
+    const operation: SetupOperation<SolutionExplanationDtoV2> = {
+      requestId: "01900000-0000-7000-8000-000000000098",
+      operationId: Promise.resolve("01900000-0000-7000-8000-000000000099"),
+      result: pending.promise,
+      cancel: vi.fn(() =>
+        Promise.resolve(
+          response({
+            schemaVersion: 1 as const,
+            acknowledgement: "cancellationRequested" as const,
+          }),
+        ),
+      ),
+      release: vi.fn(() => {
+        operationCurrent = false;
+        return Promise.resolve(
+          response({ schemaVersion: 1 as const, acknowledgement: "released" as const }),
+        );
+      }),
+      isCurrent: () => operationCurrent,
+    };
+    const releaseOperation = vi.spyOn(operation, "release");
+    mockWorkforceSetupResults([candidate, base]);
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(operation);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Explain saved-change facts" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Explanation" });
+    operationCurrent = false;
+    pending.resolve(
+      repairResponse(base, candidate, undefined, undefined, [
+        {
+          messageKey: "late.window.fact",
+          parameters: {
+            "official.workforce.fact.summary": { type: "text", value: "Late window fact." },
+          },
+          entities: [],
+          rules: [],
+          assignments: [],
+          evidence: [],
+        },
+      ]),
+    );
+    await expect
+      .element(await within(dialog).findByRole("alert"))
+      .toHaveTextContent(messages.setup.comparisonChanged);
+    expect(within(dialog).queryByText("Late window fact.")).toBeNull();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(releaseOperation).toHaveBeenCalled();
+  });
+
+  it("cancels Repair through the owned operation and discards a success that races cancellation", async () => {
+    configureNative();
+    const candidate = acceptedSummary(
+      "01900000-0000-7000-8000-000000000100",
+      "2".repeat(64),
+      "01900000-0000-7000-8000-000000000101",
+      2,
+    );
+    const base = acceptedSummary(
+      "01900000-0000-7000-8000-000000000102",
+      "3".repeat(64),
+      "01900000-0000-7000-8000-000000000103",
+      1,
+    );
+    const pending = Promise.withResolvers<ApiResponseDto<SolutionExplanationDtoV2>>();
+    const cancellationAck =
+      Promise.withResolvers<ApiResponseDto<generatedApi.OperationCancelledV1>>();
+    let operationCurrent = true;
+    const cancelOperation = vi.fn(() => cancellationAck.promise);
+    const operation: SetupOperation<SolutionExplanationDtoV2> = {
+      requestId: "01900000-0000-7000-8000-000000000104",
+      operationId: Promise.resolve("01900000-0000-7000-8000-000000000105"),
+      result: pending.promise,
+      cancel: cancelOperation,
+      release: vi.fn(() => {
+        operationCurrent = false;
+        return Promise.resolve(
+          response({ schemaVersion: 1 as const, acknowledgement: "released" as const }),
+        );
+      }),
+      isCurrent: () => operationCurrent,
+    };
+    const releaseOperation = vi.spyOn(operation, "release");
+    mockWorkforceSetupResults([candidate, base]);
+    vi.mocked(generatedApi.explainSolution).mockReturnValueOnce(operation);
+    await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
+    const trigger = await screen.findByRole("button", { name: "Explain saved-change facts" });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog", { name: "Explanation" });
+    const cancel = await within(dialog).findByRole("button", { name: "Cancel" });
+    cancel.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(cancelOperation).toHaveBeenCalledOnce();
+    cancellationAck.resolve(
+      response({ schemaVersion: 1 as const, acknowledgement: "cancellationRequested" as const }),
+    );
+    pending.resolve(
+      repairResponse(base, candidate, undefined, undefined, [
+        {
+          messageKey: "late.cancelled.fact",
+          parameters: {
+            "official.workforce.fact.summary": { type: "text", value: "Cancelled race fact." },
+          },
+          entities: [],
+          rules: [],
+          assignments: [],
+          evidence: [],
+        },
+      ]),
+    );
+    await expect
+      .element(await within(dialog).findByRole("heading", { name: "Explanation cancelled" }))
+      .toBeVisible();
+    expect(within(dialog).queryByText("Cancelled race fact.")).toBeNull();
+    await expect.element(within(dialog).getByRole("button", { name: "Close" })).toHaveFocus();
+    expect(releaseOperation).toHaveBeenCalled();
+    expect(generatedApi.selectSolution).not.toHaveBeenCalled();
+    expect(generatedApi.adoptBaseSolution).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => screen.queryByRole("dialog", { name: "Explanation" })).toBeNull();
+    await expect.element(trigger).toHaveFocus();
   });
 
   it("never sends scenario undo from a text editor, but enables contextual undo/redo and export outside it", async () => {

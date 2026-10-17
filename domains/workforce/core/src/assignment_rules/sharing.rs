@@ -11,7 +11,7 @@ use eutheto_domain_api::{
     ValidatedContractSchema,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, DomainAssignment, DomainAssignmentId, DomainEvidenceId, ScoreVector,
+    AcceptedResult, DomainAssignment, DomainAssignmentId, DomainEvidenceId, RunObjectiveContext,
 };
 use eutheto_types::{PersonId, ScenarioDocument, ScenarioId, SolutionId};
 use serde::Serialize;
@@ -50,7 +50,6 @@ struct SharePayload<'a> {
     provenance: ShareProvenance<'a>,
     privacy: ShareResultOptions,
     assignments: Vec<ShareAssignment<'a>>,
-    score: &'a ScoreVector,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_references: Option<Vec<DomainEvidenceId>>,
 }
@@ -65,10 +64,11 @@ struct SharePayload<'a> {
 pub fn build_workforce_share_result(
     document: &ScenarioDocument,
     accepted: &AcceptedResult,
+    objective_context: Option<&RunObjectiveContext>,
     options: ShareResultOptions,
 ) -> Result<DomainShareResult, DomainPackError> {
     let mut budget = OperationBudget::evaluation(None);
-    revalidate_workforce_accepted(document, accepted, &mut budget)?;
+    revalidate_workforce_accepted(document, accepted, objective_context, &mut budget)?;
     let mut identities = PlanningIdentities::default();
     let mut assignments = Vec::new();
     let mut evidence_references = options.include_evidence_references.then(Vec::new);
@@ -102,7 +102,7 @@ pub fn build_workforce_share_result(
         references.dedup();
     }
     let payload = SharePayload {
-        schema_version: 1,
+        schema_version: 2,
         scenario_id: document.scenario_id,
         scenario_revision: accepted.solution.scenario_revision,
         solution_id: accepted.solution.solution_id,
@@ -114,7 +114,6 @@ pub fn build_workforce_share_result(
         },
         privacy: options,
         assignments,
-        score: &accepted.verification.score,
         evidence_references,
     };
     let measured = preflight(&payload, &mut budget, ContractJsonLimits::DEFAULT)
@@ -143,9 +142,41 @@ pub fn build_workforce_share_result(
     budget.check().map_err(|error| operation_error(&error))?;
     Ok(DomainShareResult {
         pack_id: document.domain_pack.id.clone(),
-        schema_version: 1,
+        schema_version: 2,
         payload,
     })
+}
+
+/// Fresh typed source and native selected identities, with provenance checked on false rows too.
+pub(crate) fn recipient_source<'a>(
+    document: &ScenarioDocument,
+    accepted: &'a AcceptedResult,
+    objective_context: Option<&RunObjectiveContext>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<
+    (
+        super::input::AssignmentInput,
+        std::collections::BTreeMap<AssignmentPair, &'a str>,
+    ),
+    DomainPackError,
+> {
+    let input = revalidate_workforce_accepted(document, accepted, objective_context, budget)?;
+    let mut identities = PlanningIdentities::default();
+    let mut selected = std::collections::BTreeMap::new();
+    for assignment in &accepted.solution.assignments {
+        budget.step().map_err(|error| operation_error(&error))?;
+        let (pair, present) = decode_workforce_assignment(assignment)?;
+        validate_source_provenance(assignment, pair, &mut identities, budget)?;
+        if present {
+            budget
+                .reserve(0, 1, 128)
+                .map_err(|error| operation_error(&error))?;
+            if selected.insert(pair, assignment.id.as_str()).is_some() {
+                return Err(contract("duplicate_assignment_pair"));
+            }
+        }
+    }
+    Ok((input, selected))
 }
 
 pub(super) fn validate_source_provenance(

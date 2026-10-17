@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
-import { SetupOperationScope, type FastFindingsV1, type ValidationIssue } from "../api/generated";
+import {
+  explainSolution,
+  SetupOperationScope,
+  type FastFindingsV1,
+  type Revision,
+  type ValidationIssue,
+} from "../api/generated";
 import { useFullValidation } from "../full-validation";
 import { formatNumber, messages } from "../messages";
 import { safeMessage, type ProjectHomeController, type ProjectSummary } from "../project-home";
@@ -28,15 +34,24 @@ const copy = messages.validationWorkspace;
 const selectedHeading = ref<HTMLElement>();
 const selected = shallowRef<{
   issue: ValidationIssue;
+  issueId: string | null;
   context: ValidationContext;
   target: ValidationNavigationTarget | null;
   resolved: ResolvedValidationAddress | null;
   pending: boolean;
   error: string | null;
 } | null>(null);
+const explanation = shallowRef<{
+  revision: Revision;
+  message: string;
+  proof: { message: string; required: number; possible: number; rules: readonly string[] } | null;
+} | null>(null);
+const explanationError = ref<string | null>(null);
+const explanationLoading = ref(false);
 let current = true;
 let generation = 0;
 let selectionScope: SetupOperationScope | null = null;
+let explanationScope: SetupOperationScope | null = null;
 const findings = computed<FastFindingsV1 | null>(() => {
   if (state.report === null) return null;
   const counts = { errors: 0, warnings: 0, information: 0 };
@@ -67,10 +82,15 @@ function matches(context: ValidationContext): boolean {
 function clearSelection(): void {
   generation += 1;
   selectionScope?.dispose();
+  explanationScope?.dispose();
+  explanationScope = null;
+  explanation.value = null;
+  explanationError.value = null;
+  explanationLoading.value = false;
   selectionScope = null;
   selected.value = null;
 }
-async function selectIssue(issue: ValidationIssue): Promise<void> {
+async function selectIssue(issue: ValidationIssue, source: "fast" | "full"): Promise<void> {
   clearSelection();
   const captured = generation;
   const context = {
@@ -78,10 +98,20 @@ async function selectIssue(issue: ValidationIssue): Promise<void> {
     revision: props.project.revision,
     libraryEpoch: props.home.state.libraryEpoch,
   };
+  const report = state.report;
+  const index =
+    source === "full" &&
+    state.run === "completed" &&
+    report?.scenarioId === context.scenarioId &&
+    report.revision === context.revision
+      ? report.report.issues.indexOf(issue)
+      : -1;
+  const issueId = index < 0 ? null : (report?.issueIds[index] ?? null);
   const address = issueAddress(issue);
   const target = address === null ? null : { ...context, ...address };
   const selection = {
     issue,
+    issueId,
     context,
     target,
     resolved: null,
@@ -108,6 +138,112 @@ async function selectIssue(issue: ValidationIssue): Promise<void> {
     if (valid()) selectionScope = null;
   }
 }
+const canExplain = computed(() => {
+  const selection = selected.value;
+  return (
+    selection !== null &&
+    selection.issueId !== null &&
+    !explanationLoading.value &&
+    matches(selection.context) &&
+    state.run === "completed" &&
+    state.report?.scenarioId === selection.context.scenarioId &&
+    state.report.revision === selection.context.revision &&
+    state.report.report.issues.indexOf(selection.issue) >= 0
+  );
+});
+async function explainSelected(): Promise<void> {
+  if (!canExplain.value) return;
+  const selection = selected.value;
+  if (selection?.issueId == null) return;
+  const token = generation;
+  const issueId = selection.issueId;
+  const { scenarioId, revision } = selection.context;
+  const valid = () =>
+    token === generation &&
+    selected.value?.issueId === issueId &&
+    selected.value.issue === selection.issue &&
+    matches(selection.context);
+  explanation.value = null;
+  explanationError.value = null;
+  explanationLoading.value = true;
+  let scope: SetupOperationScope | null = null;
+  try {
+    scope = new SetupOperationScope(scenarioId, revision);
+    explanationScope = scope;
+    const { result } = await explainSolution(scope, {
+      schemaVersion: 1,
+      subject: { kind: "validation", issueId },
+    }).result;
+    if (!valid()) return;
+    const { evidence, rendered } = result.explanation;
+    const summary = rendered.messages[0]?.parameters["official.workforce.fact.summary"];
+    const proofMessage = rendered.messages[1];
+    const proofSummary = proofMessage?.parameters["official.workforce.fact.summary"];
+    const required = proofMessage?.parameters["official.workforce.fact.required_count"];
+    const possible = proofMessage?.parameters["official.workforce.fact.possible_people"];
+    if (
+      result.scenarioId !== scenarioId ||
+      result.currentRevision !== revision ||
+      result.scenarioRevisions.length !== 1 ||
+      result.scenarioRevisions[0] !== revision ||
+      evidence.evidence.kind !== "validation" ||
+      evidence.evidence.issue.issueId !== issueId ||
+      evidence.evidence.issue.severity !==
+        (selection.issue.severity === "error"
+          ? "mustFix"
+          : selection.issue.severity === "warning"
+            ? "reviewSuggested"
+            : "information") ||
+      evidence.evidence.issue.messageKey !== selection.issue.code ||
+      evidence.certainty !== "deterministic" ||
+      rendered.kind !== "validation" ||
+      rendered.evidenceChecksum !== evidence.checksum ||
+      rendered.messages.length < 1 ||
+      rendered.messages.length > 2 ||
+      rendered.messages[0]?.messageKey !== selection.issue.code ||
+      summary?.type !== "text" ||
+      summary.value !== selection.issue.message ||
+      (proofMessage !== undefined &&
+        (selection.issue.code !== "official.workforce.candidate_shortage" ||
+          selection.issue.resource?.type !== "rule" ||
+          proofMessage.messageKey !== "official.workforce.validation.coverage_shortage_proof" ||
+          proofSummary?.type !== "text" ||
+          required?.type !== "integer" ||
+          possible?.type !== "integer" ||
+          !Number.isSafeInteger(Number(required.value)) ||
+          !Number.isSafeInteger(Number(possible.value)) ||
+          Number(possible.value) < 0 ||
+          Number(required.value) > 65_535 ||
+          Number(possible.value) >= Number(required.value) ||
+          !proofMessage.rules.includes(selection.issue.resource.id)))
+    ) {
+      explanationError.value = copy.explanationChanged;
+      return;
+    }
+    explanation.value = {
+      revision,
+      message: summary.value,
+      proof:
+        proofMessage &&
+        proofSummary?.type === "text" &&
+        required?.type === "integer" &&
+        possible?.type === "integer"
+          ? {
+              message: proofSummary.value,
+              required: Number(required.value),
+              possible: Number(possible.value),
+              rules: proofMessage.rules,
+            }
+          : null,
+    };
+  } catch (failure) {
+    if (valid()) explanationError.value = safeMessage(failure);
+  } finally {
+    scope?.dispose();
+    if (explanationScope === scope) explanationScope = null;
+    if (valid()) explanationLoading.value = false;
+  }
+}
 async function openTarget(): Promise<void> {
   const selection = selected.value;
   if (selection?.target == null || selection.resolved?.route == null) return;
@@ -131,6 +267,7 @@ watch(
   clearSelection,
   { flush: "sync" },
 );
+watch([() => state.report, () => state.run], clearSelection, { flush: "sync" });
 onScopeDispose(() => {
   current = false;
   clearSelection();
@@ -200,7 +337,7 @@ onScopeDispose(() => {
           :findings="state.status.fast"
           :heading="messages.setup.fast"
           v-bind="locale === undefined ? {} : { locale }"
-          @select-issue="selectIssue"
+          @select-issue="selectIssue($event, 'fast')"
         />
         <p v-if="state.status.fast.omitted > 0">
           {{ messages.setup.omitted(formatNumber(state.status.fast.omitted, locale)) }}
@@ -215,7 +352,7 @@ onScopeDispose(() => {
           :findings="findings"
           :heading="copy.report"
           v-bind="locale === undefined ? {} : { locale }"
-          @select-issue="selectIssue"
+          @select-issue="selectIssue($event, 'full')"
         />
       </template>
       <p v-else-if="full?.state === 'completed'">{{ copy.reportUnavailable }}</p>
@@ -238,6 +375,47 @@ onScopeDispose(() => {
         </button>
         <p v-else-if="!selected.pending && !selected.error">{{ copy.unsupportedTarget }}</p>
         <p>{{ copy.noAutomaticFix }}</p>
+        <template v-if="selected.issueId !== null">
+          <button type="button" :disabled="!canExplain" @click="explainSelected">
+            {{ copy.explain }}
+          </button>
+          <p v-if="explanationLoading" role="status">{{ copy.explanationLoading }}</p>
+          <p v-if="explanationError" role="alert" class="text-danger">{{ explanationError }}</p>
+          <section
+            v-if="explanation"
+            :aria-label="copy.explanationHeading"
+            class="field-stack"
+            data-validation-explanation
+          >
+            <p>
+              {{ explanation.proof ? copy.explanationProofBoundary : copy.explanationBoundary }}
+            </p>
+            <p>{{ copy.explanationRevision(formatNumber(explanation.revision, locale)) }}</p>
+            <p>{{ explanation.message }}</p>
+            <section
+              v-if="explanation.proof"
+              class="field-stack"
+              :aria-label="copy.explanationProofHeading"
+              data-validation-source-conflict
+            >
+              <p>{{ explanation.proof.message }}</p>
+              <p>
+                {{
+                  copy.explanationProofCount(
+                    formatNumber(explanation.proof.possible, locale),
+                    formatNumber(explanation.proof.required, locale),
+                  )
+                }}
+              </p>
+              <h4>{{ copy.explanationProofRules }}</h4>
+              <ul>
+                <li v-for="ruleId in explanation.proof.rules" :key="ruleId" class="monospace">
+                  {{ ruleId }}
+                </li>
+              </ul>
+            </section>
+          </section>
+        </template>
       </section>
     </template>
     <RouteLeaveGuard

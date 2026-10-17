@@ -16,7 +16,12 @@ export type ValidationNavigationTarget = ValidationContext & DiagnosticAddress;
 export interface ResolvedValidationAddress {
   readonly label: string;
   readonly route:
-    "project-people" | "project-work" | "project-availability" | "project-rules" | null;
+    | "project-people"
+    | "project-work"
+    | "project-score-policy"
+    | "project-availability"
+    | "project-rules"
+    | null;
 }
 
 // Navigation syntax only. Native queries still validate identity and stored record kind.
@@ -62,8 +67,10 @@ function entityRoute(kind: WorkforceSetupEntityKind): ResolvedValidationAddress[
     case "coverageRequirement":
       return "project-work";
     case "baseSchedule":
-    case "scorePolicy":
+    case "externalStartingPlan":
       return null;
+    case "scorePolicy":
+      return "project-score-policy";
   }
 }
 
@@ -113,9 +120,12 @@ export async function resolveValidationAddress(
   const kindId = `official.workforce.${ruleClass === "required" ? "rule" : "preference"}.${record.record.kind.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
   const title = entries.find((entry) => entry.descriptor.id === kindId)?.descriptor.title
     .defaultText;
+  const supported =
+    record.class === "required" ||
+    entries.some((entry) => entry.descriptor.id === kindId && entry.support === "implemented");
   return {
     label: `${title ?? record.record.kind} (${address.id})`,
-    route: record.class === "required" ? "project-rules" : null,
+    route: supported ? "project-rules" : null,
   };
 }
 

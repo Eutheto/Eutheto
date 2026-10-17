@@ -7,7 +7,9 @@ use super::{AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleLimi
 use crate::generated_workforce_pack_contract::WORKFORCE_PACK_ID;
 use crate::{ids::ShiftId, model::AssignmentPair};
 use eutheto_domain_api::DomainPackError;
-use eutheto_domain_ir::{AssignmentValue, DomainAssignment, DomainEvidenceId, NormalizedSolution};
+use eutheto_domain_ir::{
+    AssignmentValue, DomainAssignment, DomainAssignmentId, DomainEvidenceId, NormalizedSolution,
+};
 use eutheto_planning_ir::{
     CandidateValues, PlanningIrLimitsV1, PlanningProblem, ProjectionError, ProjectionExpression,
     Variable, project_candidate,
@@ -130,6 +132,23 @@ pub fn decode_workforce_assignment(
     if pair_text != assignment.entity.id.as_str() {
         return Err(contract("official.workforce.projection.entity_mismatch"));
     }
+    let pair = decode_workforce_assignment_id(&assignment.id)?;
+    Ok((pair, selected))
+}
+
+/// Decodes a canonical V1 Workforce assignment ID into its typed person/shift pair.
+///
+/// This parser is allocation-free and intentionally does not inspect a candidate value or
+/// entity reference. Callers validating a full assignment must perform those checks before
+/// delegating here.
+pub(crate) fn decode_workforce_assignment_id(
+    id: &DomainAssignmentId,
+) -> Result<AssignmentPair, DomainPackError> {
+    let pair_text = id
+        .as_str()
+        .strip_prefix(ASSIGNMENT_KIND)
+        .and_then(|suffix| suffix.strip_prefix('.'))
+        .ok_or_else(|| contract("official.workforce.projection.assignment_id"))?;
     let (person, shift) = pair_text
         .split_once('.')
         .ok_or_else(|| contract("official.workforce.projection.pair"))?;
@@ -144,13 +163,10 @@ pub fn decode_workforce_assignment(
     let shift_id: ShiftId = shift
         .parse()
         .map_err(|_| contract("official.workforce.projection.pair"))?;
-    Ok((
-        AssignmentPair {
-            person_id,
-            shift_id,
-        },
-        selected,
-    ))
+    Ok(AssignmentPair {
+        person_id,
+        shift_id,
+    })
 }
 
 fn canonical_uuid(value: &str) -> bool {

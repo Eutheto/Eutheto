@@ -30,7 +30,7 @@ fn fixed(document: &mut ScenarioDocument, scope: &serde_json::Value) -> Result {
         id(20).parse()?,
         json!({
             "kind":"fixedAssignment", "id":id(20), "active":true, "strength":"required",
-            "scope":scope, "personId":id(1), "shiftId":id(8)
+            "scope":scope, "personId":id(1), "shiftId":id(8), "assigned":true
         }),
     );
     Ok(())
@@ -48,6 +48,7 @@ fn compiled(document: &ScenarioDocument) -> Result<AssignmentRuleCompilation> {
     Ok(compile_assignment_rules(
         document,
         &CompileContext {
+            objective_context: None,
             scenario_revision: 1,
             semantic_metadata: BTreeMap::new(),
             control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),

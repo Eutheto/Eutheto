@@ -992,8 +992,10 @@ name = "eutheto-desktop"
 version = "0.1.0"
 dependencies = [
  "eutheto-core",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-import",
+ "eutheto-solver-api",
  "eutheto-solver-ortools",
  "eutheto-types",
  "libc",
@@ -1064,6 +1066,7 @@ version = "0.1.0"
 dependencies = [
  "eutheto-command",
  "eutheto-domain-api",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-types",
  "eutheto-workforce",
@@ -1122,6 +1125,7 @@ dependencies = [
 name = "eutheto-solver-api"
 version = "0.1.0"
 dependencies = [
+ "eutheto-domain-ir",
  "eutheto-planning-ir",
  "eutheto-types",
  "serde",
@@ -1219,6 +1223,7 @@ dependencies = [
  "eutheto-domain-ir",
  "eutheto-planning-ir",
  "eutheto-types",
+ "ical",
  "jiff",
  "serde",
  "serde_json",
@@ -1920,6 +1925,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "ical"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b7cab7543a8b7729a19e2c04309f902861293dcdae6558dfbeb634454d279f6"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]

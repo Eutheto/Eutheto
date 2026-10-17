@@ -262,6 +262,26 @@ fn every_record_collection_supports_typed_reversible_lifecycle() -> Result<(), B
     ] {
         prove_lifecycle(&original, &case, &contracts)?;
     }
+    let weekend = json!({"kind":"weekendTarget","id":id(24),"active":true,
+        "scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+        "priority":"normal","weight":3,"targetCount":2});
+    let mut weekend_updated = weekend.clone();
+    weekend_updated["targetCount"] = json!(0);
+    weekend_updated["weight"] = json!(5);
+    prove_lifecycle(
+        &original,
+        &Lifecycle {
+            map: "preferences",
+            record: "preference",
+            target: "preferenceId",
+            add: commands::ADD_PREFERENCE,
+            update: commands::UPDATE_PREFERENCE,
+            remove: commands::REMOVE_PREFERENCE,
+            initial: weekend,
+            updated: weekend_updated,
+        },
+        &contracts,
+    )?;
     Ok(())
 }
 

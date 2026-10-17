@@ -440,6 +440,9 @@ small {
   overflow-wrap: anywhere;
   font-size: var(--text-small);
 }
+[data-optimize-terminal-explanation] dd {
+  overflow-wrap: anywhere;
+}
 .action-row {
   display: flex;
   flex-wrap: wrap;
@@ -828,6 +831,56 @@ a.intent-card:hover {
   gap: var(--s2);
   min-width: 0;
 }
+
+[data-accepted-schedule] {
+  margin-top: var(--s4);
+}
+
+.result-view-choices {
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: var(--s2);
+}
+.result-view-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+.result-view-choices input {
+  width: auto;
+  min-height: auto;
+  margin: 0;
+  flex: none;
+}
+.health-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 44rem;
+}
+.health-table th,
+.health-table td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.health-table th:nth-child(1) {
+  width: 17%;
+}
+.health-table th:nth-child(2) {
+  width: 13%;
+}
+.health-table th:nth-child(3) {
+  width: 14%;
+}
+.health-table th:nth-child(4) {
+  width: 23%;
+}
+.health-table th:nth-child(5) {
+  width: 16%;
+}
+.health-table th:nth-child(6) {
+  width: 17%;
+}
+
 .field-help {
   color: var(--muted);
   font-size: var(--text-small);

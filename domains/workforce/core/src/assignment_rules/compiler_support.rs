@@ -18,7 +18,7 @@ pub(super) fn invalid() -> AssignmentRuleError {
     AssignmentRuleError::InvalidConstruction(AssignmentConstructionIssue::InvalidRecord)
 }
 
-pub(super) fn interval(shift: &ResolvedShift) -> InstantInterval {
+pub(in crate::assignment_rules) fn interval(shift: &ResolvedShift) -> InstantInterval {
     InstantInterval {
         start: shift.interval.starts_at.instant,
         end: shift.interval.ends_at.instant,
@@ -123,7 +123,7 @@ pub(super) fn requirement_scope(
     }
 }
 
-pub(super) fn availability_scope(
+pub(in crate::assignment_rules) fn availability_scope(
     record: &Availability,
     metadata: &ShiftMetadata<'_>,
     budget: &mut OperationBudget<'_>,
@@ -189,7 +189,7 @@ pub(in crate::assignment_rules) fn qualification_match(
     Ok(all_match && any_match)
 }
 
-pub(super) fn expression(
+pub(in crate::assignment_rules) fn expression(
     person: &Person,
     expression: &QualificationExpression,
     query: InstantInterval,
@@ -208,7 +208,10 @@ pub(super) fn expression(
     }
 }
 
-pub(super) fn outside(query: InstantInterval, allowed: InstantInterval) -> Option<InstantInterval> {
+pub(in crate::assignment_rules) fn outside(
+    query: InstantInterval,
+    allowed: InstantInterval,
+) -> Option<InstantInterval> {
     if query.start < allowed.start {
         Some(InstantInterval {
             start: query.start,
@@ -224,7 +227,7 @@ pub(super) fn outside(query: InstantInterval, allowed: InstantInterval) -> Optio
     }
 }
 
-pub(super) fn uncovered(
+pub(in crate::assignment_rules) fn uncovered(
     query: InstantInterval,
     windows: &[InstantInterval],
     budget: &mut OperationBudget<'_>,
@@ -249,7 +252,7 @@ pub(super) fn uncovered(
     }))
 }
 
-pub(super) fn active_interval(
+pub(in crate::assignment_rules) fn active_interval(
     person: &Person,
     settings: &ScenarioSettings,
 ) -> Result<Option<InstantInterval>, AssignmentRuleError> {

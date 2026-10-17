@@ -21,8 +21,12 @@ use eutheto_types::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
+use tokio::sync::Notify;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -30,6 +34,13 @@ type TestResult = Result<(), Box<dyn Error>>;
 enum Behavior {
     Outcome(BackendTerminationReason, bool, u64, u64),
     Error(bool, u64),
+    FirstThenWait {
+        release: Arc<Notify>,
+        final_value: i64,
+        termination: BackendTerminationReason,
+        invalid_final: bool,
+        proof: bool,
+    },
     AssignmentFlood,
     LateCandidate(BackendTerminationReason, u64, Duration),
     Never,
@@ -58,6 +69,10 @@ impl SolverBackend for TestBackend {
         &self.runtime_identity
     }
 
+    fn verified_worker_manifest_sha256(&self) -> Option<&[u8; 32]> {
+        None
+    }
+
     fn compatibility(
         &self,
         summary: &PlanningProblemSummary,
@@ -84,6 +99,75 @@ impl SolverBackend for TestBackend {
             if matches!(self.behavior, Behavior::Never) {
                 std::future::pending::<()>().await;
             }
+            if let Behavior::FirstThenWait {
+                release,
+                final_value,
+                termination,
+                invalid_final,
+                proof,
+            } = &self.behavior
+            {
+                output.submit_candidate(CandidateSubmission {
+                    values: candidate_values()?,
+                    observed_after_milliseconds: millis(1)?,
+                    objective: (*proof).then(|| BackendObjectiveEvidence {
+                        objective_values: vec![1],
+                    }),
+                    evidence_refs: Vec::new(),
+                })?;
+                release.notified().await;
+                let mut values = candidate_values()?;
+                if *invalid_final {
+                    values.integers.insert(
+                        IntVariableId::new("tests.invalid")
+                            .map_err(|_| OutputError::UnsafeDiagnosticLine)?,
+                        *final_value,
+                    );
+                    output.submit_candidate(CandidateSubmission {
+                        values,
+                        observed_after_milliseconds: millis(2)?,
+                        objective: (*proof).then(|| BackendObjectiveEvidence {
+                            objective_values: vec![*final_value],
+                        }),
+                        evidence_refs: Vec::new(),
+                    })?;
+                } else {
+                    values.integers.insert(
+                        IntVariableId::new("tests.left")
+                            .map_err(|_| OutputError::UnsafeDiagnosticLine)?,
+                        *final_value,
+                    );
+                    output.submit_candidate(CandidateSubmission {
+                        values,
+                        observed_after_milliseconds: millis(2)?,
+                        objective: (*proof).then(|| BackendObjectiveEvidence {
+                            objective_values: vec![*final_value],
+                        }),
+                        evidence_refs: Vec::new(),
+                    })?;
+                }
+                return Ok(BackendSolveOutcome {
+                    backend_id: self.descriptor.id.clone(),
+                    model_hash: request.model_hash().to_owned(),
+                    solve_fingerprint: request.solve_fingerprint().to_owned(),
+                    termination: *termination,
+                    evidence: BackendTerminationEvidence {
+                        remaining_at_dispatch_milliseconds: request
+                            .dispatch_budget()
+                            .remaining_at_dispatch(),
+                        backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+                        elapsed_milliseconds: millis(3)?,
+                        first_incumbent_milliseconds: Some(millis(1)?),
+                        objective: (*proof).then(|| BackendObjectiveEvidence {
+                            objective_values: vec![*final_value],
+                        }),
+                        best_bound_values: (*proof).then(|| vec![*final_value]),
+                        assumption_core: None,
+                        evidence_refs: Vec::new(),
+                        execution: None,
+                    },
+                });
+            }
             if let Behavior::LateCandidate(termination, elapsed, advance) = &self.behavior {
                 self.clock
                     .advance(*advance)
@@ -107,6 +191,8 @@ impl SolverBackend for TestBackend {
                         elapsed_milliseconds: millis(*elapsed)?,
                         first_incumbent_milliseconds: Some(millis(1)?),
                         objective: None,
+                        best_bound_values: None,
+                        assumption_core: None,
                         evidence_refs: Vec::new(),
                         execution: None,
                     },
@@ -131,7 +217,6 @@ impl SolverBackend for TestBackend {
                         observed_after_milliseconds: millis(1)?,
                         objective: Some(BackendObjectiveEvidence {
                             objective_values: vec![*value],
-                            best_bound_values: None,
                         }),
                         evidence_refs: Vec::new(),
                     })?;
@@ -155,8 +240,9 @@ impl SolverBackend for TestBackend {
                         first_incumbent_milliseconds: Some(millis(1)?),
                         objective: Some(BackendObjectiveEvidence {
                             objective_values: vec![*final_value],
-                            best_bound_values: bound.map(|value| vec![value]),
                         }),
+                        best_bound_values: bound.map(|value| vec![value]),
+                        assumption_core: None,
                         evidence_refs: Vec::new(),
                         execution: None,
                     },
@@ -166,7 +252,10 @@ impl SolverBackend for TestBackend {
                 Behavior::Outcome(_, candidate, _, advance)
                 | Behavior::Error(candidate, advance) => (*candidate, *advance),
                 Behavior::AssignmentFlood => (false, 0),
-                Behavior::Proof { .. } | Behavior::LateCandidate(_, _, _) | Behavior::Never => {
+                Behavior::Proof { .. }
+                | Behavior::FirstThenWait { .. }
+                | Behavior::LateCandidate(_, _, _)
+                | Behavior::Never => {
                     unreachable!("handled before ordinary backend behavior")
                 }
             };
@@ -192,6 +281,8 @@ impl SolverBackend for TestBackend {
                         elapsed_milliseconds: millis(1)?,
                         first_incumbent_milliseconds: Some(millis(1)?),
                         objective: None,
+                        best_bound_values: None,
+                        assumption_core: None,
                         evidence_refs: Vec::new(),
                         execution: None,
                     },
@@ -230,12 +321,17 @@ impl SolverBackend for TestBackend {
                             None
                         },
                         objective: None,
+                        best_bound_values: None,
+                        assumption_core: None,
                         evidence_refs: Vec::new(),
                         execution: None,
                     },
                 }),
                 Behavior::AssignmentFlood => unreachable!("handled before backend outcome"),
-                Behavior::Proof { .. } | Behavior::LateCandidate(_, _, _) | Behavior::Never => {
+                Behavior::FirstThenWait { .. }
+                | Behavior::Proof { .. }
+                | Behavior::LateCandidate(_, _, _)
+                | Behavior::Never => {
                     unreachable!("handled before ordinary backend outcome")
                 }
             }
@@ -267,6 +363,53 @@ impl CandidateReviewer for Verify {
     fn review(&mut self, _backend: &BackendId, _candidate: &BackendCandidate) -> CandidateReview {
         CandidateReview::Verified {
             objective_matches: false,
+        }
+    }
+}
+struct QuarantineThenVerify {
+    first_reviewed: Arc<Notify>,
+    review_count: Arc<AtomicUsize>,
+}
+
+impl CandidateReviewer for QuarantineThenVerify {
+    fn review(&mut self, _backend: &BackendId, _candidate: &BackendCandidate) -> CandidateReview {
+        let index = self.review_count.fetch_add(1, Ordering::SeqCst);
+        if index == 0 {
+            self.first_reviewed.notify_one();
+            CandidateReview::VerificationFailed {
+                diagnostic_code: "verification.early_rejected".to_owned(),
+            }
+        } else {
+            CandidateReview::Verified {
+                objective_matches: false,
+            }
+        }
+    }
+}
+
+struct SignallingReview {
+    first_reviewed: Arc<Notify>,
+    review_count: Arc<AtomicUsize>,
+    cancellation: Option<CancellationToken>,
+    await_terminal: bool,
+    objective_matches: bool,
+}
+
+impl CandidateReviewer for SignallingReview {
+    fn review(&mut self, _backend: &BackendId, _candidate: &BackendCandidate) -> CandidateReview {
+        let index = self.review_count.fetch_add(1, Ordering::SeqCst);
+        if index == 0 {
+            if let Some(cancellation) = &self.cancellation {
+                cancellation.cancel();
+            }
+            self.first_reviewed.notify_one();
+        }
+        if self.await_terminal && index > 0 {
+            CandidateReview::AwaitingIndependentVerification
+        } else {
+            CandidateReview::Verified {
+                objective_matches: self.objective_matches,
+            }
         }
     }
 }
@@ -491,6 +634,12 @@ fn options(backend: BackendSelection) -> Result<SolveOptions, Box<dyn Error>> {
             max_constraints: 100,
         },
     })
+}
+
+fn intermediate_options(backend: BackendSelection) -> Result<SolveOptions, Box<dyn Error>> {
+    let mut solve_options = options(backend)?;
+    solve_options.collect_intermediate_solutions = true;
+    Ok(solve_options)
 }
 
 async fn run(
@@ -1332,13 +1481,11 @@ async fn early_terminal_rejects_clock_regression_before_returning_observations()
     struct RegressAtFinish(std::sync::atomic::AtomicU32);
     impl MonotonicClock for RegressAtFinish {
         fn now(&self) -> Duration {
-            Duration::from_millis(
-                match self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) {
-                    0 => 100,
-                    1 => 110,
-                    _ => 99,
-                },
-            )
+            Duration::from_millis(match self.0.fetch_add(1, Ordering::Relaxed) {
+                0 => 100,
+                1 => 110,
+                _ => 99,
+            })
         }
     }
     let parent = ParentSolveBudget::new(
@@ -1361,6 +1508,10 @@ async fn early_terminal_rejects_clock_regression_before_returning_observations()
     assert_eq!(execution.record.terminal_status, SolveStatus::InvalidModel);
     assert_eq!(execution.record.invocation_count, 0);
     assert!(execution.observations.is_none());
+    assert_eq!(
+        execution.last_trusted_elapsed,
+        Some(Duration::from_millis(10))
+    );
     Ok(())
 }
 
@@ -1675,6 +1826,621 @@ async fn retained_candidate_is_reviewed_after_backend_error_and_failure_is_prese
 }
 
 #[tokio::test]
+async fn intermediate_candidate_is_reviewed_before_backend_returns() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: false,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = SignallingReview {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+        cancellation: None,
+        await_terminal: false,
+        objective_matches: false,
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    assert_eq!(review_count.load(Ordering::SeqCst), 1);
+    release.notify_one();
+    let result = execution.await.record;
+    assert_eq!(review_count.load(Ordering::SeqCst), 2);
+    assert_eq!(result.terminal_status, SolveStatus::Feasible);
+    assert_eq!(
+        result.terminal_reason,
+        ExecutionTerminalReason::CandidateVerified
+    );
+    assert_eq!(
+        result
+            .selected_candidate
+            .as_ref()
+            .map(|candidate| candidate.sequence),
+        Some(2)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn intermediate_review_time_is_not_counted_as_backend_execution() -> TestResult {
+    struct TimedReview {
+        clock: FixedMonotonicClock,
+        first_reviewed: Arc<Notify>,
+        count: usize,
+    }
+    impl CandidateReviewer for TimedReview {
+        fn review(
+            &mut self,
+            _backend: &BackendId,
+            _candidate: &BackendCandidate,
+        ) -> CandidateReview {
+            if self.clock.advance(Duration::from_secs(1)).is_err() {
+                return CandidateReview::VerificationFailed {
+                    diagnostic_code: "verification.clock_overflow".to_owned(),
+                };
+            }
+            self.count += 1;
+            if self.count == 1 {
+                self.first_reviewed.notify_one();
+            }
+            CandidateReview::Verified {
+                objective_matches: false,
+            }
+        }
+    }
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: false,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        millis(5_000)?,
+        Arc::new(clock.clone()),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = TimedReview {
+        clock,
+        first_reviewed: Arc::clone(&first_reviewed),
+        count: 0,
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(reviewer.count, 2);
+    assert_eq!(execution.record.terminal_status, SolveStatus::Feasible);
+    assert_eq!(
+        execution
+            .observations
+            .ok_or("missing parent observations")?
+            .backend_elapsed,
+        Duration::ZERO,
+    );
+    assert_eq!(parent.checked_elapsed(), Some(Duration::from_secs(2)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn same_poll_terminal_candidate_review_is_excluded_from_backend_time() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::LateCandidate(
+                BackendTerminationReason::CandidateFound,
+                1,
+                Duration::from_micros(600),
+            ),
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        millis(3_000)?,
+        Arc::new(clock.clone()),
+        CancellationToken::new(),
+    )?;
+    let execution = SolverRouter::new(&registry)
+        .execute(
+            Arc::new(problem()?),
+            intermediate_options(BackendSelection::Auto)?,
+            &parent,
+            DurationMillis::ZERO,
+            &mut Progress,
+            &mut ExpiringReview { clock },
+        )
+        .await;
+    assert_eq!(execution.record.terminal_status, SolveStatus::Feasible);
+    assert_eq!(
+        execution
+            .observations
+            .ok_or("missing parent observations")?
+            .backend_elapsed,
+        Duration::from_micros(600),
+    );
+    assert_eq!(
+        parent.checked_elapsed(),
+        Some(Duration::from_micros(1_000_600))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn intermediate_verification_is_observed_before_later_cancellation() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let cancellation = CancellationToken::new();
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: false,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        cancellation.clone(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = SignallingReview {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+        cancellation: Some(cancellation),
+        await_terminal: false,
+        objective_matches: false,
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    assert!(parent.snapshot().cancelled);
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(review_count.load(Ordering::SeqCst), 1);
+    assert_eq!(execution.record.terminal_status, SolveStatus::Cancelled);
+    assert_eq!(
+        execution.record.terminal_reason,
+        ExecutionTerminalReason::Cancelled
+    );
+    assert!(execution.record.selected_candidate.is_none());
+    assert!(
+        execution
+            .record
+            .first_verified_feasible_milliseconds
+            .is_none()
+    );
+    assert_eq!(
+        execution
+            .observations
+            .as_ref()
+            .and_then(|observations| observations.first_verified_feasible_after),
+        Some(Duration::ZERO)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn later_worse_candidate_keeps_the_first_verified_terminal_candidate() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: false,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = SignallingReview {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+        cancellation: None,
+        await_terminal: true,
+        objective_matches: false,
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(review_count.load(Ordering::SeqCst), 2);
+    assert_eq!(execution.record.terminal_status, SolveStatus::Feasible);
+    assert_eq!(
+        execution.record.terminal_reason,
+        ExecutionTerminalReason::CandidateVerified
+    );
+    assert_eq!(
+        execution
+            .record
+            .selected_candidate
+            .as_ref()
+            .map(|candidate| candidate.sequence),
+        Some(1)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn intermediate_verification_quarantine_survives_later_verified_candidate() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: false,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = QuarantineThenVerify {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(review_count.load(Ordering::SeqCst), 1);
+    assert_eq!(execution.record.terminal_status, SolveStatus::BackendFailed);
+    assert_eq!(
+        execution.record.terminal_reason,
+        ExecutionTerminalReason::VerificationQuarantined
+    );
+    assert!(execution.record.selected_candidate.is_none());
+    assert_eq!(
+        execution.record.attempts[0].termination,
+        AttemptTermination::VerificationQuarantined {
+            diagnostic_code: "verification.early_rejected".to_owned()
+        }
+    );
+    assert!(execution.record.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "verification.early_rejected"
+            && diagnostic.message == "backend failed before producing a candidate"
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_later_candidate_does_not_promote_the_preview_to_terminal() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: true,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = SignallingReview {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+        cancellation: None,
+        await_terminal: false,
+        objective_matches: false,
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(review_count.load(Ordering::SeqCst), 1);
+    assert_eq!(execution.record.terminal_status, SolveStatus::BackendFailed);
+    assert_eq!(
+        execution.record.terminal_reason,
+        ExecutionTerminalReason::BackendFailure
+    );
+    assert!(execution.record.selected_candidate.is_none());
+    assert_eq!(
+        execution.record.attempts[0].termination,
+        AttemptTermination::BackendError {
+            code: "solver.output_contract".to_owned()
+        }
+    );
+    assert!(
+        execution
+            .observations
+            .as_ref()
+            .and_then(|observations| observations.first_verified_feasible_after)
+            .is_some()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn intermediate_preview_reserve_admits_a_separate_terminal_at_the_cap() -> TestResult {
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::CandidateFound,
+                invalid_final: false,
+                proof: false,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let limits = SolverApiLimits {
+        max_candidates: 1,
+        max_candidate_assignments: 2,
+        ..SolverApiLimits::DEFAULT
+    };
+    let mut progress = Progress;
+    let mut reviewer = SignallingReview {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+        cancellation: None,
+        await_terminal: false,
+        objective_matches: false,
+    };
+    let router = SolverRouter::new(&registry).with_limits(limits)?;
+    let mut execution = Box::pin(router.execute(
+        Arc::new(problem()?),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(execution.record.attempts[0].candidate_count, 2);
+    assert_eq!(execution.record.terminal_status, SolveStatus::Feasible);
+    assert_eq!(review_count.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn intermediate_terminal_proof_requires_verified_final_candidate() -> TestResult {
+    let mut fixture = problem()?;
+    let provenance = ProvenanceId::new("tests.provenance")?;
+    fixture.objectives.levels.push(ObjectiveLevel {
+        id: ObjectiveLevelId::new("tests.level")?,
+        direction: OptimizationDirection::Minimize,
+        lower_bound: 1,
+        upper_bound: 3,
+        terms: vec![ObjectiveTerm {
+            id: ObjectiveTermId::new("tests.objective")?,
+            expression: LinearExpression::new(
+                vec![LinearTerm {
+                    variable: IntVariableId::new("tests.left")?,
+                    coefficient: 1,
+                }],
+                0,
+            )?,
+            kind: ObjectiveTermKind::Penalty,
+            category: ScoreCategoryId::new("tests.score")?,
+            provenance: provenance.clone(),
+        }],
+        provenance,
+    });
+    fixture.canonicalize()?;
+    let clock = FixedMonotonicClock::default();
+    let release = Arc::new(Notify::new());
+    let first_reviewed = Arc::new(Notify::new());
+    let review_count = Arc::new(AtomicUsize::new(0));
+    let registry = registry(
+        vec![(
+            "tests.a",
+            Behavior::FirstThenWait {
+                release: Arc::clone(&release),
+                final_value: 1,
+                termination: BackendTerminationReason::OptimalityClaimed,
+                invalid_final: false,
+                proof: true,
+            },
+            false,
+        )],
+        &clock,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = SignallingReview {
+        first_reviewed: Arc::clone(&first_reviewed),
+        review_count: Arc::clone(&review_count),
+        cancellation: None,
+        await_terminal: false,
+        objective_matches: true,
+    };
+    let router = SolverRouter::new(&registry);
+    let mut execution = Box::pin(router.execute(
+        Arc::new(fixture),
+        intermediate_options(BackendSelection::Auto)?,
+        &parent,
+        DurationMillis::ZERO,
+        &mut progress,
+        &mut reviewer,
+    ));
+    tokio::select! {
+        () = first_reviewed.notified() => {}
+        _ = &mut execution => return Err("backend returned before first review".into()),
+    }
+    release.notify_one();
+    let execution = execution.await;
+    assert_eq!(review_count.load(Ordering::SeqCst), 2);
+    assert_eq!(execution.record.terminal_status, SolveStatus::Optimal);
+    assert_eq!(
+        execution.record.terminal_reason,
+        ExecutionTerminalReason::CandidateVerified
+    );
+    assert_eq!(
+        execution
+            .record
+            .selected_candidate
+            .as_ref()
+            .map(|candidate| candidate.sequence),
+        Some(2)
+    );
+    assert!(execution.record.attempts[0].outcome.is_some());
+    Ok(())
+}
+
+#[tokio::test]
 async fn backend_optimality_without_independent_objective_match_stays_feasible() -> TestResult {
     let clock = FixedMonotonicClock::default();
     let registry = registry(
@@ -1755,9 +2521,9 @@ async fn optimal_status_requires_the_selected_verified_final_candidate_and_equal
         ),
         (
             OptimalityClaimed,
-            vec![1],
-            2,
-            Some(2),
+            vec![2],
+            1,
+            Some(1),
             false,
             true,
             SolveStatus::Feasible,

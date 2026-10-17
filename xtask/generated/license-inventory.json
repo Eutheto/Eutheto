@@ -2113,6 +2113,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "ical",
+      "version": "0.11.0",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "9b7cab7543a8b7729a19e2c04309f902861293dcdae6558dfbeb634454d279f6"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "ico",
       "version": "0.5.0",
       "kind": "dependency",

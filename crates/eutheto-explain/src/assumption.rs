@@ -1,15 +1,20 @@
 use eutheto_domain_ir::ConflictGroupV1;
 use eutheto_planning_ir::{
-    Literal, PlanningIrLimitsV1, PlanningProblem, ValidationError, validate,
+    BudgetedValidationError, Literal, PlanningIrLimitsV1, PlanningPreparationBudget,
+    PlanningPreparationError, PlanningProblem, ValidationError, validate, validate_with_budget,
 };
+use eutheto_types::RuleId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::mem::size_of;
 
 /// A strict failure while mapping backend-returned assumption literals.
 #[derive(Debug)]
 pub enum AssumptionMappingError {
     /// The planning problem is not valid canonical IR.
     InvalidProblem(ValidationError),
+    /// Cooperative preparation admission/control failed.
+    Preparation(PlanningPreparationError),
     /// A conflict must contain at least one literal.
     Empty,
     /// The returned set exceeds the caller's assumption bound.
@@ -26,6 +31,7 @@ impl fmt::Display for AssumptionMappingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidProblem(error) => write!(formatter, "invalid planning problem: {error}"),
+            Self::Preparation(error) => write!(formatter, "mapping preparation failed: {error}"),
             Self::Empty => formatter.write_str("assumption conflict is empty"),
             Self::LimitExceeded => formatter.write_str("assumption conflict exceeds its limit"),
             Self::DuplicateLiteral(_) => {
@@ -42,11 +48,47 @@ impl fmt::Display for AssumptionMappingError {
 
 impl std::error::Error for AssumptionMappingError {}
 
+/// Owned mapped groups whose transient admission remains live until explicit release.
+#[must_use]
+pub struct MappedAssumptionGroups {
+    groups: Vec<ConflictGroupV1>,
+    transient_bytes: u64,
+}
+
+impl MappedAssumptionGroups {
+    /// Returns the mapped groups while this reservation remains live.
+    #[must_use]
+    pub fn groups(&self) -> &[ConflictGroupV1] {
+        &self.groups
+    }
+
+    /// Transfers the groups and their owned reservation to a caller that tracks both lifetimes.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<ConflictGroupV1>, u64) {
+        (self.groups, self.transient_bytes)
+    }
+
+    /// Drops the mapped groups and then releases their retained reservation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an accounting error if the reservation does not belong to `budget`.
+    pub fn release(
+        self,
+        budget: &mut PlanningPreparationBudget,
+    ) -> Result<(), AssumptionMappingError> {
+        let transient_bytes = self.transient_bytes;
+        drop(self.groups);
+        budget
+            .release_transient(transient_bytes)
+            .map_err(AssumptionMappingError::Preparation)
+    }
+}
+
 /// Maps one complete backend-returned literal set to canonical domain conflict groups.
 ///
 /// The planning problem and the entire returned set are validated before any result is exposed.
-/// Empty, oversized, duplicate, unknown, and wrong-polarity inputs have distinct errors. On any
-/// error no partial group vector is returned.
+/// Empty, oversized, duplicate, unknown, and wrong-polarity inputs have distinct errors.
 ///
 /// # Errors
 /// Returns [`AssumptionMappingError`] for an invalid problem or returned literal set.
@@ -55,7 +97,102 @@ pub fn map_assumption_literals(
     literals: &[Literal],
     limits: PlanningIrLimitsV1,
 ) -> Result<Vec<ConflictGroupV1>, AssumptionMappingError> {
-    validate(problem, limits).map_err(AssumptionMappingError::InvalidProblem)?;
+    // Preserve the historical owned-Vec API. The budgeted API below is the ownership-aware seam
+    // used by diagnostic preparation; its reservation must remain attached to returned groups.
+    map_assumption_literals_impl(problem, literals, limits, None)
+}
+
+/// Maps a backend core after charging validation/index/output work under inherited control.
+///
+/// The returned reservation remains live until [`MappedAssumptionGroups::release`] is called.
+///
+/// # Errors
+/// Returns [`AssumptionMappingError`] for invalid model/core data or preparation interruption.
+pub fn map_assumption_literals_with_budget(
+    problem: &PlanningProblem,
+    literals: &[Literal],
+    limits: PlanningIrLimitsV1,
+    budget: &mut PlanningPreparationBudget,
+) -> Result<MappedAssumptionGroups, AssumptionMappingError> {
+    budget
+        .precharge_serialized(problem, limits.max_ir_bytes)
+        .map_err(AssumptionMappingError::Preparation)?;
+    let units = [
+        u64::try_from(problem.variables.len()).unwrap_or(u64::MAX),
+        u64::try_from(problem.constraints.len()).unwrap_or(u64::MAX),
+        u64::try_from(problem.assumptions.len()).unwrap_or(u64::MAX),
+        u64::try_from(problem.projections.len()).unwrap_or(u64::MAX),
+        u64::try_from(problem.provenance.len()).unwrap_or(u64::MAX),
+        u64::try_from(literals.len()).unwrap_or(u64::MAX),
+    ]
+    .into_iter()
+    .try_fold(0_u64, u64::checked_add)
+    .ok_or(AssumptionMappingError::Preparation(
+        PlanningPreparationError::ArithmeticOverflow,
+    ))?;
+    let nested_rules = problem
+        .assumptions
+        .iter()
+        .map(|assumption| u64::try_from(assumption.required_rules.len()).unwrap_or(u64::MAX))
+        .try_fold(0_u64, u64::checked_add)
+        .ok_or(AssumptionMappingError::Preparation(
+            PlanningPreparationError::ArithmeticOverflow,
+        ))?;
+    // Account for B-tree nodes, cloned literals/group identities, and every RuleId retained by
+    // the returned groups before building any index or output vector.
+    let transient = units
+        .checked_mul(256)
+        .and_then(|bytes| {
+            nested_rules
+                .checked_mul((size_of::<RuleId>() as u64).saturating_add(256))
+                .and_then(|nested| bytes.checked_add(nested))
+        })
+        .ok_or(AssumptionMappingError::Preparation(
+            PlanningPreparationError::ArithmeticOverflow,
+        ))?;
+    let work = units
+        .checked_mul(4)
+        .ok_or(AssumptionMappingError::Preparation(
+            PlanningPreparationError::ArithmeticOverflow,
+        ))?;
+    budget
+        .reserve_work(work)
+        .map_err(AssumptionMappingError::Preparation)?;
+    budget
+        .reserve_transient(transient)
+        .map_err(AssumptionMappingError::Preparation)?;
+    match map_assumption_literals_impl(problem, literals, limits, Some(budget)) {
+        Ok(groups) => Ok(MappedAssumptionGroups {
+            groups,
+            transient_bytes: transient,
+        }),
+        Err(error) => {
+            let _ = budget.release_transient(transient);
+            Err(error)
+        }
+    }
+}
+
+fn map_assumption_literals_impl(
+    problem: &PlanningProblem,
+    literals: &[Literal],
+    limits: PlanningIrLimitsV1,
+    mut budget: Option<&mut PlanningPreparationBudget>,
+) -> Result<Vec<ConflictGroupV1>, AssumptionMappingError> {
+    if let Some(budget) = budget.as_deref_mut() {
+        validate_with_budget(problem, limits, budget)
+            .map(|_| ())
+            .map_err(|error| match error {
+                BudgetedValidationError::Invalid(error) => {
+                    AssumptionMappingError::InvalidProblem(error)
+                }
+                BudgetedValidationError::Preparation(error) => {
+                    AssumptionMappingError::Preparation(error)
+                }
+            })?;
+    } else {
+        validate(problem, limits).map_err(AssumptionMappingError::InvalidProblem)?;
+    }
     if literals.is_empty() {
         return Err(AssumptionMappingError::Empty);
     }
@@ -77,6 +214,11 @@ pub fn map_assumption_literals(
     let mut mapped = Vec::with_capacity(literals.len());
 
     for literal in literals {
+        if let Some(budget) = budget.as_deref_mut() {
+            budget
+                .reserve_work(1)
+                .map_err(AssumptionMappingError::Preparation)?;
+        }
         if !seen.insert(literal.clone()) {
             return Err(AssumptionMappingError::DuplicateLiteral(literal.clone()));
         }
@@ -94,6 +236,11 @@ pub fn map_assumption_literals(
     }
 
     // Planning validation already proved unique group identities and non-empty canonical rule sets.
+    if let Some(budget) = budget {
+        budget
+            .reserve_work(u64::try_from(mapped.len()).unwrap_or(u64::MAX))
+            .map_err(AssumptionMappingError::Preparation)?;
+    }
     mapped.sort();
     Ok(mapped)
 }

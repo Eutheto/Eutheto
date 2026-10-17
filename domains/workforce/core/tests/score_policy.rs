@@ -176,3 +176,76 @@ fn workload_definitions_require_matching_ids_targets_and_explicit_population()
     assert!(validate_score_policy_shape(&value).is_err());
     Ok(())
 }
+
+#[test]
+fn equal_raw_share_is_an_explicit_tag_distinct_from_weighted_share() -> Result<(), Box<dyn Error>> {
+    for (mode, tag) in [
+        (
+            WorkloadTargetMode::WeightedEqualShare {},
+            "weightedEqualShare",
+        ),
+        (WorkloadTargetMode::EqualShare {}, "equalShare"),
+    ] {
+        let encoded = serde_json::to_value(&mode)?;
+        assert_eq!(encoded, serde_json::json!({ "kind": tag }));
+        assert_eq!(serde_json::from_value::<WorkloadTargetMode>(encoded)?, mode);
+
+        let mut score = policy()?;
+        let mut workload = workload()?;
+        workload.target_mode = mode;
+        score.workload_policies.insert(workload.id, workload);
+        validate_score_policy_shape(&score)?;
+        assert_eq!(
+            serde_json::from_value::<WorkforceScorePolicy>(serde_json::to_value(&score)?)?,
+            score
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn weighted_share_keeps_nonconvex_penalty_shape_across_roundtrip() -> Result<(), Box<dyn Error>> {
+    let mut value = policy()?;
+    let mut workload = workload()?;
+    workload.target_mode = WorkloadTargetMode::WeightedEqualShare {};
+    workload.penalty = DeviationPenalty::Piecewise {
+        breakpoints: vec![
+            PenaltyBreakpoint {
+                from_deviation: 0,
+                slope: 3,
+            },
+            PenaltyBreakpoint {
+                from_deviation: 60,
+                slope: 1,
+            },
+        ],
+    };
+    value.workload_policies.insert(workload.id, workload);
+    validate_score_policy_shape(&value)?;
+    let decoded: WorkforceScorePolicy = serde_json::from_value(serde_json::to_value(&value)?)?;
+    let policy = decoded
+        .workload_policies
+        .values()
+        .next()
+        .ok_or("workload")?;
+    assert_eq!(
+        policy.target_mode,
+        WorkloadTargetMode::WeightedEqualShare {}
+    );
+    assert_eq!(
+        policy.penalty,
+        DeviationPenalty::Piecewise {
+            breakpoints: vec![
+                PenaltyBreakpoint {
+                    from_deviation: 0,
+                    slope: 3,
+                },
+                PenaltyBreakpoint {
+                    from_deviation: 60,
+                    slope: 1,
+                },
+            ],
+        }
+    );
+    Ok(())
+}

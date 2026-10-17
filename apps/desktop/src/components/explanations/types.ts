@@ -1,4 +1,10 @@
-import type { DomainEntityRef, EvidenceMessageV1, RuleEvaluation } from "../../api/generated";
+import type {
+  DomainEntityRef,
+  EvidenceMessageV1,
+  InfeasibilityExplanationContextV1,
+  RuleEvaluation,
+  UuidV7,
+} from "../../api/generated";
 
 export type ExplanationUiState =
   | "ready"
@@ -9,6 +15,12 @@ export type ExplanationUiState =
   | "inconclusive"
   | "unavailable"
   | "internalFailure";
+
+export type ConflictRuleAction = InfeasibilityExplanationContextV1 & {
+  readonly scenarioId: UuidV7;
+  readonly ruleId: UuidV7;
+  readonly action: "inspect" | "edit";
+};
 
 export interface LabeledEntityRef {
   readonly entity: DomainEntityRef;

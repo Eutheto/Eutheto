@@ -392,7 +392,7 @@ impl CsvCustody {
                     // cannot abort discard. Core errors (including eviction/wrong kind)
                     // do not retain a native slot and never trigger a retry.
                     tauri::async_runtime::spawn(async move {
-                        let _ = custody.app.discard_people_csv_preview(preview_id).await;
+                        let _ = custody.app.discard_csv_preview(preview_id).await;
                         custody.state().previews.remove(&creator);
                     });
                 }

@@ -8,7 +8,6 @@ use crate::{
     model::{AssignmentPair, Scope},
 };
 use eutheto_domain_api::DomainPackError;
-use eutheto_domain_ir::RuleEvaluation;
 use eutheto_types::{EntityId, PersonId, RuleId};
 
 /// Evaluates one authored `FixedAssignment` against the selected original-domain pair set.
@@ -16,29 +15,39 @@ use eutheto_types::{EntityId, PersonId, RuleId};
 /// The target scope is checked again here rather than relying on ingress validation. This keeps
 /// source authority independent if an already-decoded document reaches the evaluator through a
 /// future import path.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn fixed_assignment(
     input: &AssignmentInput,
     selected: &Selected<'_>,
     rule_id: RuleId,
     scope: &Scope,
-    person_id: PersonId,
-    shift_id: ShiftId,
+    pair: AssignmentPair,
+    assigned: bool,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
-) -> Result<RuleEvaluation, AssignmentRuleError> {
-    let pair = AssignmentPair {
-        person_id,
-        shift_id,
-    };
+) -> Result<Summary, AssignmentRuleError> {
     validate_target_scope(input, rule_id, scope, pair, budget)?;
-    let mut summary = Summary::default();
+    let mut summary = if collect_repair {
+        Summary::repair()
+    } else {
+        Summary::default()
+    };
     let witness = Witness::pair(
         pair,
         EntityId::from_uuid(rule_id.as_uuid()),
         "fixed_assignment",
-        "fixed_assignment_missing",
+        if assigned {
+            "fixed_assignment_missing"
+        } else {
+            "fixed_assignment_excluded_selected"
+        },
     );
-    summary.predicate(!selected.contains(pair, budget)?, &witness, budget)?;
-    summary.finish(rule_id, budget)
+    summary.predicate(
+        selected.contains(pair, budget)? != assigned,
+        &witness,
+        budget,
+    )?;
+    Ok(summary)
 }
 
 /// Evaluates one authored Hard lock independently of any base schedule or compiler candidate.
@@ -47,13 +56,18 @@ pub(super) fn hard_lock(
     lock_id: RuleId,
     person_id: PersonId,
     shift_id: ShiftId,
+    collect_repair: bool,
     budget: &mut OperationBudget<'_>,
-) -> Result<RuleEvaluation, AssignmentRuleError> {
+) -> Result<Summary, AssignmentRuleError> {
     let pair = AssignmentPair {
         person_id,
         shift_id,
     };
-    let mut summary = Summary::default();
+    let mut summary = if collect_repair {
+        Summary::repair()
+    } else {
+        Summary::default()
+    };
     let witness = Witness::pair(
         pair,
         EntityId::from_uuid(lock_id.as_uuid()),
@@ -61,7 +75,7 @@ pub(super) fn hard_lock(
         "hard_lock_missing",
     );
     summary.predicate(!selected.contains(pair, budget)?, &witness, budget)?;
-    summary.finish(lock_id, budget)
+    Ok(summary)
 }
 
 fn validate_target_scope(

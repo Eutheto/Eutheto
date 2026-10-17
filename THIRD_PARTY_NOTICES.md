@@ -171,6 +171,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `hyper-util` | `0.1.20` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `iana-time-zone` | `0.1.65` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `iana-time-zone-haiku` | `0.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ical` | `0.11.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ico` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_collections` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_locale_core` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -1222,4 +1223,4 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 
 ## Review state
 
-1210 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+1211 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

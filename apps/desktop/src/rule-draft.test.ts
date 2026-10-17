@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseDurationDraft } from "./components/planner/duration-field";
+import { rebaseEntityDraft, resolveEntityDraftField } from "./entity-draft";
 import {
   createRuleDraft,
   parseMaximumAssignmentCountDraft,
@@ -10,7 +11,7 @@ import {
   ruleRebaseValue,
   type EditableRule,
 } from "./rule-draft";
-import { rebaseEntityDraft, resolveEntityDraftField } from "./entity-draft";
+import { messages } from "./messages";
 
 const rest: EditableRule & { readonly kind: "minimumRest" } = {
   id: "01900000-0000-7000-8000-000000000040",
@@ -29,6 +30,26 @@ const count: EditableRule & { readonly kind: "maximumAssignmentCount" } = {
   strength: "required",
   scope: { people: { kind: "all" } },
   calendarId: "01900000-0000-7000-8000-000000000042",
+  maximum: 2,
+};
+const weekends: EditableRule & { readonly kind: "maximumWorkedWeekends" } = {
+  id: "01900000-0000-7000-8000-000000000053",
+  kind: "maximumWorkedWeekends",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  maximum: 2,
+};
+const quota: EditableRule & { readonly kind: "workloadQuota" } = {
+  id: "01900000-0000-7000-8000-000000000054",
+  kind: "workloadQuota",
+  active: true,
+  strength: "required",
+  scope: { people: { kind: "all" } },
+  calendarId: count.calendarId,
+  membership: "reportingDate",
+  measure: { kind: "assignmentCount" },
+  minimum: 1,
   maximum: 2,
 };
 const consecutive: EditableRule & { readonly kind: "maximumConsecutive" } = {
@@ -204,6 +225,144 @@ describe("Maximum assignment count raw custody", () => {
     ).toEqual({ ...current, maximum: 0 });
   });
 });
+describe("Maximum worked weekends raw custody", () => {
+  it("accepts zero, rejects missing input, and preserves invalid raw syntax", () => {
+    const initial = createRuleDraft(weekends);
+    expect(ruleDraftValue(weekends.id, weekends.kind, initial).value).toEqual(weekends);
+    expect(
+      ruleDraftValue(weekends.id, weekends.kind, {
+        ...initial,
+        maximum: parseMaximumAssignmentCountDraft(""),
+      }),
+    ).toMatchObject({
+      value: null,
+      errors: { maximum: messages.ruleSetup.maximumInvalid },
+    });
+    expect(
+      ruleDraftValue(weekends.id, weekends.kind, {
+        ...initial,
+        maximum: parseMaximumAssignmentCountDraft("2e"),
+      }),
+    ).toMatchObject({
+      value: null,
+      errors: { maximum: messages.ruleSetup.maximumInvalid },
+    });
+    expect(
+      ruleDraftValue(weekends.id, weekends.kind, {
+        ...initial,
+        maximum: parseMaximumAssignmentCountDraft("0"),
+      }).value,
+    ).toEqual({ ...weekends, maximum: 0 });
+  });
+
+  it("retains invalid weekend caps through concurrent updates and accepts a repaired zero", () => {
+    const raw = {
+      ...createRuleDraft(weekends),
+      maximum: parseMaximumAssignmentCountDraft("2e"),
+    };
+    const local = ruleRebaseValue(weekends, raw);
+    expect(local).not.toBeNull();
+    if (local === null) throw new Error("Invalid weekend maximum must not block rebasing");
+    const current = { ...weekends, active: false, maximum: 4 };
+    const merged = rebaseEntityDraft(weekends, local, current);
+    if (merged.value.kind !== "maximumWorkedWeekends") throw new Error("Rebased rule changed kind");
+    expect(merged.value.maximum).toBe(4);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.maximum).toEqual(raw.maximum);
+    expect(ruleDraftValue(weekends.id, weekends.kind, rebased).value).toBeNull();
+    expect(
+      ruleDraftValue(weekends.id, weekends.kind, {
+        ...rebased,
+        maximum: parseMaximumAssignmentCountDraft("0"),
+      }).value,
+    ).toEqual({ ...current, maximum: 0 });
+  });
+
+  it("adopts a concurrent valid cap when the weekend draft is untouched", () => {
+    const changed = { ...weekends, maximum: 4 };
+    const rebased = createRuleDraft(changed, { value: weekends, raw: createRuleDraft(weekends) });
+    expect(rebased.maximum).toEqual(parseMaximumAssignmentCountDraft("4"));
+    expect(ruleDraftValue(weekends.id, weekends.kind, rebased).value).toEqual(changed);
+  });
+});
+describe("Required workload quota editor", () => {
+  it("submits exact count ranges, optional maximum, and named minute bucket without inferred credits", () => {
+    const initial = createRuleDraft(quota);
+    expect(ruleDraftValue(quota.id, quota.kind, initial).value).toEqual(quota);
+    const exact = {
+      ...initial,
+      quotaMinimum: parseMaximumAssignmentCountDraft("2"),
+      quotaMaximum: parseMaximumAssignmentCountDraft("2"),
+    };
+    expect(ruleDraftValue(quota.id, quota.kind, exact).value).toEqual({
+      ...quota,
+      minimum: 2,
+      maximum: 2,
+    });
+    const unbounded = { ...initial, quotaMaximum: parseMaximumAssignmentCountDraft("") };
+    expect(ruleDraftValue(quota.id, quota.kind, unbounded).value).toEqual({
+      ...quota,
+      maximum: undefined,
+      minimum: 1,
+    });
+    expect(
+      Object.hasOwn(ruleDraftValue(quota.id, quota.kind, unbounded).value ?? {}, "maximum"),
+    ).toBe(false);
+    const minute = {
+      ...initial,
+      quotaMeasure: "bucketMinutes" as const,
+      quotaMembership: "intersection" as const,
+      bucketId: hours.bucketId,
+    };
+    expect(ruleDraftValue(quota.id, quota.kind, minute).value).toEqual({
+      ...quota,
+      measure: { kind: "bucketMinutes", bucketId: hours.bucketId },
+      membership: "intersection",
+    });
+  });
+
+  it("rejects count intersections and inverted ranges; retains incomplete raw through a concurrent rebase", () => {
+    const initial = createRuleDraft(quota);
+    const invalid = {
+      ...initial,
+      quotaMembership: "intersection" as const,
+      quotaMinimum: parseMaximumAssignmentCountDraft("3"),
+      quotaMaximum: parseMaximumAssignmentCountDraft("2"),
+    };
+    expect(ruleDraftValue(quota.id, quota.kind, invalid).errors).toMatchObject({
+      maximum: messages.ruleSetup.quotaRangeInvalid,
+      membership: messages.ruleSetup.quotaCountMembershipInvalid,
+    });
+    const raw = {
+      ...initial,
+      quotaMinimum: parseMaximumAssignmentCountDraft("3e"),
+      calendarId: "",
+    };
+    const local = ruleRebaseValue(quota, raw);
+    if (local === null)
+      throw new Error("Incomplete quota input must not block full-record rebasing");
+    const current = { ...quota, active: false, maximum: 4 };
+    const merged = rebaseEntityDraft(quota, local, current);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.quotaMinimum).toEqual(raw.quotaMinimum);
+    expect(rebased.calendarId).toBe("");
+    expect(rebased.quotaMaximum).toEqual(parseMaximumAssignmentCountDraft("4"));
+    expect(ruleDraftValue(quota.id, quota.kind, rebased).value).toBeNull();
+  });
+  it("adopts a concurrent maximum change instead of treating cleared optional text as invalid", () => {
+    const raw = {
+      ...createRuleDraft(quota),
+      quotaMaximum: parseMaximumAssignmentCountDraft(""),
+    };
+    const changed = { ...quota, maximum: 4 };
+    const rebased = createRuleDraft(changed, { value: quota, raw });
+    expect(rebased.quotaMaximum).toEqual(parseMaximumAssignmentCountDraft("4"));
+    expect(ruleDraftValue(quota.id, quota.kind, rebased).value).toEqual(changed);
+  });
+});
+
 describe("Maximum consecutive raw mode and cap custody", () => {
   it("round-trips worked-day and assignment modes while keeping a blank new cap", () => {
     expect(createRuleDraft("new").maximum).toEqual({ raw: "", status: "empty" });
@@ -540,11 +699,6 @@ describe("Required skill mix raw qualification minima", () => {
   });
 });
 describe("Fixed assignment target custody", () => {
-  it("uses the full scope by default and produces the exact named pair", () => {
-    expect(createRuleDraft("new").scope).toEqual({ people: { kind: "all" } });
-    expect(ruleDraftValue(fixed.id, fixed.kind, createRuleDraft(fixed)).value).toEqual(fixed);
-  });
-
   it("lets native admission decide whether an inactive target may be absent", () => {
     const result = ruleDraftValue(fixed.id, fixed.kind, {
       ...createRuleDraft(fixed),
@@ -588,6 +742,34 @@ describe("Fixed assignment target custody", () => {
     expect(merged.conflicts).toContain("personId");
     if (merged.value.kind !== "fixedAssignment") throw new Error("Wrong rule kind");
     expect(merged.value.personId).toBe("01900000-0000-7000-8000-000000000049");
+  });
+
+  it("keeps a local exclusion while rebasing an independent saved person change", () => {
+    const raw = { ...createRuleDraft(fixed), assigned: false };
+    const local = ruleRebaseValue(fixed, raw);
+    if (local === null) throw new Error("Excluded pair must remain a complete rule");
+    const current = { ...fixed, personId: "01900000-0000-7000-8000-000000000049" };
+    const merged = rebaseEntityDraft(fixed, local, current);
+    expect(merged.conflicts).toEqual([]);
+    const restored = createRuleDraft(merged.value, { value: local, raw });
+    const saved = ruleDraftValue(fixed.id, fixed.kind, restored).value;
+    if (saved?.kind !== "fixedAssignment") throw new Error("Wrong saved rule");
+    expect(saved.assigned).toBe(false);
+    expect(saved.personId).toBe(current.personId);
+    expect(saved.shiftId).toBe(fixed.shiftId);
+  });
+
+  it("adopts a native exclusion without replacing an independently edited target", () => {
+    const raw = { ...createRuleDraft(fixed), shiftId: "01900000-0000-7000-8000-00000000004a" };
+    const local = ruleRebaseValue(fixed, raw);
+    if (local === null) throw new Error("Named target must rebase");
+    const merged = rebaseEntityDraft(fixed, local, { ...fixed, assigned: false });
+    expect(merged.conflicts).toEqual([]);
+    const restored = createRuleDraft(merged.value, { value: local, raw });
+    const saved = ruleDraftValue(fixed.id, fixed.kind, restored).value;
+    if (saved?.kind !== "fixedAssignment") throw new Error("Wrong saved rule");
+    expect(saved.assigned).toBe(false);
+    expect(saved.shiftId).toBe(raw.shiftId);
   });
 });
 
@@ -719,5 +901,611 @@ describe("Transition time draft custody", () => {
         locationIds: [],
       }).value,
     ).toEqual({ ...merged.value, active: false, locationIds: [] });
+  });
+});
+
+const timePreference: EditableRule & { readonly kind: "time" } = {
+  id: "01900000-0000-7000-8000-000000000054",
+  kind: "time",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "high",
+  weight: 12,
+  direction: "avoid",
+  timeWindow: {
+    kind: "weekly",
+    windows: [
+      {
+        weekdays: ["monday", "wednesday"],
+        startTime: "09:00:00",
+        endTime: "17:00:00",
+        endDayOffset: 0,
+      },
+    ],
+  },
+};
+const assignmentTargetPreference: EditableRule & { readonly kind: "assignmentTarget" } = {
+  id: "01900000-0000-7000-8000-00000000005b",
+  kind: "assignmentTarget",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "high",
+  weight: 17,
+  calendarId: "01900000-0000-7000-8000-00000000005c",
+  targetCount: 0,
+};
+const weekendTargetPreference: Extract<EditableRule, { readonly kind: "weekendTarget" }> = {
+  id: "01900000-0000-7000-8000-00000000005d",
+  kind: "weekendTarget",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "high",
+  weight: 17,
+  targetCount: 0,
+};
+const workloadBalancePreference: EditableRule & { readonly kind: "workloadBalance" } = {
+  id: "01900000-0000-7000-8000-00000000005e",
+  kind: "workloadBalance",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "veryHigh",
+  weight: 23,
+  workloadPolicyId: "01900000-0000-7000-8000-00000000005f",
+};
+const consecutiveWorkPreference: Extract<EditableRule, { readonly kind: "consecutiveWork" }> = {
+  id: "01900000-0000-7000-8000-000000000060",
+  kind: "consecutiveWork",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "high",
+  weight: 19,
+  mode: { kind: "reportingDays" },
+  assignmentTypeIds: ["01900000-0000-7000-8000-000000000061"],
+  threshold: 1,
+};
+const consecutiveWorkWeekendsPreference: Extract<
+  EditableRule,
+  { readonly kind: "consecutiveWork" }
+> = {
+  id: "01900000-0000-7000-8000-000000000062",
+  kind: "consecutiveWork",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "normal",
+  weight: 7,
+  mode: {
+    kind: "weekends",
+    calendarId: "01900000-0000-7000-8000-000000000063",
+    weekdays: ["saturday", "sunday"],
+  },
+  assignmentTypeIds: ["01900000-0000-7000-8000-000000000064"],
+  threshold: 2,
+};
+const adjacencyPreference: Extract<EditableRule, { readonly kind: "adjacency" }> = {
+  id: "01900000-0000-7000-8000-000000000065",
+  kind: "adjacency",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "normal",
+  weight: 11,
+  direction: "avoid",
+  baseScheduleId: "01900000-0000-7000-8000-000000000066",
+  maximumGapMinutes: 60,
+  mode: "either",
+};
+const baseStabilityPreference: Extract<EditableRule, { readonly kind: "baseStability" }> = {
+  id: "01900000-0000-7000-8000-000000000067",
+  kind: "baseStability",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "high",
+  weight: 12,
+  baseScheduleId: "01900000-0000-7000-8000-000000000066",
+};
+const togetherSeparatePreference: Extract<EditableRule, { readonly kind: "togetherSeparate" }> = {
+  id: "01900000-0000-7000-8000-000000000068",
+  kind: "togetherSeparate",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "low",
+  weight: 13,
+  direction: "together",
+  personIds: ["01900000-0000-7000-8000-000000000069", "01900000-0000-7000-8000-00000000006a"],
+  mode: "overlappingShifts",
+};
+const preferredCoveragePreference: Extract<EditableRule, { readonly kind: "preferredCoverage" }> = {
+  id: "01900000-0000-7000-8000-00000000006b",
+  kind: "preferredCoverage",
+  active: true,
+  scope: { people: { kind: "all" } },
+  priority: "veryHigh",
+  weight: 14,
+  coverageRequirementIds: ["01900000-0000-7000-8000-00000000006c"],
+};
+
+const preferenceFixtures: readonly EditableRule[] = [
+  timePreference,
+  {
+    id: "01900000-0000-7000-8000-000000000055",
+    kind: "assignmentType",
+    active: true,
+    scope: { people: { kind: "all" } },
+    priority: "normal",
+    weight: 4,
+    direction: "prefer",
+    assignmentTypeIds: ["01900000-0000-7000-8000-000000000056"],
+  },
+  {
+    id: "01900000-0000-7000-8000-000000000057",
+    kind: "location",
+    active: true,
+    scope: { people: { kind: "all" } },
+    priority: "low",
+    weight: 1,
+    direction: "prefer",
+    locationIds: ["01900000-0000-7000-8000-000000000058"],
+  },
+  {
+    id: "01900000-0000-7000-8000-000000000059",
+    kind: "requestedTimeOff",
+    active: true,
+    scope: { people: { kind: "all" } },
+    priority: "veryHigh",
+    weight: 99,
+    availabilityIds: ["01900000-0000-7000-8000-00000000005a"],
+  },
+  assignmentTargetPreference,
+  weekendTargetPreference,
+  workloadBalancePreference,
+  consecutiveWorkPreference,
+  consecutiveWorkWeekendsPreference,
+  adjacencyPreference,
+  baseStabilityPreference,
+  togetherSeparatePreference,
+  preferredCoveragePreference,
+];
+
+describe("Preference draft custody", () => {
+  it.each(preferenceFixtures)("round-trips the supported %s preference fields", (value) => {
+    const draft = createRuleDraft(value);
+    expect(ruleDraftValue(value.id, value.kind, draft).value).toEqual(value);
+  });
+
+  it("rejects zero preference weight on its own field", () => {
+    const draft = createRuleDraft(timePreference);
+    const result = ruleDraftValue(timePreference.id, timePreference.kind, {
+      ...draft,
+      weight: parseMaximumAssignmentCountDraft("0"),
+    });
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      weight: messages.ruleSetup.preferenceWeightInvalid,
+    });
+  });
+
+  it("retains a saved typed preference while time input is incomplete", () => {
+    const draft = createRuleDraft(timePreference);
+    const raw: typeof draft = {
+      ...draft,
+      weight: parseMaximumAssignmentCountDraft(""),
+      timeWindow: { kind: "instant", startsAt: "", endsAt: "" },
+    };
+    const local = ruleRebaseValue(timePreference, raw);
+    expect(local).toEqual(timePreference);
+    if (local === null) throw new Error("Incomplete time input must not block rebasing");
+    const rebased = createRuleDraft(timePreference, { value: local, raw });
+    expect(rebased.weight).toEqual(raw.weight);
+    expect(rebased.timeWindow).toEqual(raw.timeWindow);
+  });
+
+  it("reports local preference weight and weekly-window errors", () => {
+    const draft = createRuleDraft(timePreference);
+    const result = ruleDraftValue(timePreference.id, timePreference.kind, {
+      ...draft,
+      weight: parseMaximumAssignmentCountDraft("0"),
+      timeWindow: { kind: "weekly", windows: [] },
+    });
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      "timeWindow.windows": messages.ruleSetup.timeWindowRequired,
+      weight: messages.ruleSetup.preferenceWeightInvalid,
+    });
+  });
+
+  it("reports an independent weekly-window conflict and preserves invalid weight raw input", () => {
+    const draft = createRuleDraft(timePreference);
+    if (draft.timeWindow.kind !== "weekly" || timePreference.timeWindow.kind !== "weekly")
+      throw new Error("Expected weekly time preference fixtures");
+    const savedWindow = draft.timeWindow.windows[0];
+    const currentWindow = timePreference.timeWindow.windows[0];
+    if (savedWindow === undefined || currentWindow === undefined)
+      throw new Error("Expected a weekly time preference window");
+    const raw: typeof draft = {
+      ...draft,
+      weight: parseMaximumAssignmentCountDraft("0"),
+      timeWindow: {
+        ...draft.timeWindow,
+        windows: [{ ...savedWindow, startTime: "08:00:00" }],
+      },
+    };
+    const local = ruleRebaseValue(timePreference, raw);
+    if (local === null) throw new Error("Invalid preference weight must not block rebasing");
+    const current: typeof timePreference = {
+      ...timePreference,
+      timeWindow: {
+        ...timePreference.timeWindow,
+        windows: [{ ...currentWindow, startTime: "10:00:00" }],
+      },
+    };
+    const merged = rebaseEntityDraft(timePreference, local, current);
+    expect(merged.conflicts).toContain("timeWindow");
+    if (local.kind !== "time" || merged.value.kind !== "time")
+      throw new Error("Time preference rebase changed the record kind");
+    expect(merged.value.timeWindow).toEqual(local.timeWindow);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.weight).toEqual(raw.weight);
+    expect(rebased.timeWindow).toEqual(raw.timeWindow);
+    expect(ruleDraftValue(timePreference.id, timePreference.kind, rebased).value).toBeNull();
+    expect(ruleDraftValue(timePreference.id, timePreference.kind, rebased).errors).toEqual({
+      weight: messages.ruleSetup.preferenceWeightInvalid,
+    });
+  });
+  it("validates adjacency references, direction, mode, and bounded gap input", () => {
+    const draft = createRuleDraft(adjacencyPreference);
+    const result = ruleDraftValue(adjacencyPreference.id, adjacencyPreference.kind, {
+      ...draft,
+      baseScheduleId: "",
+      direction: "later" as typeof draft.direction,
+      mode: "invalid" as typeof draft.mode,
+      maximumGapMinutes: parseMaximumAssignmentCountDraft("4294967296"),
+    });
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      baseScheduleId: messages.ruleSetup.baseScheduleRequired,
+      direction: messages.ruleSetup.preferenceDirectionInvalid,
+      mode: messages.ruleSetup.adjacencyModeInvalid,
+      maximumGapMinutes: messages.ruleSetup.adjacencyGapInvalid,
+    });
+  });
+
+  it("keeps incomplete adjacency input local while rebasing typed values", () => {
+    const draft = createRuleDraft(adjacencyPreference);
+    const raw = {
+      ...draft,
+      baseScheduleId: "",
+      maximumGapMinutes: parseMaximumAssignmentCountDraft(""),
+    };
+    expect(ruleRebaseValue(adjacencyPreference, raw)).toEqual(adjacencyPreference);
+    const local = ruleRebaseValue(adjacencyPreference, raw);
+    if (local === null) throw new Error("Incomplete adjacency input must not block rebasing");
+    const rebased = createRuleDraft(adjacencyPreference, { value: local, raw });
+    expect(rebased.baseScheduleId).toBe("");
+    expect(rebased.maximumGapMinutes).toEqual(raw.maximumGapMinutes);
+    expect(
+      ruleDraftValue(adjacencyPreference.id, adjacencyPreference.kind, rebased).value,
+    ).toBeNull();
+  });
+
+  it("adopts a new native base-schedule field when a different preference kind replaces a stale draft", () => {
+    const previous = preferenceFixtures.find((rule) => rule.kind === "assignmentType");
+    if (previous?.kind !== "assignmentType") throw new Error("Missing assignment type fixture");
+    const raw = { ...createRuleDraft(previous), baseScheduleId: "" };
+    const updated = { ...baseStabilityPreference, id: previous.id };
+    const rebased = createRuleDraft(updated, { value: previous, raw });
+    expect(rebased.baseScheduleId).toBe(updated.baseScheduleId);
+    expect(ruleDraftValue(updated.id, updated.kind, rebased).errors).toEqual({});
+  });
+
+  it("rejects duplicate together/separate people and invalid group controls", () => {
+    const draft = createRuleDraft(togetherSeparatePreference);
+    const firstPerson = draft.personIds[0];
+    if (firstPerson === undefined) throw new Error("Expected a selected person");
+    const result = ruleDraftValue(togetherSeparatePreference.id, togetherSeparatePreference.kind, {
+      ...draft,
+      direction: "near" as typeof draft.direction,
+      mode: "invalid" as typeof draft.mode,
+      personIds: [firstPerson, firstPerson],
+    });
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      direction: messages.ruleSetup.groupDirectionInvalid,
+      mode: messages.ruleSetup.togetherSeparateModeInvalid,
+      personIds: messages.ruleSetup.togetherSeparateDuplicatePeople,
+    });
+  });
+
+  it("requires a base schedule for base-stability preferences", () => {
+    const draft = createRuleDraft(baseStabilityPreference);
+    const result = ruleDraftValue(baseStabilityPreference.id, baseStabilityPreference.kind, {
+      ...draft,
+      baseScheduleId: "",
+    });
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      baseScheduleId: messages.ruleSetup.baseScheduleRequired,
+    });
+  });
+});
+describe("Consecutive work preference draft custody", () => {
+  it("round-trips reporting-day and weekend modes with explicit assignment types", () => {
+    for (const value of [consecutiveWorkPreference, consecutiveWorkWeekendsPreference]) {
+      const draft = createRuleDraft(value);
+      expect(ruleDraftValue(value.id, value.kind, draft).value).toEqual(value);
+    }
+  });
+
+  it("reports threshold and active required-field errors without changing raw intent", () => {
+    const draft = createRuleDraft(consecutiveWorkPreference);
+    const invalid = {
+      ...draft,
+      threshold: parseMaximumAssignmentCountDraft(""),
+      assignmentTypeIds: [],
+    };
+    const result = ruleDraftValue(
+      consecutiveWorkPreference.id,
+      consecutiveWorkPreference.kind,
+      invalid,
+    );
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      threshold: messages.ruleSetup.consecutiveWorkThresholdInvalid,
+      assignmentTypeIds: messages.ruleSetup.consecutiveWorkAssignmentTypesRequired,
+    });
+    expect(invalid.threshold).toEqual(parseMaximumAssignmentCountDraft(""));
+    expect(invalid.assignmentTypeIds).toEqual([]);
+  });
+
+  it("rebases a changed weekend mode as one whole nested field", () => {
+    const draft = createRuleDraft(consecutiveWorkWeekendsPreference);
+    if (typeof draft.mode !== "object" || draft.mode.kind !== "weekends")
+      throw new Error("Expected weekend mode draft");
+    const savedMode = consecutiveWorkWeekendsPreference.mode;
+    if (savedMode.kind !== "weekends") throw new Error("Expected saved weekend mode");
+    const raw = {
+      ...draft,
+      mode: {
+        ...draft.mode,
+        calendarId: "01900000-0000-7000-8000-000000000065",
+        weekdays: ["saturday"] as const,
+      },
+    };
+    const local = ruleRebaseValue(consecutiveWorkWeekendsPreference, raw);
+    if (local === null || local.kind !== "consecutiveWork" || local.mode.kind !== "weekends")
+      throw new Error("Valid weekend mode must remain rebaseable");
+    expect(local.mode).toEqual(raw.mode);
+    const current = {
+      ...consecutiveWorkWeekendsPreference,
+      mode: {
+        kind: "weekends" as const,
+        calendarId: savedMode.calendarId,
+        weekdays: ["sunday"] as const,
+      },
+    };
+    const merged = rebaseEntityDraft(consecutiveWorkWeekendsPreference, local, current);
+    expect(merged.conflicts).toContain("mode");
+    expect(merged.value.mode).toEqual(local.mode);
+  });
+
+  it("preserves inactive invalid threshold, assignment types and weekend raw fields", () => {
+    const inactive = { ...consecutiveWorkWeekendsPreference, active: false };
+    const draft = createRuleDraft(inactive);
+    if (typeof draft.mode !== "object" || draft.mode.kind !== "weekends")
+      throw new Error("Expected weekend mode draft");
+    const raw = {
+      ...draft,
+      threshold: parseMaximumAssignmentCountDraft(""),
+      assignmentTypeIds: [],
+      mode: { ...draft.mode, calendarId: "", weekdays: [] },
+    };
+    const local = ruleRebaseValue(inactive, raw);
+    if (local === null) throw new Error("Inactive invalid input must remain rebaseable");
+    const rebased = createRuleDraft(local, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.threshold).toEqual(raw.threshold);
+    expect(rebased.assignmentTypeIds).toEqual([]);
+    expect(rebased.mode).toEqual(raw.mode);
+    expect(ruleDraftValue(inactive.id, inactive.kind, rebased)).toEqual({
+      value: null,
+      errors: { threshold: messages.ruleSetup.consecutiveWorkThresholdInvalid },
+    });
+  });
+
+  it("allows inactive empty required collections while retaining the inactive meaning", () => {
+    const inactive = { ...consecutiveWorkPreference, active: false };
+    const draft = createRuleDraft(inactive);
+    const value = ruleDraftValue(inactive.id, inactive.kind, {
+      ...draft,
+      assignmentTypeIds: [],
+      threshold: parseMaximumAssignmentCountDraft("0"),
+    });
+    expect(value.errors).toEqual({});
+    expect(value.value).toMatchObject({
+      active: false,
+      assignmentTypeIds: [],
+      threshold: 0,
+    });
+  });
+});
+describe("Workload balance preference draft custody", () => {
+  it("rejects a policy reference outside the persisted singleton without mutating raw input", () => {
+    const draft = createRuleDraft(workloadBalancePreference);
+    const invalid = {
+      ...draft,
+      workloadPolicyId: "01900000-0000-7000-8000-000000000060",
+    };
+    const result = ruleDraftValue(
+      workloadBalancePreference.id,
+      workloadBalancePreference.kind,
+      invalid,
+      [workloadBalancePreference.workloadPolicyId],
+    );
+    expect(result.value).toBeNull();
+    expect(result.errors).toEqual({
+      workloadPolicyId: messages.ruleSetup.fields.workloadPolicyInvalid,
+    });
+    expect(draft.workloadPolicyId).toBe(workloadBalancePreference.workloadPolicyId);
+    expect(invalid.workloadPolicyId).toBe("01900000-0000-7000-8000-000000000060");
+  });
+
+  it("retains inactive raw policy intent while rebasing incomplete input", () => {
+    const inactive = { ...workloadBalancePreference, active: false };
+    const raw = { ...createRuleDraft(inactive), workloadPolicyId: "" };
+    const local = ruleRebaseValue(inactive, raw);
+    expect(local).toEqual(inactive);
+    if (local === null) throw new Error("Inactive incomplete policy input must remain rebaseable");
+    const rebased = createRuleDraft(inactive, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.workloadPolicyId).toBe("");
+    expect(
+      ruleDraftValue(inactive.id, inactive.kind, rebased, [
+        workloadBalancePreference.workloadPolicyId,
+      ]),
+    ).toEqual({
+      value: null,
+      errors: { workloadPolicyId: messages.ruleSetup.fields.workloadPolicyRequired },
+    });
+  });
+});
+describe("Assignment target preference draft custody", () => {
+  it("accepts a zero target count and round-trips its calendar, priority and weight", () => {
+    const draft = createRuleDraft(assignmentTargetPreference);
+    expect(draft.targetCount).toEqual(parseMaximumAssignmentCountDraft("0"));
+    expect(
+      ruleDraftValue(assignmentTargetPreference.id, assignmentTargetPreference.kind, draft).value,
+    ).toEqual(assignmentTargetPreference);
+  });
+  it("rebases a changed typed target count as an independent whole field", () => {
+    const raw = {
+      ...createRuleDraft(assignmentTargetPreference),
+      targetCount: parseMaximumAssignmentCountDraft("3"),
+    };
+    const local = ruleRebaseValue(assignmentTargetPreference, raw);
+    if (local === null) throw new Error("Valid target input must remain rebaseable");
+    const current = { ...assignmentTargetPreference, targetCount: 4 };
+    const merged = rebaseEntityDraft(assignmentTargetPreference, local, current);
+    expect(merged.conflicts).toContain("targetCount");
+    if (merged.value.kind !== "assignmentTarget")
+      throw new Error("Assignment target rebase changed the record kind");
+    expect(merged.value.targetCount).toBe(3);
+  });
+
+  it("keeps invalid target input while rebasing independent saved fields", () => {
+    const draft = createRuleDraft(assignmentTargetPreference);
+    const raw = {
+      ...draft,
+      targetCount: parseMaximumAssignmentCountDraft("2e"),
+      calendarId: "",
+      priority: "low" as const,
+    };
+    const local = ruleRebaseValue(assignmentTargetPreference, raw);
+    if (local === null) throw new Error("Invalid target input must not block rebasing");
+    const current = {
+      ...assignmentTargetPreference,
+      active: false,
+      priority: "veryHigh" as const,
+      weight: 22,
+      calendarId: "01900000-0000-7000-8000-00000000005d",
+      targetCount: 4,
+    };
+    const merged = rebaseEntityDraft(assignmentTargetPreference, local, current);
+    if (merged.value.kind !== "assignmentTarget")
+      throw new Error("Assignment target rebase changed the record kind");
+    expect(merged.conflicts).toEqual(expect.arrayContaining(["calendarId", "priority"]));
+    expect(merged.value.active).toBe(false);
+    expect(merged.value.weight).toBe(22);
+    expect(merged.value.priority).toBe("low");
+    expect(merged.value.calendarId).toBe("");
+    expect(merged.value.targetCount).toBe(4);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.targetCount).toEqual(raw.targetCount);
+    expect(rebased.calendarId).toBe("");
+    expect(
+      ruleDraftValue(assignmentTargetPreference.id, assignmentTargetPreference.kind, rebased),
+    ).toEqual({
+      value: null,
+      errors: {
+        calendarId: messages.ruleSetup.calendarRequired,
+        targetCount: messages.ruleSetup.targetCountInvalid,
+      },
+    });
+  });
+
+  it("retains inactive target fields as raw intent until they are repaired", () => {
+    const inactive = { ...assignmentTargetPreference, active: false };
+    const draft = createRuleDraft(inactive);
+    const raw = { ...draft, targetCount: parseMaximumAssignmentCountDraft("") };
+    const local = ruleRebaseValue(inactive, raw);
+    expect(local).toEqual(inactive);
+    if (local === null) throw new Error("Inactive incomplete target input must remain rebaseable");
+    const rebased = createRuleDraft(inactive, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.targetCount).toEqual(raw.targetCount);
+    expect(ruleDraftValue(inactive.id, inactive.kind, rebased).value).toBeNull();
+  });
+});
+describe("Weekend target preference draft custody", () => {
+  it("round-trips a zero total target", () => {
+    const draft = createRuleDraft(weekendTargetPreference);
+    expect(draft.targetCount).toEqual(parseMaximumAssignmentCountDraft("0"));
+    expect(
+      ruleDraftValue(weekendTargetPreference.id, weekendTargetPreference.kind, draft).value,
+    ).toEqual(weekendTargetPreference);
+  });
+
+  it("keeps invalid target input while rebasing unrelated saved fields", () => {
+    const draft = createRuleDraft(weekendTargetPreference);
+    const raw = {
+      ...draft,
+      targetCount: parseMaximumAssignmentCountDraft("2e"),
+      priority: "low" as const,
+    };
+    const local = ruleRebaseValue(weekendTargetPreference, raw);
+    if (local === null) throw new Error("Invalid weekend target must not block rebasing");
+    const current = {
+      ...weekendTargetPreference,
+      active: false,
+      priority: "veryHigh" as const,
+      weight: 22,
+      targetCount: 4,
+    };
+    const merged = rebaseEntityDraft(weekendTargetPreference, local, current);
+    if (merged.value.kind !== "weekendTarget")
+      throw new Error("Weekend target rebase changed the record kind");
+    expect(merged.conflicts).toContain("priority");
+    expect(merged.value.active).toBe(false);
+    expect(merged.value.weight).toBe(22);
+    expect(merged.value.priority).toBe("low");
+    expect(merged.value.targetCount).toBe(4);
+    const rebased = createRuleDraft(merged.value, { value: local, raw });
+    expect(rebased.targetCount).toEqual(raw.targetCount);
+    expect(
+      ruleDraftValue(weekendTargetPreference.id, weekendTargetPreference.kind, rebased),
+    ).toEqual({
+      value: null,
+      errors: { targetCount: messages.ruleSetup.targetCountInvalid },
+    });
+  });
+
+  it("recovers an inactive invalid target without losing inactive meaning", () => {
+    const inactive = { ...weekendTargetPreference, active: false };
+    const raw = {
+      ...createRuleDraft(inactive),
+      targetCount: parseMaximumAssignmentCountDraft(""),
+    };
+    const local = ruleRebaseValue(inactive, raw);
+    expect(local).toEqual(inactive);
+    if (local === null) throw new Error("Inactive invalid target must remain rebaseable");
+    const rebased = createRuleDraft(inactive, { value: local, raw });
+    expect(rebased.active).toBe(false);
+    expect(rebased.targetCount).toEqual(raw.targetCount);
+    expect(ruleDraftValue(inactive.id, inactive.kind, rebased).value).toBeNull();
+    const repaired = {
+      ...rebased,
+      targetCount: parseMaximumAssignmentCountDraft("0"),
+    };
+    expect(ruleDraftValue(inactive.id, inactive.kind, repaired).value).toEqual({
+      ...inactive,
+      targetCount: 0,
+    });
   });
 });

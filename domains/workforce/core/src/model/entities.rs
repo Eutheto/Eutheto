@@ -6,8 +6,10 @@ use crate::ids::{
     AssignmentTypeId, AvailabilityId, CoverageRequirementId, LocationId, QualificationId, ShiftId,
     ShiftTemplateId, TeamId, WorkCalendarId, WorkloadBucketId,
 };
+use eutheto_domain_ir::RunBaselineOriginal;
 use eutheto_types::{
-    AssignmentId, EntityId, PersonId, ResolvedLocalTime, Revision, Rfc3339Timestamp, SolutionId,
+    AssignmentId, CommandId, EntityId, PersonId, ResolvedLocalTime, Revision, Rfc3339Timestamp,
+    ScenarioId, SolutionId,
 };
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
@@ -346,6 +348,42 @@ pub struct BaseSchedule {
     pub source_solution_id: SolutionId,
     pub source_revision: Revision,
     pub assignments: Vec<AssignmentPair>,
+}
+
+/// Editable unverified starting pairs; never an accepted result or manual-admission receipt.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalStartingPlan {
+    pub schema_version: u32,
+    pub id: EntityId,
+    pub name: String,
+    pub assignments: Vec<AssignmentPair>,
+    /// Describes the original import, not necessarily the current edited/remapped selection.
+    pub original_import: ExternalStartingPlanImport,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalStartingPlanImport {
+    pub source_blake3: String,
+    pub pair_content_hash: String,
+}
+
+/// Immutable complete distance baseline. Imported content is data, not native admission authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManualSelection {
+    pub schema_version: u32,
+    pub id: EntityId,
+    pub original: RunBaselineOriginal,
+    pub admission_source_scenario_id: ScenarioId,
+    pub admission_source_revision: Revision,
+    pub admission_source_document_hash: String,
+    /// Indexed local journal lookup key; public possession does not authenticate admission.
+    pub admission_command_id: CommandId,
+    /// Ordered unique complete selection; an empty vector is explicit retained content.
+    pub assignments: Vec<AssignmentPair>,
+    pub checksum: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

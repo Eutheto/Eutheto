@@ -1,6 +1,5 @@
 use super::{
-    AssignmentConstructionIssue, AssignmentRuleError,
-    budget::{OperationBudget, count},
+    AssignmentConstructionIssue, AssignmentRuleError, budget::OperationBudget,
     input::AssignmentInput,
 };
 use crate::ids::WorkCalendarId;
@@ -8,7 +7,7 @@ use crate::{
     model::WorkforceEntity,
     temporal::{CalendarWindow, reporting_window_for_calendar},
 };
-use eutheto_types::{CancellationToken, OperationControl, Rfc3339Timestamp, ScenarioDocument};
+use eutheto_types::{Rfc3339Timestamp, ScenarioDocument};
 use jiff::civil::Date;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -64,21 +63,11 @@ impl ReportingWindows {
                 AssignmentConstructionIssue::InvalidRecord,
             ));
         };
-        let cancellation = match budget.control() {
-            Some(OperationControl::Cancellation(token)) => token.clone(),
-            _ => CancellationToken::new(),
-        };
-        budget.step()?;
-        let interval_count = match &calendar.period {
-            crate::model::CalendarPeriod::Custom { intervals } => count(intervals.len())?,
-            _ => 1,
-        };
-        // Temporal resolution checks its own cancellation token; charge the bounded source scan
-        // here as well so custom calendars cannot hide work from the shared operation budget.
-        budget.steps(interval_count)?;
         let period =
-            reporting_window_for_calendar(document, calendar_id, calendar, date, &cancellation)?
-                .map(ReportingPeriod::from_window);
+            reporting_window_for_calendar(document, calendar_id, calendar, date, &mut |step| {
+                budget.calendar_step(step)
+            })?
+            .map(ReportingPeriod::from_window);
         budget.check()?;
         // This retained cache is bounded by the operation's own record/item/byte ceilings.
         budget.reserve(1, 1, 128)?;

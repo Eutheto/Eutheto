@@ -59,6 +59,16 @@ pub enum WorkforcePreference {
         calendar_id: WorkCalendarId,
         target_count: u32,
     },
+    /// Each scoped person targets this many distinct local worked weekends across the entire
+    /// planning horizon; only source-owned shifts count, including overnight tails.
+    WeekendTarget {
+        id: RuleId,
+        active: bool,
+        scope: Scope,
+        priority: PreferencePriority,
+        weight: u32,
+        target_count: u32,
+    },
     WorkloadBalance {
         id: RuleId,
         active: bool,
@@ -154,6 +164,14 @@ impl WorkforcePreference {
                 ..
             }
             | Self::AssignmentTarget {
+                id,
+                active,
+                scope,
+                priority,
+                weight,
+                ..
+            }
+            | Self::WeekendTarget {
                 id,
                 active,
                 scope,

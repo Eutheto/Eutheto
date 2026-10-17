@@ -8,7 +8,11 @@ use super::{
         UPDATE_PREFERENCE, UPDATE_RULE,
     },
 };
-use crate::validation::common::{Result, invalid};
+use crate::{
+    model::WorkforceEntity,
+    validation::common::{Result, invalid},
+};
+use eutheto_domain_api::DomainPackError;
 use eutheto_types::{DomainCommandEnvelope, OperationControl, ScenarioDocument};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -26,18 +30,14 @@ pub(super) fn apply_one(
         | REMOVE_OCCURRENCE_IDENTITIES
         | DETACH_SHIFT
         | REATTACH_SHIFT => super::occurrences::apply(document, envelope, changes, control),
-        ADD_ENTITY | UPDATE_ENTITY => {
-            let payload: EntityPayload = decode(&envelope.payload)?;
-            effect::mutate(
-                &mut domain.entities,
-                payload.entity.id(),
-                record_operation(envelope, &effect::ENTITIES)?,
-                &effect::ENTITIES,
-                changes,
-            )
-        }
+        ADD_ENTITY | UPDATE_ENTITY => write_entity(document, envelope, changes),
         REMOVE_ENTITY => {
             let payload: EntityTarget = decode(&envelope.payload)?;
+            require_ordinary_entity(
+                false,
+                domain.entities.get(&payload.entity_id),
+                "/payload/entityId",
+            )?;
             effect::mutate(
                 &mut domain.entities,
                 payload.entity_id,
@@ -106,10 +106,49 @@ pub(super) fn apply_one(
                 changes,
             )
         }
-        _ => Err(eutheto_domain_api::DomainPackError::UnknownCommand(
+        _ => Err(DomainPackError::UnknownCommand(
             envelope.command_type.clone(),
         )),
     }
+}
+
+fn write_entity(
+    document: &mut ScenarioDocument,
+    envelope: &DomainCommandEnvelope,
+    changes: &mut Changes,
+) -> Result<Effect> {
+    let payload: EntityPayload = decode(&envelope.payload)?;
+    require_ordinary_entity(
+        matches!(&payload.entity, WorkforceEntity::ManualSelection(_)),
+        document.domain.entities.get(&payload.entity.id()),
+        "/payload/entity",
+    )?;
+    effect::mutate(
+        &mut document.domain.entities,
+        payload.entity.id(),
+        record_operation(envelope, &effect::ENTITIES)?,
+        &effect::ENTITIES,
+        changes,
+    )
+}
+
+fn require_ordinary_entity(
+    incoming_manual: bool,
+    current: Option<&Value>,
+    path: &str,
+) -> Result<()> {
+    if incoming_manual
+        || current
+            .and_then(|record| record.get("kind"))
+            .and_then(Value::as_str)
+            == Some("manualSelection")
+    {
+        return Err(invalid(
+            path,
+            "manual selection can only be changed by native admission or trusted history",
+        ));
+    }
+    Ok(())
 }
 
 fn decode<T: DeserializeOwned>(value: &Value) -> Result<T> {

@@ -13,6 +13,22 @@ Canonical current portable scenario and bundle serialization, bounded nonsecret 
 
 Persisted solve output is secondary to the database commit. The core service publishes only the reloaded store-owned portable result; output failure cannot roll back or relabel that committed result.
 
+Native unaccepted/legacy results use the closed `eutheto/archival-result` V1
+envelope and require host capability `eutheto.portable.archival-result` version1.
+The root `resultId`, `scenarioId` and `scenarioRevision` bind live ownership and
+the exact source. `archive` preserves original identities, recorded status/flag,
+timestamp and solution/score/verification JSON, with optional explanation/evidence
+fields absent for SQL NULL and present for JSON null. These facts confer no
+acceptance or verification authority.
+
+Copy remaps only live roots; original archival identities and JSON remain inert.
+Content, secret, depth, byte and asset checks still traverse the entire record.
+Selected results require an exact current or retained historical source. An
+unavailable native-only source or unsafe native payload refuses result-bearing
+export rather than dropping data; excluding results avoids native payload
+projection. Older readers must reject the required host capability, not deep-remap
+the unknown archive. No Workforce schema or accepted-result version is redefined.
+
 ## Verification
 
 `just test-portable` exercises serialization, malformed input and publication boundaries. Native packaging and host-specific file-selection guarantees require their separate platform evidence.

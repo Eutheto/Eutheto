@@ -152,34 +152,16 @@ pub fn decode_assignments_csv<R: Read + ?Sized>(
     reader: &mut R,
     control: &OperationControl,
 ) -> Result<Vec<AssignmentPair>, AssignmentsCsvError> {
-    check(control)?;
-    let mut raw = RawInput::new(reader);
-    let mut record = Record::new();
     let mut pairs = BTreeMap::new();
-    loop {
-        raw.fill(control)?;
-        for &byte in &raw.bytes[..raw.valid] {
-            if record.push(byte)? {
-                record.finish(&mut pairs, control)?;
-            }
+    scan_assignments_csv(reader, control, |row, id, pair| {
+        if pairs.insert(id, pair).is_some() {
+            return Err(AssignmentsCsvError::new(
+                AssignmentsCsvErrorCode::DuplicateAssignment,
+                Some(row),
+            ));
         }
-        if raw.eof {
-            break;
-        }
-    }
-    if matches!(record.state, State::Quoted | State::CarriageReturn) {
-        return Err(record.error(AssignmentsCsvErrorCode::MalformedCsv));
-    }
-    if record.used != 0 {
-        record.finish(&mut pairs, control)?;
-    }
-    if record.row <= 2 {
-        return Err(record.error(if record.row == 1 {
-            AssignmentsCsvErrorCode::InvalidVersion
-        } else {
-            AssignmentsCsvErrorCode::InvalidHeader
-        }));
-    }
+        Ok(())
+    })?;
     let mut output = Vec::with_capacity(pairs.len());
     for (_, pair) in pairs {
         check(control)?;
@@ -187,6 +169,46 @@ pub fn decode_assignments_csv<R: Read + ?Sized>(
     }
     check(control)?;
     Ok(output)
+}
+
+/// Checks strict framing and pair identities while preserving original record numbers.
+/// The visitor owns duplicate rejection and retention; nothing may be published before success.
+pub(crate) fn scan_assignments_csv<R: Read + ?Sized, E: From<AssignmentsCsvError>>(
+    reader: &mut R,
+    control: &OperationControl,
+    mut visit: impl FnMut(u32, DomainAssignmentId, AssignmentPair) -> Result<(), E>,
+) -> Result<u32, E> {
+    check(control)?;
+    let mut raw = RawInput::new(reader);
+    let mut record = Record::new();
+    loop {
+        raw.fill(control)?;
+        for &byte in &raw.bytes[..raw.valid] {
+            if record.push(byte)? {
+                record.finish(&mut visit, control)?;
+            }
+        }
+        if raw.eof {
+            break;
+        }
+    }
+    if matches!(record.state, State::Quoted | State::CarriageReturn) {
+        return Err(record.error(AssignmentsCsvErrorCode::MalformedCsv).into());
+    }
+    if record.used != 0 {
+        record.finish(&mut visit, control)?;
+    }
+    if record.row <= 2 {
+        return Err(record
+            .error(if record.row == 1 {
+                AssignmentsCsvErrorCode::InvalidVersion
+            } else {
+                AssignmentsCsvErrorCode::InvalidHeader
+            })
+            .into());
+    }
+    check(control)?;
+    Ok(record.row - 1)
 }
 
 struct RawInput<'a, R: Read + ?Sized> {
@@ -350,19 +372,19 @@ impl Record {
         Ok(false)
     }
 
-    fn finish(
+    fn finish<E: From<AssignmentsCsvError>>(
         &mut self,
-        pairs: &mut BTreeMap<DomainAssignmentId, AssignmentPair>,
+        visit: &mut impl FnMut(u32, DomainAssignmentId, AssignmentPair) -> Result<(), E>,
         control: &OperationControl,
-    ) -> Result<(), AssignmentsCsvError> {
+    ) -> Result<(), E> {
         check(control)?;
         if self.fields != if self.row == 1 { 2 } else { 3 } {
-            return Err(self.error(AssignmentsCsvErrorCode::FieldCount));
+            return Err(self.error(AssignmentsCsvErrorCode::FieldCount).into());
         }
         // There is no BOM/encoding guessing. In particular csv-core must not silently
         // discard a BOM and thereby turn an unknown version record into valid framing.
         if self.bytes[..self.used].starts_with(&[0xef, 0xbb, 0xbf]) {
-            return Err(self.error(AssignmentsCsvErrorCode::MalformedCsv));
+            return Err(self.error(AssignmentsCsvErrorCode::MalformedCsv).into());
         }
         self.bytes[self.used] = b'\n';
         let mut decoded = [0; 3 * MAX_ASSIGNMENTS_CSV_CELL_BYTES + 1];
@@ -374,7 +396,7 @@ impl Record {
         );
         if result != ReadRecordResult::Record || consumed != self.used + 1 || fields != self.fields
         {
-            return Err(self.error(AssignmentsCsvErrorCode::MalformedCsv));
+            return Err(self.error(AssignmentsCsvErrorCode::MalformedCsv).into());
         }
         let mut cells = [""; 3];
         let mut start = 0;
@@ -385,20 +407,16 @@ impl Record {
         }
         if self.row == 1 {
             if cells[..2] != ["eutheto/assignments", "1"] {
-                return Err(self.error(AssignmentsCsvErrorCode::InvalidVersion));
+                return Err(self.error(AssignmentsCsvErrorCode::InvalidVersion).into());
             }
         } else if self.row == 2 {
             if cells != ["assignment_id", "person_id", "shift_id"] {
-                return Err(self.error(AssignmentsCsvErrorCode::InvalidHeader));
+                return Err(self.error(AssignmentsCsvErrorCode::InvalidHeader).into());
             }
         } else {
             let (id, pair) = decode_pair(cells)
                 .ok_or_else(|| self.error(AssignmentsCsvErrorCode::InvalidIdentity))?;
-            // Canonical pair agreement makes duplicate IDs and duplicate pairs the same
-            // condition. Each insertion performs bounded logarithmic sorting work.
-            if pairs.insert(id, pair).is_some() {
-                return Err(self.error(AssignmentsCsvErrorCode::DuplicateAssignment));
-            }
+            visit(self.row, id, pair)?;
         }
         check(control)?;
         self.row += 1;

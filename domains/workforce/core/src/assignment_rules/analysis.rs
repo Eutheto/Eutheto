@@ -11,6 +11,8 @@ pub(super) mod consecutive;
 mod count;
 #[path = "compiler_mutual.rs"]
 mod mutual;
+#[path = "compiler_quota.rs"]
+mod quota;
 
 #[path = "compiler_overlap.rs"]
 mod overlap;
@@ -21,9 +23,12 @@ mod transition;
 #[path = "compiler_hours.rs"]
 pub(super) mod hours;
 
+use super::compiler_weekend;
+use super::weekends::WeekendPlan;
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentModelEstimate, AssignmentRuleError,
     AssignmentRuleLimit, InstantInterval, PairRejection, RejectionCause, RequiredRulePartition,
+    SelectionIssueKind,
     budget::{MAX_INSPECTED_PAIRS, OperationBudget, add, count, within},
     input::{AssignmentInput, ShiftDefinition, ShiftMetadata},
     intervals::availability_intervals,
@@ -33,8 +38,8 @@ use crate::{
     ids::{LocationId, ShiftId, WorkCalendarId},
     model::{
         AssignmentLock, AssignmentPair, Availability, AvailabilityKind, CategoryPair, Coverage,
-        LockState, PairingMode, Person, QualificationMinimum, Scope, WorkforceEntity,
-        WorkforceRule,
+        LockState, PairingMode, Person, QualificationMinimum, RequiredStrength, Scope,
+        WorkforceEntity, WorkforceRule, WorkloadQuotaMeasure,
     },
     temporal::ResolvedShift,
 };
@@ -95,6 +100,14 @@ pub(super) enum Predicate {
         period: ReportingPeriod,
         maximum: u32,
     },
+    WorkloadQuota {
+        person: PersonId,
+        calendar_id: WorkCalendarId,
+        period: ReportingPeriod,
+        minimum: u32,
+        maximum: Option<u32>,
+        measure: WorkloadQuotaMeasure,
+    },
     Overlap {
         person: PersonId,
         first: ShiftId,
@@ -129,8 +142,13 @@ pub(super) enum Predicate {
     FixedAssignment {
         person: PersonId,
         shift: ShiftId,
+        assigned: bool,
     },
     MaximumConsecutive {
+        person: PersonId,
+        definition: usize,
+    },
+    MaximumWorkedWeekends {
         person: PersonId,
         definition: usize,
     },
@@ -152,6 +170,7 @@ pub(super) struct PlannedConstraint {
 pub(super) struct Plan {
     pub definitions: Vec<Definition>,
     pub constraints: Vec<PlannedConstraint>,
+    pub weekends: Vec<WeekendPlan>,
     hours: Vec<hours::HoursPlan>,
     pub parents: BTreeMap<RuleId, &'static str>,
 }
@@ -183,11 +202,128 @@ pub(crate) fn analyze_with_budget(
     Ok(analysis)
 }
 
+/// Complete source analysis for report consumers, without measuring unused emitted IR.
+pub(crate) fn analyze_source_with_budget(
+    document: &ScenarioDocument,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<AssignmentAnalysis, AssignmentRuleError> {
+    let input = AssignmentInput::new(document, budget)?;
+    let (analysis, _) = prepare(document, &input, budget, limits)?;
+    Ok(analysis)
+}
+
+/// Source identity and lower bound for one native `candidate_shortage` finding.
+///
+/// The renderer uses this only after the complete native issue has been selected by identity.
+/// Matching the owning coverage source, field path, resource and message here prevents a
+/// same-rule finding for another shift or coverage owner from being reused as provenance.
+pub(crate) struct CandidateShortageSource {
+    pub rule_id: RuleId,
+    pub shift_id: ShiftId,
+    pub required_count: u64,
+}
+
+pub(crate) fn candidate_shortage_source(
+    input: &AssignmentInput,
+    issue: &ValidationIssue,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Option<CandidateShortageSource>, AssignmentRuleError> {
+    if issue.code != "official.workforce.candidate_shortage"
+        || issue.severity != ValidationSeverity::Error
+    {
+        return Ok(None);
+    }
+    let Some(field_path) = issue.field_path.as_deref() else {
+        return Ok(None);
+    };
+    let Some(ResourceRef::Rule(source_rule)) = issue.resource.as_ref() else {
+        return Ok(None);
+    };
+    let mut found = None;
+    for authored in input.domain.rules.values() {
+        budget.step()?;
+        let WorkforceRule::Coverage {
+            id,
+            active,
+            strength: RequiredStrength::Required,
+            scope,
+            ..
+        } = authored
+        else {
+            continue;
+        };
+        if !*active || id != source_rule {
+            continue;
+        }
+        for shift in &input.shifts {
+            budget.step()?;
+            let metadata = input.metadata(shift)?;
+            if !shift_scope(scope, shift, &metadata, budget)? {
+                continue;
+            }
+            for (owner, coverage) in coverage_owners(input, shift, &metadata, budget)? {
+                budget.step()?;
+                let (required_count, _) = bounds(coverage);
+                let count_field = match coverage {
+                    Coverage::Exact { .. } => "count",
+                    Coverage::AtLeast { .. } => "minimum",
+                };
+                // Bound temporary source-comparison strings as well as the eventual message.
+                budget.reserve(0, 1, 128)?;
+                let expected_path = format!("domain.entities.{}.coverage.{count_field}", owner.id);
+                if field_path != expected_path.as_str() {
+                    continue;
+                }
+                budget.reserve(0, 1, 512)?;
+                let expected_message = finding_message(owner, shift.id);
+                if issue.message != expected_message.as_str() {
+                    continue;
+                }
+                if found.is_some() {
+                    // A native issue identity should select exactly one source. Refuse an
+                    // ambiguous provenance match rather than choosing one arbitrarily.
+                    return Ok(None);
+                }
+                found = Some(CandidateShortageSource {
+                    rule_id: *id,
+                    shift_id: shift.id,
+                    required_count,
+                });
+            }
+        }
+    }
+    Ok(found)
+}
+
 pub(super) fn prepare(
     document: &ScenarioDocument,
     input: &AssignmentInput,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,
+) -> Result<(AssignmentAnalysis, Plan), AssignmentRuleError> {
+    prepare_with_restoration(document, input, budget, limits, None)
+}
+
+/// Prepare the diagnostic candidate graph. Authored Eligibility/Availability rejections are
+/// restored before any rule populations are planned; activity and approved-leave facts remain
+/// structural exclusions.
+pub(super) fn prepare_infeasibility(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+    relaxable: &BTreeSet<RuleId>,
+) -> Result<(AssignmentAnalysis, Plan), AssignmentRuleError> {
+    prepare_with_restoration(document, input, budget, limits, Some(relaxable))
+}
+
+fn prepare_with_restoration(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+    relaxable: Option<&BTreeSet<RuleId>>,
 ) -> Result<(AssignmentAnalysis, Plan), AssignmentRuleError> {
     budget.check()?;
     let raw = count(input.people.len())?
@@ -230,6 +366,9 @@ pub(super) fn prepare(
             context.analyze(active, &mut result, budget)?;
         }
     }
+    if let Some(relaxable) = relaxable {
+        restore_authored_candidates(&mut result, input, relaxable, budget)?;
+    }
     budget.sort_work(result.candidates.len())?;
     result.candidates.sort_unstable();
     budget.sort_work(result.rejections.len())?;
@@ -252,6 +391,51 @@ pub(super) fn prepare(
         .clone_from(&input.source_document_hash);
     budget.check()?;
     Ok((result, plan))
+}
+
+fn restore_authored_candidates(
+    result: &mut AssignmentAnalysis,
+    input: &AssignmentInput,
+    relaxable: &BTreeSet<RuleId>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let mut authored = BTreeSet::new();
+    let mut facts = BTreeSet::new();
+    for rejection in &result.rejections {
+        budget.step()?;
+        let authored_rejection = relaxable.contains(&rejection.binding_id)
+            && matches!(
+                rejection.cause,
+                RejectionCause::AssignmentTypeNotAllowed { .. }
+                    | RejectionCause::QualificationExpression { .. }
+                    | RejectionCause::Unavailable { .. }
+                    | RejectionCause::OutsideAvailableOnly { .. }
+            );
+        if authored_rejection {
+            budget.reserve(0, 1, 16)?;
+            authored.insert(rejection.pair);
+        } else {
+            // Activity and approved leave are intentionally not relaxable. Any other
+            // rejection is likewise retained as a structural fact rather than guessed.
+            budget.reserve(0, 1, 16)?;
+            facts.insert(rejection.pair);
+        }
+    }
+    for pair in authored {
+        budget.step()?;
+        if facts.contains(&pair) || result.candidates.contains(&pair) {
+            continue;
+        }
+        if input.person(pair.person_id).is_none() || input.shift(pair.shift_id).is_none() {
+            return Err(AssignmentRuleError::InvalidSelection {
+                pair,
+                kind: SelectionIssueKind::UnresolvedShift,
+            });
+        }
+        budget.reserve(1, 2, budget.measure(&pair)?)?;
+        result.candidates.push(pair);
+    }
+    Ok(())
 }
 
 struct PairContext<'a> {
@@ -509,8 +693,10 @@ pub(crate) fn supported_rule(rule: &WorkforceRule) -> bool {
             | WorkforceRule::Coverage { .. }
             | WorkforceRule::NoOverlap { .. }
             | WorkforceRule::MinimumRest(_)
+            | WorkforceRule::WorkloadQuota(_)
             | WorkforceRule::MaximumAssignmentCount { .. }
             | WorkforceRule::MaximumConsecutive { .. }
+            | WorkforceRule::MaximumWorkedWeekends { .. }
             | WorkforceRule::MaximumHours { .. }
             | WorkforceRule::RequiredSkillMix { .. }
             | WorkforceRule::FixedAssignment { .. }
@@ -596,6 +782,7 @@ fn plan(
     let mut plan = Plan {
         definitions: Vec::new(),
         constraints: Vec::new(),
+        weekends: Vec::new(),
         hours: Vec::new(),
         parents: BTreeMap::new(),
     };
@@ -670,11 +857,32 @@ fn plan(
             WorkforceRule::TransitionTime { .. } => {
                 transition::plan(input, &result.candidates, &mut plan, rule, budget)?;
             }
+            WorkforceRule::WorkloadQuota(_) => {
+                quota::plan(
+                    document,
+                    input,
+                    &result.candidates,
+                    rule,
+                    &mut plan,
+                    budget,
+                    limits,
+                )?;
+            }
             WorkforceRule::MaximumAssignmentCount { .. } => {
                 count::plan(document, input, &result.candidates, rule, &mut plan, budget)?;
             }
             WorkforceRule::MaximumConsecutive { .. } => {
                 consecutive::plan(input, &result.candidates, &mut plan, rule, budget, limits)?;
+            }
+            WorkforceRule::MaximumWorkedWeekends { .. } => {
+                compiler_weekend::plan(
+                    input,
+                    &result.candidates,
+                    rule,
+                    &mut plan,
+                    &document.settings,
+                    budget,
+                )?;
             }
             WorkforceRule::MaximumHours { .. } => {
                 hours::plan(
@@ -759,12 +967,13 @@ fn plan_fixed(
         scope,
         person_id,
         shift_id,
+        assigned,
         ..
     } = fixed
     else {
         return Err(invalid());
     };
-    let (rule, person_id, shift_id) = (*rule, *person_id, *shift_id);
+    let (rule, person_id, shift_id, assigned) = (*rule, *person_id, *shift_id, *assigned);
     budget.step()?;
     let pair = AssignmentPair {
         person_id,
@@ -795,9 +1004,10 @@ fn plan_fixed(
                 predicate: Predicate::FixedAssignment {
                     person: person_id,
                     shift: shift_id,
+                    assigned,
                 },
                 population: Vec::new(),
-                impossible: true,
+                impossible: assigned,
             },
             budget,
         );
@@ -812,15 +1022,17 @@ fn plan_fixed(
             budget.reserve(0, 1, 8)?;
             (vec![index], false)
         } else {
-            fixed_finding(
-                report,
-                "fixed_assignment_rejected_pair",
-                rule,
-                pair,
-                &format!("domain.rules.{rule}"),
-                budget,
-            )?;
-            (Vec::new(), true)
+            if assigned {
+                fixed_finding(
+                    report,
+                    "fixed_assignment_rejected_pair",
+                    rule,
+                    pair,
+                    &format!("domain.rules.{rule}"),
+                    budget,
+                )?;
+            }
+            (Vec::new(), assigned)
         }
     } else {
         fixed_finding(
@@ -831,7 +1043,7 @@ fn plan_fixed(
             &format!("domain.rules.{rule}.scope"),
             budget,
         )?;
-        (Vec::new(), true)
+        (Vec::new(), assigned)
     };
     append(
         plan,
@@ -840,6 +1052,7 @@ fn plan_fixed(
             predicate: Predicate::FixedAssignment {
                 person: person_id,
                 shift: shift_id,
+                assigned,
             },
             population,
             impossible,
@@ -1313,11 +1526,15 @@ fn estimate_contribution(
         if consecutive::is(constraint) {
             consecutive_shape =
                 consecutive_shape.add(consecutive::shape_constraint(constraint, plan, limits)?)?;
-        } else {
+        } else if !compiler_weekend::is(constraint) {
             generic_constraints = add(generic_constraints, 1)?;
         }
     }
-    let base_constraints = add(generic_constraints, consecutive_shape.constraints)?;
+    let weekend_shape = compiler_weekend::shape(plan, limits)?;
+    let base_constraints = add(
+        add(generic_constraints, consecutive_shape.constraints)?,
+        weekend_shape.constraints,
+    )?;
     let mut hard_lock_parents = 0;
     for constraint in &plan.constraints {
         budget.step()?;
@@ -1338,7 +1555,7 @@ fn estimate_contribution(
     )?;
     for constraint in &plan.constraints {
         budget.step()?;
-        if consecutive::is(constraint) {
+        if consecutive::is(constraint) || compiler_weekend::is(constraint) {
             continue;
         }
         let literals = if constraint.impossible {
@@ -1371,18 +1588,27 @@ fn estimate_contribution(
             add(literals, add(2, add(entities, parameters)?)?)?,
         )?;
     }
-    base_references = add(base_references, consecutive_shape.references)?;
+    base_references = add(
+        add(base_references, consecutive_shape.references)?,
+        weekend_shape.references,
+    )?;
     let hour_shape = hours::checked_shape(plan, limits)?;
     let variables = add(
         add(
-            add(base_variables, consecutive_shape.variables)?,
+            add(
+                add(base_variables, consecutive_shape.variables)?,
+                weekend_shape.variables,
+            )?,
             hour_shape.pair_indices,
         )?,
         hour_shape.helper_variables,
     )?;
     let constraints = add(base_constraints, hour_shape.constraints)?;
     let provenance = add(
-        add(base_provenance, consecutive_shape.provenance)?,
+        add(
+            add(base_provenance, consecutive_shape.provenance)?,
+            weekend_shape.provenance,
+        )?,
         hour_shape.provenance,
     )?;
     let references = add(base_references, hour_shape.references)?;
@@ -1467,6 +1693,13 @@ pub(super) fn predicate_shape(
             (2, add(2, count(key.all.len() + key.any.len())?)?)
         }
         Predicate::MaximumAssignmentCount { .. } => (2, 3),
+        Predicate::MaximumWorkedWeekends { .. } => (1, 2),
+        Predicate::WorkloadQuota {
+            maximum,
+            measure: WorkloadQuotaMeasure::BucketMinutes { .. },
+            ..
+        } => (3, 4 + u64::from(maximum.is_some())),
+        Predicate::WorkloadQuota { maximum, .. } => (2, 4 + u64::from(maximum.is_some())),
         Predicate::MaximumConsecutive { .. } => (1, 3),
         Predicate::Overlap { .. } => (3, 0),
         Predicate::OverlapClique { .. } | Predicate::MutualSameShift { .. } => (1, 0),
@@ -1523,7 +1756,9 @@ pub(super) fn commit_append(
                 Predicate::MinimumRest { .. } => "minimum_rest",
                 Predicate::TransitionTime { .. } => "transition_time",
                 Predicate::MaximumAssignmentCount { .. } => "maximum_assignment_count",
+                Predicate::WorkloadQuota { .. } => "workload_quota",
                 Predicate::MaximumConsecutive { .. } => "maximum_consecutive",
+                Predicate::MaximumWorkedWeekends { .. } => "maximum_worked_weekends",
                 Predicate::Headcount { .. } | Predicate::Qualification { .. } => "coverage",
                 Predicate::SkillMixQualification { .. } => "required_skill_mix",
                 Predicate::FixedAssignment { .. } => "fixed_assignment",
@@ -1534,7 +1769,7 @@ pub(super) fn commit_append(
     plan.constraints.push(constraint);
 }
 
-fn append(
+pub(super) fn append(
     plan: &mut Plan,
     constraint: PlannedConstraint,
     budget: &mut OperationBudget<'_>,
@@ -1559,6 +1794,8 @@ fn coverage_bound_findings(
             | Predicate::Qualification { shift, .. }
             | Predicate::SkillMixQualification { shift, .. } => shift,
             Predicate::MaximumAssignmentCount { .. }
+            | Predicate::MaximumWorkedWeekends { .. }
+            | Predicate::WorkloadQuota { .. }
             | Predicate::MaximumConsecutive { .. }
             | Predicate::Overlap { .. }
             | Predicate::OverlapClique { .. }
@@ -1597,6 +1834,8 @@ fn coverage_bound_findings(
                     )
                 }
                 Predicate::MaximumAssignmentCount { .. }
+                | Predicate::WorkloadQuota { .. }
+                | Predicate::MaximumWorkedWeekends { .. }
                 | Predicate::MaximumConsecutive { .. }
                 | Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
@@ -1675,20 +1914,26 @@ fn finding(
     budget.step()?;
     budget.reserve(1, 5, 768)?;
     report.issues.push(ValidationIssue {
-        code: format!("official.workforce.{code}"), severity: ValidationSeverity::Error,
-        message: format!(
-            "{} has an obvious contradiction (owner {} {}, shift {shift}). This is not a solver feasibility result.",
-            if owner.kind == "required_skill_mix" {
-                "Required skill mix"
-            } else {
-                "Required coverage"
-            },
-            owner.kind,
-            owner.id
-        ),
-        field_path: Some(field_path.to_owned()), resource: Some(ResourceRef::Rule(rule)),
+        code: format!("official.workforce.{code}"),
+        severity: ValidationSeverity::Error,
+        message: finding_message(owner, shift),
+        field_path: Some(field_path.to_owned()),
+        resource: Some(ResourceRef::Rule(rule)),
     });
     Ok(())
+}
+
+fn finding_message(owner: Owner, shift: ShiftId) -> String {
+    format!(
+        "{} has an obvious contradiction (owner {} {}, shift {shift}). This is not a solver feasibility result.",
+        if owner.kind == "required_skill_mix" {
+            "Required skill mix"
+        } else {
+            "Required coverage"
+        },
+        owner.kind,
+        owner.id
+    )
 }
 
 fn lock_finding(
@@ -1910,15 +2155,162 @@ fn locked_coverage_findings(
 mod tests {
     use super::{
         AssignmentAnalysis, AssignmentInput, AssignmentModelEstimate, AssignmentPair,
-        AssignmentRuleError, DomainValidationReport, OperationBudget, PairContext, obligations,
+        AssignmentRuleError, AssignmentRuleLimit, DomainValidationReport, OperationBudget,
+        PairContext, analyze_assignments, analyze_source_with_budget, analyze_with_budget,
+        obligations,
     };
     use crate::{
-        assignment_rules::analysis::prepare,
+        assignment_rules::{analysis::prepare, budget::MAX_WORK_STEPS},
         test_support::{fixture, id},
     };
     use eutheto_planning_ir::PlanningIrLimitsV1;
     use eutheto_types::{CancellationToken, ScenarioDocument};
     use serde_json::json;
+
+    #[test]
+    fn source_analysis_matches_full_analysis_and_retains_preparation_charges()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        let mut rejected_person = document
+            .domain
+            .entities
+            .get(&id(1).parse()?)
+            .ok_or("person fixture")?
+            .clone();
+        rejected_person["id"] = json!(id(12));
+        rejected_person["externalId"] = json!("staff-02");
+        rejected_person["eligibleAssignmentTypeIds"] = json!([]);
+        document
+            .domain
+            .entities
+            .insert(id(12).parse()?, rejected_person);
+        document
+            .domain
+            .entities
+            .get_mut(&id(8).parse()?)
+            .ok_or("shift fixture")?["coverage"] =
+            json!({"kind":"exact","count":2,"qualificationMinimums":[]});
+        for (index, kind) in [(20, "eligibility"), (22, "coverage")] {
+            document.domain.rules.insert(
+                id(index).parse()?,
+                json!({"id":id(index),"kind":kind,"active":true,"strength":"required",
+                       "scope":{"people":{"kind":"all"}}}),
+            );
+        }
+        for limits in [
+            PlanningIrLimitsV1::DEFAULT,
+            PlanningIrLimitsV1 {
+                max_variables: 100,
+                max_constraints: 100,
+                max_provenance_records: 1_000,
+                max_total_refs: 10_000,
+                max_ir_bytes: 1024 * 1024,
+                ..PlanningIrLimitsV1::DEFAULT
+            },
+        ] {
+            for mut source_budget in [
+                OperationBudget::analysis(None, limits),
+                OperationBudget::evaluation(None),
+            ] {
+                source_budget.reserve(1, 1, 128)?;
+                source_budget.steps(7)?;
+                let mut full_budget = source_budget.clone();
+                let mut preparation_budget = source_budget.clone();
+                let input = AssignmentInput::new(&document, &mut preparation_budget)?;
+                prepare(&document, &input, &mut preparation_budget, limits)?;
+                let source = analyze_source_with_budget(&document, &mut source_budget, limits)?;
+                let full = analyze_with_budget(&document, &mut full_budget, limits)?;
+                // AssignmentAnalysis equality covers the hash, complete pair partition,
+                // validation, obligations and every estimate field, including pruning stages.
+                assert_eq!(source, full);
+                assert!(source.obligations.handled.contains(&id(20).parse()?));
+                assert_eq!(
+                    source_budget.remaining_output(),
+                    preparation_budget.remaining_output()
+                );
+                assert_eq!(source_budget.reserved_ir_bytes(), 0);
+                assert!(full_budget.reserved_ir_bytes() > 0);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn source_analysis_does_not_measure_unused_derived_ids()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // No hours rule: its source checked_shape may legitimately enforce derived-ID limits.
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        let limits = PlanningIrLimitsV1 {
+            max_id_bytes: 1,
+            ..PlanningIrLimitsV1::DEFAULT
+        };
+        let expected = analyze_assignments(&document, None, PlanningIrLimitsV1::DEFAULT)?;
+        let mut budget = OperationBudget::analysis(None, limits);
+        assert_eq!(
+            analyze_source_with_budget(&document, &mut budget, limits)?,
+            expected
+        );
+        assert_eq!(
+            analyze_assignments(&document, None, limits),
+            Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::PerRecord
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_analysis_preserves_inherited_cancellation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let document = fixture()?;
+        let token = CancellationToken::new();
+        let control = eutheto_types::OperationControl::Cancellation(token.clone());
+        let mut budget = OperationBudget::evaluation(Some(&control));
+        budget.cancel_after_steps(1)?;
+        assert_eq!(
+            analyze_source_with_budget(&document, &mut budget, PlanningIrLimitsV1::DEFAULT),
+            Err(AssignmentRuleError::Cancelled)
+        );
+        assert!(token.is_cancelled());
+        Ok(())
+    }
+
+    #[test]
+    fn source_analysis_preserves_inherited_source_budget_exhaustion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        document.domain.locked_assignments.clear();
+        document.domain.entities.remove(&id(6).parse()?);
+        let limits = PlanningIrLimitsV1::DEFAULT;
+        let mut budget = OperationBudget::evaluation(None);
+        assert!(analyze_source_with_budget(&document, &mut budget, limits).is_ok());
+
+        let mut bytes_budget = OperationBudget::evaluation(None);
+        let (_, _, remaining_bytes) = bytes_budget.remaining_output();
+        bytes_budget.reserve(0, 0, remaining_bytes - 1)?;
+        assert_eq!(
+            analyze_source_with_budget(&document, &mut bytes_budget, limits),
+            Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::Bytes
+            ))
+        );
+        assert_eq!(bytes_budget.reserved_ir_bytes(), 0);
+
+        let mut work_budget = OperationBudget::evaluation(None);
+        work_budget.steps(MAX_WORK_STEPS)?;
+        assert_eq!(
+            analyze_source_with_budget(&document, &mut work_budget, limits),
+            Err(AssignmentRuleError::LimitExceeded(
+                AssignmentRuleLimit::WorkSteps
+            ))
+        );
+        assert_eq!(work_budget.reserved_ir_bytes(), 0);
+        Ok(())
+    }
 
     fn leaf_document(leaf: &str) -> Result<ScenarioDocument, Box<dyn std::error::Error>> {
         let mut document = fixture()?;

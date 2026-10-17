@@ -4,7 +4,7 @@ import {
   getScenarioSetupStatus,
   validateScenario,
   type ApiResponseDto,
-  type FullValidationResultV2,
+  type FullValidationResultV3,
 } from "./api/generated";
 import { useFullValidation } from "./full-validation";
 import type { ProjectHomeController, ProjectSummary } from "./project-home";
@@ -48,7 +48,7 @@ async function startValidation() {
     full: { state: "notRun" as const },
   };
   vi.mocked(getScenarioSetupStatus).mockImplementation(() => portableOperation(response(status)));
-  const terminal = deferred<ApiResponseDto<FullValidationResultV2>>();
+  const terminal = deferred<ApiResponseDto<FullValidationResultV3>>();
   vi.mocked(validateScenario).mockImplementation(() => portableOperation(terminal.promise));
   const scope = effectScope();
   const validation = scope.run(() => useFullValidation(home, () => workforceProject));
@@ -75,10 +75,11 @@ describe("full validation context", () => {
       expect(validation.state.run).toBe("running");
       terminal.resolve(
         response({
-          schemaVersion: 2,
+          schemaVersion: 3,
           scenarioId: workforceProject.scenarioId,
           revision: workforceProject.revision,
           report: { issues: [] },
+          issueIds: [],
         }),
       );
       await running;
@@ -100,10 +101,11 @@ describe("full validation context", () => {
       expect(validation.state.run).toBe("idle");
       terminal.resolve(
         response({
-          schemaVersion: 2,
+          schemaVersion: 3,
           scenarioId: workforceProject.scenarioId,
           revision: workforceProject.revision,
           report: { issues: [] },
+          issueIds: [],
         }),
       );
       await running;

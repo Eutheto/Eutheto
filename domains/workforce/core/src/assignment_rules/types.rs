@@ -7,7 +7,8 @@ use eutheto_domain_api::{DomainPackError, DomainValidationReport};
 use eutheto_domain_ir::RuleEvaluation;
 use eutheto_planning_ir::{BoolVariable, ConstraintRecord, PlanningProblem, ProvenanceRecord};
 use eutheto_types::{
-    AssignmentId, Rfc3339Timestamp, RuleId, ScenarioDocument, ValidationIssue, ValidationSeverity,
+    AssignmentId, EntityId, PersonId, Rfc3339Timestamp, RuleId, ScenarioDocument, ValidationIssue,
+    ValidationSeverity,
 };
 use std::fmt;
 
@@ -143,6 +144,52 @@ pub struct AssignmentRuleEvaluation {
     pub source_document_hash: String,
     pub evaluations: Vec<RuleEvaluation>,
     pub obligations: RequiredRulePartition,
+}
+/// One source-derived Required predicate observation retained only for the optional result health
+/// view. It is deliberately not part of normal verification output.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum HealthObservationKind {
+    MinimumRest,
+    MaximumHours,
+    TransitionTime,
+    CoverageHeadcount,
+    CoverageQualification,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum HealthUnits {
+    Minutes,
+    People,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum HealthDirection {
+    Minimum,
+    Maximum,
+    Exact,
+}
+
+/// A bounded, exact source observation. Values are nanoseconds for minute units and integer
+/// counts for people units; result-view conversion keeps them as reduced rational strings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HealthObservation {
+    pub(crate) kind: HealthObservationKind,
+    pub(crate) rule_id: Option<RuleId>,
+    pub(crate) coverage_owner: Option<(EntityId, &'static str)>,
+    pub(crate) person_id: Option<PersonId>,
+    pub(crate) shift_id: Option<crate::ids::ShiftId>,
+    pub(crate) other_shift_id: Option<crate::ids::ShiftId>,
+    pub(crate) period: Option<(Rfc3339Timestamp, Rfc3339Timestamp)>,
+    pub(crate) units: HealthUnits,
+    pub(crate) direction: HealthDirection,
+    pub(crate) threshold: Option<i128>,
+    pub(crate) observed: Option<i128>,
+    pub(crate) satisfied: Option<bool>,
+    pub(crate) minimum_rank: Option<u64>,
+    pub(crate) affected_pairs: Vec<AssignmentPair>,
+    pub(crate) affected_pair_count: u64,
+    pub(crate) affected_pairs_truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

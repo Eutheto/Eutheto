@@ -12,12 +12,14 @@ use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     AppliedPortableScenario, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
-    FoundationStatusService, ProjectScope, SOLUTION_API_SCHEMA_VERSION, SolutionCompareRequestV1,
-    SolutionExplainRequestV1, SolutionListRequestV1, SolutionSummaryRequestV1,
-    SolutionVerifyRequestV1, SolverSupportMatrixMetadata, SupportCell,
+    FoundationStatusService, ProjectScope, SOLUTION_API_SCHEMA_VERSION,
+    SOLUTION_COMPARE_SCHEMA_VERSION, SolutionCompareRequestV3, SolutionExplainRequestV1,
+    SolutionListRequestV1, SolutionSummaryRequestV1, SolutionVerifyRequestV1,
+    SolverSupportMatrixMetadata, SupportCell,
 };
 use eutheto_domain_ir::{
     AcceptedResultRefV1, DomainAssignmentId, ExplanationRequestSubjectV1, ExplanationRequestV1,
+    ScoreComparisonV2,
 };
 use eutheto_export::FixedExclusion;
 use eutheto_import::{
@@ -26,9 +28,10 @@ use eutheto_import::{
 };
 use eutheto_types::{
     ActorRef, AppError, BackendId, CancellationToken, CommandBatch, CommandEnvelope, CommandId,
-    CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone, LocaleTag, PackId,
-    ProjectSummaryDto, RequestId, Revision, ScenarioCommand, ScenarioId, ScenarioSettings,
-    SolutionId, SystemClock, SystemIdGenerator, UnitSystem,
+    CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone, KnownVerificationAlarmV1,
+    LocaleTag, PackId, ProjectSummaryDto, RequestId, Revision, ScenarioCommand, ScenarioId,
+    ScenarioSettings, SolutionId, SystemClock, SystemIdGenerator, UnitSystem,
+    VerificationAlarmTerminalization, VerificationFailure,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
@@ -122,6 +125,7 @@ enum ProgressArg {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum SolutionExportFormat {
     Csv,
+    SummaryCsv,
     Ics,
     Svg,
     Html,
@@ -463,8 +467,15 @@ struct SolveArgs {
     seed: Option<u64>,
     #[arg(long)]
     first_feasible: bool,
-    #[arg(long)]
+    /// Repair from an exact solution ID or accepted-result JSON file without changing INPUT.
+    /// File INPUT resolves IDs within its bundle and must retain the exact original revision.
+    /// External results are freshly verified; their solver proof/history stays untrusted.
+    /// Captured originals are limited to 512 KiB; existing native in-snapshot baselines are unchanged.
+    #[arg(long, value_name = "SOLUTION")]
     repair_from: Option<PathBuf>,
+    /// Repair against an unverified imported starting-plan entity in INPUT, without Required locks.
+    #[arg(long, value_name = "ENTITY_ID", conflicts_with = "repair_from")]
+    repair_external: Option<eutheto_types::EntityId>,
     #[arg(long)]
     output: Option<PathBuf>,
     #[arg(long)]
@@ -524,15 +535,39 @@ enum SolutionsCommand {
     Export(ExportSolutionArgs),
 }
 
+// Stale consent and report disclosures are independent opt-ins.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Args)]
 struct ExportSolutionArgs {
     scenario: PathBuf,
     solution: PathBuf,
     #[arg(long, value_enum)]
     format: SolutionExportFormat,
-    /// Publish to an explicit no-clobber destination; otherwise human mode writes raw stdout.
+    /// Explicit no-clobber destination; required for HTML and JSON envelope mode.
+    /// Other formats may write raw stdout in human mode.
     #[arg(long)]
     output: Option<PathBuf>,
+    /// Restrict Workforce iCalendar output to one stable person UUID.
+    #[arg(long = "person-id", value_name = "PERSON_ID")]
+    person_id: Option<String>,
+    /// Explicitly authorize publishing an accepted result known stale as of its revision read.
+    #[arg(long = "allow-stale")]
+    allow_stale: bool,
+    /// Include person names in HTML instead of generated aliases.
+    #[arg(long)]
+    include_person_names: bool,
+    /// Include authored plan, assignment-type and location labels in HTML.
+    #[arg(long)]
+    include_authored_labels: bool,
+    /// Include staffing totals for every source shift in HTML.
+    #[arg(long)]
+    include_staffing: bool,
+    /// Include recorded plan changes in HTML without authenticating imported history.
+    #[arg(long)]
+    include_changes: bool,
+    /// Include configured workload actuals in HTML, not private preference scores.
+    #[arg(long)]
+    include_fairness_actuals: bool,
 }
 
 #[derive(Debug, Args)]
@@ -875,7 +910,7 @@ fn requests_json(args: &[OsString]) -> bool {
                     .any(|arg| arg == OsStr::new("--json"))
             })
 }
-
+#[allow(clippy::large_futures)]
 async fn execute_cli(
     cli: Cli,
     cancellation: CancellationToken,
@@ -1208,12 +1243,20 @@ async fn execute_solution_list(
         })
         .collect::<Vec<_>>();
     if list.solutions.is_empty() {
-        human.push(format!("No accepted solutions for scenario {scenario_id}."));
-    } else if list.solutions.len() > HUMAN_SOLUTION_LIST_LIMIT {
         human.push(format!(
-            "{} additional accepted solutions omitted.",
-            list.solutions.len() - HUMAN_SOLUTION_LIST_LIMIT
+            "No saved result records for scenario {scenario_id}."
         ));
+    } else {
+        human.insert(
+            0,
+            "Saved result records are not freshly reverified by this listing; use `solutions verify` for a specific result.".to_owned(),
+        );
+        if list.solutions.len() > HUMAN_SOLUTION_LIST_LIMIT {
+            human.push(format!(
+                "{} additional saved result records omitted.",
+                list.solutions.len() - HUMAN_SOLUTION_LIST_LIMIT
+            ));
+        }
     }
     Ok(Outcome::new(
         "solutions.list",
@@ -1282,9 +1325,9 @@ async fn execute_solution_compare(
     let base_solution_id = solution_id(solution_a).map_err(|error| ("solutions.compare", error))?;
     let candidate_solution_id =
         solution_id(solution_b).map_err(|error| ("solutions.compare", error))?;
-    let AppQueryResult::SolutionComparison(comparison) = app
-        .query(AppQuery::SolutionCompare(SolutionCompareRequestV1 {
-            schema_version: SOLUTION_API_SCHEMA_VERSION,
+    let AppQueryResult::SolutionComparisonV3(result) = app
+        .query(AppQuery::SolutionCompareV3(SolutionCompareRequestV3 {
+            schema_version: SOLUTION_COMPARE_SCHEMA_VERSION,
             scenario_id,
             base_solution_id,
             candidate_solution_id,
@@ -1294,25 +1337,53 @@ async fn execute_solution_compare(
     else {
         return Err(("solutions.compare", unexpected_result()));
     };
-    let detail = &comparison.comparison;
+    let comparison = &result.comparison;
+    let score = match &comparison.score {
+        ScoreComparisonV2::Comparable {
+            base_score,
+            candidate_score,
+            score_levels,
+            ordering,
+        } => format!(
+            "Scores are comparable: base {base_score:?}, candidate {candidate_score:?}; candidate ordering {ordering:?} across {} objective levels.",
+            score_levels.len(),
+        ),
+        ScoreComparisonV2::Unavailable { reason } => {
+            format!("Score comparison unavailable ({reason:?}); no aggregate ordering is asserted.")
+        }
+    };
     let human = vec![
         format!(
             "Compared candidate {} with base {} for scenario {}.",
-            detail.candidate.accepted_result.solution_id,
-            detail.base.accepted_result.solution_id,
-            comparison.scenario_id,
+            comparison.candidate.accepted_result.solution_id,
+            comparison.base.accepted_result.solution_id,
+            result.scenario_id,
         ),
         format!(
-            "{} assignment changes, {} required-rule changes, {} affected entities.",
-            detail.assignments.len(),
-            detail.rules.len(),
-            detail.affected_entities.len(),
+            "Semantic changes: {} assignments, {} required-rule statuses and {} metrics across {} affected entities ({} source observations).",
+            comparison.assignments.len(),
+            comparison.rules.len(),
+            comparison.metrics.len(),
+            comparison.affected_entities.len(),
+            comparison.entity_observations.len(),
+        ),
+        format!(
+            "Protection evidence: {} assignment protection records, including unchanged protections.",
+            comparison.protections.len(),
+        ),
+        score,
+        format!(
+            "Recorded terminal status: base {:?} outcome {:?}; candidate {:?} outcome {:?}. This comparison does not authenticate historical backend proof.",
+            comparison.runs.base.run_id,
+            comparison.runs.base.outcome,
+            comparison.runs.candidate.run_id,
+            comparison.runs.candidate.outcome,
         ),
     ];
     Ok(Outcome::new(
         "solutions.compare",
         "compared",
-        to_value(&comparison).map_err(|error| ("solutions.compare", error))?,
+        to_value(&result).map_err(|error| ("solutions.compare", error))?,
         human,
     ))
 }
@@ -1336,6 +1407,8 @@ async fn execute_solution_explain(
     };
     let result = AcceptedResultRefV1::from_result(&detail.result)
         .map_err(|_| ("solutions.explain", unexpected_result()))?;
+    let source_revision = Revision::try_new(detail.result.solution.scenario_revision)
+        .map_err(|_| ("solutions.explain", unexpected_result()))?;
     let request = SolutionExplainRequestV1 {
         schema_version: SOLUTION_API_SCHEMA_VERSION,
         scenario_id,
@@ -1354,7 +1427,11 @@ async fn execute_solution_explain(
         })?,
     };
     let AppQueryResult::SolutionExplanation(explanation) = app
-        .query(AppQuery::SolutionExplain(request))
+        .query(AppQuery::SolutionExplain {
+            request,
+            source_revision,
+            control: eutheto_types::OperationControl::Cancellation(app.setup_cancellation()),
+        })
         .await
         .map_err(|error| ("solutions.explain", app_error(error)))?
     else {
@@ -3400,6 +3477,61 @@ fn is_portable_artifact_error_code(code: &str) -> bool {
         )
 }
 
+fn known_alarm_value(alarm: &KnownVerificationAlarmV1) -> Value {
+    let mut value = json!({
+        "runId": alarm.run_id(),
+        "inputChecksum": alarm.input_checksum(),
+        "diagnosticCode": alarm.diagnostic_code().as_str(),
+        "terminalization": alarm.terminalization().as_str(),
+    });
+    if let Some(code) = alarm.secondary_cause_code() {
+        value["secondaryCauseCode"] = json!(code.as_str());
+    }
+    value
+}
+
+fn known_alarm_human_details(alarm: &KnownVerificationAlarmV1) -> Vec<String> {
+    let terminalization = match alarm.terminalization() {
+        VerificationAlarmTerminalization::NotApplicable => {
+            "No durable terminalization was required for this verification run."
+        }
+        VerificationAlarmTerminalization::Confirmed => {
+            "Durable verification-alarm terminalization was confirmed; no accepted result is available."
+        }
+        VerificationAlarmTerminalization::Unconfirmed => {
+            "Durable verification-alarm terminalization is unconfirmed; do not assume success or retry blindly."
+        }
+    };
+    let mut details = vec![
+        format!("Verification run {}.", alarm.run_id()),
+        terminalization.to_owned(),
+    ];
+    if let Some(code) = alarm.secondary_cause_code() {
+        details.push(format!("Safe secondary cause: {}.", code.as_str()));
+    }
+    details
+}
+
+fn known_verification_error(failure: VerificationFailure) -> SafeCliError {
+    let Some(alarm) = failure.known_alarm else {
+        return failure_error(
+            CliExitCode::Verification,
+            failure.code,
+            failure.message,
+            failure.diagnostic_id,
+        );
+    };
+    let mut error = failure_error(
+        CliExitCode::Verification,
+        alarm.diagnostic_code().as_str().to_owned(),
+        VerificationFailure::KNOWN_ALARM_MESSAGE.to_owned(),
+        failure.diagnostic_id,
+    );
+    error.details = Some(json!({"knownAlarm": known_alarm_value(&alarm)}));
+    error.human_details = known_alarm_human_details(&alarm);
+    error
+}
+
 fn app_error(error: AppError) -> SafeCliError {
     match error {
         AppError::Validation(report) => {
@@ -3449,12 +3581,7 @@ fn app_error(error: AppError) -> SafeCliError {
             failure.message,
             failure.diagnostic_id,
         ),
-        AppError::Verification(failure) => failure_error(
-            CliExitCode::Verification,
-            failure.code,
-            failure.message,
-            failure.diagnostic_id,
-        ),
+        AppError::Verification(failure) => known_verification_error(failure),
         AppError::Storage(failure) => failure_error(
             CliExitCode::Storage,
             failure.code,
@@ -3620,8 +3747,9 @@ mod tests {
     };
     use eutheto_types::CancellationToken;
     use eutheto_types::{
-        AppError, ProtocolFailure, RequestId, Revision, StorageFailure, ValidationIssue,
-        ValidationReport, ValidationSeverity, VerificationFailure,
+        AppError, KnownVerificationAlarmV1, ProtocolFailure, RequestId, Revision, StorageFailure,
+        ValidationIssue, ValidationReport, ValidationSeverity, VerificationAlarmTerminalization,
+        VerificationFailure,
     };
     use std::error::Error;
 
@@ -3798,6 +3926,7 @@ mod tests {
                 .to_owned(),
             retryable: false,
             diagnostic_id: None,
+            known_alarm: None,
         }));
         assert_eq!(alarm.exit, CliExitCode::Verification);
 
@@ -3818,6 +3947,69 @@ mod tests {
         assert_eq!(
             envelope["error"]["code"],
             "solution.reverification_mismatch"
+        );
+        Ok(())
+    }
+    #[test]
+    fn known_verification_alarm_preserves_closed_metadata_and_fixed_human_output()
+    -> Result<(), Box<dyn Error>> {
+        let known_alarm = KnownVerificationAlarmV1::new(
+            "018f47f2-e880-7000-8000-000000000010".parse()?,
+            &"ab".repeat(32),
+            "verification.projection_failed",
+            VerificationAlarmTerminalization::Unconfirmed,
+            Some("storage.operation_failed"),
+        )?;
+        let error = app_error(AppError::Verification(
+            VerificationFailure::from_known_alarm(known_alarm, None),
+        ));
+        assert_eq!(error.exit, CliExitCode::Verification);
+        assert_eq!(error.code, "verification.projection_failed");
+        assert_eq!(error.message, VerificationFailure::KNOWN_ALARM_MESSAGE);
+        assert_eq!(
+            error.details.as_ref().and_then(|details| {
+                details
+                    .get("knownAlarm")
+                    .and_then(|alarm| alarm.get("terminalization"))
+            }),
+            Some(&serde_json::json!("unconfirmed"))
+        );
+        assert!(
+            error
+                .human_details
+                .iter()
+                .any(|line| { line.contains("018f47f2-e880-7000-8000-000000000010") })
+        );
+        assert!(
+            error
+                .human_details
+                .iter()
+                .any(|line| line.contains("unconfirmed"))
+        );
+        assert!(
+            !error
+                .human_details
+                .iter()
+                .any(|line| line.contains("raw") || line.contains("backend"))
+        );
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        render_error(
+            &mut stdout,
+            &mut stderr,
+            OutputFormat::Json,
+            "solve",
+            &error,
+        )?;
+        let envelope: serde_json::Value = serde_json::from_slice(&stderr)?;
+        assert_eq!(
+            envelope["error"]["details"]["knownAlarm"]["inputChecksum"],
+            "abababababababababababababababababababababababababababababababab"
+        );
+        assert_eq!(
+            envelope["error"]["details"]["knownAlarm"]["secondaryCauseCode"],
+            "storage.operation_failed"
         );
         Ok(())
     }

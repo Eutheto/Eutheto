@@ -46,6 +46,12 @@ impl WorkforceSchemas {
             .ok_or_else(generated_error)?;
         let properties = variants
             .iter()
+            .flat_map(|schema| {
+                schema
+                    .get("oneOf")
+                    .and_then(Value::as_array)
+                    .map_or(std::slice::from_ref(schema), Vec::as_slice)
+            })
             .find(|schema| {
                 schema
                     .pointer("/properties/kind/const")

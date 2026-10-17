@@ -1,0 +1,3 @@
+{"event":{"kind":"incumbentFound","value":{"objective":{"bestBoundValues":null,"objectiveValues":[-9223372036854775808,9223372036854775807]},"observedAfterMilliseconds":2,"sequence":1}},"kind":"progress","publication":"pending"}
+{"event":{"kind":"incumbentFound","value":{"objective":null,"observedAfterMilliseconds":2,"sequence":1}},"kind":"progress","publication":"pending"}
+{"event":{"kind":"boundImproved","value":{"boundValues":[-7],"observedAfterMilliseconds":3}},"kind":"progress","publication":"pending"}

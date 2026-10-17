@@ -45,6 +45,7 @@ fn rule(document: &mut ScenarioDocument, index: u32, kind: &str) -> Result {
 
 fn context(limits: PlanningIrLimitsV1) -> CompileContext {
     CompileContext {
+        objective_context: None,
         scenario_revision: 1,
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -235,6 +236,54 @@ fn maximum_assignment_count_compiles_one_cap_per_person_reporting_period() -> Re
 }
 
 #[test]
+fn required_count_quota_compiles_all_owned_days_even_without_candidate_shifts() -> Result {
+    let mut value = document()?;
+    value.domain.entities.remove(&id(6).parse()?);
+    value.settings.time_zone = "UTC".parse()?;
+    value.settings.horizon = eutheto_types::Horizon::new(
+        "2026-11-01T00:00:00Z".parse()?,
+        "2026-11-03T00:00:00Z".parse()?,
+    )?;
+    for (field, timestamp) in [
+        ("startsAt", "2026-11-01T08:00:00"),
+        ("endsAt", "2026-11-01T09:00:00"),
+    ] {
+        entity(&mut value, 8)?[field] = json!({
+            "instant":format!("{timestamp}Z"), "local":timestamp, "offsetSeconds":0
+        });
+    }
+    value.domain.rules.insert(
+        id(20).parse()?,
+        json!({
+            "kind":"workloadQuota", "id":id(20), "active":true,
+            "strength":"required", "scope":{"people":{"kind":"all"}},
+            "calendarId":id(2), "membership":"reportingDate",
+            "measure":{"kind":"assignmentCount"}, "minimum":1, "maximum":1
+        }),
+    );
+
+    let missing_day = compile(&value)?;
+    assert!(missing_day.constraints.iter().any(|record| matches!(
+        &record.body, Constraint::BoolOr { literals } if literals.is_empty()
+    )));
+    assert!(!allows(&missing_day, &[pair(1, 8)?])?);
+    let quota_id: eutheto_types::RuleId = id(20).parse()?;
+    assert!(
+        evaluate_assignment_rules(&value, &[pair(1, 8)?], None)?
+            .evaluations
+            .iter()
+            .any(|entry| entry.rule_id == quota_id && !entry.satisfied)
+    );
+
+    shift_instance(&mut value, 30, "2026-11-02T08:00:00", "2026-11-02T09:00:00")?;
+    let populated = compile(&value)?;
+    assert!(allows(&populated, &[pair(1, 8)?, pair(1, 30)?])?);
+    assert!(!allows(&populated, &[pair(1, 8)?])?);
+    assert!(!allows(&populated, &[pair(1, 30)?])?);
+    Ok(())
+}
+
+#[test]
 fn eligibility_activation_and_scope_own_both_predicates() -> Result {
     let mut value = document()?;
     entity(&mut value, 1)?["eligibleAssignmentTypeIds"] = json!([]);
@@ -286,6 +335,149 @@ fn adjacent_qualification_renewals_cover_but_nanosecond_gap_and_expiry_do_not() 
     entity(&mut value, 1)?["qualificationGrants"] =
         json!([{"qualificationId":id(11),"expiresAt":"2026-11-01T05:30:00Z"}]);
     assert!(compile(&value)?.variables.is_empty());
+    Ok(())
+}
+#[test]
+fn dated_qualification_grant_must_cover_the_entire_shift() -> Result {
+    let mut value = document()?;
+    rule(&mut value, 20, "eligibility")?;
+    entity(&mut value, 1)?["qualificationGrants"] = json!([{
+        "qualificationId":id(11),
+        "effectiveFrom":"2026-11-01T05:30:00Z",
+        "expiresAt":"2026-11-01T07:30:00Z"
+    }]);
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 1)?["qualificationGrants"][0]["effectiveFrom"] =
+        json!("2026-11-01T05:30:00.000000001Z");
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 1)?["qualificationGrants"][0]["effectiveFrom"] =
+        json!("2026-11-01T05:30:00Z");
+    entity(&mut value, 1)?["qualificationGrants"][0]["expiresAt"] =
+        json!("2026-11-01T07:29:59.999999999Z");
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+    Ok(())
+}
+
+#[test]
+fn eligibility_type_and_location_scope_are_conjunctive() -> Result {
+    let mut value = document()?;
+    let mut alternate_type = entity(&mut value, 4)?.clone();
+    alternate_type["id"] = json!(id(12));
+    alternate_type["name"] = json!("Other");
+    value
+        .domain
+        .entities
+        .insert(id(12).parse()?, alternate_type);
+    let mut alternate_location = entity(&mut value, 5)?.clone();
+    alternate_location["id"] = json!(id(13));
+    alternate_location["name"] = json!("South");
+    value
+        .domain
+        .entities
+        .insert(id(13).parse()?, alternate_location);
+    entity(&mut value, 1)?["eligibleAssignmentTypeIds"] = json!([]);
+    entity(&mut value, 1)?["qualificationGrants"] = json!([]);
+    rule(&mut value, 20, "eligibility")?;
+
+    let scope = json!({
+        "people":{"kind":"all"},
+        "assignmentTypeIds":[id(12)],
+        "locationIds":[id(5)]
+    });
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("rule")?["scope"] = scope.clone();
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("rule")?["scope"] = json!({
+        "people":{"kind":"all"},
+        "assignmentTypeIds":[id(4)],
+        "locationIds":[id(13)]
+    });
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("rule")?["scope"] = json!({
+        "people":{"kind":"all"},
+        "assignmentTypeIds":[id(4)],
+        "locationIds":[id(5)]
+    });
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+    Ok(())
+}
+#[test]
+fn availability_record_type_and_location_filters_are_conjunctive() -> Result {
+    let mut value = document()?;
+    let mut alternate_type = entity(&mut value, 4)?.clone();
+    alternate_type["id"] = json!(id(12));
+    alternate_type["name"] = json!("Other");
+    value
+        .domain
+        .entities
+        .insert(id(12).parse()?, alternate_type);
+    let mut alternate_location = entity(&mut value, 5)?.clone();
+    alternate_location["id"] = json!(id(13));
+    alternate_location["name"] = json!("South");
+    value
+        .domain
+        .entities
+        .insert(id(13).parse()?, alternate_location);
+    availability(
+        &mut value,
+        30,
+        "unavailable",
+        "2026-11-01T05:30:00Z",
+        "2026-11-01T07:30:00Z",
+    )?;
+    entity(&mut value, 30)?["assignmentTypeIds"] = json!([id(12)]);
+    entity(&mut value, 30)?["locationIds"] = json!([id(5)]);
+    rule(&mut value, 21, "availability")?;
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 30)?["assignmentTypeIds"] = json!([id(4)]);
+    entity(&mut value, 30)?["locationIds"] = json!([id(13)]);
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 30)?["locationIds"] = json!([id(5)]);
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+    Ok(())
+}
+
+#[test]
+fn recurring_availability_clips_an_effective_tail_across_dst() -> Result {
+    let mut value = document()?;
+    entity(&mut value, 8)?["startsAt"] = json!({
+        "instant":"2026-11-01T04:30:00Z",
+        "local":"2026-11-01T00:30:00",
+        "offsetSeconds":-14400
+    });
+    entity(&mut value, 8)?["endsAt"] = json!({
+        "instant":"2026-11-01T07:00:00Z",
+        "local":"2026-11-01T02:00:00",
+        "offsetSeconds":-18000
+    });
+    availability(
+        &mut value,
+        30,
+        "availableOnly",
+        "2026-11-01T00:00:00Z",
+        "2026-11-02T00:00:00Z",
+    )?;
+    entity(&mut value, 30)?["effectiveRange"] =
+        json!({"startDate":"2026-11-01","endDateExclusive":"2026-11-02"});
+    entity(&mut value, 30)?["timeWindow"] = json!({
+        "kind":"weekly",
+        "windows":[{
+            "weekdays":["saturday"],
+            "startTime":"23:00:00",
+            "endTime":"03:00:00",
+            "endDayOffset":1
+        }]
+    });
+    rule(&mut value, 21, "availability")?;
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 30)?["timeWindow"]["windows"][0]["endTime"] = json!("01:59:59.999999999");
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
     Ok(())
 }
 

@@ -61,6 +61,14 @@ pub enum WorkforceRule {
         mode: ConsecutiveMode,
         maximum: u32,
     },
+    MaximumWorkedWeekends {
+        id: RuleId,
+        active: bool,
+        strength: RequiredStrength,
+        scope: Scope,
+        maximum: u32,
+    },
+    WorkloadQuota(Box<WorkloadQuotaRule>),
     MaximumAssignmentCount {
         id: RuleId,
         active: bool,
@@ -83,6 +91,9 @@ pub enum WorkforceRule {
         scope: Scope,
         person_id: PersonId,
         shift_id: ShiftId,
+        /// Omitted/true requires the pair; false excludes only this exact pair.
+        #[serde(default = "default_assigned", skip_serializing_if = "is_assigned")]
+        assigned: bool,
     },
     MutualAssignmentRestriction {
         id: RuleId,
@@ -124,6 +135,9 @@ impl WorkforceRule {
             | Self::MaximumConsecutive {
                 id, active, scope, ..
             }
+            | Self::MaximumWorkedWeekends {
+                id, active, scope, ..
+            }
             | Self::MaximumAssignmentCount {
                 id, active, scope, ..
             }
@@ -140,8 +154,41 @@ impl WorkforceRule {
                 id, active, scope, ..
             } => (*id, *active, scope),
             Self::MinimumRest(rule) => (rule.id, rule.active, &rule.scope),
+            Self::WorkloadQuota(rule) => (rule.id, rule.active, &rule.scope),
         }
     }
+}
+
+/// Independently authored per-person Required workload/count quota.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadQuotaRule {
+    pub id: RuleId,
+    pub active: bool,
+    pub strength: RequiredStrength,
+    pub scope: Scope,
+    pub calendar_id: WorkCalendarId,
+    pub membership: super::WindowMembership,
+    pub minimum: u32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::deserialize_present"
+    )]
+    pub maximum: Option<u32>,
+    pub measure: WorkloadQuotaMeasure,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum WorkloadQuotaMeasure {
+    AssignmentCount {},
+    BucketMinutes { bucket_id: WorkloadBucketId },
 }
 
 /// Boxed in the rule enum so every other rule does not reserve space for three scopes.
@@ -185,4 +232,14 @@ pub enum ConsecutiveMode {
 pub enum PairingMode {
     SameShift,
     OverlappingShifts,
+}
+
+const fn default_assigned() -> bool {
+    true
+}
+
+// Serde's skip_serializing_if API requires a reference predicate for this boolean field.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_assigned(assigned: &bool) -> bool {
+    *assigned
 }

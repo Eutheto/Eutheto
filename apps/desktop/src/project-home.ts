@@ -240,6 +240,7 @@ function isUncommittedMutationRejection(error: unknown): boolean {
   // Do not infer rollback from generic validation, transport or publication errors.
   return (
     (failure.category === "conflict" && failure.code === "scenario.revision_conflict") ||
+    (failure.category === "validation" && failure.code === "solution.base_adoption_noop") ||
     isRedoBranchTruncation(error) ||
     isOperationCancelled(error)
   );

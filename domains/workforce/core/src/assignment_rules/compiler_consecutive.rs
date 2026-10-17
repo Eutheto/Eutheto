@@ -38,8 +38,11 @@ pub(crate) struct ConsecutivePlan {
     pub mode: ConsecutiveMode,
     pub maximum: u32,
     pub break_minutes: Option<u32>,
-    /// For Assignments, one entry for every `i < j`, in lexicographic `(i, j)` order.
-    pub joins: Vec<bool>,
+    /// Positive ranks of possible predecessor ends, in matching candidate order.
+    pub end_ranks: Vec<u32>,
+    /// First joining end rank for candidates after the first; zero never joins.
+    pub join_thresholds: Vec<u32>,
+    pub rank_count: u32,
     /// For `WorkedDays`, sorted distinct reporting dates and their matching candidates.
     pub days: Vec<ConsecutiveDay>,
 }
@@ -174,7 +177,9 @@ pub(crate) fn plan(
                 ConsecutiveMode::WorkedDays {} => None,
                 ConsecutiveMode::Assignments { break_minutes } => Some(*break_minutes),
             },
-            joins: Vec::new(),
+            end_ranks: Vec::new(),
+            join_thresholds: Vec::new(),
+            rank_count: 0,
             days: Vec::new(),
         };
         match mode {
@@ -206,7 +211,7 @@ pub(crate) fn plan(
                     check_worked_shape(&consecutive.days, *maximum, limits)?;
                 }
             }
-            ConsecutiveMode::Assignments { .. } => {
+            ConsecutiveMode::Assignments { break_minutes } => {
                 budget.sort_work(matching.len())?;
                 matching.sort_unstable_by(|left, right| {
                     let left_pair = candidates[*left];
@@ -226,29 +231,15 @@ pub(crate) fn plan(
                         continue;
                     }
                     check_assignment_shape(matching.len(), *maximum, limits)?;
-                    let pair_count = pair_count(matching.len())?;
-                    budget.reserve(0, pair_count, pair_count)?;
-                    let break_duration = SignedDuration::from_mins(i64::from(
-                        consecutive.break_minutes.ok_or_else(invalid)?,
-                    ));
-                    for i in 0..matching.len() {
-                        let previous = input
-                            .shift(candidates[matching[i]].shift_id)
-                            .ok_or_else(invalid)?;
-                        for j in (i + 1)..matching.len() {
-                            budget.step()?;
-                            let next = input
-                                .shift(candidates[matching[j]].shift_id)
-                                .ok_or_else(invalid)?;
-                            let gap = previous
-                                .interval
-                                .ends_at
-                                .instant
-                                .as_timestamp()
-                                .duration_until(next.interval.starts_at.instant.as_timestamp());
-                            consecutive.joins.push(gap <= break_duration);
-                        }
-                    }
+                    plan_assignment_ranks(
+                        input,
+                        candidates,
+                        &matching,
+                        &mut consecutive,
+                        *break_minutes,
+                        budget,
+                        limits,
+                    )?;
                 }
             }
         }
@@ -280,22 +271,72 @@ pub(crate) fn plan(
     Ok(())
 }
 
-fn pair_count(n: usize) -> Result<u64, AssignmentRuleError> {
-    let n = count(n)?;
-    n.checked_mul(n.saturating_sub(1))
-        .and_then(|value| value.checked_div(2))
-        .ok_or_else(arithmetic)
-}
-
-fn q_count(n: usize) -> Result<u64, AssignmentRuleError> {
-    if n < 3 {
-        return Ok(0);
+fn plan_assignment_ranks(
+    input: &AssignmentInput,
+    candidates: &[AssignmentPair],
+    matching: &[usize],
+    data: &mut ConsecutivePlan,
+    break_minutes: u32,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<(), AssignmentRuleError> {
+    let predecessors = matching.len().checked_sub(1).ok_or_else(invalid)?;
+    let items = count(predecessors)?;
+    let bytes = items
+        .checked_mul(count(size_of::<jiff::Timestamp>() + 2 * size_of::<u32>())?)
+        .ok_or_else(arithmetic)?;
+    budget.reserve(0, items.checked_mul(3).ok_or_else(arithmetic)?, bytes)?;
+    let mut ends = Vec::with_capacity(predecessors);
+    for index in &matching[..predecessors] {
+        budget.step()?;
+        ends.push(
+            input
+                .shift(candidates[*index].shift_id)
+                .ok_or_else(invalid)?
+                .interval
+                .ends_at
+                .instant
+                .as_timestamp(),
+        );
     }
-    let left = count(n - 1)?;
-    let right = count(n - 2)?;
-    left.checked_mul(right)
-        .and_then(|value| value.checked_div(2))
-        .ok_or_else(arithmetic)
+    budget.sort_work(ends.len())?;
+    ends.sort_unstable();
+    budget.steps(count(ends.len())?)?;
+    ends.dedup();
+    data.rank_count = u32::try_from(ends.len()).map_err(|_| arithmetic())?;
+    check_maximum(data.rank_count, limits)?;
+    data.end_ranks = Vec::with_capacity(predecessors);
+    data.join_thresholds = Vec::with_capacity(predecessors);
+    let break_duration = SignedDuration::from_mins(i64::from(break_minutes));
+    let search_work = u64::from(ends.len().checked_ilog2().unwrap_or(0)) + 1;
+    for (position, index) in matching.iter().enumerate() {
+        budget.step()?;
+        let shift = input
+            .shift(candidates[*index].shift_id)
+            .ok_or_else(invalid)?;
+        if position < predecessors {
+            budget.steps(search_work)?;
+            let rank = ends
+                .binary_search(&shift.interval.ends_at.instant.as_timestamp())
+                .map_err(|_| invalid())?
+                .checked_add(1)
+                .ok_or_else(arithmetic)?;
+            data.end_ranks
+                .push(u32::try_from(rank).map_err(|_| arithmetic())?);
+        }
+        if position > 0 {
+            budget.steps(search_work)?;
+            let start = shift.interval.starts_at.instant.as_timestamp();
+            let threshold = ends
+                .partition_point(|end| end.duration_until(start) > break_duration)
+                .checked_add(1)
+                .ok_or_else(arithmetic)?;
+            let threshold = u32::try_from(threshold).map_err(|_| arithmetic())?;
+            check_maximum(threshold, limits)?;
+            data.join_thresholds.push(threshold);
+        }
+    }
+    Ok(())
 }
 
 fn add_constraint_shape(
@@ -373,79 +414,31 @@ fn bounded_shape(shape: Shape, limits: PlanningIrLimitsV1) -> Result<Shape, Assi
 
 fn assignment_shape(n: usize) -> Result<Shape, AssignmentRuleError> {
     let n = count(n)?;
-    let n_minus_one = n.saturating_sub(1);
-    let n_minus_two = n.saturating_sub(2);
-    let q = if n >= 3 {
-        n_minus_one
-            .checked_mul(n_minus_two)
-            .and_then(|value| value.checked_div(2))
-            .ok_or_else(arithmetic)?
-    } else {
-        0
-    };
-    let pairs = n
-        .checked_mul(n_minus_one)
-        .and_then(|value| value.checked_div(2))
+    let transitions = n.checked_sub(1).ok_or_else(invalid)?;
+    let variables = add(n, transitions.checked_mul(2).ok_or_else(arithmetic)?)?;
+    let constraints = add(2, transitions.checked_mul(7).ok_or_else(arithmetic)?)?;
+    // The first end-state carry has one term; subsequent carries have two.
+    let short_carry = u64::from(transitions > 0);
+    let references = add(
+        add(variables.checked_mul(3).ok_or_else(arithmetic)?, 10)?,
+        transitions.checked_mul(40).ok_or_else(arithmetic)?,
+    )?
+    .checked_sub(short_carry)
+    .ok_or_else(arithmetic)?;
+    let component_edges = add(4, transitions.checked_mul(19).ok_or_else(arithmetic)?)?
+        .checked_sub(short_carry)
         .ok_or_else(arithmetic)?;
-    let variables = n
-        .checked_add(n_minus_one)
-        .and_then(|value| value.checked_add(q))
-        .ok_or_else(arithmetic)?;
-    let mut constraints = n.checked_add(1).ok_or_else(arithmetic)?;
-    let mut references = variables.checked_mul(3).ok_or_else(arithmetic)?;
-    let mut component_edges = 0_u64;
-    references = references
-        .checked_add(n.checked_mul(5).ok_or_else(arithmetic)?)
-        .and_then(|value| value.checked_add(5))
-        .ok_or_else(arithmetic)?;
-    component_edges = component_edges
-        .checked_add(n.checked_mul(2).ok_or_else(arithmetic)?)
-        .and_then(|value| value.checked_add(2))
-        .ok_or_else(arithmetic)?;
-    if n >= 2 {
-        let prefix_constraints = 2_u64
-            .checked_add(n_minus_two.checked_mul(3).ok_or_else(arithmetic)?)
-            .and_then(|value| value.checked_add(n_minus_one))
-            .ok_or_else(arithmetic)?;
-        constraints = constraints
-            .checked_add(prefix_constraints)
-            .ok_or_else(arithmetic)?;
-        references = add(
-            add(
-                add(references, 10)?,
-                n_minus_two.checked_mul(16).ok_or_else(arithmetic)?,
-            )?,
-            n_minus_one.checked_mul(6).ok_or_else(arithmetic)?,
-        )?;
-        component_edges = add(
-            add(
-                add(component_edges, 4)?,
-                n_minus_two.checked_mul(7).ok_or_else(arithmetic)?,
-            )?,
-            n_minus_one.checked_mul(3).ok_or_else(arithmetic)?,
-        )?;
-    }
-    constraints = constraints
-        .checked_add(q.checked_mul(3).ok_or_else(arithmetic)?)
-        .and_then(|value| value.checked_add(pairs))
-        .ok_or_else(arithmetic)?;
-    references = add(
-        add(references, q.checked_mul(16).ok_or_else(arithmetic)?)?,
-        pairs.checked_mul(7).ok_or_else(arithmetic)?,
-    )?;
-    component_edges = add(
-        add(component_edges, q.checked_mul(7).ok_or_else(arithmetic)?)?,
-        pairs.checked_mul(4).ok_or_else(arithmetic)?,
-    )?;
-    let shape = Shape {
-        planned_constraints: 1,
-        variables,
-        constraints,
-        provenance: variables.checked_add(constraints).ok_or_else(arithmetic)?,
-        references,
-        component_edges,
-    };
-    bounded_shape(shape, PlanningIrLimitsV1::DEFAULT)
+    bounded_shape(
+        Shape {
+            planned_constraints: 1,
+            variables,
+            constraints,
+            provenance: add(variables, constraints)?,
+            references,
+            component_edges,
+        },
+        PlanningIrLimitsV1::DEFAULT,
+    )
 }
 
 pub(super) fn check_assignment_shape(
@@ -465,6 +458,16 @@ pub(super) fn check_assignment_shape(
         return Ok(());
     }
     check_maximum(maximum, limits)?;
+    within(
+        1,
+        u64::try_from(
+            limits
+                .max_abs_coefficient
+                .min(PlanningIrLimitsV1::DEFAULT.max_abs_coefficient),
+        )
+        .map_err(|_| arithmetic())?,
+        AssignmentRuleLimit::PerRecord,
+    )?;
     let shape = assignment_shape(n)?;
     let defaults = PlanningIrLimitsV1::DEFAULT;
     within(
@@ -672,7 +675,6 @@ pub(crate) fn capabilities(
                 capabilities.insert(Capability::CardinalityRange);
             }
             ConsecutiveMode::Assignments { .. } => {
-                capabilities.insert(Capability::BoolOr);
                 capabilities.insert(Capability::LinearComparison);
             }
         }
@@ -688,24 +690,6 @@ pub(crate) fn shape(plan: &Plan, limits: PlanningIrLimitsV1) -> Result<Shape, As
         }
     }
     Ok(result)
-}
-
-fn pair_offset(i: usize, n: usize) -> usize {
-    i * (2 * n - i - 1) / 2
-}
-
-fn join_at(joins: &[bool], i: usize, j: usize, n: usize) -> Result<bool, AssignmentRuleError> {
-    if i >= j || j >= n {
-        return Err(invalid());
-    }
-    let offset = pair_offset(i, n)
-        .checked_add(j - i - 1)
-        .ok_or_else(arithmetic)?;
-    joins.get(offset).copied().ok_or_else(invalid)
-}
-
-fn int_id(value: &str) -> Result<IntVariableId, AssignmentRuleError> {
-    IntVariableId::new(value.to_owned()).map_err(|_| invalid())
 }
 
 fn helper_fact(
@@ -769,7 +753,7 @@ fn emit_int<K: Serialize>(
     provenance: &mut Vec<ProvenanceRecord>,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,
-) -> Result<IntVariable, AssignmentRuleError> {
+) -> Result<IntVariableId, AssignmentRuleError> {
     budget.step()?;
     within(
         i64::from(maximum).unsigned_abs(),
@@ -798,8 +782,8 @@ fn emit_int<K: Serialize>(
         },
         provenance: fact_id,
     };
-    variables.push(Variable::Integer(variable.clone()));
-    Ok(variable)
+    variables.push(Variable::Integer(variable));
+    Ok(id)
 }
 
 fn linear(
@@ -886,7 +870,7 @@ fn not_literal(variable: &BoolVariable) -> Literal {
     Literal::negative(variable.id.clone())
 }
 
-// Keep the exact predecessor channel and guarded run transitions together for audit.
+// Carry the last selected end rank, not the greatest end seen so far.
 #[allow(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
@@ -925,16 +909,18 @@ fn emit_assignments(
         }
         return Ok(());
     }
-    let mut x = Vec::with_capacity(n);
-    for index in &planned.population {
-        x.push(variables.boolean(*index).ok_or_else(invalid)?);
-    }
-    let mut runs = Vec::with_capacity(n);
-    for (j, _) in x.iter().enumerate() {
-        runs.push(emit_int(
+    let mut previous_run = None;
+    let mut previous_end = None;
+    let term = |variable: &IntVariableId, coefficient| LinearTerm {
+        variable: variable.clone(),
+        coefficient,
+    };
+    for (j, index) in planned.population.iter().enumerate() {
+        let x = variables.boolean(*index).ok_or_else(invalid)?;
+        let run = emit_int(
             planned.rule,
             person,
-            &("run", j),
+            &("prefix_run", j),
             data.maximum,
             parent.clone(),
             identities,
@@ -942,288 +928,131 @@ fn emit_assignments(
             provenance,
             budget,
             limits,
-        )?);
-    }
-    for (j, run) in runs.iter().enumerate() {
-        emit_constraint(
-            planned.rule,
-            person,
-            &("absent", j),
-            linear(
-                vec![LinearTerm {
-                    variable: run.id.clone(),
-                    coefficient: 1,
-                }],
-                ComparisonOp::Equal,
-                0,
-                limits,
-            )?,
-            vec![not_literal(x[j])],
-            parent.clone(),
-            identities,
-            constraints,
-            provenance,
-            budget,
-            limits,
         )?;
-    }
-    emit_constraint(
-        planned.rule,
-        person,
-        &("first", 0_usize),
-        linear(
-            vec![LinearTerm {
-                variable: runs[0].id.clone(),
-                coefficient: 1,
-            }],
-            ComparisonOp::Equal,
-            1,
-            limits,
-        )?,
-        vec![x_literal(x[0])],
-        parent.clone(),
-        identities,
-        constraints,
-        provenance,
-        budget,
-        limits,
-    )?;
-    let mut prefixes = Vec::with_capacity(n.saturating_sub(1));
-    for j in 1..n {
-        let prefix = emit_bool(
-            planned.rule,
-            person,
-            &("prefix", j),
-            parent.clone(),
-            identities,
-            output,
-            provenance,
-            budget,
-        )?;
-        if j == 1 {
-            emit_constraint(
+        let end = if j + 1 < n {
+            Some(emit_int(
                 planned.rule,
                 person,
-                &("prefix_not", j),
-                Constraint::bool_or(vec![not_literal(&prefix), not_literal(x[0])]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
-            )?;
-            emit_constraint(
-                planned.rule,
-                person,
-                &("prefix_yes", j),
-                Constraint::bool_or(vec![x_literal(x[0]), x_literal(&prefix)]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
-            )?;
-        } else {
-            let previous = &prefixes[j - 2];
-            emit_constraint(
-                planned.rule,
-                person,
-                &("prefix_prev", j),
-                Constraint::bool_or(vec![not_literal(&prefix), x_literal(previous)]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
-            )?;
-            emit_constraint(
-                planned.rule,
-                person,
-                &("prefix_gap", j),
-                Constraint::bool_or(vec![not_literal(&prefix), not_literal(x[j - 1])]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
-            )?;
-            emit_constraint(
-                planned.rule,
-                person,
-                &("prefix_back", j),
-                Constraint::bool_or(vec![
-                    not_literal(previous),
-                    x_literal(x[j - 1]),
-                    x_literal(&prefix),
-                ]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
-            )?;
-        }
-        prefixes.push(prefix);
-    }
-    for j in 1..n {
-        emit_constraint(
-            planned.rule,
-            person,
-            &("prefix_run", j),
-            linear(
-                vec![LinearTerm {
-                    variable: runs[j].id.clone(),
-                    coefficient: 1,
-                }],
-                ComparisonOp::Equal,
-                1,
-                limits,
-            )?,
-            vec![x_literal(x[j]), x_literal(&prefixes[j - 1])],
-            parent.clone(),
-            identities,
-            constraints,
-            provenance,
-            budget,
-            limits,
-        )?;
-    }
-    for i in 0..n {
-        for j in (i + 2)..n {
-            let q = emit_bool(
-                planned.rule,
-                person,
-                &("q", i, j),
+                &("prefix_end_rank", j),
+                data.rank_count,
                 parent.clone(),
                 identities,
                 output,
                 provenance,
                 budget,
-            )?;
-            let previous = if j == i + 2 {
-                x[i].clone()
-            } else {
-                let previous_id = identities.derive(
-                    IdentityKind::Boolean,
-                    &("maximum_consecutive", planned.rule, person, ("q", i, j - 1)),
-                    budget,
-                )?;
-                BoolVariable {
-                    id: BoolVariableId::new(previous_id).map_err(|_| invalid())?,
-                    provenance: q.provenance.clone(),
-                }
-            };
+                limits,
+            )?)
+        } else {
+            None
+        };
+        let joined = if j > 0 {
+            Some(emit_bool(
+                planned.rule,
+                person,
+                &("prefix_join", j),
+                parent.clone(),
+                identities,
+                output,
+                provenance,
+                budget,
+            )?)
+        } else {
+            None
+        };
+        let mut emit = |kind, terms, op, rhs, enforcement| {
             emit_constraint(
                 planned.rule,
                 person,
-                &("q_prev", i, j),
-                Constraint::bool_or(vec![not_literal(&q), x_literal(&previous)]),
-                Vec::new(),
+                &(kind, j),
+                linear(terms, op, rhs, limits)?,
+                enforcement,
                 parent.clone(),
                 identities,
                 constraints,
                 provenance,
                 budget,
                 limits,
+            )
+        };
+        if j == 0 {
+            emit(
+                "prefix_run_carry",
+                vec![term(&run, 1)],
+                ComparisonOp::Equal,
+                0,
+                vec![not_literal(x)],
             )?;
-            emit_constraint(
-                planned.rule,
-                person,
-                &("q_gap", i, j),
-                Constraint::bool_or(vec![not_literal(&q), not_literal(x[j - 1])]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
+            emit(
+                "prefix_run_reset",
+                vec![term(&run, 1)],
+                ComparisonOp::Equal,
+                1,
+                vec![x_literal(x)],
             )?;
-            emit_constraint(
-                planned.rule,
-                person,
-                &("q_back", i, j),
-                Constraint::bool_or(vec![
-                    not_literal(&previous),
-                    x_literal(x[j - 1]),
-                    x_literal(&q),
-                ]),
-                Vec::new(),
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
+        } else {
+            let prior_run = previous_run.as_ref().ok_or_else(invalid)?;
+            let prior_end = previous_end.as_ref().ok_or_else(invalid)?;
+            let joined = joined.as_ref().ok_or_else(invalid)?;
+            let threshold = i64::from(*data.join_thresholds.get(j - 1).ok_or_else(invalid)?);
+            emit(
+                "prefix_join_yes",
+                vec![term(prior_end, 1)],
+                ComparisonOp::GreaterOrEqual,
+                threshold,
+                vec![x_literal(joined)],
+            )?;
+            emit(
+                "prefix_join_no",
+                vec![term(prior_end, 1)],
+                ComparisonOp::LessOrEqual,
+                threshold - 1,
+                vec![not_literal(joined)],
+            )?;
+            emit(
+                "prefix_run_carry",
+                vec![term(&run, 1), term(prior_run, -1)],
+                ComparisonOp::Equal,
+                0,
+                vec![not_literal(x)],
+            )?;
+            emit(
+                "prefix_run_increment",
+                vec![term(&run, 1), term(prior_run, -1)],
+                ComparisonOp::Equal,
+                1,
+                vec![x_literal(x), x_literal(joined)],
+            )?;
+            emit(
+                "prefix_run_reset",
+                vec![term(&run, 1)],
+                ComparisonOp::Equal,
+                1,
+                vec![x_literal(x), not_literal(joined)],
             )?;
         }
-    }
-    for j in 1..n {
-        for i in 0..j {
-            let predecessor = if i + 1 == j {
-                x[i].clone()
-            } else {
-                let q_id = identities.derive(
-                    IdentityKind::Boolean,
-                    &("maximum_consecutive", planned.rule, person, ("q", i, j)),
-                    budget,
-                )?;
-                BoolVariable {
-                    id: BoolVariableId::new(q_id).map_err(|_| invalid())?,
-                    provenance: x[i].provenance.clone(),
-                }
+        if let Some(end) = &end {
+            let rank = i64::from(*data.end_ranks.get(j).ok_or_else(invalid)?);
+            emit(
+                "prefix_end_selected",
+                vec![term(end, 1)],
+                ComparisonOp::Equal,
+                rank,
+                vec![x_literal(x)],
+            )?;
+            let carry = match &previous_end {
+                Some(prior_end) => vec![term(end, 1), term(prior_end, -1)],
+                None => vec![term(end, 1)],
             };
-            let body = if join_at(&data.joins, i, j, n)? {
-                linear(
-                    vec![
-                        LinearTerm {
-                            variable: runs[j].id.clone(),
-                            coefficient: 1,
-                        },
-                        LinearTerm {
-                            variable: runs[i].id.clone(),
-                            coefficient: -1,
-                        },
-                    ],
-                    ComparisonOp::Equal,
-                    1,
-                    limits,
-                )?
-            } else {
-                linear(
-                    vec![LinearTerm {
-                        variable: runs[j].id.clone(),
-                        coefficient: 1,
-                    }],
-                    ComparisonOp::Equal,
-                    1,
-                    limits,
-                )?
-            };
-            emit_constraint(
-                planned.rule,
-                person,
-                &("transition", i, j),
-                body,
-                vec![x_literal(x[j]), x_literal(&predecessor)],
-                parent.clone(),
-                identities,
-                constraints,
-                provenance,
-                budget,
-                limits,
+            emit(
+                "prefix_end_carry",
+                carry,
+                ComparisonOp::Equal,
+                0,
+                vec![not_literal(x)],
             )?;
         }
+        previous_run = Some(run);
+        previous_end = end;
     }
     Ok(())
 }
@@ -1464,6 +1293,12 @@ struct MeasuredExpression {
     constant: i64,
 }
 
+#[derive(Serialize)]
+struct MeasuredTerm {
+    variable: &'static str,
+    coefficient: i64,
+}
+
 struct MeasuredTerms {
     count: usize,
     two: bool,
@@ -1472,11 +1307,11 @@ impl Serialize for MeasuredTerms {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut sequence = serializer.serialize_seq(Some(self.count))?;
         for index in 0..self.count {
-            sequence.serialize_element(&LinearTerm {
+            sequence.serialize_element(&MeasuredTerm {
                 variable: if self.two && index & 1 == 1 {
-                    int_id(MEASURE_INT_ALT_ID).map_err(|_| serde::ser::Error::custom("id"))?
+                    MEASURE_INT_ALT_ID
                 } else {
-                    int_id(MEASURE_INT_ID).map_err(|_| serde::ser::Error::custom("id"))?
+                    MEASURE_INT_ID
                 },
                 coefficient: if self.two && index == 1 { -1 } else { 1 },
             })?;
@@ -1601,7 +1436,7 @@ fn measured_int_variable(maximum: u32) -> MeasuredVariable {
     })
 }
 
-fn measured_linear(body_terms: usize, rhs: i64, _enforcement: usize) -> MeasuredBody {
+fn measured_linear(body_terms: usize, rhs: i64, op: ComparisonOp) -> MeasuredBody {
     MeasuredBody::LinearComparison(MeasuredComparison {
         expression: MeasuredExpression {
             terms: MeasuredTerms {
@@ -1610,7 +1445,7 @@ fn measured_linear(body_terms: usize, rhs: i64, _enforcement: usize) -> Measured
             },
             constant: 0,
         },
-        op: ComparisonOp::Equal,
+        op,
         rhs,
     })
 }
@@ -1640,7 +1475,7 @@ fn preflight_assignments(
         }
         return Ok(());
     }
-    for _ in 0..n {
+    for j in 0..n {
         charge_variable(
             planned.rule,
             person,
@@ -1648,160 +1483,51 @@ fn preflight_assignments(
             budget,
             limits,
         )?;
-    }
-    for _ in 0..n.saturating_sub(1) {
-        charge_variable(
-            planned.rule,
-            person,
-            &measured_bool_variable(),
-            budget,
-            limits,
-        )?;
-    }
-    for _ in 0..q_count(n)? {
-        charge_variable(
-            planned.rule,
-            person,
-            &measured_bool_variable(),
-            budget,
-            limits,
-        )?;
-    }
-    for _ in 0..n {
-        charge_constraint(
-            planned.rule,
-            person,
-            measured_linear(1, 0, 1),
-            1,
-            1,
-            budget,
-            limits,
-        )?;
-    }
-    charge_constraint(
-        planned.rule,
-        person,
-        measured_linear(1, 1, 1),
-        1,
-        1,
-        budget,
-        limits,
-    )?;
-    if n >= 2 {
-        charge_constraint(
-            planned.rule,
-            person,
-            MeasuredBody::BoolOr {
-                literals: MeasuredLiterals(2, true),
-            },
-            2,
-            0,
-            budget,
-            limits,
-        )?;
-        charge_constraint(
-            planned.rule,
-            person,
-            MeasuredBody::BoolOr {
-                literals: MeasuredLiterals(2, true),
-            },
-            2,
-            0,
-            budget,
-            limits,
-        )?;
-        for _ in 2..n {
-            charge_constraint(
+        if j + 1 < n {
+            charge_variable(
                 planned.rule,
                 person,
-                MeasuredBody::BoolOr {
-                    literals: MeasuredLiterals(2, true),
-                },
-                2,
-                0,
-                budget,
-                limits,
-            )?;
-            charge_constraint(
-                planned.rule,
-                person,
-                MeasuredBody::BoolOr {
-                    literals: MeasuredLiterals(2, true),
-                },
-                2,
-                0,
-                budget,
-                limits,
-            )?;
-            charge_constraint(
-                planned.rule,
-                person,
-                MeasuredBody::BoolOr {
-                    literals: MeasuredLiterals(3, true),
-                },
-                3,
-                0,
+                &measured_int_variable(data.rank_count),
                 budget,
                 limits,
             )?;
         }
-        for _ in 1..n {
-            charge_constraint(
+        if j > 0 {
+            charge_variable(
                 planned.rule,
                 person,
-                measured_linear(1, 1, 2),
-                1,
-                2,
+                &measured_bool_variable(),
                 budget,
                 limits,
             )?;
         }
-    }
-    for _ in 0..q_count(n)? {
-        charge_constraint(
-            planned.rule,
-            person,
-            MeasuredBody::BoolOr {
-                literals: MeasuredLiterals(2, true),
-            },
-            2,
-            0,
-            budget,
-            limits,
-        )?;
-        charge_constraint(
-            planned.rule,
-            person,
-            MeasuredBody::BoolOr {
-                literals: MeasuredLiterals(2, true),
-            },
-            2,
-            0,
-            budget,
-            limits,
-        )?;
-        charge_constraint(
-            planned.rule,
-            person,
-            MeasuredBody::BoolOr {
-                literals: MeasuredLiterals(3, true),
-            },
-            3,
-            0,
-            budget,
-            limits,
-        )?;
-    }
-    for _ in 0..pair_count(n)? {
-        charge_constraint(
-            planned.rule,
-            person,
-            measured_linear(2, 1, 2),
-            2,
-            2,
-            budget,
-            limits,
-        )?;
+        let mut charge = |terms, op, rhs, enforcement| {
+            charge_constraint(
+                planned.rule,
+                person,
+                measured_linear(terms, rhs, op),
+                count(terms)?,
+                enforcement,
+                budget,
+                limits,
+            )
+        };
+        if j == 0 {
+            charge(1, ComparisonOp::Equal, 0, 1)?;
+            charge(1, ComparisonOp::Equal, 1, 1)?;
+        } else {
+            let threshold = i64::from(*data.join_thresholds.get(j - 1).ok_or_else(invalid)?);
+            charge(1, ComparisonOp::GreaterOrEqual, threshold, 1)?;
+            charge(1, ComparisonOp::LessOrEqual, threshold - 1, 1)?;
+            charge(2, ComparisonOp::Equal, 0, 1)?;
+            charge(2, ComparisonOp::Equal, 1, 2)?;
+            charge(1, ComparisonOp::Equal, 1, 2)?;
+        }
+        if j + 1 < n {
+            let rank = i64::from(*data.end_ranks.get(j).ok_or_else(invalid)?);
+            charge(1, ComparisonOp::Equal, rank, 1)?;
+            charge(if j == 0 { 1 } else { 2 }, ComparisonOp::Equal, 0, 1)?;
+        }
     }
     Ok(())
 }
@@ -1910,47 +1636,4 @@ pub(crate) fn preflight_contribution(
         }
     }
     budget.check()
-}
-
-/// Complete-model root serialization has an enum wrapper for every helper variable. Contribution
-/// preflight already charges each declaration; this pass returns only the additional wrapper bytes
-/// which the complete root's empty-array measurement cannot see.
-pub(crate) fn helper_variable_bytes(
-    plan: &Plan,
-    budget: &mut OperationBudget<'_>,
-) -> Result<u64, AssignmentRuleError> {
-    let mut bytes = 0_u64;
-    for planned in &plan.constraints {
-        if !is(planned) {
-            continue;
-        }
-        let (data, _) = data(planned, plan)?;
-        let mut charge = |variable: MeasuredVariable| -> Result<(), AssignmentRuleError> {
-            budget.step()?;
-            bytes = add(bytes, budget.measure_ir(&variable)?)?;
-            Ok(())
-        };
-        if data.maximum == 0 {
-            continue;
-        }
-        match data.mode {
-            ConsecutiveMode::WorkedDays {} => {
-                for _ in &data.days {
-                    charge(measured_bool_variable())?;
-                }
-            }
-            ConsecutiveMode::Assignments { .. } => {
-                for _ in &planned.population {
-                    charge(measured_int_variable(data.maximum))?;
-                }
-                for _ in 0..planned.population.len().saturating_sub(1) {
-                    charge(measured_bool_variable())?;
-                }
-                for _ in 0..q_count(planned.population.len())? {
-                    charge(measured_bool_variable())?;
-                }
-            }
-        }
-    }
-    Ok(bytes)
 }

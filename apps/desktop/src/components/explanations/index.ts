@@ -1,5 +1,4 @@
 export { default as AssignmentInspector } from "./AssignmentInspector.vue";
-export { default as ChangeSetPreview } from "./ChangeSetPreview.vue";
 export { default as ConflictCard } from "./ConflictCard.vue";
 export { default as ErrorRecoveryPanel } from "./ErrorRecoveryPanel.vue";
 export { default as ExplanationPanel } from "./ExplanationPanel.vue";

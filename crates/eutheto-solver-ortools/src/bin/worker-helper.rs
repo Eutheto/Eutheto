@@ -10,9 +10,9 @@ use std::time::Duration;
 use eutheto_protocol::frame::{decode_parent_frame, encode_frame, read_frame};
 use eutheto_protocol::wire::handshake_response::Outcome;
 use eutheto_protocol::wire::{
-    Finished, HandshakeError, HandshakeErrorCode, HandshakeResponse, HandshakeSuccess, Progress,
-    ProgressKind, ProjectedCandidate, ProjectedValue, Started, TerminationReason, WorkerError,
-    WorkerErrorCode, WorkerFrame, WorkerSolveStatus, parent_frame, worker_frame,
+    Finished, HandshakeError, HandshakeErrorCode, HandshakeResponse, HandshakeSuccess, Incumbent,
+    Progress, ProgressKind, ProjectedCandidate, ProjectedValue, Started, TerminationReason,
+    WorkerError, WorkerErrorCode, WorkerFrame, WorkerSolveStatus, parent_frame, worker_frame,
 };
 use eutheto_protocol::{
     FrameClass, applied_parameters_sha256, checked_in_policy, normalize_applied_parameters,
@@ -106,6 +106,7 @@ fn worker() -> Result<(), Box<dyn Error>> {
             eutheto_protocol::wire::Capability::Progress as i32,
             eutheto_protocol::wire::Capability::SolutionProjection as i32,
             eutheto_protocol::wire::Capability::SolutionStats as i32,
+            eutheto_protocol::wire::Capability::SufficientAssumptions as i32,
         ];
     write_worker(
         &mut output,
@@ -202,6 +203,45 @@ fn worker() -> Result<(), Box<dyn Error>> {
                 },
             )?;
         }
+        return Ok(());
+    }
+
+    if production_contract
+        && solve.parameters.as_ref().is_some_and(|parameters| {
+            parameters.random_seed == Some(2)
+                && parameters.emit_intermediate_solutions == Some(true)
+        })
+    {
+        write_worker(
+            &mut output,
+            &WorkerFrame {
+                body: Some(worker_frame::Body::Incumbent(Incumbent {
+                    request_id: solve.request_id.clone(),
+                    candidate: Some(ProjectedCandidate {
+                        values: solve
+                            .projections
+                            .iter()
+                            .map(|projection| ProjectedValue {
+                                projection_id: projection.projection_id,
+                                value: 0,
+                            })
+                            .collect(),
+                    }),
+                    ..Incumbent::default()
+                })),
+            },
+        )?;
+        write_worker(
+            &mut output,
+            &WorkerFrame {
+                body: Some(worker_frame::Body::Error(WorkerError {
+                    request_id: solve.request_id,
+                    code: WorkerErrorCode::Internal as i32,
+                    message: "test internal failure".to_owned(),
+                    retryable: false,
+                })),
+            },
+        )?;
         return Ok(());
     }
 

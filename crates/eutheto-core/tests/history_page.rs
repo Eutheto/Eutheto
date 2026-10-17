@@ -481,12 +481,23 @@ async fn recorded_empty_summary_and_nonreversible_entry_are_not_omissions_or_und
     let applied_at = "2026-09-01T00:00:00Z".parse()?;
     // The store's public journal producer contract permits an absent inverse and
     // an empty recorded summary. Commit a real pure mutation through that API.
+    let project = store.get_project(scenario_id).await?;
+    let (_, custody_stamp) = store
+        .capture_scenario_custody(
+            scenario_id,
+            Revision::INITIAL,
+            project.document,
+            eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+            None,
+        )
+        .await?;
     store
         .execute_command(
             scenario_id,
             Revision::INITIAL,
             eutheto_store::RedoBranchPolicy::Reject,
-            CancellationToken::new(),
+            custody_stamp,
+            eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
             move |current| {
                 let applied = eutheto_command::apply_command_with_registry(
                     current,

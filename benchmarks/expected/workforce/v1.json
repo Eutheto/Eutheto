@@ -2,7 +2,7 @@
   "format": "eutheto/workforce-corpus-expectations",
   "schemaVersion": 1,
   "corpusVersion": 1,
-  "generatorSourceSha256": "9fccd28881bf3bc5d2fa8c9400223234309356a5e027c52df8d5c669e90d13e7",
+  "generatorSourceSha256": "17cbb6a982ed87f82e5ee6de163e3f2e66bc74ce715c3c42eacb907e0de74697",
   "cases": [
     {
       "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
@@ -287,18 +287,18 @@
       }
     },
     {
-      "inputSha256": "ef3edf583839ea1d6170a2b186632168c54c61ff11187b6dab9485ff11feaf1d",
+      "inputSha256": "ebee95aec00b746e08e50948d76bb773ec0d503ac3d3e4337bdf567f42e5a172",
       "expected": {
         "id": "large-supported",
         "disposition": "accepted",
-        "people": 100,
+        "people": 101,
         "horizonDays": 12,
         "resolvedShifts": 12,
         "selectedAssignments": 12,
         "score": {
           "feasibility": 0,
           "minimumStableRank": 0,
-          "maximumStableRank": 14400
+          "maximumStableRank": 14544
         },
         "modelEnvelope": {
           "minimumVariables": 2400,
@@ -307,7 +307,7 @@
         },
         "deferredObligations": [],
         "semantics": [
-          "Exactly100 active universally eligible people by12 independent daily one-hour shifts:1200 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
+          "Exactly101 active universally eligible people by12 independent daily one-hour shifts:1212 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
         ]
       }
     },

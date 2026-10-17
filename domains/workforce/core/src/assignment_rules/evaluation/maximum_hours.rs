@@ -4,15 +4,18 @@ use super::super::{
     input::AssignmentInput,
     reporting::ReportingWindows,
 };
-use super::{HoursWitness, Selected, Summary, Witness, arithmetic, invalid, predicates};
+use super::{
+    HealthDirection, HealthObservation, HealthObservationKind, HealthUnits, HoursWitness,
+    MAX_HEALTH_AFFECTED_PAIRS, Selected, Summary, Witness, arithmetic, invalid, predicates,
+};
 use crate::{
     ids::{ShiftId, WorkCalendarId, WorkloadBucketId},
     model::{
-        CalendarPeriod, OverlappingContribution, Scope, WindowMembership, WorkWindow,
+        AssignmentPair, OverlappingContribution, Scope, WindowMembership, WorkWindow,
         WorkforceEntity, WorkforceRule, WorkloadMeasurement,
     },
 };
-use eutheto_types::{CancellationToken, Horizon, Rfc3339Timestamp, ScenarioDocument};
+use eutheto_types::{Horizon, Rfc3339Timestamp, ScenarioDocument};
 use jiff::{SignedDuration, Span, civil::Date};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,6 +56,7 @@ struct RollingEvent {
 /// Evaluates `MaximumHours` directly from the original selected pairs.
 ///
 /// No compiler population, candidate pruning, compiled window, or IR decision is consulted.
+#[allow(clippy::too_many_lines)]
 pub(super) fn evaluate(
     document: &ScenarioDocument,
     input: &AssignmentInput,
@@ -111,6 +115,8 @@ pub(super) fn evaluate(
             } => evaluate_calendar(
                 document,
                 input,
+                selected,
+                scope,
                 &contributions,
                 calendar_id,
                 membership,
@@ -129,6 +135,10 @@ pub(super) fn evaluate(
                 membership,
             } => match membership {
                 WindowMembership::StartInstant => evaluate_rolling_start(
+                    document,
+                    input,
+                    selected,
+                    scope,
                     &contributions,
                     duration_minutes,
                     bucket.measurement,
@@ -141,6 +151,10 @@ pub(super) fn evaluate(
                     budget,
                 )?,
                 WindowMembership::Intersection => evaluate_rolling_intersection(
+                    document,
+                    input,
+                    selected,
+                    scope,
                     &contributions,
                     duration_minutes,
                     bucket.overlapping_contribution,
@@ -199,6 +213,8 @@ fn collect_contributions(
 fn evaluate_calendar(
     document: &ScenarioDocument,
     input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     contributions: &[Contribution],
     calendar_id: WorkCalendarId,
     membership: WindowMembership,
@@ -257,6 +273,22 @@ fn evaluate_calendar(
     for (window, group) in grouped {
         budget.step()?;
         let actual = aggregate(&group, measurement, overlapping, budget)?;
+        let repair_members = if actual > cap && summary.collecting_repair() {
+            Some(association_members(
+                document,
+                input,
+                selected,
+                scope,
+                person_id,
+                bucket_id,
+                Some(calendar_id),
+                membership,
+                window,
+                budget,
+            )?)
+        } else {
+            None
+        };
         check_window(
             person_id,
             &group,
@@ -266,6 +298,9 @@ fn evaluate_calendar(
             maximum_minutes,
             cap,
             actual,
+            None,
+            None,
+            repair_members,
             summary,
             budget,
         )?;
@@ -336,19 +371,9 @@ fn resolve_calendar_ranges(
     else {
         return Err(invalid());
     };
-    let scan_cost = match &calendar.period {
-        CalendarPeriod::Custom { intervals } => count(intervals.len())?,
-        _ => 1,
-    };
-    let cancellation = match budget.control() {
-        Some(eutheto_types::OperationControl::Cancellation(token)) => token.clone(),
-        _ => CancellationToken::new(),
-    };
     let mut windows = BTreeSet::new();
     for contribution in contributions {
         budget.step()?;
-        // A sparse instant query still validates/resolves all custom intervals.
-        budget.steps(scan_cost)?;
         let (start, end) = match membership {
             WindowMembership::StartInstant => (
                 contribution.interval.start,
@@ -365,7 +390,7 @@ fn resolve_calendar_ranges(
             calendar_id,
             calendar,
             range,
-            &cancellation,
+            &mut |step| budget.calendar_step(step),
         )?;
         budget.check()?;
         budget.steps(count(resolved.len())?)?;
@@ -419,8 +444,12 @@ fn resolve_dates(
 }
 
 // Keep evaluator dimensions explicit; bundling them would add a one-use context type.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn evaluate_rolling_start(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     contributions: &[Contribution],
     duration_minutes: u32,
     measurement: WorkloadMeasurement,
@@ -503,17 +532,57 @@ fn evaluate_rolling_start(
         let end = add_timestamp(at, duration)?;
         let mut group = Vec::new();
         let first_shift = first_active_shift(contributions, &active, budget)?;
+        let affected_pair_count = summary
+            .collecting_health()
+            .then(|| count(active_count))
+            .transpose()?;
+        let affected_pairs = if summary.collecting_health() {
+            let mut pairs = Vec::new();
+            for (contribution, is_active) in contributions.iter().zip(&active) {
+                budget.step()?;
+                if *is_active && pairs.len() < MAX_HEALTH_AFFECTED_PAIRS {
+                    budget.reserve(0, 1, 16)?;
+                    pairs.push(AssignmentPair {
+                        person_id,
+                        shift_id: contribution.shift_id,
+                    });
+                }
+            }
+            Some(pairs)
+        } else {
+            None
+        };
+        let window = Window { start: at, end };
+        let repair_members = if actual > cap && summary.collecting_repair() {
+            Some(association_members(
+                document,
+                input,
+                selected,
+                scope,
+                person_id,
+                bucket_id,
+                None,
+                WindowMembership::StartInstant,
+                window,
+                budget,
+            )?)
+        } else {
+            None
+        };
         budget.reserve(0, 1, 96)?;
         group.push(contributions[first_shift]);
         check_window(
             person_id,
             &group,
-            Window { start: at, end },
+            window,
             bucket_id,
             None,
             maximum_minutes,
             cap,
             actual,
+            affected_pair_count,
+            affected_pairs,
+            repair_members,
             summary,
             budget,
         )?;
@@ -522,8 +591,12 @@ fn evaluate_rolling_start(
 }
 
 // Keep evaluator dimensions explicit; bundling them would add a one-use context type.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn evaluate_rolling_intersection(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     contributions: &[Contribution],
     duration_minutes: u32,
     overlapping: OverlappingContribution,
@@ -571,11 +644,27 @@ fn evaluate_rolling_intersection(
         };
         let mut group = Vec::new();
         let mut first = None;
+        let mut matching_count = 0usize;
+        let mut affected_pairs = summary.collecting_health().then(Vec::new);
         for contribution in contributions {
             budget.step()?;
             if contribution.interval.start < end && start < contribution.interval.end {
-                first = Some(contribution.shift_id);
-                break;
+                matching_count = matching_count.checked_add(1).ok_or_else(arithmetic)?;
+                if first.is_none() {
+                    first = Some(contribution.shift_id);
+                }
+                if let Some(pairs) = affected_pairs.as_mut()
+                    && pairs.len() < MAX_HEALTH_AFFECTED_PAIRS
+                {
+                    budget.reserve(0, 1, 16)?;
+                    pairs.push(AssignmentPair {
+                        person_id,
+                        shift_id: contribution.shift_id,
+                    });
+                }
+                if affected_pairs.is_none() {
+                    break;
+                }
             }
         }
         let Some(first_shift) = first else {
@@ -586,17 +675,41 @@ fn evaluate_rolling_intersection(
             .find(|contribution| contribution.shift_id == first_shift)
             .copied()
             .ok_or_else(invalid)?;
+        let affected_pair_count = summary
+            .collecting_health()
+            .then(|| count(matching_count))
+            .transpose()?;
+        let window = Window { start, end };
+        let repair_members = if actual > cap && summary.collecting_repair() {
+            Some(association_members(
+                document,
+                input,
+                selected,
+                scope,
+                person_id,
+                bucket_id,
+                None,
+                WindowMembership::Intersection,
+                window,
+                budget,
+            )?)
+        } else {
+            None
+        };
         budget.reserve(0, 1, 96)?;
         group.push(contribution);
         check_window(
             person_id,
             &group,
-            Window { start, end },
+            window,
             bucket_id,
             None,
             maximum_minutes,
             cap,
             actual,
+            affected_pair_count,
+            affected_pairs,
+            repair_members,
             summary,
             budget,
         )?;
@@ -794,6 +907,9 @@ fn check_window(
     maximum_minutes: u32,
     cap: i128,
     actual_nanos: i128,
+    affected_pair_count: Option<u64>,
+    health_pairs: Option<Vec<AssignmentPair>>,
+    repair_members: Option<Vec<AssignmentPair>>,
     summary: &mut Summary,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
@@ -808,7 +924,7 @@ fn check_window(
             (calendar.as_entity_id(), "calendar")
         });
     let mut witness = Witness::pair(
-        crate::model::AssignmentPair {
+        AssignmentPair {
             person_id,
             shift_id,
         },
@@ -824,7 +940,111 @@ fn check_window(
         bucket: bucket_id,
         calendar: calendar_id,
     });
-    summary.predicate(actual_nanos > cap, &witness, budget)
+    let failed = actual_nanos > cap;
+    if summary.collecting_health() {
+        let affected_pair_count = affected_pair_count.unwrap_or(count(group.len())?);
+        let affected_pairs = health_pairs.unwrap_or_else(|| {
+            group
+                .iter()
+                .take(MAX_HEALTH_AFFECTED_PAIRS)
+                .map(|contribution| AssignmentPair {
+                    person_id,
+                    shift_id: contribution.shift_id,
+                })
+                .collect::<Vec<_>>()
+        });
+        let affected_assignments_truncated = affected_pair_count > count(affected_pairs.len())?;
+        summary.record_health(
+            HealthObservation {
+                kind: HealthObservationKind::MaximumHours,
+                rule_id: None,
+                coverage_owner: None,
+                person_id: Some(person_id),
+                shift_id: Some(shift_id),
+                other_shift_id: None,
+                period: Some((window.start, window.end)),
+                units: HealthUnits::Minutes,
+                direction: HealthDirection::Maximum,
+                threshold: Some(cap),
+                observed: Some(actual_nanos),
+                satisfied: Some(!failed),
+                minimum_rank: None,
+                affected_pairs,
+                affected_pair_count,
+                affected_pairs_truncated: affected_assignments_truncated,
+            },
+            budget,
+        )?;
+    }
+    if let Some(repair_members) = repair_members {
+        summary.predicate_with_members(
+            failed,
+            &witness,
+            Some(repair_members),
+            "maximum_hours",
+            budget,
+        )
+    } else {
+        summary.predicate(failed, &witness, budget)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn association_members(
+    document: &ScenarioDocument,
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
+    person_id: eutheto_types::PersonId,
+    bucket_id: WorkloadBucketId,
+    calendar_id: Option<WorkCalendarId>,
+    membership: WindowMembership,
+    window: Window,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<AssignmentPair>, AssignmentRuleError> {
+    let mut members = Vec::new();
+    if let Some(associations) = selected.associations() {
+        let mut reporting = ReportingWindows::new();
+        for pair in associations {
+            budget.step()?;
+            if pair.person_id != person_id {
+                continue;
+            }
+            let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
+            let metadata = input.metadata(shift)?;
+            if !predicates::shift_matches(shift, &metadata, scope, budget)?
+                || !metadata
+                    .assignment_type
+                    .workload_bucket_ids
+                    .contains(&bucket_id)
+            {
+                continue;
+            }
+            let member = match membership {
+                WindowMembership::ReportingDate => {
+                    let calendar_id = calendar_id.ok_or_else(invalid)?;
+                    reporting
+                        .resolve(document, input, calendar_id, shift.reporting_date, budget)?
+                        .is_some_and(|period| {
+                            period.start == window.start && period.end == window.end
+                        })
+                }
+                WindowMembership::StartInstant => {
+                    shift.interval.starts_at.instant >= window.start
+                        && shift.interval.starts_at.instant < window.end
+                }
+                WindowMembership::Intersection => {
+                    shift.interval.starts_at.instant < window.end
+                        && window.start < shift.interval.ends_at.instant
+                }
+            };
+            if member {
+                budget.reserve(0, 1, 48)?;
+                members.push(*pair);
+            }
+        }
+    }
+    Ok(members)
 }
 
 fn first_active_shift(
@@ -1027,7 +1247,16 @@ mod tests {
         let bucket = crate::test_support::id(100).parse()?;
         let mut summary = Summary::default();
         let mut budget = OperationBudget::evaluation(None);
+        let mut document = crate::test_support::fixture()?;
+        document.settings.overlap_policy = eutheto_types::OverlapPolicy::Earlier;
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let selected = Selected::new(&input, &[], &mut budget)?;
+        let scope: Scope = serde_json::from_value(serde_json::json!({"people":{"kind":"all"}}))?;
         evaluate_rolling_start(
+            &document,
+            &input,
+            &selected,
+            &scope,
             &values,
             60,
             WorkloadMeasurement::ScheduledMinutes,
@@ -1071,7 +1300,7 @@ mod tests {
         document.domain.rules.insert(rule_id, rule);
         let result = crate::assignment_rules::evaluate_assignment_rules(
             &document,
-            &[crate::model::AssignmentPair {
+            &[AssignmentPair {
                 person_id: crate::test_support::id(1).parse()?,
                 shift_id: crate::test_support::id(8).parse()?,
             }],

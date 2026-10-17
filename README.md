@@ -4,7 +4,7 @@
 
 The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
-> **Project status:** [Phases 00–05](docs/roadmap/README.md) established the reproducible core, the isolated OR-Tools worker, independent verification, the registered Workforce domain, and headless solving and JSON/CSV export. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) Workforce setup passed its applicable native checkpoint and protected-main checks and integrated through [PR #59](https://github.com/Eutheto/Eutheto/pull/59). Development screens provide People, Work, eligibility, availability, six Required rule kinds, and explicit full validation. Phase 07 has added Maximum Assignment Count, including a reviewed calendar/cap editor and headless compile–solve–verify support; live desktop solves, results and repair remain unavailable. Independent solver-naive and spoken native screen-reader QA are deferred and unverified. [Phase 07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) is active; Seating, AI and signed releases remain roadmap work.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) established the reproducible core, isolated OR-Tools worker, independent verification, registered Workforce domain, and headless exports. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) setup passed its applicable native checkpoint and protected-main checks and integrated through [PR #59](https://github.com/Eutheto/Eutheto/pull/59). Active [Phase 07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) development includes fourteen Required rule kinds, eleven authored preference kinds, native Optimize, accepted-result calendars/tables and summaries, explanations, reviewed manual changes/Repair, Alternatives/comparison, CSV/calendar exports and privacy-reviewed offline HTML. A debug desktop without the bundled worker truthfully reports Optimize unavailable. Direct PDF, final Phase07 manual acceptance, solver-naive and spoken native screen-reader QA, Seating, AI and signed releases remain incomplete or unverified.
 
 ## Product direction
 
@@ -117,9 +117,10 @@ Phases 00–04 established a working, deliberately bounded optimization foundati
 Phase 05 adds the registered Workforce domain, independent original-domain
 verification and scoring, and real headless file/stored optimization through the
 approved OR-Tools worker. The CLI can fully validate scenarios, retain verified
-results, explain recorded assignments, and export accepted JSON or assignment CSV.
-This remains a bounded development planner: the complete Workforce desktop flow,
-Seating, repair/comparison product flows, AI, and signed releases remain roadmap work.
+results, explain recorded assignments, and export accepted JSON, assignment CSV,
+Workforce person/shift summary CSV, or combined/per-person iCalendar.
+This remains a bounded development planner: Phase07 adds the desktop flows below;
+direct PDF, manual acceptance, Seating, AI and signed releases remain roadmap work.
 
 Phase 06 now provides first launch, Workforce project creation, a searchable
 active/archived library, a revision-bound setup overview, a bounded change-history
@@ -155,13 +156,92 @@ people and draft validation before one atomic apply. Rejected-row reports can be
 saved separately, including after apply; an exact no-change import creates no history
 entry. Names are never used to guess identity.
 
+**Eligibility → Import eligibility from CSV** applies sparse configured membership
+edits. Explicitly choose comma/semicolon/tab, header and person/type/membership
+columns; membership must be exactly `true` or `false`. Use typed IDs or explicit
+exact-token mappings, never guessed names. Missing pairs remain unchanged, and
+every unskipped invalid or duplicate pair blocks the whole import. Review native
+before/after facts and approve one atomic, undoable batch; unrelated Person fields
+are preserved and a no-change import creates no history. The source is limited to
+16 MiB/10,000 data records, with at most 1,000 changed people. Save the complete
+excluded-row report before replacing the source or leaving. Token mappings retain
+the existing nonsecret-input policy; credential-like labels may be refused.
+
+**Eligibility → Import eligibility from pasted matrix** accepts tab-separated text
+that you explicitly paste into the bounded input. The first record contains an
+empty or `personId` corner followed by assignment-type references; subsequent
+records begin with a person reference and have exactly the same width. Use typed
+IDs or separate explicit person/type token mappings. Membership cells are exactly
+`true`, `false`, or empty; empty cells and absent pairs preserve membership.
+This edits configured eligibility, not assignment feasibility.
+
+The complete text is limited to 1 MiB UTF-8, 64 total columns and 10,000 membership
+cells, including blanks and skipped cells. Oversized input is cleared in full,
+never truncated. Ragged records are refused. Every included invalid or duplicate
+typed pair blocks apply; explicitly skip individual native cells and re-review.
+The review shows logical record numbers including the header and one-based display
+columns. Native approval applies one undoable batch, preserving unrelated Person
+fields and membership order. A no-change apply consumes the source without history.
+Save the complete exclusion report before leaving or replacing the source.
+Release the captured source before editing the paste; stale revisions require
+re-review, and unknown apply outcomes must be checked in History, never replayed.
+
+**Work → Import shifts from CSV** adds manual shift instances or updates stored
+manual/detached instances; it never edits generated occurrences or templates.
+Choose the delimiter, header, columns and exact reference mappings explicitly.
+A supplied native shift ID matches only that stored instance; an unknown supplied
+ID requires explicit Add using the same ID. Without an ID column/value, choose Add
+or select one stored update target. Names and dates never establish identity.
+
+New rows require assignment type, local start/end, Coverage JSON and reporting
+attribution (`startLocalDate` or `endLocalDate`). For example, exact coverage is
+`{"kind":"exact","count":1,"qualificationMinimums":[]}`; the complete `atLeast`
+shape and qualification minima are also supported. Tags are a JSON array.
+Times must be offset-free local date/times, such as `2030-01-01T23:00:00`, resolved
+by Rust using the scenario's timezone and daylight-saving policy. Enter the actual
+next-day end date for overnight work; offsets, zone annotations and implicit
+rollover are not accepted. Review the original local intent, resolved instants,
+offsets and complete before/after fields.
+
+Updates preserve unmapped fields and equivalent raw values, including detached
+origin. Empty mapped cells preserve values unless Clear is explicitly selected
+for location or tags. Invalid or duplicate unskipped targets block the whole
+import. The 16 MiB/10,000-row source and 1,000-change atomic batch limits apply;
+no-change imports create no history. Save the complete excluded-row report before
+leaving. A revision change requires re-review, not recapturing the source.
+
+**Availability → Import availability from CSV** adds or updates stored availability
+and time-off records. New records need a person, one native kind (`unavailable`,
+`availableOnly`, `approvedTimeOff` or `requestedTimeOff`), and effective start/end
+dates; the end date is exclusive. Supply either both offset-free local instant
+endpoints or a complete `weeklyWindows` JSON array. Each weekly window has
+`weekdays`, `startTime`, `endTime` and explicit `endDayOffset`; for example,
+`[{"weekdays":["monday"],"startTime":"09:00:00","endTime":"17:00:00","endDayOffset":0}]`.
+Weekly windows remain authored recurrence, not eagerly expanded occurrences.
+
+Person, assignment-type and location tokens have separate explicit mappings.
+Optional type/location restrictions are complete JSON arrays of references.
+Updates preserve unmapped fields and equivalent raw spelling. Empty cells preserve
+values by default; Clear is available only for restrictions, source and note.
+Source/note whitespace is authored data. Switching from weekly to instant requires
+both endpoints; mixing weekly and instant edits is refused. Review native endpoint
+resolution facts even when an edit makes no change.
+
+Approved time off independently blocks applicable overlaps. Unavailable and
+available-only records require matching active Required rules; requested time off
+only affects explicitly referencing preferences. Imports never create those rules
+or preferences, and kind changes that invalidate even inactive references are
+blocked. The same explicit identity, stale-review, atomic Undo/Redo and source/change
+limits apply as for shift imports. Save the complete excluded-row report before
+leaving; no-change imports create no history.
+
 The Eligibility route edits configured person/type memberships through a bounded,
 keyboard-accessible matrix or equivalent paged table. Explicit row/column choices
 are reviewed and applied as one undoable batch; they are not assignment-feasibility
 results. Availability provides authored records, a calendar and exact interval
 list, instant/weekly windows, effective dates, type/location restrictions and inert
 source/note fields. Rust resolves time and supplies the person–assignment blocking
-inspector. Required-rule editors support twelve implemented kinds, including
+inspector. Required-rule editors support fourteen implemented kinds, including
 Maximum Assignment Count with a reporting-date calendar and nonnegative cap,
 Maximum Consecutive with distinct consecutive reporting dates or consecutive
 matching assignments joined by a configured elapsed break, Maximum Hours with
@@ -180,16 +260,212 @@ and cancelled attempts, and navigates supported
 findings to their owning editor fields; it does not prove plan feasibility. See
 [desktop behavior and verification limits](apps/desktop/README.md), including
 native editing-accelerator, accessibility and packaged-platform gates.
-Use the headless Workforce workflow below for the available end-to-end
-optimization path.
+The headless workflow below remains available without the desktop. The setup
+overview now offers a native **Optimize** action after current, completed,
+error-free full validation when a supported worker is available. Quick, Balanced
+and Deep are bounded modes, not optimality promises. Native progress and
+cancellation remain separate from independently accepted results; the overview
+lists current and historical accepted results, allows one verified terminal
+result to be selected for viewing without changing the scenario revision, and
+inspects bounded by-person, by-shift/location, UTC-ordered assignment timeline,
+selected-assignment, fairness, and Plan Health pages in the original scenario's
+time zone. Seven-day person and shift/location calendars show the original
+scenario's civil dates with virtual or paged keyboard-accessible rows. Opening
+a saved result requests a fresh native check against its original revision
+before showing Required-rule, preference-score and exact Plan Health observations;
+a recorded run status is not a fresh optimality proof. When two accepted
+results are saved, **Compare latest two results** compares the immediately
+previous result with the newest through native, independently checked source
+evidence. Assignment, Required-rule, metric, protection/selection, affected-entity
+and descriptive run changes remain available without comparable scores.
+Score ordering and category deltas require recognized, compatible original
+objective meaning: units, population/scope, weights, scaling, priority order
+and score shape. Rust checks each result's own recorded policy against its
+original source; different revisions or lowered policy hashes do not by
+themselves make utility incomparable. Matching unknown metadata does not
+establish scoring meaning, and historical absent objective context is not
+inferred to mean current Authored context. Viewing or comparing does not change
+the scenario revision, adopt a base schedule, or create a lock. Separately,
+**Review as repair base**
+binds one accepted result to a reviewed current revision: Rust re-verifies its
+original source, saves its selected assignments as an undoable base schedule,
+and requires fresh full validation before another solve. The reviewed
+Adjacency and Base Stability preference editors can then select that saved
+base; changing a preference also requires fresh validation and a new solve
+before judging its effects. A result's **Changes from base** view compares
+with the base recorded in that result's original scenario, not later edits;
+a recorded source ID alone is not proof of acceptance.
 
-The setup overview offers a read-only **Optimize** handoff only for a current,
-completed, error-free full validation. Quick, Balanced and Deep describe intended
-budgets, not runnable desktop choices or optimality promises. Native capability
-still reports desktop solve start/cancel unavailable; the headless CLI remains the
-working optimization path. General native-operation status uses actual reported
-phases, delays its visible panel for 400 ms, and coalesces assistive announcements.
+**Manual changes and repair** provides native-reviewed add, remove, same-shift
+replacement, and Hard/Soft/Unlocked protection changes. Review checks the
+complete selection and Required rules, not just the visible page. A valid Apply
+saves the selection and protection as one undoable command; removing a Hard
+incumbent requires an explicit unlock in that same review. Original accepted
+results stay immutable. Invalid changes retain their draft and offer related
+rule/preference editing or a diagnostic against a chosen current accepted result.
+
+After edits, **Repair plan** uses the latest complete manual selection. It
+minimizes changed person–shift pairs first, Soft-lock penalties second, then
+authored preferences and deterministic rank; Hard locks remain Required.
+Run full validation for the new revision before solving. Authored **Optimize**
+is unavailable while Soft locks are present. The CLI also supports explicit
+original-result repair without adopting a base. The full Phase-07 acceptance
+gate and complete result reporting remain unfinished.
+
+**Alternatives** runs Balanced, Preference-focused, Minimal-changes, and
+Fairness-first sequentially from one immutable current source: an explicitly
+adopted base or selected unverified external starting plan, sharing one total time
+limit. Each saved result is independently verified. Exact native outcome
+equivalence suppresses duplicate suggestions,
+not their History records. Choose two distinct suggestions to inspect assignment
+and rule differences; incompatible objective profiles have no aggregate score
+ranking. Viewing an alternative does not apply it or change the authored scenario.
+
+Open **Inspect schedule → Share result** to review and save a participant-friendly,
+single-file HTML report. Rust captures the complete accepted result, not the visible
+page or filter. Person names, authored labels, staffing, changes and fairness actuals
+are off by default; the preview lists included, excluded and unavailable information.
+Generated aliases remain linkable, not anonymous. Older accepted results require
+explicit consent and retain their original revision. Saving uses the native file
+picker, never overwrites an existing file, and consumes that review even on
+cancellation; prepare a fresh review to try again. The HTML works offline.
+Direct PDF remains unavailable.
+
+Use **Inspect schedule → Export CSV/calendar** for assignment CSV, people/shift
+summary CSV, or a combined calendar. Each accepted-person row also offers a
+calendar export, including people with no assignments and people on later pages.
+Native capture always covers the complete selected source, not the current view.
+The review shows source identities, the full artifact's byte count and SHA-256,
+and an explicitly partial inert text sample of at most 8 KiB. These fixed formats
+have their own field disclosures; HTML Share switches do not apply.
+Saving publishes those exact bytes through the native picker without overwriting
+an existing file. Older sources require consent. Assignment CSV V1 has no inline
+revision field: the review and suggested filename identify its source revision;
+summary CSV and ICS also carry historical revision labels inside the file.
+
+Existing **unverified starting plans** can be selected, renamed and edited in
+Setup, including an explicit empty plan. Review covers all pairs, not only the
+displayed page; updates and removal are atomic History Undo/Redo steps.
+Repair and Alternatives capture the selected saved source without adding
+Required locks or accepted ancestry. Changing the next source does not retarget
+an active group. Stale drafts require rebase and fresh review; unknown writes
+are reconciled through History, never replayed.
+
+To create one from **assignment CSV**, choose **Imported starting plan — unverified**
+as the starting source in Setup, then **Import assignments from CSV**. Use strict
+Eutheto assignments v1 or explicitly map comma/semicolon/tab columns and exact
+endpoint tokens. Choose a new named plan or complete replacement of an existing
+plan; every unskipped invalid or duplicate pair blocks the import. Empty plans
+require explicit approval. The 16 MiB/10,000-data-record limit includes skipped
+records. Review shows complete additions/removals; the separately savable native
+exclusion report retains every omitted record, including skips. A changed revision
+requires fresh review without discarding the raw mapping. Import is one undoable
+command and never grants accepted-result export authority or selects a Repair source.
+
+**Explain terminal status** reads a recorded run's original input and exact
+manifest; accepted results are independently reverified against that saved
+source. No-result runs have no verified candidate, and a backend-only
+infeasible/unbounded status is not a mapped conflict or independent proof.
+Explanations from older revisions remain historical, never current-source
+validation. After **Run full validation** completes, selecting a finding in the
+full report offers **Check this full validation finding**: Rust rechecks its
+exact native issue and saved revision, and the Workforce pack renders the
+matching native message. For a current `candidate_shortage` finding, it may
+also show a sufficient source-level staffing contradiction: an independent
+upper bound on possible people is below the authored Required coverage count.
+The evidence lists the source Coverage rule and any active Eligibility or
+Availability rules used to exclude people; unconditional activity and approved
+leave remain source facts, not invented rules. Coverage scope and qualification
+filters are omitted from that count, so it can only overestimate possible
+staffing. This is not a minimal conflict, a solver result, or a proof about
+other infeasible runs. Fast findings do not offer this evidence.
+
+**Explain saved-change facts** reads two exact saved accepted sources without
+changing the scenario. It preserves the accepted-plan comparison and separately
+shows original-domain Repair facts against the candidate's recorded manual/base
+selection when present. Native facts retain expected thresholds, observed totals,
+group scope and assignment identities. A recorded baseline is not newly admitted
+by this read; missing historical endpoints are explicit, and no unique cause or
+universal fairness is claimed. **Explain recorded repair facts for chosen result**
+instead binds A to the candidate's recorded original accepted plan, retaining
+the separate manual B and accepted C scopes without applying C.
+
+The OR-Tools adapter supports bounded assumption diagnostics in an objective-free,
+single-worker satisfaction model with presolve disabled. The Workforce driver
+validates complete signed cores before mapping source rule identities and performs
+bounded deletion trials with independently checked original-domain witnesses.
+Invalid cores never publish a partial mapping; a zero-assumption foundational
+proof is distinct from an unavailable empty native core. These paths have local
+approved-worker evidence, and the actual packaged desktop displays mapped source
+groups. Native solve modes request bounded diagnostics by default; retries keep
+their recorded explanation policy. The packaged desktop navigates to the exact
+mapped source rule and retains the committed diagnostic-copy receipt through
+same-revision refreshes. A copy's normal History Undo leaves the original
+unchanged. Private diagnostic JSON uses the native save picker and refuses
+to overwrite an existing destination.
+
+Current native run manifests retain compact backend observations bound to the
+recorded input, with independently optional objective and bound vectors.
+Observed terminal runtime requires a completed-terminal parameter digest;
+configured versions alone are not an observation. These remain backend claims,
+not acceptance or independent proof. Private diagnostic JSON includes the
+checksummed manifest; participant reports do not inherit this private metadata.
+
+For a saved terminal accepted assignment, **Inspect evidence** rechecks
+pair-local activity, approved leave, and active Eligibility/Availability against
+the original source. On a selected, locally eligible pair it can list up to
+128 matching active Time, Assignment Type, Location, Requested Time Off,
+Adjacency, and Base Stability preference terms in rule order with authored
+IDs. Each term includes its original policy objective level and the exact
+pair-local penalty with that pair selected versus unselected; the latter is
+not a feasible alternative or a whole-schedule score difference. Finite
+resource limits can omit optional terms, so this is not a complete preference
+inventory. Requested time off is not approved leave. These local terms do
+not explain why the solver selected the pair, attribute fairness or aggregate
+score changes, or revalidate it against later edits.
+
+**Check an assignment change** reads native decisions from the same saved accepted
+source before starting a 30-second diagnostic. Replace a person (select the target
+and exclude the recorded incumbent on the same shift), require another person
+without excluding the incumbent, or forbid the incumbent from working that shift.
+All other assignments may change, while the original Required rules and score
+policy remain intact. A replacement or newly required person must be modeled and
+unselected; static exclusions show native source reasons without saving a
+question, and an already-assigned target is rejected. Completed questions remain
+readable from native per-result history. A verified alternative is retained as
+another accepted result, not applied to the scenario, and shows assignment changes
+and exact priority/category score differences. An observed worse alternative does
+not prove every alternative is worse. Unmapped backend infeasibility remains
+inconclusive. Workforce diagnostics support Boolean decisions, not arbitrary
+integer, interval or absent-value conditions.
+
+Mapped Workforce conflicts retain their immutable source revision, Required-rule
+captions, fixed-fact/Hard-lock counts, and sufficient-versus-proven-minimal status.
+Eligible authored Required groups can be reviewed for a new diagnostic copy:
+the native transaction preserves the original and journals the copy for undo.
+Diagnostic JSON captures a bounded native whitelist before destination selection,
+uses private no-clobber publication, and may contain historical domain labels.
+It is a local diagnostic, not a redacted public Share Result artifact. Historical
+rule inspection cannot redirect an old rule into a newer revision's editor.
+
+General native-operation status uses actual reported phases, delays its visible
+panel for 400 ms, and coalesces assistive announcements.
+Optimize delays its live progress display for 350 ms, so quick completions
+show only their durable terminal status.
 Cancellation acknowledgement is not a successful terminal result.
+In a bundled desktop solve, the first candidate that passes independent
+original-domain verification is committed as a separate local checkpoint and
+can be inspected as a read-only schedule while the backend continues. Its
+verified schedule remains available after cancellation or backend failure;
+the checkpoint does not claim a terminal accepted result, optimality, selection,
+or export authority. Later final proof and terminal status remain separate.
+An actual native correctness alarm revokes that run's checkpoint authority even
+if durable quarantine cleanup fails. Application-service checkpoint reads,
+views, explanations, result exports, and exact-request retries then refuse that
+source; ordinary cancellation alone does not revoke a verified checkpoint.
+Independent verification covers candidate feasibility and score, not a second
+global optimality certificate; a terminal `Optimal` status reflects the bundled
+backend's checked proof-state report.
 
 ## Quick start
 
@@ -216,8 +492,9 @@ just desktop-dev
 
 `just cli` runs the non-final working CLI. `just desktop-dev` runs the persisted
 desktop shell and implemented project, People/supporting-record, Work,
-Eligibility/Availability, Required rules, Validation, portable-file, Settings and
-About workflows; live desktop solving remains unavailable.
+Eligibility/Availability, Required and Preference rules, Validation, portable-file,
+Settings and About workflows. Desktop Optimize runs only when a compatible worker
+is bundled; the unbundled debug desktop reports backend unavailability.
 On Linux, `just e2e` builds the unbundled Tauri application and exercises native
 settings/portable workflows, People editing and bulk actions with concurrent-change
 recovery, native CSV import/report/no-change behavior, a 100-person membership batch
@@ -225,6 +502,26 @@ with undo/redo, availability authoring and blocking inspection, Required-rule re
 full validation and exact-field navigation, restart persistence,
 safety-backup failure/recovery and deletion/history boundaries with isolated local
 data and networking.
+
+`just e2e true` additionally builds an unsigned manifest-bound OR-Tools
+desktop bundle on Linux and exercises a real native accepted solve, persisted
+timings and re-verified accepted schedule in a disposable WebKit run. It is
+not a release-signed package. The packaged fixture alone does not prove
+first-result-before-proof delivery; an approved-worker core regression holds
+the backend open while reading the durable verified schedule and then cancels
+the run without losing that checkpoint.
+
+`just e2e true false` re-extracts and tests the existing unsigned bundle without
+rebuilding it. Use this only after a successful bundle build when application
+inputs are unchanged, for example while correcting E2E steps. The default still
+rebuilds the selected application.
+
+`EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true` exercises the versioned
+101-person accepted-result fixture and writes bounded native/WebKit performance
+evidence. It measures settled keyboard interactions, not INP, paint or heap usage;
+the fixture has 1,212 candidate pairs but only 12 selected assignments.
+First-transition and repeat samples do not flush system or webview caches.
+See [desktop verification](apps/desktop/README.md) for focused modes and limits.
 
 Run `just` to list every supported command. In particular,
 `just generate-check`, `just protocol-check`, and `just fixtures-check` verify
@@ -256,6 +553,16 @@ Bare UUIDv7 values always mean stored IDs; use `./name` for an extensionless or
 UUID-shaped filename. File errors never fall back to SQLite. Read-only operations
 also accept checked single-scenario bundles, not full-library backups.
 
+Workforce portable exports and full backups preserve current editable data,
+original result-source revisions, and archived result records. Migrated legacy
+and unaccepted native records use a versioned inert archive; their recorded
+status and flags do not grant native accepted-result authority. Copies retain
+the original archival payload while remapping only its live ownership/source
+bindings. Result-bearing export refuses missing exact sources or nonportable
+payloads; `backup create --exclude-results` remains available for those cases.
+Result-derived outputs still require fresh independent verification. Imported
+external starting plans remain explicitly unverified after backup/restore.
+
 `scenario apply` also accepts `setScenarioSettings` with complete `settings` and
 `restoration: null`. Workforce timezone/DST-policy changes preserve every stored
 manual or detached shift's instants and elapsed duration, re-expressing local
@@ -271,7 +578,77 @@ optimizer solve ./scenario.json --output ./result.json --progress human
 optimizer solutions verify ./scenario.json ./result.json
 optimizer solutions explain ./scenario.json ./result.json --assignment-id "$assignment_id"
 optimizer solutions export ./scenario.json ./result.json --format csv --output ./assignments.csv
+optimizer solutions export ./scenario.json ./result.json --format summary-csv --output ./summary.csv
+optimizer solutions export ./scenario.json ./result.json --format ics --output ./schedule.ics
+optimizer solutions export ./scenario.json ./result.json --format ics --person-id "$person_id" --output ./person.ics
+optimizer solutions export ./scenario.json ./result.json --format html --output ./shared-plan.html
+optimizer solutions export "$scenario_id" "$solution_id" --format html --output ./shared-plan.html
 ```
+
+For two stored accepted results, compare an explicit base and candidate under
+the same scenario ID:
+
+```sh
+target/cli-package/optimizer --format json solutions compare "$scenario_id" "$base_solution_id" "$candidate_solution_id"
+```
+
+The CLI independently re-verifies both original source results before returning
+the current V3 comparison envelope. Score ordering requires recognized,
+compatible original objective meaning and ordered score shapes, with each side
+checked against its own recorded policy. A changed revision or lowered model
+policy alone does not prevent comparison. Unestablished scoring meaning still
+returns changed assignments, Required-rule facts, metrics, protection/selection
+and descriptive run bindings, with score comparison explicitly unavailable.
+
+Workforce `--format summary-csv` emits every source person and resolved shift,
+including unassigned rows, with selected assignment counts, source timezone,
+solved/as-of revisions, and exact coverage margins. Shift rows retain local
+endpoints and source-resolved UTC instants (including DST transitions); output is
+bounded and re-verifies the accepted result before publication. CSV cells
+containing untrusted display names are escaped for spreadsheet import.
+
+Workforce iCalendar export is combined by default; `--person-id` is valid only with
+`--format ics` and selects one stable person UUID. The export first independently
+re-verifies the accepted result against the source scenario, then resolves shift
+endpoints from that source. `DTSTART` and `DTEND` are UTC (`Z`) values;
+`DTSTAMP` uses the export operation's local clock, not an unverified historical
+run timestamp. `X-EUTHETO-SCENARIO-TIMEZONE` records the scenario's IANA timezone;
+assignment endpoints with subsecond precision are rejected rather than truncated.
+Output uses RFC 5545 CRLF content, line folding, and TEXT escaping, and excludes
+notes, evidence, private solver provenance, and source scenario titles. A result
+already known stale at the revision read labels its standard calendar name and
+event summaries with the historical solved revision. Event UIDs are opaque and
+distinct per accepted result, so a later export of history cannot replace a
+different accepted result's events for the same person and shift. Custom headers
+expose stable scenario/person identities, solved revision, the as-of observation,
+scenario timezone, accepted/feasible status, and the unverified historical solver
+proof. CLI result-envelope metadata for stored JSON, assignment CSV, Workforce
+summary CSV, and iCalendar exports records the solved revision, the revision
+observed as of the read/verification boundary, and stale-at-revision-read
+metadata. A known-stale stored result is blocked before any file or raw output is
+published with an explicit warning; repeat the command with `--allow-stale` to
+authorize an output visibly labeled stale as of that revision observation. A
+concurrent edit may occur after the observation and before no-clobber publication,
+so these exports make no claim of being current at publication time. `--output`
+never overwrites an existing file.
+
+Workforce `--format html` publishes the same offline recipient report as the
+desktop Share review. A named `--output` is required; HTML is never written to
+stdout. Person names, authored labels, staffing totals, assignment changes, and
+configured fairness actuals are independently opt-in through
+`--include-person-names`, `--include-authored-labels`, `--include-staffing`,
+`--include-changes`, and `--include-fairness-actuals`. These flags are valid only
+for HTML. Even with every option off, stable identities and schedule structure
+remain linkable; this is not anonymization.
+
+Stored HTML captures an immutable accepted source and checks the live head under
+the publication lease; `--allow-stale` explicitly authorizes a historical source.
+Explicit-file HTML independently verifies the complete supplied snapshot/result
+without opening a library. Its live head remains unknown, and recorded original
+and baseline comparisons do not establish native historical custody. Both paths
+share one 30-second preparation/publication budget and preserve an existing
+destination. JSON CLI receipts include the report-model and exact HTML SHA-256
+digests.
 
 To require one qualified Physician on each scoped shift in the checked-in
 synthetic `clinic-tiny` scenario, save this as `skill-mix-command.json`:
@@ -346,8 +723,8 @@ target/cli-package/optimizer scenario validate ./clinic-tiny-with-fixed.json
 ```
 
 The fixed rule forces that pair; an authored Hard lock also forces its named pair
-without inferring an accepted base schedule. Soft-lock scoring and interactive
-repair are not yet available.
+without inferring an accepted base schedule. Repair scores Soft locks after
+pair-change cost. Authored Optimize with Soft locks remains unavailable.
 
 To keep Synthetic clinicians 1 and 2 apart on overlapping matching shifts,
 save this as `mutual-command.json`:
@@ -517,6 +894,52 @@ File solves require an output destination. Stored solves retain their result in
 the library first; a later optional output failure is a warning, not rollback.
 Results always belong to their solved revision and are never silently applied.
 
+Use `--repair-from` to select an exact original accepted result without changing
+the input scenario, its revision/history, or that original result:
+
+```sh
+optimizer solve ./scenario.json --repair-from ./result.json --output ./repaired.json
+optimizer solutions verify ./scenario.json ./repaired.json
+optimizer solve "$scenario_id" --repair-from "$original_result_id"
+```
+
+Stored inputs accept a saved result ID or accepted-result JSON file. The exact
+original revision must be current or retained in that scenario's history. A native admitted manual
+selection takes precedence only when it belongs to the same original; incompatible
+manual ancestry is refused. Exact request retries retain their recorded manual
+generation rather than recapturing later edits.
+
+File inputs accept an accepted-result JSON file, or an exact result ID inside a
+single-scenario bundle. The exact original snapshot must be the current input or
+retained in that bundle: after a call-out edit, a standalone changed JSON file
+plus an old result is insufficient. Imported manual selections cannot establish
+native receipt custody. Imported solver proof/history remains untrusted.
+
+Without native manual state, repair retains the complete original pairs only in
+the run's objective context. This captured form is limited to 512 KiB canonical
+JSON; larger captures fail before solving, without truncation or fallback.
+Existing in-snapshot/native manual capacity and whole-result/explanation limits
+are unchanged. The repaired result can be independently reverified against its
+unchanged current input.
+Repair prioritizes changed person–shift pairs, then Soft-lock penalties, then
+preference and rank objectives. A `feasible` status is not a claim of global
+optimality.
+
+For an existing unverified `externalStartingPlan` entity, select its stable entity
+ID explicitly instead of an accepted result:
+
+```sh
+optimizer solve ./scenario.json --repair-external "$starting_plan_id" --output ./repaired.json
+optimizer solve "$scenario_id" --repair-external "$starting_plan_id"
+```
+
+This source records complete current person–shift pairs, including an explicit
+empty plan. Repair minimizes changes without turning those pairs into Required
+locks or inventing accepted ancestry. Imported fingerprints remain descriptive;
+the resulting candidate still requires independent verification. The two repair
+source flags are mutually exclusive. Desktop CSV import creates these unverified
+records; desktop selection and pair editing preserve their descriptive provenance.
+
 Verification and export recheck the complete accepted result against its original
 scenario. External solver history, optimality, and timing remain unverified source
 metadata. JSON preserves the full accepted artifact, including false decisions;
@@ -524,15 +947,19 @@ CSV preserves only selected assignment identities in canonical order. Assignment
 CSV v1 begins with `eutheto/assignments,1`, then
 `assignment_id,person_id,shift_id`; it is bounded to 16 MiB, 100,000 rows, and
 160 UTF-8 bytes per cell. CSV decoding is not an accepted-assignment import API.
+The desktop starting-plan importer has the smaller 10,000-data-record limit above;
+it creates unverified intent, not an accepted solution.
 
-Without `--output`, human-format export writes exact raw bytes to stdout.
-Global `--format json` requires an export destination so data cannot mix with
-the one terminal result envelope. Exits are 0 success, 2 usage, 3 validation,
-4 proven infeasible, 5 no verified result within limits, 6 unavailable/incompatible
+Without `--output`, human-format JSON, CSV and iCalendar exports write exact raw
+bytes to stdout. HTML and global `--format json` always require an export
+destination so data cannot mix with the one terminal result envelope.
+Exits are 0 success, 2 usage, 3 validation,
+4 backend-reported compiled-model infeasibility (without a mapped original-rule
+conflict), 5 no verified result within limits, 6 unavailable/incompatible
 backend or capability, 7 verification alarm, 8 file/storage failure, 10 revision
-conflict, and 130 cancellation. Repair, service cancellation, standalone migration,
-configuration files for these new operations, and non-JSON/CSV result exports
-remain explicitly unavailable.
+conflict, and 130 cancellation. Service cancellation, standalone migration,
+configuration files for these new operations, and CLI PDF result exports remain
+explicitly unavailable.
 
 ## Contributing
 

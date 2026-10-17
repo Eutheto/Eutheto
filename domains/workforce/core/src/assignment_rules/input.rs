@@ -4,7 +4,10 @@ use super::{
 };
 use crate::{
     ids::{AssignmentTypeId, AvailabilityId, LocationId, ShiftId, ShiftTemplateId},
-    model::{AssignmentPair, AssignmentType, Coverage, Person, WorkforceDomainV1, WorkforceEntity},
+    model::{
+        AssignmentPair, AssignmentType, BaseSchedule, Coverage, Person, WorkforceDomainV1,
+        WorkforceEntity,
+    },
     temporal::{ResolvedShift, ResolvedShiftOrigin, resolve_validated_shifts},
     validation::{validate_document_controlled, validate_value_bounds},
 };
@@ -16,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Structural data only. No scopes, eligibility decisions, candidate graph or solver state.
 pub(crate) struct AssignmentInput {
     pub domain: WorkforceDomainV1,
+    pub captured_original: Option<BaseSchedule>,
     pub shifts: Vec<ResolvedShift>,
     pub people: Vec<PersonId>,
     pub availability_by_person: BTreeMap<PersonId, Vec<AvailabilityId>>,
@@ -117,12 +121,28 @@ impl AssignmentInput {
         let source_document_hash = hasher.finalize().to_hex().to_string();
         Ok(Self {
             domain,
+            captured_original: None,
             shifts,
             people,
             availability_by_person,
             source_document_hash,
             shift_positions,
         })
+    }
+
+    pub fn with_objective_context(
+        mut self,
+        context: Option<&eutheto_domain_ir::RunObjectiveContext>,
+        scenario_id: eutheto_types::ScenarioId,
+        budget: &mut OperationBudget<'_>,
+    ) -> Result<Self, eutheto_domain_api::DomainPackError> {
+        super::authority::check_objective_context(context, scenario_id)?;
+        self.captured_original = context
+            .and_then(|context| context.baseline.as_deref())
+            .map(|binding| super::baseline::decode_captured_original(binding, scenario_id, budget))
+            .transpose()?
+            .flatten();
+        Ok(self)
     }
 
     pub fn person(&self, id: PersonId) -> Option<&Person> {

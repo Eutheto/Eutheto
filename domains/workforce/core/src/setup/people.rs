@@ -169,6 +169,9 @@ pub(super) fn people_page(
     let mut cursor_seen = previous.is_none();
     for (&id, record) in &document.domain.entities {
         budget.visit()?;
+        if record.get("kind").and_then(Value::as_str) == Some("manualSelection") {
+            continue;
+        }
         let (kind, name) = header(id, record)?;
         if kind != WorkforceEntityKindV1::Person {
             continue;
@@ -249,6 +252,9 @@ pub(super) fn availability_records(
     let mut cursor_seen = previous.is_none();
     for (&id, record) in &document.domain.entities {
         budget.visit()?;
+        if record.get("kind").and_then(Value::as_str) == Some("manualSelection") {
+            continue;
+        }
         if header(id, record)?.0 != WorkforceEntityKindV1::Availability {
             continue;
         }
@@ -337,6 +343,9 @@ pub(super) fn availability_window(
     // sorted, deduplicated, fully clipped intervals within each record.
     for (&id, record) in &document.domain.entities {
         budget.visit()?;
+        if record.get("kind").and_then(Value::as_str) == Some("manualSelection") {
+            continue;
+        }
         if header(id, record)?.0 != WorkforceEntityKindV1::Availability {
             continue;
         }

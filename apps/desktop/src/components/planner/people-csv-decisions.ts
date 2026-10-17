@@ -1,4 +1,4 @@
-import type { PeopleCsvDecision, PeopleCsvSampleV1 } from "../../api/generated";
+import type { PeopleCsvDecision } from "../../api/generated";
 import { plannerMessage } from "./messages";
 
 export interface CsvDecisionDraft {
@@ -8,13 +8,6 @@ export interface CsvDecisionDraft {
     | { readonly kind: "update"; readonly personId: string | null }
     | { readonly kind: "skip" };
 }
-
-/** The parent correlates source, dialect, scope and request before publishing a sample. */
-export type CsvRecordSampleState =
-  | { readonly status: "idle" }
-  | { readonly status: "loading"; readonly record: number }
-  | { readonly status: "error"; readonly record: number; readonly message: string }
-  | { readonly status: "ready"; readonly sample: PeopleCsvSampleV1 };
 
 function representableRecord(record: number): boolean {
   return Number.isSafeInteger(record) && record >= 1 && record <= 10_001;

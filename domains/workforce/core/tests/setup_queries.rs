@@ -69,6 +69,29 @@ fn people_fixture() -> Result<ScenarioDocument, Box<dyn Error>> {
 }
 
 #[test]
+fn rule_catalog_accepts_all_supported_preferences_at_the_native_setup_boundary()
+-> Result<(), Box<dyn Error>> {
+    let document = support::fixture()?;
+    let WorkforceSetupViewDataV1::RuleCatalog(catalog) = view(
+        &document,
+        &query("eutheto.setup.rule_catalog", json!({})),
+        context(),
+    )?
+    else {
+        return Err("wrong result family".into());
+    };
+    assert_eq!(catalog.preferences.len(), 12);
+    assert!(catalog.preferences.iter().any(|entry| {
+        entry.descriptor.id == "official.workforce.preference.weekend-target"
+            && matches!(
+                entry.support,
+                eutheto_workforce::setup::contracts::RuleSupportV1::Implemented
+            )
+    }));
+    Ok(())
+}
+
+#[test]
 fn entity_summary_resolves_kind_without_copying_detail_and_rejects_wrong_identity()
 -> Result<(), Box<dyn Error>> {
     let mut document = support::fixture()?;
@@ -445,8 +468,9 @@ fn work_detail_validation_observes_live_cancellation_and_deadlines() -> Result<(
         .entities
         .get_mut(&support::id(9).parse()?)
         .ok_or("score policy")?["workloadPolicies"][support::id(10)];
-    policy["peerGroup"]["people"] = json!({"kind":"filter", "allTags":["absent"], "anyTags":[]});
-    policy["targetMode"] = json!({"kind":"explicit", "targets":[]});
+    policy["peerGroup"]["people"] = json!({"kind":"filter", "allTags":["tag-4999"], "anyTags":[]});
+    policy["targetMode"] =
+        json!({"kind":"explicit", "targets":[{"personId":support::id(1),"target":120}]});
     let request = query(
         "official.workforce.setup.work_detail",
         json!({"shiftId":support::id(7)}),
@@ -551,9 +575,8 @@ fn deeply_nested_query_values_are_rejected_without_stack_exhaustion() -> Result<
 }
 
 #[test]
-fn overview_counts_configured_facts_and_catalog_labels_actual_support() -> Result<(), Box<dyn Error>>
-{
-    use eutheto_workforce::setup::contracts::{RuleSupportV1, WorkforceEntityKindV1};
+fn overview_counts_configured_facts() -> Result<(), Box<dyn Error>> {
+    use eutheto_workforce::setup::contracts::WorkforceEntityKindV1;
     let document = people_fixture()?;
     let WorkforceSetupViewDataV1::Overview(facts) = view(
         &document,
@@ -582,50 +605,6 @@ fn overview_counts_configured_facts_and_catalog_labels_actual_support() -> Resul
         0
     );
     assert_eq!(facts.configured_type_memberships, 4);
-    let WorkforceSetupViewDataV1::RuleCatalog(catalog) = view(
-        &document,
-        &query("eutheto.setup.rule_catalog", json!({})),
-        context(),
-    )?
-    else {
-        return Err("wrong result family".into());
-    };
-    assert!(matches!(
-        catalog
-            .required
-            .iter()
-            .find(|row| row.descriptor.id == "official.workforce.rule.minimum-rest")
-            .ok_or("missing rest descriptor")?
-            .support,
-        RuleSupportV1::Implemented
-    ));
-    assert!(matches!(
-        catalog
-            .required
-            .iter()
-            .find(|row| row.descriptor.id == "official.workforce.rule.required-skill-mix")
-            .ok_or("missing skill-mix descriptor")?
-            .support,
-        RuleSupportV1::Implemented
-    ));
-    assert!(matches!(
-        catalog
-            .required
-            .iter()
-            .find(|row| row.descriptor.id == "official.workforce.rule.maximum-hours")
-            .ok_or("missing hours descriptor")?
-            .support,
-        RuleSupportV1::Implemented
-    ));
-    assert!(matches!(
-        catalog
-            .preferences
-            .iter()
-            .find(|row| row.descriptor.id == "official.workforce.preference.time")
-            .ok_or("missing time descriptor")?
-            .support,
-        RuleSupportV1::NotImplemented
-    ));
     Ok(())
 }
 
@@ -921,5 +900,36 @@ fn filtered_generation_review_reconciles_the_entire_prospective_horizon()
             .iter()
             .any(|shift| shift.interval.starts_at.local.as_datetime().date() == added_date)
     );
+    let finalized_output = WorkforcePack.build_view(
+        DomainViewInput::CommandPreviewSetup {
+            original: &original,
+            prospective: &reconciled.document,
+            command: &command,
+            changes: &changes,
+            query: &request,
+            context: context(),
+        },
+        &control,
+    )?;
+    assert!(finalized_output.reconciliation.is_none());
+    let WorkforceSetupViewDataV1::GenerationReview(finalized_review) =
+        serde_json::from_value::<WorkforceSetupResultV1>(finalized_output.view.data)?.result
+    else {
+        return Err("wrong finalized result family".into());
+    };
+    assert!(finalized_review.reconciliation_required);
+    assert_eq!(finalized_review.total_added, 1);
+    assert_eq!(
+        finalized_review.prospective_hash,
+        eutheto_workforce::temporal::preview_generation(&original, &reconciled.document, &token,)?
+            .prospective_hash,
+    );
+    assert_ne!(finalized_review.prospective_hash, review.prospective_hash);
+    let WorkforceSetupViewDataV1::GenerationReview(persisted_review) =
+        view(&reconciled.document, &request, context())?
+    else {
+        return Err("wrong persisted result family".into());
+    };
+    assert!(!persisted_review.reconciliation_required);
     Ok(())
 }

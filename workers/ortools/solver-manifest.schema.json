@@ -99,9 +99,7 @@
     },
     "non_windows_cmake_map": {
       "not": {
-        "required": [
-          "CMAKE_MSVC_RUNTIME_LIBRARY"
-        ]
+        "required": ["CMAKE_MSVC_RUNTIME_LIBRARY"]
       },
       "type": "object"
     },
@@ -111,9 +109,7 @@
           "const": "MultiThreadedDLL"
         }
       },
-      "required": [
-        "CMAKE_MSVC_RUNTIME_LIBRARY"
-      ],
+      "required": ["CMAKE_MSVC_RUNTIME_LIBRARY"],
       "type": "object"
     },
     "file_digest": {
@@ -126,10 +122,7 @@
           "$ref": "#/$defs/sha256"
         }
       },
-      "required": [
-        "path",
-        "sha256"
-      ],
+      "required": ["path", "sha256"],
       "type": "object"
     },
     "relative_path": {
@@ -162,11 +155,7 @@
           "$ref": "#/$defs/sha256"
         }
       },
-      "required": [
-        "phase",
-        "record",
-        "source_contract_sha256"
-      ],
+      "required": ["phase", "record", "source_contract_sha256"],
       "type": "object"
     },
     "backend_source": {
@@ -190,12 +179,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "kind",
-        "sha256",
-        "source_url",
-        "version"
-      ],
+      "required": ["kind", "sha256", "source_url", "version"],
       "type": "object"
     },
     "build": {
@@ -212,10 +196,7 @@
                   "const": "aarch64-apple-darwin"
                 }
               },
-              "required": [
-                "architecture",
-                "target_triple"
-              ]
+              "required": ["architecture", "target_triple"]
             },
             {
               "properties": {
@@ -230,10 +211,7 @@
                   ]
                 }
               },
-              "required": [
-                "architecture",
-                "target_triple"
-              ]
+              "required": ["architecture", "target_triple"]
             }
           ]
         },
@@ -258,9 +236,7 @@
                 "const": "x86_64-pc-windows-msvc"
               }
             },
-            "required": [
-              "target_triple"
-            ]
+            "required": ["target_triple"]
           },
           "then": {
             "properties": {
@@ -280,10 +256,7 @@
       ],
       "properties": {
         "architecture": {
-          "enum": [
-            "aarch64",
-            "x86_64"
-          ]
+          "enum": ["aarch64", "x86_64"]
         },
         "cmake": {
           "additionalProperties": false,
@@ -295,21 +268,14 @@
               "$ref": "#/$defs/cmake_map"
             }
           },
-          "required": [
-            "ortools",
-            "worker"
-          ],
+          "required": ["ortools", "worker"],
           "type": "object"
         },
         "compiler": {
           "additionalProperties": false,
           "properties": {
             "identity": {
-              "enum": [
-                "clang",
-                "gcc",
-                "msvc"
-              ]
+              "enum": ["clang", "gcc", "msvc"]
             },
             "version": {
               "maxLength": 64,
@@ -318,10 +284,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "identity",
-            "version"
-          ],
+          "required": ["identity", "version"],
           "type": "object"
         },
         "linkage": {
@@ -353,7 +316,8 @@
         "objective-bounds",
         "progress",
         "solution-projection",
-        "solution-stats"
+        "solution-stats",
+        "sufficient-assumptions"
       ],
       "maxItems": 64,
       "type": "array",
@@ -370,20 +334,10 @@
             "$ref": "#/$defs/sha256"
           },
           "spdx": {
-            "enum": [
-              "Apache-2.0",
-              "BSD-3-Clause",
-              "MIT",
-              "Zlib",
-              "bzip2-1.0.6"
-            ]
+            "enum": ["Apache-2.0", "BSD-3-Clause", "MIT", "Zlib", "bzip2-1.0.6"]
           }
         },
-        "required": [
-          "path",
-          "sha256",
-          "spdx"
-        ],
+        "required": ["path", "sha256", "spdx"],
         "type": "object"
       },
       "maxItems": 256,
@@ -401,10 +355,7 @@
           "const": 1
         }
       },
-      "required": [
-        "generation_contract_version",
-        "schema_version"
-      ],
+      "required": ["generation_contract_version", "schema_version"],
       "type": "object"
     },
     "protobuf": {
@@ -420,10 +371,7 @@
               "const": "9a5e08486a63414191870bd9953f9e561af221e165654913a33662bf1b674308"
             }
           },
-          "required": [
-            "cp_model_proto",
-            "sat_parameters_proto"
-          ],
+          "required": ["cp_model_proto", "sat_parameters_proto"],
           "type": "object"
         },
         "cpp_runtime_version": {
@@ -479,12 +427,7 @@
           "const": 1
         }
       },
-      "required": [
-        "major",
-        "minor",
-        "schema_sha256",
-        "wire_version"
-      ],
+      "required": ["major", "minor", "schema_sha256", "wire_version"],
       "type": "object"
     },
     "runtime_libraries": {

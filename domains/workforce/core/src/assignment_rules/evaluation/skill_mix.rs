@@ -112,7 +112,7 @@ pub(super) fn evaluate(
             let witness = Witness {
                 person: None,
                 other_person: None,
-                shift: shift.id,
+                shift: Some(shift.id),
                 other_shift: None,
                 owner,
                 owner_kind: "required_skill_mix",
@@ -124,11 +124,47 @@ pub(super) fn evaluate(
                 actual: Some(matching),
                 interval: None,
                 period: None,
+                consecutive_start_date: None,
+                consecutive_end_date: None,
                 rest: None,
                 transition: None,
                 hours: None,
+                quota: None,
+                quota_count: None,
             };
-            summary.predicate(matching < u64::from(minimum.required), &witness, budget)?;
+            let failed = matching < u64::from(minimum.required);
+            if failed && summary.collecting_repair() {
+                let mut members = Vec::new();
+                if let Some(associations) = selected.associations() {
+                    for pair in associations {
+                        budget.step()?;
+                        if pair.shift_id != shift.id {
+                            continue;
+                        }
+                        let person = input.person(pair.person_id).ok_or_else(invalid)?;
+                        if predicates::person_matches(person, scope, budget)?
+                            && predicates::qualification_match(
+                                person,
+                                &minimum.expression,
+                                predicates::interval(shift),
+                                budget,
+                            )?
+                        {
+                            budget.reserve(0, 1, 48)?;
+                            members.push(*pair);
+                        }
+                    }
+                }
+                summary.predicate_with_members(
+                    failed,
+                    &witness,
+                    Some(members),
+                    "required_skill_mix",
+                    budget,
+                )?;
+            } else {
+                summary.predicate(failed, &witness, budget)?;
+            }
         }
     }
     Ok(())

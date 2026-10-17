@@ -74,6 +74,124 @@ fn portable_roundtrip_preserves_raw_semantics_extensions_and_explicit_host_shell
 }
 
 #[test]
+fn additive_equal_share_portable_preserves_legacy_target_mode_and_rejects_unknown_modes()
+-> Result<(), Box<dyn Error>> {
+    let original = fixture()?;
+    let legacy = export_portable(&original)?;
+    let context = PortableImportContext {
+        scenario_shell: original.clone(),
+    };
+    assert_eq!(import_portable(&legacy, &context)?.domain, original.domain);
+
+    let mut equal = original.clone();
+    let policy = equal
+        .domain
+        .entities
+        .get_mut(&id(9).parse()?)
+        .ok_or("score policy")?;
+    policy["workloadPolicies"][id(10)]["targetMode"] = json!({"kind":"equalShare"});
+    let portable = export_portable(&equal)?;
+    let contract: Value = serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON)?;
+    validate_contract_value(
+        &contract["portableSchema"],
+        &portable.payload,
+        ContractJsonLimits::DEFAULT,
+    )?;
+    assert_eq!(import_portable(&portable, &context)?.domain, equal.domain);
+
+    let mut unknown = portable;
+    unknown.payload["entities"][id(9)]["workloadPolicies"][id(10)]["targetMode"] =
+        json!({"kind":"futureShare"});
+    assert!(import_portable(&unknown, &context).is_err());
+    assert_eq!(export_portable(&context.scenario_shell)?, legacy);
+    Ok(())
+}
+
+#[test]
+fn external_starting_plan_requires_its_exact_capability_and_preserves_descriptive_provenance()
+-> Result<(), Box<dyn Error>> {
+    let mut original = fixture()?;
+    let legacy = export_portable(&original)?;
+    let capability = SemanticCapability {
+        id: "official.workforce.external-starting-plan".to_owned(),
+        version: 1,
+    };
+    original.domain.entities.insert(
+        id(50).parse()?,
+        json!({
+            "kind":"externalStartingPlan", "schemaVersion":1, "id":id(50),
+            "name":"Unverified imported plan",
+            "assignments":[{"personId":id(1),"shiftId":id(8)}],
+            "originalImport":{"sourceBlake3":"a".repeat(64),"pairContentHash":"b".repeat(64)}
+        }),
+    );
+    let portable = export_portable(&original)?;
+    let mut expected_capabilities = legacy.required_capabilities.clone();
+    expected_capabilities.insert(capability.clone());
+    assert_eq!(portable.required_capabilities, expected_capabilities);
+    let context = PortableImportContext {
+        scenario_shell: original.clone(),
+    };
+    assert_eq!(
+        import_portable(&portable, &context)?.domain,
+        original.domain
+    );
+    let mut missing = portable.clone();
+    missing.required_capabilities.remove(&capability);
+    assert!(import_portable(&missing, &context).is_err());
+    let mut extra = legacy;
+    extra.required_capabilities.insert(capability.clone());
+    assert!(import_portable(&extra, &context).is_err());
+    let mut newer = portable.clone();
+    newer.required_capabilities.remove(&capability);
+    newer.required_capabilities.insert(SemanticCapability {
+        version: 2,
+        ..capability
+    });
+    assert!(import_portable(&newer, &context).is_err());
+    let mut newer_entity = portable.clone();
+    newer_entity.payload["entities"][id(50)]["schemaVersion"] = json!(2);
+    assert!(import_portable(&newer_entity, &context).is_err());
+    let mut malformed = portable;
+    malformed.payload["entities"][id(50)]["assignments"] =
+        json!([{"personId":id(1),"shiftId":id(8)},{"personId":id(1),"shiftId":id(8)}]);
+    assert!(import_portable(&malformed, &context).is_err());
+    Ok(())
+}
+#[test]
+fn additive_weekend_target_roundtrips_and_unknown_newer_variants_fail_closed()
+-> Result<(), Box<dyn Error>> {
+    let original = fixture()?;
+    let legacy = export_portable(&original)?;
+    let context = PortableImportContext {
+        scenario_shell: original.clone(),
+    };
+    assert_eq!(import_portable(&legacy, &context)?.domain, original.domain);
+
+    let mut authored = original.clone();
+    authored.domain.preferences.insert(
+        id(31).parse()?,
+        json!({"kind":"weekendTarget","id":id(31),"active":true,
+            "scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+            "priority":"high","weight":7,"targetCount":2}),
+    );
+    let wire = export_portable(&authored)?;
+    let contract: Value = serde_json::from_str(WORKFORCE_PACK_CONTRACT_JSON)?;
+    validate_contract_value(
+        &contract["portableSchema"],
+        &wire.payload,
+        ContractJsonLimits::DEFAULT,
+    )?;
+    assert_eq!(import_portable(&wire, &context)?.domain, authored.domain);
+
+    let mut newer = wire;
+    newer.payload["preferences"][id(31)]["kind"] = json!("futureWeekendTarget");
+    assert!(import_portable(&newer, &context).is_err());
+    assert_eq!(export_portable(&context.scenario_shell)?, legacy);
+    Ok(())
+}
+
+#[test]
 fn portable_versions_and_semantic_requirements_never_fall_back() -> Result<(), Box<dyn Error>> {
     let original = fixture()?;
     let portable = export_portable(&original)?;

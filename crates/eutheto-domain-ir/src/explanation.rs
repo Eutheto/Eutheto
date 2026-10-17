@@ -4,31 +4,38 @@
 //! request hash, and checksum; validation rejects noncanonical collections and inconsistent nested
 //! records so deserialized clients cannot upgrade a claim.
 
+use crate::VerificationFactId;
+
+use super::CounterfactualTerminalAuthorityV1;
 use super::{
     AcceptedResult, AssignmentValue, AssumptionGroupId, BTreeMap, BTreeSet, CounterfactualJobId,
     Deserialize, DomainAssignment, DomainAssignmentId, DomainContractError, DomainEntityRef,
     DomainEvidenceId, DurationMillis, MAX_SCORE_CATEGORIES_PER_LEVEL, MAX_SCORE_LEVELS,
     MAX_VERIFICATION_ENTITIES, MAX_VERIFICATION_EVIDENCE, MAX_VERIFICATION_METRICS,
     MAX_VERIFICATION_RULES, MetricId, MetricValue, NormalizedSolution, OptimizationDirection,
-    Ordering, PackId, RequestId, Rfc3339Timestamp, RuleEvaluation, RuleId, RunInputV1,
-    RunManifestV1, RunTerminalOutcomeV1, ScenarioId, ScenarioSnapshotId, ScoreCategoryId,
-    ScoreLevelId, ScoreVector, Serialize, SolutionId, SolveRunId, SolveStatus, VerificationFactId,
-    VerificationIssueId, VerificationValue, canonical_hash, checksum_without_field,
-    ensure_domain_contract_size, parse_portable_domain_json, strictly_sorted_unique,
-    strictly_sorted_unique_by, validate_fact_map, validate_hash, validate_message_key,
-    validate_metrics, validate_revision,
+    Ordering, PackId, RequestId, Rfc3339Timestamp, RuleEvaluation, RuleId, RunInput, RunManifest,
+    RunTerminalOutcomeV1, ScenarioId, ScenarioSnapshotId, ScoreCategoryId, ScoreLevelId,
+    ScoreVector, Serialize, SolutionId, SolveRunId, SolveStatus, VerificationIssueId,
+    VerificationValue, canonical_hash, checksum_without_field, ensure_domain_contract_size,
+    parse_portable_domain_json, strictly_sorted_unique, strictly_sorted_unique_by,
+    validate_fact_map, validate_hash, validate_message_key, validate_metrics, validate_revision,
 };
+use eutheto_types::ValidationIssue;
 
 /// Current explanation request schema.
 pub const EXPLANATION_REQUEST_SCHEMA_VERSION: u32 = 1;
-/// Current explanation evidence schema.
-pub const EXPLANATION_EVIDENCE_SCHEMA_VERSION: u32 = 1;
-/// Current evidence rendering schema.
-pub const EVIDENCE_RENDER_SCHEMA_VERSION: u32 = 1;
-/// Current explanation result schema.
-pub const EXPLANATION_RESULT_SCHEMA_VERSION: u32 = 1;
+/// Current V2 explanation-evidence schema.
+pub const EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION: u32 = 2;
+/// Current V2 evidence-render request schema.
+pub const EVIDENCE_RENDER_REQUEST_V2_SCHEMA_VERSION: u32 = 2;
+/// Current unchanged V1 evidence-render result schema.
+pub const EVIDENCE_RENDER_RESULT_SCHEMA_VERSION: u32 = 1;
+/// Current full explanation-result schema.
+pub const EXPLANATION_RESULT_V2_SCHEMA_VERSION: u32 = 2;
 /// Current comparison schema.
 pub const SOLUTION_COMPARISON_SCHEMA_VERSION: u32 = 1;
+/// Current semantic-only accepted-result comparison schema.
+pub const SEMANTIC_DIFFERENCE_SCHEMA_VERSION: u32 = 1;
 /// Current counterfactual condition schema.
 pub const COUNTERFACTUAL_CONDITION_SCHEMA_VERSION: u32 = 1;
 /// Current counterfactual compilation-binding schema.
@@ -40,7 +47,7 @@ pub const COUNTERFACTUAL_JOB_REQUEST_SCHEMA_VERSION: u32 = 1;
 /// Current counterfactual job-record schema.
 pub const COUNTERFACTUAL_JOB_RECORD_SCHEMA_VERSION: u32 = 1;
 /// Current counterfactual result schema.
-pub const COUNTERFACTUAL_RESULT_SCHEMA_VERSION: u32 = 1;
+pub const COUNTERFACTUAL_RESULT_SCHEMA_VERSION: u32 = 2;
 /// Largest total budget accepted for one interactive counterfactual diagnostic.
 ///
 /// Thirty seconds keeps the diagnostic bounded to the short, user-initiated workflow while still
@@ -55,6 +62,21 @@ pub const MAX_EVIDENCE_MESSAGE_REFERENCES: usize = 1_024;
 pub const MAX_EVIDENCE_MESSAGES: usize = 10_000;
 /// Maximum components in a typed validation field path.
 pub const MAX_VALIDATION_FIELD_PATH: usize = 64;
+/// Derives a stable identity for one complete native validation issue.
+///
+/// The complete canonical JSON representation is hashed, so findings that share a code and
+/// field path remain distinct when their message, severity, or resource differs. Serialization is
+/// bounded by [`MAX_DOMAIN_CONTRACT_JSON_BYTES`].
+///
+/// # Errors
+/// Returns [`DomainContractError`] when canonical serialization exceeds its bound or fails.
+pub fn validation_issue_identity(
+    issue: &ValidationIssue,
+) -> Result<VerificationIssueId, DomainContractError> {
+    let digest = canonical_hash(issue)?;
+    VerificationIssueId::new(format!("validation.issue.{digest}"))
+        .map_err(|_| DomainContractError::InvalidExplanationContract("validation issue identity"))
+}
 
 fn explanation_error(invariant: &'static str) -> DomainContractError {
     DomainContractError::InvalidExplanationContract(invariant)
@@ -511,6 +533,20 @@ pub enum ConflictUnavailableReason {
     ConflictNotReturned,
     /// Returned assumption evidence was invalid, duplicated, out of set, or wrong-polarity.
     InvalidAssumptionCore,
+    /// The captured run intentionally requested no optional diagnostics.
+    NotRequested,
+    /// A legacy run has no retained diagnostic evidence.
+    NotRecorded,
+    /// The installed pack does not advertise this diagnostic capability.
+    UnsupportedDomainPack,
+    /// Optional enrichment exhausted its inherited deadline.
+    BudgetExpired,
+    /// Explicit cancellation stopped optional enrichment.
+    Cancelled,
+    /// Complete source groups or producer storage exceeded the charged resource ceiling.
+    ResourceLimitExceeded,
+    /// Diagnostic compilation or dispatch failed without replacing original solve knowledge.
+    DiagnosticFailed,
 }
 
 /// Complete infeasibility evidence or an explicit typed unavailable reason.
@@ -534,7 +570,11 @@ pub enum InfeasibilityEvidenceV1 {
 }
 
 impl InfeasibilityEvidenceV1 {
-    fn validate(&self) -> Result<(), DomainContractError> {
+    /// Validates complete conflict shape and shrink state, without granting local proof authority.
+    ///
+    /// # Errors
+    /// Rejects empty, noncanonical or inconsistent evidence.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
         match self {
             Self::Conflict {
                 groups,
@@ -1061,6 +1101,219 @@ impl RunComparisonV1 {
     }
 }
 
+/// Exact recorded terminal metadata, not authenticated historical backend proof.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunComparisonSideV2 {
+    /// Recorded run identity.
+    pub run_id: SolveRunId,
+    /// Checksum binding the recorded terminal manifest.
+    pub run_manifest_checksum: String,
+    /// Recorded closed outcome; current domain verification does not reprove optimality.
+    pub outcome: RunTerminalOutcomeV1,
+}
+
+impl RunComparisonSideV2 {
+    /// Validates descriptive status and checksum without deriving backend authority.
+    ///
+    /// # Errors
+    /// Rejects malformed terminal metadata or checksum.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
+        validate_hash(&self.run_manifest_checksum)?;
+        self.outcome.validate()
+    }
+}
+
+/// Both recorded terminal sides of a current comparison.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunComparisonV2 {
+    /// Base recorded run.
+    pub base: RunComparisonSideV2,
+    /// Candidate recorded run.
+    pub candidate: RunComparisonSideV2,
+}
+
+impl RunComparisonV2 {
+    /// Validates both descriptive terminal sides.
+    ///
+    /// # Errors
+    /// Rejects malformed terminal metadata or checksum.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
+        self.base.validate()?;
+        self.candidate.validate()
+    }
+}
+
+fn validate_shared_comparison_bindings(
+    base: &ComparisonBindingV1,
+    candidate: &ComparisonBindingV1,
+) -> Result<(), DomainContractError> {
+    if base.pack_id != candidate.pack_id
+        || base.scenario_id != candidate.scenario_id
+        || base.projection_version != candidate.projection_version
+    {
+        return Err(explanation_error("comparison compatibility"));
+    }
+    if base.scenario_revision == candidate.scenario_revision
+        && base.verification_scope_checksum != candidate.verification_scope_checksum
+    {
+        return Err(explanation_error("same-revision verification scope"));
+    }
+    Ok(())
+}
+
+fn validate_assignment_comparisons(
+    assignments: &[AssignmentComparisonV1],
+) -> Result<(), DomainContractError> {
+    if assignments.len() > MAX_EXPLANATION_RECORDS
+        || !assignments
+            .windows(2)
+            .all(|pair| pair[0].assignment_id() < pair[1].assignment_id())
+    {
+        return Err(DomainContractError::NonCanonicalExplanationCollection(
+            "assignment comparisons",
+        ));
+    }
+    for value in assignments {
+        value.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_rule_comparisons(rules: &[RuleComparisonV1]) -> Result<(), DomainContractError> {
+    if rules.len() > MAX_VERIFICATION_RULES
+        || !strictly_sorted_unique_by(rules, |value| &value.rule_id)
+    {
+        return Err(DomainContractError::NonCanonicalExplanationCollection(
+            "rule comparisons",
+        ));
+    }
+    for value in rules {
+        value.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_metric_comparisons(metrics: &[MetricComparisonV1]) -> Result<(), DomainContractError> {
+    if metrics.len() > MAX_VERIFICATION_METRICS
+        || !strictly_sorted_unique_by(metrics, |value| &value.metric_id)
+    {
+        return Err(DomainContractError::NonCanonicalExplanationCollection(
+            "metric comparisons",
+        ));
+    }
+    for value in metrics {
+        value.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_affected_entities(
+    affected_entities: &[DomainEntityRef],
+) -> Result<(), DomainContractError> {
+    validate_bounded_strict(
+        affected_entities,
+        MAX_VERIFICATION_ENTITIES,
+        "comparison affected entities",
+    )
+}
+
+/// Canonical accepted-result differences that deliberately omit objective scores and lock state.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticDifferenceV1 {
+    /// Must equal [`SEMANTIC_DIFFERENCE_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// Base result binding.
+    pub base: ComparisonBindingV1,
+    /// Candidate result binding. Its revision/scope may differ for repair.
+    pub candidate: ComparisonBindingV1,
+    /// Canonical added/removed/changed assignments.
+    pub assignments: Vec<AssignmentComparisonV1>,
+    /// Canonical added/removed/changed required rules.
+    pub rules: Vec<RuleComparisonV1>,
+    /// Canonical changed metrics.
+    pub metrics: Vec<MetricComparisonV1>,
+    /// Terminal comparison only when validated manifests were supplied.
+    pub runs: Option<RunComparisonV1>,
+    /// Canonical union of entities affected by assignment/rule changes.
+    pub affected_entities: Vec<DomainEntityRef>,
+    /// Lowercase BLAKE3 checksum excluding this field.
+    pub checksum: String,
+}
+
+impl SemanticDifferenceV1 {
+    /// Computes a checksum after validating all semantic comparison invariants.
+    #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Errors
+    /// Returns [`DomainContractError`] when a documented invariant is violated.
+    pub fn new(
+        base: ComparisonBindingV1,
+        candidate: ComparisonBindingV1,
+        assignments: Vec<AssignmentComparisonV1>,
+        rules: Vec<RuleComparisonV1>,
+        metrics: Vec<MetricComparisonV1>,
+        runs: Option<RunComparisonV1>,
+        affected_entities: Vec<DomainEntityRef>,
+    ) -> Result<Self, DomainContractError> {
+        let mut value = Self {
+            schema_version: SEMANTIC_DIFFERENCE_SCHEMA_VERSION,
+            base,
+            candidate,
+            assignments,
+            rules,
+            metrics,
+            runs,
+            affected_entities,
+            checksum: String::new(),
+        };
+        value.validate_payload()?;
+        value.checksum = checksum_without_field(&value, "checksum")?;
+        ensure_domain_contract_size(&value)?;
+        Ok(value)
+    }
+
+    /// Parses under strict portable JSON limits and validates the checksum.
+    ///
+    /// # Errors
+    /// Returns [`DomainContractError`] when the JSON or semantic difference is invalid.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, DomainContractError> {
+        let value: Self = parse_portable_domain_json(bytes)?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Validates all nested records, compatibility, canonical order, bounds, and checksum.
+    ///
+    /// # Errors
+    /// Returns [`DomainContractError`] when a documented invariant is violated.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
+        self.validate_payload()?;
+        validate_hash(&self.checksum)?;
+        if checksum_without_field(self, "checksum")? != self.checksum {
+            return Err(DomainContractError::ChecksumMismatch);
+        }
+        ensure_domain_contract_size(self)?;
+        Ok(())
+    }
+
+    fn validate_payload(&self) -> Result<(), DomainContractError> {
+        validate_version(self.schema_version, SEMANTIC_DIFFERENCE_SCHEMA_VERSION)?;
+        self.base.validate()?;
+        self.candidate.validate()?;
+        validate_shared_comparison_bindings(&self.base, &self.candidate)?;
+        validate_assignment_comparisons(&self.assignments)?;
+        validate_rule_comparisons(&self.rules)?;
+        validate_metric_comparisons(&self.metrics)?;
+        if let Some(runs) = &self.runs {
+            runs.validate()?;
+        }
+        validate_affected_entities(&self.affected_entities)
+    }
+}
+
 /// Canonical cross-revision-capable accepted-result comparison.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1164,110 +1417,20 @@ impl SolutionComparisonV1 {
         validate_version(self.schema_version, SOLUTION_COMPARISON_SCHEMA_VERSION)?;
         self.base.validate()?;
         self.candidate.validate()?;
-        if self.base.pack_id != self.candidate.pack_id
-            || self.base.scenario_id != self.candidate.scenario_id
-            || self.base.projection_version != self.candidate.projection_version
-        {
-            return Err(explanation_error("comparison compatibility"));
-        }
-        if self.base.scenario_revision == self.candidate.scenario_revision
-            && self.base.verification_scope_checksum != self.candidate.verification_scope_checksum
-        {
-            return Err(explanation_error("same-revision verification scope"));
-        }
-        self.validate_assignment_and_rule_comparisons()?;
-        self.validate_score_comparisons()?;
+        validate_shared_comparison_bindings(&self.base, &self.candidate)?;
+        validate_assignment_comparisons(&self.assignments)?;
+        validate_rule_comparisons(&self.rules)?;
+        validate_score_comparisons(
+            &self.base_score,
+            &self.candidate_score,
+            &self.score_levels,
+            self.ordering,
+        )?;
         self.validate_optional_context()
     }
 
-    fn validate_assignment_and_rule_comparisons(&self) -> Result<(), DomainContractError> {
-        if self.assignments.len() > MAX_EXPLANATION_RECORDS
-            || !self
-                .assignments
-                .windows(2)
-                .all(|pair| pair[0].assignment_id() < pair[1].assignment_id())
-        {
-            return Err(DomainContractError::NonCanonicalExplanationCollection(
-                "assignment comparisons",
-            ));
-        }
-        for value in &self.assignments {
-            value.validate()?;
-        }
-        if self.rules.len() > MAX_VERIFICATION_RULES
-            || !strictly_sorted_unique_by(&self.rules, |value| &value.rule_id)
-        {
-            return Err(DomainContractError::NonCanonicalExplanationCollection(
-                "rule comparisons",
-            ));
-        }
-        for value in &self.rules {
-            value.validate()?;
-        }
-        Ok(())
-    }
-
-    fn validate_score_comparisons(&self) -> Result<(), DomainContractError> {
-        self.base_score.validate_current_shape()?;
-        self.candidate_score.validate_current_shape()?;
-        let expected_ordering = match self.base_score.compare(&self.candidate_score)? {
-            Ordering::Less => ComparisonOrdering::Worse,
-            Ordering::Equal => ComparisonOrdering::Equivalent,
-            Ordering::Greater => ComparisonOrdering::Better,
-        };
-        if self.ordering != expected_ordering {
-            return Err(explanation_error("comparison ordering"));
-        }
-        if self.score_levels.len() != self.base_score.levels.len() {
-            return Err(explanation_error("score comparison levels"));
-        }
-        if self.score_levels.len() > MAX_SCORE_LEVELS {
-            return Err(DomainContractError::LimitExceeded(
-                "score level comparisons",
-            ));
-        }
-        let mut level_ids = BTreeSet::new();
-        for ((comparison, base), candidate) in self
-            .score_levels
-            .iter()
-            .zip(&self.base_score.levels)
-            .zip(&self.candidate_score.levels)
-        {
-            if !level_ids.insert(&comparison.level_id) {
-                return Err(DomainContractError::NonCanonicalExplanationCollection(
-                    "score level comparisons",
-                ));
-            }
-            comparison.validate()?;
-            if comparison.level_id != base.level_id
-                || comparison.level_id != candidate.level_id
-                || comparison.direction != base.direction
-                || comparison.direction != candidate.direction
-                || comparison.before != base.value
-                || comparison.after != candidate.value
-            {
-                return Err(explanation_error("score comparison binding"));
-            }
-            validate_score_categories(
-                &comparison.categories,
-                &base.category_breakdown,
-                &candidate.category_breakdown,
-            )?;
-        }
-        Ok(())
-    }
-
     fn validate_optional_context(&self) -> Result<(), DomainContractError> {
-        if self.metrics.len() > MAX_VERIFICATION_METRICS
-            || !strictly_sorted_unique_by(&self.metrics, |value| &value.metric_id)
-        {
-            return Err(DomainContractError::NonCanonicalExplanationCollection(
-                "metric comparisons",
-            ));
-        }
-        for value in &self.metrics {
-            value.validate()?;
-        }
+        validate_metric_comparisons(&self.metrics)?;
         if self.locks.len() > MAX_EXPLANATION_RECORDS
             || !strictly_sorted_unique_by(&self.locks, |value| &value.assignment_id)
         {
@@ -1281,15 +1444,407 @@ impl SolutionComparisonV1 {
         if let Some(runs) = &self.runs {
             runs.validate()?;
         }
-        validate_bounded_strict(
-            &self.affected_entities,
-            MAX_VERIFICATION_ENTITIES,
-            "comparison affected entities",
-        )
+        validate_affected_entities(&self.affected_entities)
     }
 }
 
-/// V1 intentionally does not claim repair causality without a typed comparison-bound proof basis.
+fn validate_score_comparisons(
+    base_score: &ScoreVector,
+    candidate_score: &ScoreVector,
+    score_levels: &[ScoreLevelComparisonV1],
+    ordering: ComparisonOrdering,
+) -> Result<(), DomainContractError> {
+    base_score.validate_current_shape()?;
+    candidate_score.validate_current_shape()?;
+    let expected_ordering = match base_score.compare(candidate_score)? {
+        Ordering::Less => ComparisonOrdering::Worse,
+        Ordering::Equal => ComparisonOrdering::Equivalent,
+        Ordering::Greater => ComparisonOrdering::Better,
+    };
+    if ordering != expected_ordering {
+        return Err(explanation_error("comparison ordering"));
+    }
+    if score_levels.len() != base_score.levels.len() {
+        return Err(explanation_error("score comparison levels"));
+    }
+    if score_levels.len() > MAX_SCORE_LEVELS {
+        return Err(DomainContractError::LimitExceeded(
+            "score level comparisons",
+        ));
+    }
+    let mut level_ids = BTreeSet::new();
+    for ((comparison, base), candidate) in score_levels
+        .iter()
+        .zip(&base_score.levels)
+        .zip(&candidate_score.levels)
+    {
+        if !level_ids.insert(&comparison.level_id) {
+            return Err(DomainContractError::NonCanonicalExplanationCollection(
+                "score level comparisons",
+            ));
+        }
+        comparison.validate()?;
+        if comparison.level_id != base.level_id
+            || comparison.level_id != candidate.level_id
+            || comparison.direction != base.direction
+            || comparison.direction != candidate.direction
+            || comparison.before != base.value
+            || comparison.after != candidate.value
+        {
+            return Err(explanation_error("score comparison binding"));
+        }
+        validate_score_categories(
+            &comparison.categories,
+            &base.category_breakdown,
+            &candidate.category_breakdown,
+        )?;
+    }
+    Ok(())
+}
+
+/// Current complete accepted-result comparison schema; V1 remains a stored counterfactual format.
+pub const SOLUTION_COMPARISON_V2_SCHEMA_VERSION: u32 = 2;
+
+/// Protection of one Boolean assignment selection, not a generic locked value.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
+pub enum AssignmentProtectionStateV1 {
+    /// An explicit unlocked record, distinct from an absent record.
+    Unlocked,
+    /// The assignment must be selected.
+    Hard,
+    /// Deselection incurs this positive stability weight.
+    Soft {
+        /// Positive source-authored weight.
+        weight: u32,
+    },
+}
+
+/// Both source observations and independently derived preservation facts for a protected pair.
+#[allow(clippy::struct_excessive_bools)] // Separate source observations and checked derived facts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AssignmentProtectionComparisonV1 {
+    /// Pack-owned canonical assignment identity.
+    pub assignment_id: DomainAssignmentId,
+    /// Base source record, absent when no record existed.
+    pub before: Option<AssignmentProtectionStateV1>,
+    /// Candidate source record, absent when no record existed.
+    pub after: Option<AssignmentProtectionStateV1>,
+    /// Selection in the complete independently verified base result.
+    pub before_selected: bool,
+    /// Selection in the complete independently verified candidate result.
+    pub after_selected: bool,
+    /// True exactly when optional protection states are equal.
+    pub state_preserved: bool,
+    /// True exactly when both selection observations are equal.
+    pub assignment_preserved: bool,
+}
+
+impl AssignmentProtectionComparisonV1 {
+    /// Derives preservation from explicit source and selection observations.
+    ///
+    /// # Errors
+    /// Rejects absent protection on both sides, zero Soft weight or an unselected Hard pair.
+    pub fn new(
+        assignment_id: DomainAssignmentId,
+        before: Option<AssignmentProtectionStateV1>,
+        after: Option<AssignmentProtectionStateV1>,
+        before_selected: bool,
+        after_selected: bool,
+    ) -> Result<Self, DomainContractError> {
+        let value = Self {
+            assignment_id,
+            before,
+            after,
+            before_selected,
+            after_selected,
+            state_preserved: before == after,
+            assignment_preserved: before_selected == after_selected,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Validates Boolean selection meaning and both derived preservation flags.
+    ///
+    /// # Errors
+    /// Rejects inconsistent protection or selection evidence.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
+        if self.before.is_none() && self.after.is_none() {
+            return Err(explanation_error("empty assignment protection"));
+        }
+        for (state, selected) in [
+            (self.before, self.before_selected),
+            (self.after, self.after_selected),
+        ] {
+            if matches!(state, Some(AssignmentProtectionStateV1::Soft { weight: 0 }))
+                || matches!(state, Some(AssignmentProtectionStateV1::Hard)) && !selected
+            {
+                return Err(explanation_error("assignment protection observation"));
+            }
+        }
+        if self.state_preserved != (self.before == self.after)
+            || self.assignment_preserved != (self.before_selected == self.after_selected)
+        {
+            return Err(explanation_error("assignment protection preservation"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_selection_values(
+        &self,
+        before: Option<&AssignmentValue>,
+        after: Option<&AssignmentValue>,
+    ) -> Result<(), DomainContractError> {
+        for (value, observed) in [(before, self.before_selected), (after, self.after_selected)] {
+            match value {
+                Some(AssignmentValue::Boolean(selected)) if *selected == observed => {}
+                None => {}
+                Some(_) => {
+                    return Err(explanation_error("assignment protection selection binding"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Inert labels retained from each entity's own immutable source, never from the current head.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComparisonEntityObservationV1 {
+    /// Canonical affected entity.
+    pub entity: DomainEntityRef,
+    /// Label in the base source, absent if unavailable on that side.
+    pub before_label: Option<String>,
+    /// Label in the candidate source, absent if unavailable on that side.
+    pub after_label: Option<String>,
+}
+
+impl ComparisonEntityObservationV1 {
+    fn validate(&self) -> Result<(), DomainContractError> {
+        if self.before_label.is_none() && self.after_label.is_none() {
+            return Err(explanation_error("empty comparison entity observation"));
+        }
+        for label in [self.before_label.as_ref(), self.after_label.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if label.is_empty() || label.len() > super::MAX_VERIFICATION_TEXT_BYTES {
+                return Err(explanation_error("comparison entity label"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Why aggregate score comparison was not established; semantic evidence remains available.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScoreComparisonUnavailableReasonV1 {
+    /// Recorded policy or pack-established scoring population/semantics differ or are unknown.
+    PolicyOrScopeMismatch,
+    /// Ordered objective levels, directions or score-vector shape differ.
+    ScoreShapeMismatch,
+}
+
+/// Exact score comparison only when source-owned scoring compatibility was established.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    deny_unknown_fields
+)]
+pub enum ScoreComparisonV2 {
+    /// Full independently recomputed vectors, categories and candidate ordering.
+    Comparable {
+        /// Exact base score.
+        base_score: ScoreVector,
+        /// Exact candidate score.
+        candidate_score: ScoreVector,
+        /// Objective levels in recorded precedence order.
+        score_levels: Vec<ScoreLevelComparisonV1>,
+        /// Candidate ordering relative to the base.
+        ordering: ComparisonOrdering,
+    },
+    /// Aggregate scores and ordering are deliberately absent.
+    Unavailable {
+        /// Closed reason, not an inferred utility comparison.
+        reason: ScoreComparisonUnavailableReasonV1,
+    },
+}
+
+/// Complete semantic/protection comparison with descriptive runs and an independently gated score.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolutionComparisonV2 {
+    /// Must equal [`SOLUTION_COMPARISON_V2_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// Exact base acceptance and immutable source.
+    pub base: ComparisonBindingV1,
+    /// Exact candidate acceptance and immutable source.
+    pub candidate: ComparisonBindingV1,
+    /// Canonical assignment changes.
+    pub assignments: Vec<AssignmentComparisonV1>,
+    /// Canonical Required-rule changes.
+    pub rules: Vec<RuleComparisonV1>,
+    /// Explicitly comparable or unavailable aggregate scores.
+    pub score: ScoreComparisonV2,
+    /// Canonical metric changes.
+    pub metrics: Vec<MetricComparisonV1>,
+    /// Complete canonical union of supplied source protections, including unchanged records.
+    pub protections: Vec<AssignmentProtectionComparisonV1>,
+    /// Both recorded terminal outcomes, not authenticated historical backend proof.
+    pub runs: RunComparisonV2,
+    /// Canonical union of changed generic entities and pack-projected affected parties.
+    pub affected_entities: Vec<DomainEntityRef>,
+    /// Canonical source-side labels for affected parties when available.
+    pub entity_observations: Vec<ComparisonEntityObservationV1>,
+    /// Lowercase BLAKE3 checksum excluding this field.
+    pub checksum: String,
+}
+
+impl SolutionComparisonV2 {
+    pub(super) fn seal(mut self) -> Result<Self, DomainContractError> {
+        self.validate_payload()?;
+        self.checksum = checksum_without_field(&self, "checksum")?;
+        crate::ensure_portable_domain_contract_size(&self)?;
+        Ok(self)
+    }
+
+    /// Strictly parses the bounded current comparison format.
+    ///
+    /// # Errors
+    /// Rejects malformed JSON, unsupported versions or invalid complete comparison evidence.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, DomainContractError> {
+        let value: Self = parse_portable_domain_json(bytes)?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Validates complete nested evidence and integrity, not local acceptance authority.
+    ///
+    /// # Errors
+    /// Rejects noncanonical, contradictory, oversized or incorrectly bound evidence.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
+        self.validate_payload()?;
+        validate_hash(&self.checksum)?;
+        if checksum_without_field(self, "checksum")? != self.checksum {
+            return Err(DomainContractError::ChecksumMismatch);
+        }
+        crate::ensure_portable_domain_contract_size(self)
+    }
+
+    fn validate_payload(&self) -> Result<(), DomainContractError> {
+        validate_version(self.schema_version, SOLUTION_COMPARISON_V2_SCHEMA_VERSION)?;
+        self.base.validate()?;
+        self.candidate.validate()?;
+        validate_shared_comparison_bindings(&self.base, &self.candidate)?;
+        validate_assignment_comparisons(&self.assignments)?;
+        validate_rule_comparisons(&self.rules)?;
+        validate_metric_comparisons(&self.metrics)?;
+        if let ScoreComparisonV2::Comparable {
+            base_score,
+            candidate_score,
+            score_levels,
+            ordering,
+        } = &self.score
+        {
+            validate_score_comparisons(base_score, candidate_score, score_levels, *ordering)?;
+        }
+        self.validate_protections_and_entities()?;
+        self.runs.validate()?;
+        for (run, binding) in [
+            (&self.runs.base, &self.base),
+            (&self.runs.candidate, &self.candidate),
+        ] {
+            if !matches!(&run.outcome, RunTerminalOutcomeV1::Accepted {
+                solution_id, accepted_result_checksum, ..
+            } if *solution_id == binding.accepted_result.solution_id
+                && *accepted_result_checksum == binding.accepted_result.result_checksum)
+            {
+                return Err(explanation_error("comparison accepted run binding"));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_protections_and_entities(&self) -> Result<(), DomainContractError> {
+        if self.protections.len() > MAX_EXPLANATION_RECORDS
+            || !strictly_sorted_unique_by(&self.protections, |value| &value.assignment_id)
+        {
+            return Err(DomainContractError::NonCanonicalExplanationCollection(
+                "assignment protection comparisons",
+            ));
+        }
+        for value in &self.protections {
+            value.validate()?;
+            if let Ok(index) = self
+                .assignments
+                .binary_search_by(|assignment| assignment.assignment_id().cmp(&value.assignment_id))
+            {
+                let (before, after) = match &self.assignments[index] {
+                    AssignmentComparisonV1::Added { after } => (None, Some(&after.value)),
+                    AssignmentComparisonV1::Removed { before } => (Some(&before.value), None),
+                    AssignmentComparisonV1::Changed { before, after } => {
+                        (Some(&before.value), Some(&after.value))
+                    }
+                };
+                value.validate_selection_values(before, after)?;
+            }
+        }
+        validate_bounded_strict(
+            &self.affected_entities,
+            MAX_EXPLANATION_RECORDS,
+            "comparison affected entities",
+        )?;
+        let require_affected = |entity: &DomainEntityRef| {
+            if self.affected_entities.binary_search(entity).is_err() {
+                Err(explanation_error("missing comparison affected entity"))
+            } else {
+                Ok(())
+            }
+        };
+        for assignment in &self.assignments {
+            match assignment {
+                AssignmentComparisonV1::Added { after } => require_affected(&after.entity)?,
+                AssignmentComparisonV1::Removed { before } => require_affected(&before.entity)?,
+                AssignmentComparisonV1::Changed { before, after } => {
+                    require_affected(&before.entity)?;
+                    if before.entity != after.entity {
+                        require_affected(&after.entity)?;
+                    }
+                }
+            }
+        }
+        for rule in &self.rules {
+            for entity in rule
+                .before
+                .iter()
+                .chain(&rule.after)
+                .flat_map(|evaluation| &evaluation.affected_entities)
+            {
+                require_affected(entity)?;
+            }
+        }
+        if self.entity_observations.len() > MAX_EXPLANATION_RECORDS
+            || !strictly_sorted_unique_by(&self.entity_observations, |value| &value.entity)
+        {
+            return Err(DomainContractError::NonCanonicalExplanationCollection(
+                "comparison entity observations",
+            ));
+        }
+        for observation in &self.entity_observations {
+            observation.validate()?;
+            require_affected(&observation.entity)?;
+        }
+        Ok(())
+    }
+}
+
+/// V1 non-causality marker retained by the V2 repair contract.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RepairCausalityV1 {
@@ -1297,17 +1852,17 @@ pub enum RepairCausalityV1 {
     NotEstablished,
 }
 
-/// Deterministic repair evidence.
+/// Deterministic repair evidence without a causal claim.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RepairEvidenceV1 {
-    /// Cross-revision-capable deterministic comparison.
-    pub comparison: SolutionComparisonV1,
-    /// Explicit V1 non-causality claim.
+pub struct RepairEvidenceV2 {
+    /// Complete comparison of the independently accepted base and repaired result.
+    pub comparison: SolutionComparisonV2,
+    /// Explicit non-causality claim.
     pub causality: RepairCausalityV1,
 }
 
-impl RepairEvidenceV1 {
+impl RepairEvidenceV2 {
     /// Validates the complete comparison.
     ///
     /// # Errors
@@ -1318,8 +1873,8 @@ impl RepairEvidenceV1 {
 }
 
 fn validate_run_pair(
-    run_input: &RunInputV1,
-    run_manifest: &RunManifestV1,
+    run_input: &RunInput,
+    run_manifest: &RunManifest,
     invariant: &'static str,
 ) -> Result<(), DomainContractError> {
     run_input.validate()?;
@@ -1329,27 +1884,44 @@ fn validate_run_pair(
     {
         return Err(explanation_error(invariant));
     }
+    if let Some(observations) = &run_manifest.native_observations {
+        observations.validate_input_bindings(run_input)?;
+    }
     Ok(())
 }
 
 /// Terminal optimality/status evidence bound to exact run authority records.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OptimalityStatusEvidenceV1 {
+pub struct OptimalityStatusEvidence {
+    /// Current writers record 2; absence is the exact historical unversioned status payload.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::deserialize_present"
+    )]
+    pub schema_version: Option<u32>,
     /// Exact immutable run input.
-    pub run_input: RunInputV1,
+    pub run_input: RunInput,
     /// Exact terminal manifest bound to the run input.
-    pub run_manifest: RunManifestV1,
+    pub run_manifest: RunManifest,
     /// Accepted result only for an accepted outcome.
     pub result: Option<AcceptedResultRefV1>,
 }
 
-impl OptimalityStatusEvidenceV1 {
+impl OptimalityStatusEvidence {
     /// Validates exact run binding and accepted-result partitioning.
     ///
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn validate(&self) -> Result<(), DomainContractError> {
+        match self.schema_version {
+            None if self.run_input.schema_version == 1 && self.run_manifest.schema_version == 1 => {
+            }
+            Some(2) => {}
+            None => return Err(explanation_error("legacy optimality nested versions")),
+            Some(version) => return Err(DomainContractError::UnsupportedVersion(version)),
+        }
         validate_run_pair(
             &self.run_input,
             &self.run_manifest,
@@ -1384,9 +1956,6 @@ fn certainty_for_terminal_outcome(outcome: &RunTerminalOutcomeV1) -> Explanation
         RunTerminalOutcomeV1::Accepted {
             status: SolveStatus::Optimal,
             ..
-        }
-        | RunTerminalOutcomeV1::NoResult {
-            status: SolveStatus::Infeasible | SolveStatus::Unbounded,
         } => ExplanationCertainty::BackendProof,
         RunTerminalOutcomeV1::Accepted {
             status: SolveStatus::Feasible,
@@ -1448,7 +2017,7 @@ impl EvidenceMessageV1 {
 /// Exact seven-variant typed evidence payload.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
-pub enum ExplanationEvidencePayloadV1 {
+pub enum ExplanationEvidencePayloadV2 {
     /// Validation issue evidence.
     Validation {
         /// Exact issue.
@@ -1458,6 +2027,9 @@ pub enum ExplanationEvidencePayloadV1 {
     Infeasibility {
         /// Exact infeasibility evidence.
         infeasibility: InfeasibilityEvidenceV1,
+        /// Exact immutable question, omitted for old unconditional payloads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<CounterfactualConditionV1>,
     },
     /// Independently verified assignment evidence.
     Assignment {
@@ -1467,26 +2039,26 @@ pub enum ExplanationEvidencePayloadV1 {
     /// Exact validated counterfactual result.
     Counterfactual {
         /// Counterfactual job result.
-        result: Box<CounterfactualResultV1>,
+        result: Box<CounterfactualResult>,
     },
     /// Deterministic accepted-result comparison.
     SolutionDifference {
         /// Exact comparison.
-        comparison: Box<SolutionComparisonV1>,
+        comparison: Box<SolutionComparisonV2>,
     },
-    /// Deterministic repair comparison without a V1 causality claim.
+    /// Deterministic repair comparison without a causal claim.
     Repair {
         /// Repair evidence.
-        repair: Box<RepairEvidenceV1>,
+        repair: Box<RepairEvidenceV2>,
     },
     /// Terminal run status/proof evidence.
     OptimalityStatus {
         /// Exact terminal evidence.
-        status: Box<OptimalityStatusEvidenceV1>,
+        status: Box<OptimalityStatusEvidence>,
     },
 }
 
-impl ExplanationEvidencePayloadV1 {
+impl ExplanationEvidencePayloadV2 {
     /// Returns the exact evidence discriminant.
     #[must_use]
     pub const fn kind(&self) -> ExplanationKind {
@@ -1506,9 +2078,17 @@ impl ExplanationEvidencePayloadV1 {
             Self::Validation { .. } | Self::SolutionDifference { .. } | Self::Repair { .. } => {
                 ExplanationCertainty::Deterministic
             }
-            Self::Infeasibility { infeasibility } => infeasibility.certainty(),
+            Self::Infeasibility { infeasibility, .. } => infeasibility.certainty(),
             Self::Assignment { .. } => ExplanationCertainty::IndependentlyVerified,
             Self::Counterfactual { result } => result.certainty(),
+            Self::OptimalityStatus { status } if status.schema_version == Some(2) => {
+                match status.run_manifest.outcome {
+                    RunTerminalOutcomeV1::Accepted { .. } => {
+                        ExplanationCertainty::IndependentlyVerified
+                    }
+                    _ => ExplanationCertainty::Deterministic,
+                }
+            }
             Self::OptimalityStatus { status } => {
                 certainty_for_terminal_outcome(&status.run_manifest.outcome)
             }
@@ -1518,7 +2098,16 @@ impl ExplanationEvidencePayloadV1 {
     fn validate(&self) -> Result<(), DomainContractError> {
         match self {
             Self::Validation { issue } => issue.validate(),
-            Self::Infeasibility { infeasibility } => infeasibility.validate(),
+            Self::Infeasibility {
+                infeasibility,
+                condition,
+            } => {
+                infeasibility.validate()?;
+                if let Some(condition) = condition {
+                    condition.validate()?;
+                }
+                Ok(())
+            }
             Self::Assignment { assignment } => assignment.validate(),
             Self::Counterfactual { result } => result.validate(),
             Self::SolutionDifference { comparison } => comparison.validate(),
@@ -1531,27 +2120,27 @@ impl ExplanationEvidencePayloadV1 {
 /// Checksummed evidence whose certainty is exactly derived from its typed payload.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExplanationEvidenceV1 {
-    /// Must equal [`EXPLANATION_EVIDENCE_SCHEMA_VERSION`].
+pub struct ExplanationEvidenceV2 {
+    /// Must equal [`EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Derived evidence strength.
     pub certainty: ExplanationCertainty,
     /// Exact typed payload.
-    pub evidence: ExplanationEvidencePayloadV1,
+    pub evidence: ExplanationEvidencePayloadV2,
     /// Lowercase BLAKE3 checksum excluding this field.
     pub checksum: String,
 }
 
-impl ExplanationEvidenceV1 {
+impl ExplanationEvidenceV2 {
     /// Validates a payload, derives certainty, and computes its checksum.
     ///
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
-    pub fn new(evidence: ExplanationEvidencePayloadV1) -> Result<Self, DomainContractError> {
+    pub fn new(evidence: ExplanationEvidencePayloadV2) -> Result<Self, DomainContractError> {
         evidence.validate()?;
         let certainty = evidence.certainty();
         let mut value = Self {
-            schema_version: EXPLANATION_EVIDENCE_SCHEMA_VERSION,
+            schema_version: EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION,
             certainty,
             evidence,
             checksum: String::new(),
@@ -1576,7 +2165,7 @@ impl ExplanationEvidenceV1 {
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn validate(&self) -> Result<(), DomainContractError> {
-        validate_version(self.schema_version, EXPLANATION_EVIDENCE_SCHEMA_VERSION)?;
+        validate_version(self.schema_version, EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION)?;
         self.evidence.validate()?;
         if self.certainty != self.evidence.certainty() {
             return Err(explanation_error("evidence certainty"));
@@ -1598,24 +2187,24 @@ impl ExplanationEvidenceV1 {
 /// Pack rendering request. The redundant kind is validated against evidence.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EvidenceRenderRequestV1 {
-    /// Must equal [`EVIDENCE_RENDER_SCHEMA_VERSION`].
+pub struct EvidenceRenderRequestV2 {
+    /// Must equal [`EVIDENCE_RENDER_REQUEST_V2_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Expected evidence kind.
     pub kind: ExplanationKind,
     /// Exact checksummed evidence.
-    pub evidence: ExplanationEvidenceV1,
+    pub evidence: ExplanationEvidenceV2,
 }
 
-impl EvidenceRenderRequestV1 {
+impl EvidenceRenderRequestV2 {
     /// Creates a kind-bound rendering request.
     ///
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
-    pub fn new(evidence: ExplanationEvidenceV1) -> Result<Self, DomainContractError> {
+    pub fn new(evidence: ExplanationEvidenceV2) -> Result<Self, DomainContractError> {
         evidence.validate()?;
         Ok(Self {
-            schema_version: EVIDENCE_RENDER_SCHEMA_VERSION,
+            schema_version: EVIDENCE_RENDER_REQUEST_V2_SCHEMA_VERSION,
             kind: evidence.kind(),
             evidence,
         })
@@ -1636,7 +2225,10 @@ impl EvidenceRenderRequestV1 {
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn validate(&self) -> Result<(), DomainContractError> {
-        validate_version(self.schema_version, EVIDENCE_RENDER_SCHEMA_VERSION)?;
+        validate_version(
+            self.schema_version,
+            EVIDENCE_RENDER_REQUEST_V2_SCHEMA_VERSION,
+        )?;
         self.evidence.validate()?;
         if self.kind != self.evidence.kind() {
             return Err(explanation_error("render request kind"));
@@ -1649,7 +2241,7 @@ impl EvidenceRenderRequestV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceRenderResultV1 {
-    /// Must equal [`EVIDENCE_RENDER_SCHEMA_VERSION`].
+    /// Must equal [`EVIDENCE_RENDER_RESULT_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Rendered evidence kind.
     pub kind: ExplanationKind,
@@ -1665,12 +2257,12 @@ impl EvidenceRenderResultV1 {
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn new(
-        request: &EvidenceRenderRequestV1,
+        request: &EvidenceRenderRequestV2,
         messages: Vec<EvidenceMessageV1>,
     ) -> Result<Self, DomainContractError> {
         request.validate()?;
         let value = Self {
-            schema_version: EVIDENCE_RENDER_SCHEMA_VERSION,
+            schema_version: EVIDENCE_RENDER_RESULT_SCHEMA_VERSION,
             kind: request.kind,
             evidence_checksum: request.evidence.checksum.clone(),
             messages,
@@ -1695,7 +2287,7 @@ impl EvidenceRenderResultV1 {
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn validate(&self) -> Result<(), DomainContractError> {
-        validate_version(self.schema_version, EVIDENCE_RENDER_SCHEMA_VERSION)?;
+        validate_version(self.schema_version, EVIDENCE_RENDER_RESULT_SCHEMA_VERSION)?;
         validate_hash(&self.evidence_checksum)?;
         if self.messages.len() > MAX_EVIDENCE_MESSAGES {
             return Err(DomainContractError::LimitExceeded("evidence messages"));
@@ -1710,28 +2302,28 @@ impl EvidenceRenderResultV1 {
 /// Checksummed pairing of exact evidence with its matching data-only rendering.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExplanationResultV1 {
-    /// Must equal [`EXPLANATION_RESULT_SCHEMA_VERSION`].
+pub struct ExplanationResultV2 {
+    /// Must equal [`EXPLANATION_RESULT_V2_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Exact checksummed evidence.
-    pub evidence: ExplanationEvidenceV1,
+    pub evidence: ExplanationEvidenceV2,
     /// Matching rendered messages.
     pub rendered: EvidenceRenderResultV1,
     /// Lowercase BLAKE3 checksum excluding this field.
     pub checksum: String,
 }
 
-impl ExplanationResultV1 {
+impl ExplanationResultV2 {
     /// Creates and checksums a matching evidence/rendering pair.
     ///
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn new(
-        evidence: ExplanationEvidenceV1,
+        evidence: ExplanationEvidenceV2,
         rendered: EvidenceRenderResultV1,
     ) -> Result<Self, DomainContractError> {
         let mut value = Self {
-            schema_version: EXPLANATION_RESULT_SCHEMA_VERSION,
+            schema_version: EXPLANATION_RESULT_V2_SCHEMA_VERSION,
             evidence,
             rendered,
             checksum: String::new(),
@@ -1766,7 +2358,7 @@ impl ExplanationResultV1 {
     }
 
     fn validate_payload(&self) -> Result<(), DomainContractError> {
-        validate_version(self.schema_version, EXPLANATION_RESULT_SCHEMA_VERSION)?;
+        validate_version(self.schema_version, EXPLANATION_RESULT_V2_SCHEMA_VERSION)?;
         self.evidence.validate()?;
         self.rendered.validate()?;
         if self.evidence.kind() != self.rendered.kind {
@@ -1779,7 +2371,7 @@ impl ExplanationResultV1 {
     }
 }
 
-/// Exact two-condition counterfactual vocabulary.
+/// Exact three-condition counterfactual vocabulary.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     rename_all = "camelCase",
@@ -1802,24 +2394,53 @@ pub enum CounterfactualConditionPayloadV1 {
         /// Forbidden value.
         value: AssignmentValue,
     },
+    /// Require the target assignment to be true while the replaced assignment is false.
+    ReplaceAssignment {
+        /// Assignment identity selected by the counterfactual.
+        target_assignment_id: DomainAssignmentId,
+        /// Existing assignment identity that must no longer be selected.
+        replaced_assignment_id: DomainAssignmentId,
+    },
 }
 
 impl CounterfactualConditionPayloadV1 {
     fn validate(&self) -> Result<(), DomainContractError> {
-        let value = match self {
+        match self {
             Self::ForceAssignmentValue { value, .. }
-            | Self::ForbidAssignmentValue { value, .. } => value,
-        };
-        if let AssignmentValue::Interval(interval) = value {
-            interval.validate()?;
+            | Self::ForbidAssignmentValue { value, .. } => {
+                if let AssignmentValue::Interval(interval) = value {
+                    interval.validate()?;
+                }
+            }
+            Self::ReplaceAssignment {
+                target_assignment_id,
+                replaced_assignment_id,
+            } => {
+                // DomainAssignmentId construction/deserialization already enforces the canonical
+                // namespace grammar; retain an explicit non-empty check at this V1 boundary.
+                if target_assignment_id.as_str().is_empty()
+                    || replaced_assignment_id.as_str().is_empty()
+                {
+                    return Err(explanation_error(
+                        "counterfactual replacement assignment ids",
+                    ));
+                }
+                if target_assignment_id == replaced_assignment_id {
+                    return Err(explanation_error(
+                        "counterfactual replacement assignments must be distinct",
+                    ));
+                }
+            }
         }
         Ok(())
     }
 }
+
 /// Returns whether a normalized solution satisfies the exact counterfactual condition.
 ///
 /// A condition never matches when its target assignment is absent. Force requires equality;
-/// forbid requires inequality.
+/// forbid requires inequality. Replace requires both exact assignments, with the target set to
+/// `true` and the replaced assignment set to `false`.
 #[must_use]
 pub fn counterfactual_condition_satisfied(
     condition: &CounterfactualConditionV1,
@@ -1839,6 +2460,19 @@ pub fn counterfactual_condition_satisfied(
         CounterfactualConditionPayloadV1::ForbidAssignmentValue { value, .. } => {
             &assignment.value != value
         }
+        CounterfactualConditionPayloadV1::ReplaceAssignment {
+            target_assignment_id: _,
+            replaced_assignment_id,
+        } => {
+            matches!(&assignment.value, AssignmentValue::Boolean(true))
+                && solution
+                    .assignments
+                    .iter()
+                    .find(|assignment| &assignment.id == replaced_assignment_id)
+                    .is_some_and(|assignment| {
+                        matches!(&assignment.value, AssignmentValue::Boolean(false))
+                    })
+        }
     }
 }
 
@@ -1848,6 +2482,10 @@ fn condition_assignment_id(condition: &CounterfactualConditionPayloadV1) -> &Dom
         | CounterfactualConditionPayloadV1::ForbidAssignmentValue { assignment_id, .. } => {
             assignment_id
         }
+        CounterfactualConditionPayloadV1::ReplaceAssignment {
+            target_assignment_id,
+            ..
+        } => target_assignment_id,
     }
 }
 
@@ -1857,7 +2495,7 @@ fn condition_assignment_id(condition: &CounterfactualConditionPayloadV1) -> &Dom
 pub struct CounterfactualConditionV1 {
     /// Must equal [`COUNTERFACTUAL_CONDITION_SCHEMA_VERSION`].
     pub schema_version: u32,
-    /// Exact force/forbid condition.
+    /// Exact force/forbid/replace condition.
     pub condition: CounterfactualConditionPayloadV1,
     /// Lowercase BLAKE3 checksum excluding this field.
     pub checksum: String,
@@ -2210,39 +2848,39 @@ pub enum CounterfactualConclusionV1 {
 /// Checksummed result bound to the exact request, base authority, derived run, and compilation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CounterfactualResultV1 {
+pub struct CounterfactualResult {
     /// Must equal [`COUNTERFACTUAL_RESULT_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Exact typed job request and condition.
     pub request: CounterfactualJobRequestV1,
     /// Exact immutable input for the accepted base run.
-    pub base_run_input: RunInputV1,
+    pub base_run_input: RunInput,
     /// Exact accepted manifest for the base run.
-    pub base_run_manifest: RunManifestV1,
+    pub base_run_manifest: RunManifest,
     /// Validated derived-model compilation binding.
     pub compilation: CounterfactualCompilationBindingV1,
     /// Exact condition-bound derived run input.
-    pub run_input: RunInputV1,
+    pub run_input: RunInput,
     /// Exact terminal manifest bound to the derived run input.
-    pub run_manifest: RunManifestV1,
+    pub run_manifest: RunManifest,
     /// One truthful successful conclusion.
     pub conclusion: CounterfactualConclusionV1,
     /// Lowercase BLAKE3 checksum excluding this field.
     pub checksum: String,
 }
 
-impl CounterfactualResultV1 {
+impl CounterfactualResult {
     /// Creates and checksums a result from exact request, base, and derived-run authority.
     ///
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
     pub fn new(
         request: CounterfactualJobRequestV1,
-        base_run_input: RunInputV1,
-        base_run_manifest: RunManifestV1,
+        base_run_input: RunInput,
+        base_run_manifest: RunManifest,
         compilation: CounterfactualCompilationBindingV1,
-        run_input: RunInputV1,
-        run_manifest: RunManifestV1,
+        run_input: RunInput,
+        run_manifest: RunManifest,
         conclusion: CounterfactualConclusionV1,
     ) -> Result<Self, DomainContractError> {
         let mut value = Self {
@@ -2286,7 +2924,20 @@ impl CounterfactualResultV1 {
     }
 
     fn validate_payload(&self) -> Result<(), DomainContractError> {
-        validate_version(self.schema_version, COUNTERFACTUAL_RESULT_SCHEMA_VERSION)?;
+        if !matches!(
+            self.schema_version,
+            1 | COUNTERFACTUAL_RESULT_SCHEMA_VERSION
+        ) {
+            return Err(DomainContractError::UnsupportedVersion(self.schema_version));
+        }
+        if self.schema_version == 1
+            && (self.base_run_input.schema_version != 1
+                || self.run_input.schema_version != 1
+                || self.base_run_manifest.schema_version != 1
+                || self.run_manifest.schema_version != 1)
+        {
+            return Err(explanation_error("legacy counterfactual nested versions"));
+        }
         self.request.validate()?;
         self.compilation.validate()?;
         self.validate_base_run()?;
@@ -2341,6 +2992,7 @@ impl CounterfactualResultV1 {
             || self.run_input.run_id == self.base_run_input.run_id
             || self.run_input.pack_id != self.base_run_input.pack_id
             || self.run_input.pack_schema_version != self.base_run_input.pack_schema_version
+            || self.run_input.objective_context != self.base_run_input.objective_context
             || self.run_input.planning_ir_schema_version
                 != self.base_run_input.planning_ir_schema_version
             || self.run_input.compiler_version != self.base_run_input.compiler_version
@@ -2445,9 +3097,12 @@ pub struct CounterfactualJobRecordV1 {
     /// Cancellation request timestamp, paired with `cancel_request_id`.
     pub cancel_requested_at: Option<Rfc3339Timestamp>,
     /// Present exactly for `completed`.
-    pub result: Option<CounterfactualResultV1>,
+    pub result: Option<CounterfactualResult>,
     /// Present exactly for `failed`.
     pub error: Option<CounterfactualJobErrorV1>,
+    /// Optional local terminal custody reference, omitted by old lifecycle records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_authority: Option<CounterfactualTerminalAuthorityV1>,
 }
 
 impl CounterfactualJobRecordV1 {
@@ -2463,8 +3118,9 @@ impl CounterfactualJobRecordV1 {
         finished_at: Option<Rfc3339Timestamp>,
         cancel_request_id: Option<RequestId>,
         cancel_requested_at: Option<Rfc3339Timestamp>,
-        result: Option<CounterfactualResultV1>,
+        result: Option<CounterfactualResult>,
         error: Option<CounterfactualJobErrorV1>,
+        terminal_authority: Option<CounterfactualTerminalAuthorityV1>,
     ) -> Result<Self, DomainContractError> {
         let value = Self {
             schema_version: COUNTERFACTUAL_JOB_RECORD_SCHEMA_VERSION,
@@ -2476,6 +3132,7 @@ impl CounterfactualJobRecordV1 {
             cancel_requested_at,
             result,
             error,
+            terminal_authority,
         };
         value.validate()?;
         ensure_domain_contract_size(&value)?;
@@ -2496,6 +3153,7 @@ impl CounterfactualJobRecordV1 {
     ///
     /// # Errors
     /// Returns [`DomainContractError`] when a documented invariant is violated.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), DomainContractError> {
         validate_version(
             self.schema_version,
@@ -2505,23 +3163,40 @@ impl CounterfactualJobRecordV1 {
         if self.cancel_request_id.is_some() != self.cancel_requested_at.is_some() {
             return Err(explanation_error("counterfactual cancellation pair"));
         }
+        let marked_alarm_authority = matches!(
+            &self.terminal_authority,
+            Some(CounterfactualTerminalAuthorityV1::VerificationAlarm {
+                clock_failure: Some(_),
+                ..
+            })
+        );
         if self
             .started_at
             .is_some_and(|started| started < self.request.created_at)
             || self.finished_at.is_some_and(|finished| {
-                finished < self.request.created_at
-                    || self.started_at.is_some_and(|started| finished < started)
+                !marked_alarm_authority
+                    && (finished < self.request.created_at
+                        || self.started_at.is_some_and(|started| finished < started))
             })
             || self.cancel_requested_at.is_some_and(|cancelled| {
                 cancelled < self.request.created_at
-                    || self
+                    || (self
                         .finished_at
                         .is_some_and(|finished| cancelled > finished)
+                        && !marked_alarm_authority)
             })
         {
             return Err(explanation_error("counterfactual timestamps"));
         }
         let has_cancel_request = self.cancel_request_id.is_some();
+        let timely_authority = matches!(
+            self.terminal_authority,
+            Some(CounterfactualTerminalAuthorityV1::TimelyInfeasibility { .. })
+        );
+        let alarm_authority = matches!(
+            self.terminal_authority,
+            Some(CounterfactualTerminalAuthorityV1::VerificationAlarm { .. })
+        );
         let valid_shape = match self.state {
             CounterfactualJobState::Queued => {
                 self.started_at.is_none()
@@ -2541,13 +3216,13 @@ impl CounterfactualJobRecordV1 {
                     && self.finished_at.is_some()
                     && self.result.is_some()
                     && self.error.is_none()
-                    && !has_cancel_request
+                    && (!has_cancel_request || timely_authority)
             }
             CounterfactualJobState::Failed => {
                 self.finished_at.is_some()
                     && self.result.is_none()
                     && self.error.is_some()
-                    && !has_cancel_request
+                    && (!has_cancel_request || alarm_authority)
             }
             CounterfactualJobState::Cancelled => {
                 self.finished_at.is_some()
@@ -2570,6 +3245,42 @@ impl CounterfactualJobRecordV1 {
             result.validate()?;
             if result.request != self.request {
                 return Err(explanation_error("counterfactual job result binding"));
+            }
+        }
+        if let Some(authority) = &self.terminal_authority {
+            authority.validate()?;
+            match (authority, self.state) {
+                (
+                    CounterfactualTerminalAuthorityV1::TimelyInfeasibility {
+                        run_id,
+                        run_manifest_checksum,
+                        ..
+                    },
+                    CounterfactualJobState::Completed,
+                ) => {
+                    let result = self
+                        .result
+                        .as_ref()
+                        .ok_or(explanation_error("missing terminal result authority"))?;
+                    if *run_id != result.run_input.run_id
+                        || run_manifest_checksum != &result.run_manifest.checksum
+                        || result.run_manifest.outcome
+                            != (RunTerminalOutcomeV1::NoResult {
+                                status: SolveStatus::Infeasible,
+                            })
+                    {
+                        return Err(explanation_error(
+                            "counterfactual timely authority reference",
+                        ));
+                    }
+                }
+                (
+                    CounterfactualTerminalAuthorityV1::VerificationAlarm { .. },
+                    CounterfactualJobState::Failed,
+                ) if self.error.is_some_and(|error| {
+                    error.kind == CounterfactualFailureKind::InvalidCandidate
+                }) => {}
+                _ => return Err(explanation_error("counterfactual terminal authority state")),
             }
         }
         Ok(())

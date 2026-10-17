@@ -1,8 +1,12 @@
-//! Platform-neutral Phase-01 application services.
+//! Platform-neutral application services, including authenticated stateless manual review and
+//! journaled atomic selection/protection admission. Accepted originals remain immutable.
 
 #[path = "app.rs"]
 mod application;
 mod counterfactual;
+mod infeasibility;
+mod infeasibility_diagnostic;
+mod native_observations;
 mod verification;
 
 pub use application::*;

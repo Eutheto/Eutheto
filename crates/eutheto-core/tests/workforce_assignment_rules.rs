@@ -8,6 +8,12 @@ mod workforce_fixture;
 #[path = "workforce_assignment_rules/authority.rs"]
 mod authority;
 
+#[path = "workforce_assignment_rules/diagnostic_matrix.rs"]
+mod diagnostic_matrix;
+
+#[path = "workforce_assignment_rules/diagnostic_copy.rs"]
+mod diagnostic_copy;
+
 use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::AssignmentValue;
 use eutheto_planning_ir::{
@@ -166,6 +172,7 @@ fn consecutive_fixture() -> Result<Value, Box<dyn Error>> {
 
 fn context() -> CompileContext {
     CompileContext {
+        objective_context: None,
         scenario_revision: 1,
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -1229,9 +1236,11 @@ fn mutual_dense_overlap_conflicts_fail_at_the_existing_constraint_budget() -> Te
 }
 
 #[test]
-fn original_evaluator_detects_pruning_overlap_and_coverage_mutants() -> TestResult {
+fn original_evaluator_detects_pruned_eligibility_availability_and_structural_mutants() -> TestResult
+{
     let document: ScenarioDocument = serde_json::from_value(fixture_value()?)?;
     let compiled = compile_assignment_rules(&document, &context())?;
+    // The first restored pair violates eligibility; the second intersects unavailable time.
     for rejected in [pair(21, 8)?, pair(20, 8)?] {
         let mut mutant = compiled.clone();
         let mut restored = mutant
@@ -1339,6 +1348,7 @@ fn problem(
             .variables
             .iter()
             .map(|item| Variable::Boolean(item.variable.clone()))
+            .chain(compiled.auxiliary_variables.iter().cloned())
             .collect(),
         constraints: compiled.constraints.clone(),
         objectives: ObjectivePlan::default(),
@@ -1411,7 +1421,11 @@ async fn solve_with_real_worker(
             max_constraints: 100,
         },
     };
-    assert!(backend.compatibility(&summary, &options).compatible());
+    assert!(
+        backend.compatibility(&summary, &options).compatible(),
+        "real-worker test model unsupported: {:?}",
+        backend.compatibility(&summary, &options)
+    );
     let budget = ParentSolveBudget::new(
         options.time_limit_milliseconds,
         Arc::new(SystemMonotonicClock::new()),
@@ -1424,7 +1438,7 @@ async fn solve_with_real_worker(
         Arc::clone(&problem),
         summary,
         options,
-        &budget,
+        budget.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1477,6 +1491,972 @@ async fn real_worker_solves_and_rejects_assignment_rule_models() -> TestResult {
 
     let mut impossible = fixture_value()?;
     impossible["domain"]["entities"][id(20)]["eligibleAssignmentTypeIds"] = json!([]);
+    let impossible: ScenarioDocument = serde_json::from_value(impossible)?;
+    let compiled = compile_assignment_rules(&impossible, &context())?;
+    let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_maximum_assignment_count_per_person() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint("11:00:00");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint("13:00:00");
+    value["domain"]["rules"][id(35)] = json!({
+        "id":id(35),"kind":"maximumAssignmentCount","active":true,
+        "strength":"required","scope":{"people":{"kind":"all"}},
+        "calendarId":id(2),"maximum":2
+    });
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let result = solve_with_real_worker(problem(&document, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let candidate = result.candidates.first().ok_or("missing candidate")?;
+    let selected = compiled
+        .variables
+        .iter()
+        .filter_map(|item| {
+            candidate
+                .values
+                .booleans
+                .get(&item.variable.id)
+                .and_then(|value| (*value).then_some(item.pair))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected.iter().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from([pair(1, 8)?, pair(1, 22)?])
+    );
+    assert!(original_accepts(&document, &selected)?);
+
+    value["domain"]["rules"][id(35)]["maximum"] = json!(1);
+    let impossible: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&impossible, &context())?;
+    let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_authored_count_and_exact_minute_quotas() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["rules"][id(35)] = json!({
+        "id":id(35),"kind":"workloadQuota","active":true,
+        "strength":"required","scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+        "calendarId":id(2),"membership":"reportingDate",
+        "measure":{"kind":"assignmentCount"},"minimum":1,"maximum":1
+    });
+    for (measure, feasible_minimum, impossible_minimum) in [
+        (json!({"kind":"assignmentCount"}), 1, 2),
+        (json!({"kind":"bucketMinutes","bucketId":id(3)}), 120, 121),
+    ] {
+        value["domain"]["rules"][id(35)]["measure"] = measure;
+        value["domain"]["rules"][id(35)]["minimum"] = json!(feasible_minimum);
+        value["domain"]["rules"][id(35)]["maximum"] = json!(feasible_minimum);
+        let feasible: ScenarioDocument = serde_json::from_value(value.clone())?;
+        let compiled = compile_assignment_rules(&feasible, &context())?;
+        let result = solve_with_real_worker(problem(&feasible, &compiled)?).await?;
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed
+        );
+        let selected = compiled
+            .variables
+            .iter()
+            .filter_map(|item| {
+                result.candidates[0]
+                    .values
+                    .booleans
+                    .get(&item.variable.id)
+                    .and_then(|value| (*value).then_some(item.pair))
+            })
+            .collect::<Vec<_>>();
+        assert!(original_accepts(&feasible, &selected)?);
+
+        value["domain"]["rules"][id(35)]["minimum"] = json!(impossible_minimum);
+        value["domain"]["rules"][id(35)]["maximum"] = json!(impossible_minimum);
+        let impossible: ScenarioDocument = serde_json::from_value(value.clone())?;
+        let compiled = compile_assignment_rules(&impossible, &context())?;
+        let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::InfeasibilityClaimed
+        );
+        assert!(result.candidates.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_distinct_weekend_cap_without_pruning_source_weekends() -> TestResult {
+    let mut value = fixture_value()?;
+    value["settings"]["horizon"]["end"] = json!("2026-11-10T00:00:00Z");
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint_on("2026-11-08", "09:00:00");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint_on("2026-11-08", "11:00:00");
+    value["domain"]["rules"][id(35)] = json!({
+        "id":id(35),"kind":"maximumWorkedWeekends","active":true,
+        "strength":"required","scope":{"people":{"kind":"all"}},"maximum":2
+    });
+    let feasible: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&feasible, &context())?;
+    let result = solve_with_real_worker(problem(&feasible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let selected = compiled
+        .variables
+        .iter()
+        .filter_map(|item| {
+            result.candidates[0]
+                .values
+                .booleans
+                .get(&item.variable.id)
+                .and_then(|selected| (*selected).then_some(item.pair))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([pair(1, 8)?, pair(1, 22)?])
+    );
+    assert!(original_accepts(&feasible, &[pair(1, 8)?, pair(1, 22)?])?);
+
+    value["domain"]["rules"][id(35)]["maximum"] = json!(1);
+    let impossible: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_assignment_rules(&impossible, &context())?;
+    let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::InfeasibilityClaimed
+    );
+    assert!(result.candidates.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_optimizes_consecutive_days_and_weekends_and_respects_hard_lock() -> TestResult
+{
+    for weekend in [false, true] {
+        for forced in [false, true] {
+            let mut value = fixture_value()?;
+            value["settings"]["horizon"] =
+                json!({"start":"2026-11-01T00:00:00Z","end":"2026-11-03T00:00:00Z"});
+            value["domain"]["entities"][id(20)]["qualificationGrants"] = json!([{"qualificationId":id(11),"effectiveFrom":"2026-11-01T00:00:00Z","expiresAt":"2026-11-03T00:00:00Z"}]);
+            value["domain"]["entities"][id(8)]["endsAt"] = endpoint("09:00:00");
+            value["domain"]["entities"][id(22)]["startsAt"] = endpoint_on("2026-11-02", "08:00:00");
+            value["domain"]["entities"][id(22)]["endsAt"] = endpoint_on("2026-11-02", "09:00:00");
+            if weekend {
+                value["settings"]["horizon"]["end"] = json!("2026-11-16T00:00:00Z");
+                value["domain"]["entities"][id(2)]["period"] =
+                    json!({"kind":"week","anchorDate":"2026-11-02","startTime":"00:00:00"});
+                value["domain"]["entities"][id(8)]["startsAt"] =
+                    endpoint_on("2026-11-07", "08:00:00");
+                value["domain"]["entities"][id(8)]["endsAt"] =
+                    endpoint_on("2026-11-07", "09:00:00");
+                value["domain"]["entities"][id(22)]["startsAt"] =
+                    endpoint_on("2026-11-14", "08:00:00");
+                value["domain"]["entities"][id(22)]["endsAt"] =
+                    endpoint_on("2026-11-14", "09:00:00");
+                value["domain"]["entities"][id(20)]["qualificationGrants"][0]["expiresAt"] =
+                    json!("2026-11-16T00:00:00Z");
+                value["domain"]["entities"][id(23)]["timeWindow"] = json!({
+                    "kind":"instant","startsAt":"2026-11-07T08:00:00Z",
+                    "endsAt":"2026-11-07T08:30:00Z"
+                });
+                value["domain"]["entities"][id(23)]["effectiveRange"] =
+                    json!({"startDate":"2026-11-07","endDateExclusive":"2026-11-08"});
+            }
+            let mode = if weekend {
+                json!({"kind":"weekends","calendarId":id(2),"weekdays":["saturday"]})
+            } else {
+                json!({"kind":"reportingDays"})
+            };
+            value["domain"]["preferences"][id(40)] = json!({
+                "id":id(40),"kind":"consecutiveWork","active":true,
+                "scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+                "priority":"normal","weight":1,
+                "mode":mode,"assignmentTypeIds":[id(4)],"threshold":1
+            });
+            if forced {
+                value["domain"]["lockedAssignments"][id(41)] = json!({
+                    "id":id(41),"personId":id(1),"shiftId":id(22),"state":{"kind":"hard"}
+                });
+            }
+            let document: ScenarioDocument = serde_json::from_value(value)?;
+            let compiled = compile_workforce(&document, &context())?;
+            let assignment = compile_assignment_rules(&document, &context())?;
+            let result = solve_with_real_worker(compiled.problem.clone()).await?;
+            assert_eq!(
+                result.outcome.termination,
+                BackendTerminationReason::OptimalityClaimed
+            );
+            let candidate = result
+                .candidates
+                .first()
+                .ok_or("no consecutive-work candidate")?;
+            let selected = assignment
+                .variables
+                .iter()
+                .filter_map(|item| {
+                    candidate
+                        .values
+                        .booleans
+                        .get(&item.variable.id)
+                        .and_then(|selected| (*selected).then_some(item.pair))
+                })
+                .collect::<BTreeSet<_>>();
+            let expected = if forced {
+                BTreeSet::from([pair(1, 8)?, pair(1, 22)?])
+            } else {
+                BTreeSet::from([pair(1, 8)?, pair(20, 22)?])
+            };
+            assert_eq!(selected, expected);
+            let clock = eutheto_verify::SystemVerificationClock::default();
+            let reviewer = eutheto_verify::AcceptanceReviewer::new(
+                &eutheto_workforce::WorkforcePack,
+                &document,
+                1,
+                &compiled.problem,
+                None,
+                &clock,
+            )
+            .map_err(|alarm| alarm.diagnostic_code)?;
+            let eutheto_verify::AcceptanceDecision::Accepted {
+                result: accepted,
+                objective_reconciliation: eutheto_verify::BackendObjectiveReconciliation::Matched,
+                ..
+            } = reviewer.review(candidate, id(500).parse()?, &context().control)
+            else {
+                return Err("consecutive-work backend candidate and source score disagree".into());
+            };
+            assert_eq!(
+                accepted.verification.score.levels[0].value,
+                if forced { 10 } else { 0 }
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_optimizes_weighted_peer_share_and_reconciles_source_score() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(20)]["workloadWeight"] = json!({"numerator":2,"denominator":1});
+    value["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    value["domain"]["entities"][id(22)]["endsAt"] = endpoint("11:00:00");
+    value["domain"]["entities"][id(9)]["workloadPolicies"][id(10)]["targetMode"] =
+        json!({"kind":"weightedEqualShare"});
+    value["domain"]["preferences"][id(40)] = json!({
+        "id":id(40),"kind":"workloadBalance","active":true,
+        "scope":{"people":{"kind":"all"}},"priority":"low","weight":1,
+        "workloadPolicyId":id(10)
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_workforce(&document, &context())?;
+    let assignment = compile_assignment_rules(&document, &context())?;
+    let result = solve_with_real_worker(compiled.problem.clone()).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let candidate = result
+        .candidates
+        .first()
+        .ok_or("no weighted-share candidate")?;
+    let selected = assignment
+        .variables
+        .iter()
+        .filter_map(|item| {
+            candidate
+                .values
+                .booleans
+                .get(&item.variable.id)
+                .and_then(|selected| (*selected).then_some(item.pair))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(selected, BTreeSet::from([pair(1, 8)?, pair(20, 22)?]));
+    let clock = eutheto_verify::SystemVerificationClock::default();
+    let reviewer = eutheto_verify::AcceptanceReviewer::new(
+        &eutheto_workforce::WorkforcePack,
+        &document,
+        1,
+        &compiled.problem,
+        None,
+        &clock,
+    )
+    .map_err(|alarm| alarm.diagnostic_code)?;
+    let eutheto_verify::AcceptanceDecision::Accepted {
+        result: accepted,
+        objective_reconciliation,
+        ..
+    } = reviewer.review(candidate, id(500).parse()?, &context().control)
+    else {
+        return Err("weighted-share candidate failed original-source verification".into());
+    };
+    assert_eq!(
+        objective_reconciliation,
+        eutheto_verify::BackendObjectiveReconciliation::Matched
+    );
+    assert_eq!(accepted.verification.score.feasibility, 0);
+    assert_eq!(accepted.verification.score.levels[0].value, 600);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_preserves_one_nanosecond_workload_deviation_and_reconciles_score() -> TestResult
+{
+    let mut value = fixture_value()?;
+    for entity in [20, 21, 22, 23] {
+        value["domain"]["entities"]
+            .as_object_mut()
+            .ok_or("entities")?
+            .remove(&id(entity));
+    }
+    value["domain"]["entities"][id(8)]["endsAt"] = endpoint("10:00:00.000000001");
+    value["domain"]["preferences"][id(40)] = json!({
+        "id":id(40),"kind":"workloadBalance","active":true,
+        "scope":{"people":{"kind":"all"}},"priority":"low","weight":1,
+        "workloadPolicyId":id(10)
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_workforce(&document, &context())?;
+    let result = solve_with_real_worker(compiled.problem.clone()).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let candidate = result
+        .candidates
+        .first()
+        .ok_or("no fractional workload candidate")?;
+    let clock = eutheto_verify::SystemVerificationClock::default();
+    let reviewer = eutheto_verify::AcceptanceReviewer::new(
+        &eutheto_workforce::WorkforcePack,
+        &document,
+        1,
+        &compiled.problem,
+        None,
+        &clock,
+    )
+    .map_err(|alarm| alarm.diagnostic_code)?;
+    let eutheto_verify::AcceptanceDecision::Accepted {
+        result: accepted,
+        objective_reconciliation,
+        ..
+    } = reviewer.review(candidate, id(500).parse()?, &context().control)
+    else {
+        return Err("fractional workload solver candidate failed source verification".into());
+    };
+    assert_eq!(
+        objective_reconciliation,
+        eutheto_verify::BackendObjectiveReconciliation::Matched
+    );
+    assert_eq!(accepted.verification.score.feasibility, 0);
+    assert_eq!(accepted.verification.score.levels[0].value, 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+#[allow(clippy::too_many_lines)]
+async fn real_worker_optimizes_four_preference_variants_and_independently_scores_them() -> TestResult
+{
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(21)]["eligibleAssignmentTypeIds"] = json!([id(4)]);
+    value["domain"]["entities"][id(21)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    value["domain"]["preferences"][id(40)] = json!({
+        "kind":"time","id":id(40),"active":true,
+        "scope":{"people":{"kind":"selected","personIds":[id(21)]}},
+        "priority":"normal","weight":10,"direction":"prefer",
+        "timeWindow":{"kind":"instant","startsAt":"2026-11-01T08:00:00Z",
+                      "endsAt":"2026-11-01T09:00:00Z"}
+    });
+    value["domain"]["preferences"][id(41)] = json!({
+        "kind":"assignmentType","id":id(41),"active":true,
+        "scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+        "priority":"high","weight":10,"direction":"avoid",
+        "assignmentTypeIds":[id(4)]
+    });
+    value["domain"]["preferences"][id(42)] = json!({
+        "kind":"location","id":id(42),"active":true,
+        "scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+        "priority":"normal","weight":3,"direction":"avoid",
+        "locationIds":[id(5)]
+    });
+    value["domain"]["entities"][id(43)] = json!({
+        "kind":"availability","id":id(43),"personId":id(21),
+        "availabilityKind":"requestedTimeOff",
+        "timeWindow":{"kind":"instant","startsAt":"2026-11-01T08:00:00Z",
+                      "endsAt":"2026-11-01T10:00:00Z"},
+        "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+        "source":"synthetic","note":""
+    });
+    value["domain"]["preferences"][id(44)] = json!({
+        "kind":"requestedTimeOff","id":id(44),"active":true,
+        "scope":{"people":{"kind":"selected","personIds":[id(21)]}},
+        "priority":"normal","weight":7,"availabilityIds":[id(43)]
+    });
+    let document: ScenarioDocument = serde_json::from_value(value)?;
+    let compiled = compile_workforce(&document, &context())?;
+    let result = solve_with_real_worker(compiled.problem.clone()).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let candidate = result
+        .candidates
+        .first()
+        .ok_or("missing preferred candidate")?;
+    let solution = eutheto_workforce::assignment_rules::project_workforce_candidate(
+        &compiled.problem,
+        &candidate.values,
+        id(500).parse()?,
+        PlanningIrLimitsV1::DEFAULT,
+        &context().control,
+    )?;
+    let selected = solution
+        .assignments
+        .iter()
+        .map(eutheto_workforce::assignment_rules::decode_workforce_assignment)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter_map(|(pair, active)| active.then_some(pair))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(selected, BTreeSet::from([pair(21, 8)?, pair(20, 22)?]));
+    let clock = eutheto_verify::SystemVerificationClock::default();
+    let reviewer = eutheto_verify::AcceptanceReviewer::new(
+        &eutheto_workforce::WorkforcePack,
+        &document,
+        1,
+        &compiled.problem,
+        None,
+        &clock,
+    )
+    .map_err(|alarm| alarm.diagnostic_code)?;
+    let eutheto_verify::AcceptanceDecision::Accepted {
+        result: accepted,
+        objective_reconciliation,
+        ..
+    } = reviewer.review(candidate, solution.solution_id, &context().control)
+    else {
+        return Err("preferred real-worker solution failed independent verification".into());
+    };
+    assert_eq!(
+        objective_reconciliation,
+        eutheto_verify::BackendObjectiveReconciliation::Matched
+    );
+    assert_eq!(accepted.verification.score.feasibility, 0);
+    // Shift 8 overlaps requested leave, so its selected pair incurs normal scale 10 × weight 7.
+    assert_eq!(accepted.verification.score.levels[0].value, 70);
+    assert_eq!(accepted.verification.score.levels[1].value, 9);
+    for include_evidence_references in [false, true] {
+        let shared = eutheto_workforce::assignment_rules::build_workforce_share_result(
+            &document,
+            &accepted,
+            None,
+            eutheto_domain_api::ShareResultOptions {
+                include_evidence_references,
+            },
+        )?;
+        assert_eq!(shared.schema_version, 2);
+        assert_eq!(shared.payload["schemaVersion"], 2);
+        assert!(shared.payload.get("score").is_none());
+        assert!(!serde_json::to_string(&shared)?.contains("requested_time_off"));
+        assert_eq!(
+            shared.payload.get("evidenceReferences").is_some(),
+            include_evidence_references
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_reconciles_stability_pairing_and_preferred_coverage() -> TestResult {
+    let mut stability = fixture_value()?;
+    stability["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(23));
+    stability["domain"]["entities"][id(40)] = json!({
+        "kind":"baseSchedule","id":id(40),"sourceSolutionId":id(41),
+        "sourceRevision":1,
+        "assignments":[
+            {"personId":id(1),"shiftId":id(8)},
+            {"personId":id(20),"shiftId":id(22)}
+        ]
+    });
+    stability["domain"]["preferences"][id(42)] = json!({
+        "kind":"baseStability","id":id(42),"active":true,
+        "scope":{"people":{"kind":"all"}},"priority":"normal","weight":1,
+        "baseScheduleId":id(40)
+    });
+    stability["domain"]["lockedAssignments"][id(50)] = json!({
+        "id":id(50),"personId":id(1),"shiftId":id(22),"state":{"kind":"hard"}
+    });
+
+    let mut pruned_base = fixture_value()?;
+    pruned_base["domain"]["rules"]
+        .as_object_mut()
+        .ok_or("rules")?
+        .remove(&id(32));
+    pruned_base["domain"]["entities"][id(24)] = json!({
+        "kind":"availability","id":id(24),"personId":id(1),
+        "availabilityKind":"unavailable",
+        "timeWindow":{"kind":"instant","startsAt":"2026-11-01T08:00:00Z","endsAt":"2026-11-01T10:00:00Z"},
+        "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+        "source":"manual","note":""
+    });
+    pruned_base["domain"]["entities"][id(40)] = json!({
+        "kind":"baseSchedule","id":id(40),"sourceSolutionId":id(41),
+        "sourceRevision":1,"assignments":[{"personId":id(1),"shiftId":id(8)}]
+    });
+    pruned_base["domain"]["preferences"][id(42)] = json!({
+        "kind":"baseStability","id":id(42),"active":true,
+        "scope":{"people":{"kind":"all"}},"priority":"normal","weight":1,
+        "baseScheduleId":id(40)
+    });
+
+    let mut pairing = fixture_value()?;
+    pairing["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(23));
+    pairing["domain"]["entities"][id(21)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    pairing["domain"]["preferences"][id(42)] = json!({
+        "kind":"togetherSeparate","id":id(42),"active":true,
+        "scope":{"people":{"kind":"all"}},"priority":"normal","weight":1,
+        "direction":"separate","personIds":[id(1),id(20)],
+        "mode":"overlappingShifts"
+    });
+    for (lock, person, shift) in [(50, 1, 8), (51, 20, 22)] {
+        pairing["domain"]["lockedAssignments"][id(lock)] = json!({
+            "id":id(lock),"personId":id(person),"shiftId":id(shift),
+            "state":{"kind":"hard"}
+        });
+    }
+
+    let mut coverage = fixture_value()?;
+    coverage["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(22));
+    coverage["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(23));
+    coverage["domain"]["entities"][id(8)]["coverage"] = json!({
+        "kind":"atLeast","minimum":1,"preferredCount":2,
+        "maximumCount":2,"qualificationMinimums":[]
+    });
+    coverage["domain"]["entities"][id(40)] = json!({
+        "kind":"coverageRequirement","id":id(40),"active":true,
+        "scope":{"kind":"all"},
+        "coverage":{"kind":"atLeast","minimum":1,"preferredCount":2,
+            "maximumCount":2,"qualificationMinimums":[]}
+    });
+    coverage["domain"]["preferences"][id(42)] = json!({
+        "kind":"preferredCoverage","id":id(42),"active":true,
+        "scope":{"people":{"kind":"all"}},"priority":"normal","weight":1,
+        "coverageRequirementIds":[id(40)]
+    });
+
+    let mut adjacency = fixture_value()?;
+    adjacency["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("entities")?
+        .remove(&id(23));
+    adjacency["domain"]["entities"][id(22)]["startsAt"] = endpoint("10:00:00");
+    adjacency["domain"]["entities"][id(40)] = json!({
+        "kind":"baseSchedule","id":id(40),"sourceSolutionId":id(41),
+        "sourceRevision":1,"assignments":[{"personId":id(1),"shiftId":id(8)}]
+    });
+    adjacency["domain"]["preferences"][id(42)] = json!({
+        "kind":"adjacency","id":id(42),"active":true,
+        "scope":{"people":{"kind":"selected","personIds":[id(1)]}},
+        "priority":"normal","weight":1,"direction":"prefer",
+        "baseScheduleId":id(40),"maximumGapMinutes":0,"mode":"after"
+    });
+    adjacency["domain"]["lockedAssignments"][id(50)] = json!({
+        "id":id(50),"personId":id(20),"shiftId":id(8),"state":{"kind":"hard"}
+    });
+    let mut adjacency_avoid = adjacency.clone();
+    adjacency_avoid["domain"]["preferences"][id(42)]["direction"] = json!("avoid");
+    adjacency_avoid["domain"]["lockedAssignments"][id(51)] = json!({
+        "id":id(51),"personId":id(1),"shiftId":id(22),"state":{"kind":"hard"}
+    });
+
+    for (name, source, expected_score, expected_pairs, category) in [
+        (
+            "base stability",
+            stability,
+            40,
+            BTreeSet::from([pair(1, 22)?, pair(20, 8)?]),
+            "official.workforce.score.preference.base_stability",
+        ),
+        (
+            "pruned base stability",
+            pruned_base,
+            10,
+            BTreeSet::new(),
+            "official.workforce.score.preference.base_stability",
+        ),
+        (
+            "together/separate",
+            pairing,
+            10,
+            BTreeSet::from([pair(1, 8)?, pair(20, 22)?]),
+            "official.workforce.score.preference.together_separate",
+        ),
+        (
+            "adjacency prefers the source-shift successor",
+            adjacency,
+            0,
+            BTreeSet::from([pair(20, 8)?, pair(1, 22)?]),
+            "official.workforce.score.preference.adjacency",
+        ),
+        (
+            "adjacency avoid charges the forced successor",
+            adjacency_avoid,
+            10,
+            BTreeSet::from([pair(20, 8)?, pair(1, 22)?]),
+            "official.workforce.score.preference.adjacency",
+        ),
+        (
+            "preferred coverage",
+            coverage,
+            0,
+            BTreeSet::from([pair(1, 8)?, pair(20, 8)?]),
+            "official.workforce.score.preference.preferred_coverage",
+        ),
+    ] {
+        let document: ScenarioDocument = serde_json::from_value(source)?;
+        let compiled = compile_workforce(&document, &context())?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed,
+            "{name}"
+        );
+        let candidate = result.candidates.first().ok_or("no backend candidate")?;
+        let solution = eutheto_workforce::assignment_rules::project_workforce_candidate(
+            &compiled.problem,
+            &candidate.values,
+            id(500).parse()?,
+            PlanningIrLimitsV1::DEFAULT,
+            &context().control,
+        )?;
+        let selected = solution
+            .assignments
+            .iter()
+            .map(eutheto_workforce::assignment_rules::decode_workforce_assignment)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|(pair, active)| active.then_some(pair))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(selected, expected_pairs, "{name}");
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            None,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let eutheto_verify::AcceptanceDecision::Accepted {
+            result: accepted,
+            objective_reconciliation,
+            ..
+        } = reviewer.review(candidate, solution.solution_id, &context().control)
+        else {
+            return Err(format!("{name} candidate failed independent verification").into());
+        };
+        assert_eq!(
+            objective_reconciliation,
+            eutheto_verify::BackendObjectiveReconciliation::Matched,
+            "{name}"
+        );
+        assert_eq!(accepted.verification.score.feasibility, 0, "{name}");
+        assert_eq!(
+            accepted.verification.score.levels[0].value, expected_score,
+            "{name}"
+        );
+        if expected_score > 0 {
+            assert_eq!(
+                accepted.verification.score.levels[0]
+                    .category_breakdown
+                    .get(&eutheto_domain_ir::ScoreCategoryId::new(category)?),
+                Some(&expected_score),
+                "{name}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_changes_assignment_for_authored_target_and_reconciles_shortfall() -> TestResult
+{
+    for (target_count, first_person, expected_penalty, no_target_candidates) in [
+        (0, 1, 0, false),
+        (1, 21, 0, false),
+        (2, 21, 500, false),
+        (2, 1, 1_000, true),
+    ] {
+        let mut value = fixture_value()?;
+        let mut call = value["domain"]["entities"][id(4)].clone();
+        call["id"] = json!(id(24));
+        call["name"] = json!("Call");
+        call["category"] = json!("call");
+        value["domain"]["entities"][id(24)] = call;
+        value["domain"]["entities"][id(22)]["assignmentTypeId"] = json!(id(24));
+        value["domain"]["entities"][id(20)]["eligibleAssignmentTypeIds"] = json!([id(4), id(24)]);
+        value["domain"]["entities"][id(21)]["eligibleAssignmentTypeIds"] = json!([id(4)]);
+        value["domain"]["entities"][id(21)]["qualificationGrants"] =
+            json!([{"qualificationId":id(11)}]);
+        if no_target_candidates {
+            value["domain"]["entities"][id(21)]["eligibleAssignmentTypeIds"] = json!([]);
+        }
+        value["domain"]["preferences"][id(40)] = json!({
+            "kind":"assignmentTarget","id":id(40),"active":true,
+            "scope":{"people":{"kind":"selected","personIds":[id(21)]}},
+            "priority":"high","weight":5,"calendarId":id(2),"targetCount":target_count
+        });
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_workforce(&document, &context())?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed
+        );
+        let candidate = result
+            .candidates
+            .first()
+            .ok_or("missing target candidate")?;
+        let solution = eutheto_workforce::assignment_rules::project_workforce_candidate(
+            &compiled.problem,
+            &candidate.values,
+            id(500).parse()?,
+            PlanningIrLimitsV1::DEFAULT,
+            &context().control,
+        )?;
+        let selected = solution
+            .assignments
+            .iter()
+            .map(eutheto_workforce::assignment_rules::decode_workforce_assignment)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|(pair, active)| active.then_some(pair))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            selected,
+            BTreeSet::from([pair(first_person, 8)?, pair(20, 22)?])
+        );
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            None,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let eutheto_verify::AcceptanceDecision::Accepted {
+            result: accepted,
+            objective_reconciliation,
+            ..
+        } = reviewer.review(candidate, solution.solution_id, &context().control)
+        else {
+            return Err("target real-worker candidate failed independent verification".into());
+        };
+        assert_eq!(
+            objective_reconciliation,
+            eutheto_verify::BackendObjectiveReconciliation::Matched
+        );
+        assert_eq!(accepted.verification.score.feasibility, 0);
+        assert_eq!(
+            accepted.verification.score.levels[0].value,
+            expected_penalty
+        );
+    }
+    Ok(())
+}
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_optimizes_distinct_weekend_target_and_independently_reconciles_score()
+-> TestResult {
+    for (target_count, person_index, expected_worked_weekends, expected_penalty) in
+        [(0, 1, 0, 0), (1, 1, 1, 0), (2, 1, 2, 0), (2, 21, 0, 200)]
+    {
+        let mut value = fixture_value()?;
+        value["settings"]["horizon"]["end"] = json!("2026-11-10T00:00:00Z");
+        value["domain"]["entities"][id(22)]["startsAt"] = endpoint_on("2026-11-08", "09:00:00");
+        value["domain"]["entities"][id(22)]["endsAt"] = endpoint_on("2026-11-08", "11:00:00");
+        value["domain"]["entities"][id(20)]["qualificationGrants"] =
+            json!([{"qualificationId":id(11)}]);
+        value["domain"]["entities"]
+            .as_object_mut()
+            .ok_or("entities")?
+            .remove(&id(23));
+        value["domain"]["preferences"][id(40)] = json!({
+            "kind":"weekendTarget","id":id(40),"active":true,
+            "scope":{"people":{"kind":"selected","personIds":[id(person_index)]}},
+            "priority":"normal","weight":10,"targetCount":target_count
+        });
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let compiled = compile_workforce(&document, &context())?;
+        let assignment = compile_assignment_rules(&document, &context())?;
+        let result = solve_with_real_worker(compiled.problem.clone()).await?;
+        assert_eq!(
+            result.outcome.termination,
+            BackendTerminationReason::OptimalityClaimed
+        );
+        let candidate = result
+            .candidates
+            .first()
+            .ok_or("missing weekend-target candidate")?;
+        let person_id: eutheto_types::PersonId = id(person_index).parse()?;
+        let selected = assignment
+            .variables
+            .iter()
+            .filter_map(|item| {
+                candidate
+                    .values
+                    .booleans
+                    .get(&item.variable.id)
+                    .and_then(|selected| (*selected).then_some(item.pair))
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|pair| pair.person_id == person_id)
+                .count(),
+            expected_worked_weekends
+        );
+        let clock = eutheto_verify::SystemVerificationClock::default();
+        let reviewer = eutheto_verify::AcceptanceReviewer::new(
+            &eutheto_workforce::WorkforcePack,
+            &document,
+            1,
+            &compiled.problem,
+            None,
+            &clock,
+        )
+        .map_err(|alarm| alarm.diagnostic_code)?;
+        let eutheto_verify::AcceptanceDecision::Accepted {
+            result: accepted,
+            objective_reconciliation,
+            ..
+        } = reviewer.review(candidate, id(500).parse()?, &context().control)
+        else {
+            return Err("weekend-target worker candidate failed independent verification".into());
+        };
+        assert_eq!(
+            objective_reconciliation,
+            eutheto_verify::BackendObjectiveReconciliation::Matched
+        );
+        assert_eq!(accepted.verification.score.feasibility, 0);
+        assert_eq!(
+            accepted.verification.score.levels[0].value,
+            expected_penalty
+        );
+        if expected_penalty > 0 {
+            assert_eq!(
+                accepted.verification.score.levels[0]
+                    .category_breakdown
+                    .get(&eutheto_domain_ir::ScoreCategoryId::new(
+                        "official.workforce.score.preference.weekend_target"
+                    )?),
+                Some(&expected_penalty)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_enforces_approved_leave_and_available_only_filters() -> TestResult {
+    let mut value = fixture_value()?;
+    value["domain"]["entities"][id(21)]["eligibleAssignmentTypeIds"] = json!([id(4)]);
+    value["domain"]["entities"][id(21)]["qualificationGrants"] =
+        json!([{"qualificationId":id(11)}]);
+    value["domain"]["entities"][id(24)] = json!({
+        "kind":"availability",
+        "id":id(24),
+        "personId":id(1),
+        "availabilityKind":"approvedTimeOff",
+        "timeWindow":{"kind":"instant","startsAt":"2026-11-01T08:00:00Z","endsAt":"2026-11-01T10:00:00Z"},
+        "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+        "source":"synthetic","note":""
+    });
+    value["domain"]["entities"][id(25)] = json!({
+        "kind":"availability",
+        "id":id(25),
+        "personId":id(21),
+        "availabilityKind":"availableOnly",
+        "timeWindow":{"kind":"instant","startsAt":"2026-11-01T08:00:00Z","endsAt":"2026-11-01T10:00:00Z"},
+        "effectiveRange":{"startDate":"2026-11-01","endDateExclusive":"2026-11-02"},
+        "source":"synthetic","note":""
+    });
+    let document: ScenarioDocument = serde_json::from_value(value.clone())?;
+    let compiled = compile_assignment_rules(&document, &context())?;
+    let result = solve_with_real_worker(problem(&document, &compiled)?).await?;
+    assert_eq!(
+        result.outcome.termination,
+        BackendTerminationReason::OptimalityClaimed
+    );
+    let candidate = result.candidates.first().ok_or("missing candidate")?;
+    let selected: BTreeSet<_> = compiled
+        .variables
+        .iter()
+        .filter_map(|item| {
+            candidate
+                .values
+                .booleans
+                .get(&item.variable.id)
+                .and_then(|value| (*value).then_some(item.pair))
+        })
+        .collect();
+    assert_eq!(selected.len(), 2);
+    assert!(selected.contains(&pair(21, 8)?));
+    assert!(!selected.contains(&pair(1, 8)?));
+    assert!(!selected.contains(&pair(20, 8)?));
+    assert!(!selected.contains(&pair(21, 22)?));
+    let selected_vec: Vec<_> = selected.iter().copied().collect();
+    assert!(original_accepts(&document, &selected_vec)?);
+
+    let mut impossible = value;
+    impossible["domain"]["entities"][id(25)]["timeWindow"]["startsAt"] =
+        json!("2026-11-01T09:00:00Z");
+    impossible["domain"]["entities"][id(25)]["timeWindow"]["endsAt"] =
+        json!("2026-11-01T10:00:00Z");
     let impossible: ScenarioDocument = serde_json::from_value(impossible)?;
     let compiled = compile_assignment_rules(&impossible, &context())?;
     let result = solve_with_real_worker(problem(&impossible, &compiled)?).await?;
@@ -1573,6 +2553,7 @@ async fn real_worker_enforces_mutual_modes_and_half_open_endpoint() -> TestResul
             &document,
             1,
             &compiled.problem,
+            None,
             &clock,
         )
         .map_err(|alarm| alarm.diagnostic_code)?;
@@ -1651,6 +2632,7 @@ async fn real_worker_enforces_directed_transition_boundaries() -> TestResult {
             &document,
             1,
             &compiled.problem,
+            None,
             &clock,
         )
         .map_err(|alarm| alarm.diagnostic_code)?;
@@ -1929,6 +2911,7 @@ async fn real_worker_enforces_calendar_and_rolling_maximum_hours() -> TestResult
             &document,
             1,
             &compiled.problem,
+            None,
             &clock,
         )
         .map_err(|alarm| alarm.diagnostic_code)?;
@@ -2012,6 +2995,7 @@ async fn real_worker_enforces_signed_scheduled_rolling_credit_exit() -> TestResu
             &document,
             1,
             &compiled.problem,
+            None,
             &clock,
         )
         .map_err(|alarm| alarm.diagnostic_code)?;
@@ -2074,6 +3058,7 @@ async fn check_consecutive_worker(
         &document,
         1,
         &compiled.problem,
+        None,
         &clock,
     )
     .map_err(|alarm| alarm.diagnostic_code)?;
@@ -2509,6 +3494,7 @@ fn directional_rest_identities_match_frozen_vectors() -> TestResult {
 
 #[tokio::test]
 #[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+#[allow(clippy::too_many_lines)]
 async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> TestResult {
     let mut value = rest_fixture()?;
     // Exactly two source people, one unavailable for the first shift. The nine-hour,
@@ -2612,7 +3598,9 @@ async fn real_worker_complete_workforce_rank_projection_and_infeasibility() -> T
     let result = solve_with_real_worker(impossible.problem).await?;
     assert_eq!(
         result.outcome.termination,
-        BackendTerminationReason::InfeasibilityClaimed
+        BackendTerminationReason::InfeasibilityClaimed,
+        "unexpected real-worker infeasibility outcome: {:?}",
+        result.outcome
     );
     assert!(result.candidates.is_empty());
     Ok(())
@@ -2631,6 +3619,7 @@ fn assert_real_workforce_acceptance(
         document,
         17,
         problem,
+        None,
         &clock,
     )
     .map_err(|alarm| alarm.diagnostic_code)?;
@@ -2654,6 +3643,7 @@ fn assert_real_workforce_acceptance(
         let share = eutheto_workforce::assignment_rules::build_workforce_share_result(
             document,
             &result,
+            None,
             eutheto_domain_api::ShareResultOptions {
                 include_evidence_references,
             },
@@ -2690,6 +3680,7 @@ async fn assert_real_worker_coverage_mutant_quarantined(
         document,
         17,
         &problem,
+        None,
         &clock,
     )
     .map_err(|alarm| alarm.diagnostic_code)?;

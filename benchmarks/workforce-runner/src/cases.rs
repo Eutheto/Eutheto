@@ -6,13 +6,13 @@ pub(crate) use semantics::{validate_repair, validate_semantics};
 
 use crate::contract::{
     CORPUS_VERSION, CaseId, CorpusDefinitions, CorpusFamily, ExpectedCase, ExpectedDisposition,
-    FIXTURE_CLOCK, FORMAT_VERSION, FixtureDefinition, LargeParameters, ModelEnvelope,
-    PreservedObligation, REPAIR_FORMAT, RepairFixture, ScoreExpectation, WorkloadClass,
+    FIXTURE_CLOCK, FixtureDefinition, LargeParameters, ModelEnvelope, REPAIR_FORMAT,
+    REPAIR_SCHEMA_VERSION, RepairFixture, ScoreExpectation, WorkloadClass,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use eutheto_types::{
-    CancellationToken, Clock, EntityId, FixedClock, Revision, ScenarioDocument, ScenarioSnapshotV1,
-    TypedUuidError,
+    AssignmentId, CancellationToken, Clock, EntityId, FixedClock, PersonId, Revision,
+    ScenarioDocument, ScenarioSnapshotV1, TypedUuidError,
 };
 use eutheto_workforce::{
     commands,
@@ -26,7 +26,8 @@ use eutheto_workforce::{
         ScoreLevel, ShiftTemplate, ShiftTiming, TieBreakPolicy, TimeBehavior, TimeWindow, Weekday,
         WeeklyWindow, WindowMembership, WorkCalendar, WorkWindow, WorkforceDomainV1,
         WorkforceEntity, WorkforcePreference, WorkforceRule, WorkforceScorePolicy, WorkloadBucket,
-        WorkloadMeasurement, WorkloadPolicy, WorkloadTargetMode, WorkloadWeight,
+        WorkloadMeasurement, WorkloadPolicy, WorkloadQuotaMeasure, WorkloadQuotaRule,
+        WorkloadTargetMode, WorkloadWeight,
     },
     temporal,
 };
@@ -39,8 +40,8 @@ use std::{
 };
 use uuid::Uuid;
 
-const REPAIR_REQUIREMENT: &str = "Phase07: repair from that accepted and selected baseline after this single unavailable-person mutation; pure mutation validation is not repair execution";
-const BASELINE_REQUIREMENT: &str = "Phase07: obtain a genuine independently accepted solution of repair-before containing person-0 on the September2 clinic and select it as the baseline before applying this call-out";
+pub(crate) const REPAIR_REQUIREMENT: &str = "Phase07: repair from that accepted and selected baseline after this single unavailable-person mutation; pure mutation validation is not repair execution";
+pub(crate) const BASELINE_REQUIREMENT: &str = "Phase07: obtain a genuine independently accepted solution of practitioner-workflow and select it as the baseline; bind this call-out to the canonical first accepted pair on the exact 2027-02-10 weekday clinic that is not Hard-locked";
 const WEEKDAYS: [Weekday; 5] = [
     Weekday::Monday,
     Weekday::Tuesday,
@@ -223,6 +224,44 @@ fn person(
     );
     Ok(())
 }
+fn dated_person(
+    case: CaseId,
+    role: &str,
+    name: &str,
+    types: &[&str],
+    grants: &[&str],
+    range: DateRange,
+    weight: WorkloadWeight,
+) -> Result<WorkforceEntity> {
+    let starts_at = "2027-01-31T06:00:00Z".parse()?;
+    let expires_at = "2027-03-02T06:00:00Z".parse()?;
+    Ok(WorkforceEntity::Person(Person {
+        id: id(case, role)?,
+        name: name.to_owned(),
+        external_id: None,
+        active_range: ActiveRange::DateRange(range),
+        qualification_grants: grants
+            .iter()
+            .map(|role| {
+                Ok(QualificationGrant {
+                    qualification_id: id(case, role)?,
+                    effective_from: Some(starts_at),
+                    expires_at: Some(expires_at),
+                })
+            })
+            .collect::<Result<_>>()?,
+        eligible_assignment_type_ids: types
+            .iter()
+            .map(|role| id(case, role))
+            .collect::<Result<_>>()?,
+        home_location_id: None,
+        workload_weight: weight,
+        workload_target: None,
+        tags: vec![],
+        team_ids: vec![],
+        display: None,
+    }))
+}
 fn assignment_type(
     case: CaseId,
     domain: &mut WorkforceDomainV1,
@@ -357,6 +396,19 @@ fn unavailable(
         note: note.to_owned(),
     })
 }
+fn approved_leave(
+    case: CaseId,
+    role: &str,
+    person_role: &str,
+    instants: (&str, &str),
+    range: DateRange,
+    source: &str,
+    note: &str,
+) -> Result<Availability> {
+    let mut value = unavailable(case, role, person_role, instants, range, source, note)?;
+    value.availability_kind = AvailabilityKind::ApprovedTimeOff;
+    Ok(value)
+}
 fn rest(case: CaseId, domain: &mut WorkforceDomainV1, people: PersonSelection) -> Result<()> {
     rule(
         domain,
@@ -368,6 +420,29 @@ fn rest(case: CaseId, domain: &mut WorkforceDomainV1, people: PersonSelection) -
             after_scope: type_scope(case, "type-call-overnight")?,
             before_scope: type_scope(case, "type-clinic-am")?,
             minimum_minutes: 600,
+        })),
+    );
+    Ok(())
+}
+fn directional_rest(
+    case: CaseId,
+    domain: &mut WorkforceDomainV1,
+    role: &str,
+    people: PersonSelection,
+    after_type: &str,
+    before_type: &str,
+    minimum_minutes: u32,
+) -> Result<()> {
+    rule(
+        domain,
+        WorkforceRule::MinimumRest(Box::new(MinimumRestRule {
+            id: id(case, role)?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: Scope { people, ..all() },
+            after_scope: type_scope(case, after_type)?,
+            before_scope: type_scope(case, before_type)?,
+            minimum_minutes,
         })),
     );
     Ok(())
@@ -915,6 +990,357 @@ fn clinic_rules(
     }
     Ok(())
 }
+fn practitioner_population(
+    case: CaseId,
+    activity_range: DateRange,
+    infeasible: bool,
+) -> Result<WorkforceDomainV1> {
+    let mut domain = WorkforceDomainV1::default();
+    qualification(case, &mut domain, "q-physician", "Physician")?;
+    qualification(case, &mut domain, "q-call", "Overnight call eligible")?;
+    qualification(case, &mut domain, "q-specialist", "Synthetic specialist")?;
+    for (role, measurement) in [
+        ("all-hours", WorkloadMeasurement::ElapsedMinutes),
+        ("combined-count", WorkloadMeasurement::AssignmentCount),
+        ("clinic-hours", WorkloadMeasurement::ElapsedMinutes),
+        ("call-hours", WorkloadMeasurement::ElapsedMinutes),
+    ] {
+        bucket(case, &mut domain, role, measurement)?;
+    }
+    assignment_type(
+        case,
+        &mut domain,
+        "type-clinic-am",
+        "Morning clinic",
+        "clinic",
+        240,
+        &["all-hours", "clinic-hours", "combined-count"],
+    )?;
+    assignment_type(
+        case,
+        &mut domain,
+        "type-call-overnight",
+        "Overnight call",
+        "call",
+        600,
+        &["all-hours", "call-hours", "combined-count"],
+    )?;
+    let names = [
+        "Aster Vale",
+        "Brin Rowan",
+        "Cleo Maren",
+        "Dax Solis",
+        "Elian Moss",
+        "Faye Quill",
+        "Gio Lark",
+        "Hana Voss",
+        "Ira Nolin",
+        "Juno Pike",
+        "Kian Wren",
+        "Lumi Sable",
+    ];
+    for (index, name) in names.into_iter().enumerate() {
+        let mut grants = vec!["q-physician", "q-call"];
+        let specialist = if infeasible { index == 0 } else { index < 4 };
+        if specialist {
+            grants.push("q-specialist");
+        }
+        let weight = match index {
+            0..=3 => WorkloadWeight {
+                numerator: 1,
+                denominator: 1,
+            },
+            4..=7 => WorkloadWeight {
+                numerator: 3,
+                denominator: 4,
+            },
+            _ => WorkloadWeight {
+                numerator: 1,
+                denominator: 2,
+            },
+        };
+        insert(
+            &mut domain,
+            dated_person(
+                case,
+                &format!("person-{index:02}"),
+                name,
+                &["type-clinic-am", "type-call-overnight"],
+                &grants,
+                activity_range,
+                weight,
+            )?,
+        );
+    }
+    Ok(domain)
+}
+
+fn practitioner_templates(
+    case: CaseId,
+    domain: &mut WorkforceDomainV1,
+    range: DateRange,
+    infeasible: bool,
+) -> Result<()> {
+    let mut clinic_coverage = exact(case, 2, Some("q-physician"), 2)?;
+    if let Coverage::Exact {
+        qualification_minimums,
+        ..
+    } = &mut clinic_coverage
+    {
+        qualification_minimums.push(QualificationMinimum {
+            qualifications: QualificationMatch {
+                all_qualification_ids: vec![id(case, "q-specialist")?],
+                any_qualification_ids: vec![],
+            },
+            minimum: if infeasible { 2 } else { 1 },
+        });
+    }
+    template(
+        case,
+        domain,
+        TemplateSpec {
+            role: "template-weekday-clinic",
+            name: "Weekday morning clinic",
+            type_role: "type-clinic-am",
+            range,
+            weekdays: &WEEKDAYS,
+            timing: wall("08:00:00", "12:00:00", 0)?,
+            coverage: clinic_coverage,
+            location: false,
+        },
+    )?;
+    template(
+        case,
+        domain,
+        TemplateSpec {
+            role: "template-nightly-call",
+            name: "Nightly overnight call",
+            type_role: "type-call-overnight",
+            range,
+            weekdays: &EVERY_DAY,
+            timing: wall("20:00:00", "06:00:00", 1)?,
+            coverage: exact(case, 1, Some("q-call"), 1)?,
+            location: false,
+        },
+    )?;
+    Ok(())
+}
+
+fn practitioner_rules(
+    case: CaseId,
+    domain: &mut WorkforceDomainV1,
+    range: DateRange,
+) -> Result<()> {
+    basic_rules(case, domain)?;
+    directional_rest(
+        case,
+        domain,
+        "rule-rest-call-to-clinic",
+        PersonSelection::All {},
+        "type-call-overnight",
+        "type-clinic-am",
+        600,
+    )?;
+    directional_rest(
+        case,
+        domain,
+        "rule-rest-clinic-to-call",
+        PersonSelection::All {},
+        "type-clinic-am",
+        "type-call-overnight",
+        600,
+    )?;
+    insert(
+        domain,
+        WorkforceEntity::Calendar(WorkCalendar {
+            id: id(case, "calendar-week")?,
+            name: "Authored weekly period".to_owned(),
+            period: CalendarPeriod::Custom {
+                intervals: vec![
+                    LocalInterval {
+                        starts_at: "2027-02-01T00:00:00".parse()?,
+                        ends_at: "2027-02-08T00:00:00".parse()?,
+                    },
+                    LocalInterval {
+                        starts_at: "2027-02-08T00:00:00".parse()?,
+                        ends_at: "2027-02-15T00:00:00".parse()?,
+                    },
+                    LocalInterval {
+                        starts_at: "2027-02-15T00:00:00".parse()?,
+                        ends_at: "2027-02-22T00:00:00".parse()?,
+                    },
+                    LocalInterval {
+                        starts_at: "2027-02-22T00:00:00".parse()?,
+                        ends_at: "2027-03-01T00:00:00".parse()?,
+                    },
+                ],
+            },
+        }),
+    );
+    score_policy(
+        case,
+        domain,
+        Some(("combined-count", PersonSelection::All {}, range)),
+    )?;
+    preference(
+        domain,
+        WorkforcePreference::WeekendTarget {
+            id: id(case, "pref-weekend-target")?,
+            active: true,
+            scope: all(),
+            priority: PreferencePriority::Normal,
+            weight: 1,
+            target_count: 1,
+        },
+    );
+    practitioner_workload_rules(case, domain)?;
+    practitioner_maximum_rules(case, domain)?;
+    Ok(())
+}
+
+fn practitioner_workload_rules(case: CaseId, domain: &mut WorkforceDomainV1) -> Result<()> {
+    rule(
+        domain,
+        WorkforceRule::WorkloadQuota(Box::new(WorkloadQuotaRule {
+            id: id(case, "rule-quota-count")?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: all(),
+            calendar_id: id(case, "calendar-week")?,
+            membership: WindowMembership::ReportingDate,
+            minimum: 1,
+            maximum: Some(3),
+            measure: WorkloadQuotaMeasure::AssignmentCount {},
+        })),
+    );
+    rule(
+        domain,
+        WorkforceRule::WorkloadQuota(Box::new(WorkloadQuotaRule {
+            id: id(case, "rule-quota-hours")?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: all(),
+            calendar_id: id(case, "calendar-week")?,
+            membership: WindowMembership::Intersection,
+            minimum: 240,
+            maximum: Some(2400),
+            measure: WorkloadQuotaMeasure::BucketMinutes {
+                bucket_id: id(case, "all-hours")?,
+            },
+        })),
+    );
+    rule(
+        domain,
+        WorkforceRule::MaximumHours {
+            id: id(case, "rule-max-hours-fourteen-days")?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: all(),
+            bucket_id: id(case, "all-hours")?,
+            window: WorkWindow::Rolling {
+                duration_minutes: 20160,
+                membership: WindowMembership::Intersection,
+            },
+            maximum_minutes: 6000,
+        },
+    );
+    rule(
+        domain,
+        WorkforceRule::MaximumAssignmentCount {
+            id: id(case, "rule-max-count-week")?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: all(),
+            calendar_id: id(case, "calendar-week")?,
+            maximum: 3,
+        },
+    );
+    Ok(())
+}
+
+fn practitioner_maximum_rules(case: CaseId, domain: &mut WorkforceDomainV1) -> Result<()> {
+    rule(
+        domain,
+        WorkforceRule::MaximumConsecutive {
+            id: id(case, "rule-max-consecutive-call")?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: type_scope(case, "type-call-overnight")?,
+            mode: ConsecutiveMode::Assignments { break_minutes: 900 },
+            maximum: 2,
+        },
+    );
+    rule(
+        domain,
+        WorkforceRule::MaximumWorkedWeekends {
+            id: id(case, "rule-max-worked-weekends")?,
+            active: true,
+            strength: RequiredStrength::Required,
+            scope: all(),
+            maximum: 2,
+        },
+    );
+    Ok(())
+}
+
+fn practitioner(case: CaseId, infeasible: bool) -> Result<ScenarioSnapshotV1> {
+    let range = date_range("2027-02-01", "2027-03-01")?;
+    // Finite person activity contains the final overnight tail without extending generation.
+    let activity_range = date_range("2027-02-01", "2027-03-02")?;
+    let mut domain = practitioner_population(case, activity_range, infeasible)?;
+    practitioner_templates(case, &mut domain, range, infeasible)?;
+    insert(
+        &mut domain,
+        WorkforceEntity::Availability(approved_leave(
+            case,
+            "availability-approved-leave",
+            "person-07",
+            ("2027-02-17T13:00:00Z", "2027-02-18T01:00:00Z"),
+            range,
+            "synthetic-practitioner",
+            "Approved study leave",
+        )?),
+    );
+    practitioner_rules(case, &mut domain, range)?;
+    let mut result = snapshot(
+        case,
+        &domain,
+        range,
+        if infeasible {
+            "Synthetic practitioner workflow: specialist infeasible variation"
+        } else {
+            "Synthetic practitioner workflow: combined clinic and overnight call"
+        },
+        "Deliberately fictional twelve-clinician four-week source with authored coverage, dated eligibility, leave, quotas, recovery, burden metrics, weekend cap and preference target; no accepted result authority",
+        "reject",
+        "reject",
+    )?;
+    let shifts = temporal::resolve_shifts(&result.document, &CancellationToken::new())?;
+    let clinic_id = id::<eutheto_workforce::ids::ShiftTemplateId>(case, "template-weekday-clinic")?;
+    let anchor = shifts
+        .iter()
+        .find(|shift| {
+            shift.reporting_date.to_string() == "2027-02-01"
+                && matches!(
+                    shift.origin,
+                    temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                        if template_id == clinic_id
+                )
+        })
+        .context("missing practitioner hard-lock clinic")?;
+    let lock = AssignmentLock {
+        id: id::<AssignmentId>(case, "lock-clinic-anchor")?,
+        person_id: id(case, "person-00")?,
+        shift_id: anchor.id,
+        state: LockState::Hard {},
+    };
+    result
+        .document
+        .domain
+        .locked_assignments
+        .insert(lock.id, serde_json::to_value(lock)?);
+    Ok(result)
+}
 
 fn dst(case: CaseId) -> Result<ScenarioSnapshotV1> {
     let spring = case == CaseId::DstSpring;
@@ -1059,38 +1485,23 @@ pub(crate) fn build_large(parameters: LargeParameters) -> Result<ScenarioSnapsho
     large(CaseId::LargeSupported, parameters)
 }
 
-fn expected(case: CaseId) -> Result<ExpectedCase> {
-    use ExpectedDisposition::{Accepted, CompileRejected, Infeasible, ResourceLimit};
+fn expected(case: CaseId) -> ExpectedCase {
+    use ExpectedDisposition::{Accepted, Infeasible, ResourceLimit};
     let (people, horizon_days, resolved_shifts, selected_assignments, disposition) = match case {
-        CaseId::AppendixF => (3, 30, 52, None, CompileRejected),
+        CaseId::AppendixF => (3, 30, 52, None, Infeasible),
         CaseId::ClinicTiny => (3, 7, 5, Some(10), Accepted),
-        CaseId::ClinicInitial | CaseId::RollingHours => (8, 28, 20, Some(40), Accepted),
-        CaseId::ClinicFull => (8, 28, 20, None, CompileRejected),
-        CaseId::ClinicOvernight => (12, 28, 48, Some(68), Accepted),
+        CaseId::ClinicInitial | CaseId::RollingHours | CaseId::ClinicFull => {
+            (8, 28, 20, Some(40), Accepted)
+        }
+        CaseId::ClinicOvernight | CaseId::PractitionerWorkflow => (12, 28, 48, Some(68), Accepted),
         CaseId::SpecialistCoverage => (6, 7, 5, Some(10), Accepted),
         CaseId::RepairBefore => (4, 7, 5, Some(10), Accepted),
         CaseId::InfeasibleCoverage => (3, 1, 1, None, Infeasible),
+        CaseId::PractitionerInfeasible => (12, 28, 48, None, Infeasible),
         CaseId::DstSpring | CaseId::DstFall => (2, 1, 1, Some(1), Accepted),
-        CaseId::LargeSupported => (100, 12, 12, Some(12), Accepted),
-        CaseId::LargePressure => (100, 20, 20, None, ResourceLimit),
+        CaseId::LargeSupported => (101, 12, 12, Some(12), Accepted),
+        CaseId::LargePressure => (100, 64, 64, None, ResourceLimit),
     };
-    let mut deferred_obligations = vec![];
-    if matches!(case, CaseId::AppendixF | CaseId::ClinicFull) {
-        for (role, kind) in [
-            ("pref-balance", "workloadBalance"),
-            ("pref-no-friday", "time"),
-        ] {
-            deferred_obligations.push(PreservedObligation::Preference {
-                rule_id: id(case, role)?,
-                preference_kind: kind.to_owned(),
-            });
-        }
-    }
-    if case == CaseId::RollingHours {
-        deferred_obligations.push(PreservedObligation::Lock {
-            assignment_id: id(case, "lock-first-clinic")?,
-        });
-    }
     // Broad source-derived integer rank bounds do not assert a particular equal-score schedule.
     // Characterize exact committed IR shapes centrally before tightening these envelopes.
     let score = selected_assignments.map(|selected| ScoreExpectation {
@@ -1105,7 +1516,12 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
             } else {
                 1
             },
-            maximum_variables: if case == CaseId::LargeSupported {
+            maximum_variables: if matches!(
+                case,
+                CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible
+            ) {
+                12000
+            } else if case == CaseId::LargeSupported {
                 2600
             } else {
                 3000
@@ -1116,7 +1532,21 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
         None
     };
     let detail = semantic_description(case);
-    Ok(ExpectedCase {
+    let semantics = if matches!(
+        case,
+        CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible
+    ) {
+        vec![
+            detail.to_owned(),
+            "Reviewed source totals: 20 weekday clinic occurrences at exact two physicians with one specialist minimum in the feasible variant (two in the infeasible variation), plus 28 daily overnight calls at exact one call-qualified clinician; the feasible source therefore has 40 clinic and 28 call assignments, while the variation has no accepted assignment authority.".to_owned(),
+            "Reviewed Required boundaries: dated active eligibility is 2027-02-01..2027-03-02 (exclusive end, containing the final overnight tail), approved study leave is an explicit non-work availability record, both directional recovery rules require 600 minutes, weekly count quota is 1..=3, weekly elapsed bucket quota is 240..=2400 minutes, rolling maximum is 6000 minutes per 14 days, and weekly assignment maximum is 3.".to_owned(),
+            "Reviewed burden/preference metrics: all-hours, clinic-hours, call-hours and combined-count source buckets are retained; clinician weights are 1/1, 3/4 or 1/2; Required distinct worked weekends cap at 2 and explicit weekendTarget prefers 1 across the horizon; operator totals report period, burden and preference deviations rather than a prescribed roster.".to_owned(),
+            "Boundary and scope decisions are explicit: weekly quotas use four authored Monday-midnight periods from February 1 through March 1; the final overnight tail remains work but lies outside those quota periods. Other elapsed/weekend membership still includes overnight tails, no unpaid-break or administrative-leave credit is inferred, no new-work grouping or guaranteed free/consecutive weekend is claimed, and no linked split-session alternative is modeled.".to_owned(),
+        ]
+    } else {
+        vec![detail.to_owned()]
+    };
+    ExpectedCase {
         id: case,
         disposition,
         people,
@@ -1125,15 +1555,15 @@ fn expected(case: CaseId) -> Result<ExpectedCase> {
         selected_assignments,
         score,
         model_envelope,
-        deferred_obligations,
-        semantics: vec![detail.to_owned()],
-    })
+        deferred_obligations: vec![],
+        semantics,
+    }
 }
 
 fn semantic_description(case: CaseId) -> &'static str {
     match case {
         CaseId::AppendixF => {
-            "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later preferences require Phase07; no claim of feasibility"
+            "Source-complete Appendix F remains infeasible: Smith's full local September 10 absence excludes the preceding overnight call and morning clinic; the remaining call owner cannot cover that clinic after only 120 of the Required 600 rest minutes, leaving one clinician for exact-two coverage. Preserve all three people, full-day absence, coverage, rest and active preferences; no accepted assignment count or score is claimed."
         }
         CaseId::ClinicTiny => {
             "Three clinicians, five four-hour weekday shifts, exact two physicians, one full local day unavailable; basic Required rules only"
@@ -1142,7 +1572,7 @@ fn semantic_description(case: CaseId) -> &'static str {
             "Eight clinicians/four weeks; availability and exact two physicians; explicitly omits clinic-full workload balance and Friday preference"
         }
         CaseId::ClinicFull => {
-            "Eight clinicians/four weeks; same clinical obligations plus active whole-plan weighted equal-share balance and whole-Friday avoidance; Phase07 compilation gate"
+            "Eight clinicians/four weeks; exact two physicians plus active whole-plan weighted equal-share balance and whole-Friday avoidance; current compiler supports the complete source"
         }
         CaseId::ClinicOvernight => {
             "Twelve clinicians;20 clinic shifts and28 overnight calls; exact2/1 qualified coverage; unavailable day intersects preceding overnight;600 elapsed minutes call-to-clinic rest"
@@ -1154,10 +1584,16 @@ fn semantic_description(case: CaseId) -> &'static str {
             "Six physicians, exactly two also specialists; each shift requires exactly two physicians including at least one specialist through Coverage.qualification_minimums; no RequiredSkillMix"
         }
         CaseId::RepairBefore => {
-            "Four clinicians ordinary supported before-input; no BaseSchedule or accepted/selected authority; separately typed call-out mutation requires genuine accepted and selected Phase07 baseline"
+            "Four clinicians ordinary supported before-input; no BaseSchedule or accepted/selected authority; separately typed call-out mutation remains an independent recipe requiring a genuine accepted and selected baseline"
         }
         CaseId::InfeasibleCoverage => {
             "Three active qualified people but only one eligible for a clinic needing exactly two; structurally valid model must reach backend infeasible termination"
+        }
+        CaseId::PractitionerWorkflow => {
+            "Twelve fictional clinicians across 2027-02-01..2027-03-01: 20 weekday four-hour clinics and 28 ten-hour overnight calls; exact qualified coverage, dated eligibility, approved leave, 600-minute directional rest, count/hour quotas, maxima, hard-protected anchor, distinct-weekend cap and explicit weekend target jointly optimize one source"
+        }
+        CaseId::PractitionerInfeasible => {
+            "Same twelve-clinician combined source and boundaries, but every clinic requires two distinct specialist-qualified people while only one dated specialist grant is authored; this is a genuine mapped specialist-coverage infeasible variation, not a time-limit result"
         }
         CaseId::DstSpring => {
             "Chicago2026-03-08 gap02:30 moved forward;03:30 actual start/04:30 end;60 elapsed and120 scheduled minutes; Reject fails with Gap"
@@ -1166,47 +1602,79 @@ fn semantic_description(case: CaseId) -> &'static str {
             "Chicago2026-11-01 first01:30 to02:30;120 elapsed and60 scheduled minutes; Later gives60 elapsed; Reject fails with Overlap"
         }
         CaseId::LargeSupported => {
-            "Exactly100 active universally eligible people by12 independent daily one-hour shifts:1200 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
+            "Exactly101 active universally eligible people by12 independent daily one-hour shifts:1212 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
         }
         CaseId::LargePressure => {
-            "Exactly100 active universally eligible people by20 independent daily one-hour shifts:2000 unpruned pairs; expected typed resource limit, never infeasible or accepted; metrics unavailable unless actually produced"
+            "Exactly100 active universally eligible people by64 independent daily one-hour shifts:6400 unpruned pairs; expected typed resource limit, never infeasible or accepted; metrics unavailable unless actually produced"
         }
     }
 }
 
-fn repair_fixture() -> Result<RepairFixture> {
+fn repair_fixture(before: &ScenarioSnapshotV1) -> Result<RepairFixture> {
+    let case = CaseId::PractitionerWorkflow;
+    let shifts = temporal::resolve_shifts(&before.document, &CancellationToken::new())?;
+    let clinic_template =
+        id::<eutheto_workforce::ids::ShiftTemplateId>(case, "template-weekday-clinic")?;
+    let mut targets = shifts.iter().filter(|shift| {
+        shift.reporting_date.to_string() == "2027-02-10"
+            && matches!(
+                shift.origin,
+                temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                    if template_id == clinic_template
+            )
+    });
+    let target = targets.next().context("missing repair target clinic")?;
+    ensure!(targets.next().is_none(), "ambiguous repair target clinic");
     Ok(RepairFixture {
         format: REPAIR_FORMAT.to_owned(),
-        schema_version: FORMAT_VERSION,
+        schema_version: REPAIR_SCHEMA_VERSION,
         corpus_version: CORPUS_VERSION,
-        before_case: CaseId::RepairBefore,
+        before_case: CaseId::PractitionerWorkflow,
         execution_phase: 7,
         baseline_requirement: BASELINE_REQUIREMENT.to_owned(),
         command_id: commands::ADD_ENTITY.to_owned(),
-        payload: commands::EntityPayload {
-            entity: WorkforceEntity::Availability(unavailable(
-                CaseId::RepairBefore,
-                "availability-callout",
-                "person-0",
-                ("2026-09-02T05:00:00Z", "2026-09-03T05:00:00Z"),
-                date_range("2026-09-01", "2026-09-08")?,
-                "synthetic-callout",
-                "Synthetic unexpected call-out",
-            )?),
+        availability_id: id(case, "availability-callout")?,
+        target_shift_id: target.id,
+        time_window: TimeWindow::Instant {
+            starts_at: "2027-02-10T13:00:00Z".parse()?,
+            ends_at: "2027-02-11T01:00:00Z".parse()?,
         },
+        effective_range: date_range("2027-02-01", "2027-03-01")?,
         repair_requirement: REPAIR_REQUIREMENT.to_owned(),
     })
 }
+
+pub(crate) fn repair_payload(
+    recipe: &RepairFixture,
+    person_id: PersonId,
+) -> commands::EntityPayload {
+    commands::EntityPayload {
+        entity: WorkforceEntity::Availability(Availability {
+            id: recipe.availability_id,
+            person_id,
+            availability_kind: AvailabilityKind::Unavailable,
+            time_window: recipe.time_window.clone(),
+            effective_range: recipe.effective_range,
+            assignment_type_ids: None,
+            location_ids: None,
+            source: "synthetic-practitioner-callout".to_owned(),
+            note: "Synthetic unexpected call-out".to_owned(),
+        }),
+    }
+}
+
 pub(crate) fn build() -> Result<CorpusDefinitions> {
     let mut fixtures = Vec::with_capacity(CaseId::ALL.len());
     for case in CaseId::ALL {
         let snapshot = match case {
             CaseId::AppendixF => appendix()?,
+            CaseId::PractitionerWorkflow => practitioner(case, false)?,
+            CaseId::PractitionerInfeasible => practitioner(case, true)?,
             CaseId::DstSpring | CaseId::DstFall => dst(case)?,
             CaseId::LargeSupported => large(
                 case,
                 LargeParameters {
-                    people: 100,
+                    people: 101,
                     shifts: 12,
                 },
             )?,
@@ -1214,7 +1682,7 @@ pub(crate) fn build() -> Result<CorpusDefinitions> {
                 case,
                 LargeParameters {
                     people: 100,
-                    shifts: 20,
+                    shifts: 64,
                 },
             )?,
             _ => clinic(case)?,
@@ -1228,6 +1696,9 @@ pub(crate) fn build() -> Result<CorpusDefinitions> {
             CaseId::RollingHours => Some(CorpusFamily::RollingHours),
             CaseId::SpecialistCoverage => Some(CorpusFamily::SpecialistCoverage),
             CaseId::RepairBefore => Some(CorpusFamily::RepairCallout),
+            CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible => {
+                Some(CorpusFamily::PractitionerWorkflow)
+            }
             CaseId::InfeasibleCoverage => Some(CorpusFamily::InfeasibleCoverage),
             CaseId::DstSpring | CaseId::DstFall => Some(CorpusFamily::Dst),
             CaseId::LargeSupported | CaseId::LargePressure => Some(CorpusFamily::LargeSynthetic),
@@ -1246,11 +1717,13 @@ pub(crate) fn build() -> Result<CorpusDefinitions> {
             family,
             workload_class,
             snapshot,
-            expected: expected(case)?,
+            expected: expected(case),
         });
     }
-    Ok(CorpusDefinitions {
-        fixtures,
-        repair: repair_fixture()?,
-    })
+    let before = fixtures
+        .iter()
+        .find(|fixture| fixture.id == CaseId::PractitionerWorkflow)
+        .context("repair before case absent")?;
+    let repair = repair_fixture(&before.snapshot)?;
+    Ok(CorpusDefinitions { fixtures, repair })
 }

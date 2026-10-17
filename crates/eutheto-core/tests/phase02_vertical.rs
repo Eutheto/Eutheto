@@ -51,6 +51,10 @@ impl SolverBackend for ExactTestBackend {
         &self.runtime_identity
     }
 
+    fn verified_worker_manifest_sha256(&self) -> Option<&[u8; 32]> {
+        None
+    }
+
     fn compatibility(
         &self,
         summary: &PlanningProblemSummary,
@@ -94,7 +98,6 @@ impl SolverBackend for ExactTestBackend {
             }
             let raw_objective = BackendObjectiveEvidence {
                 objective_values: vec![RAW_BACKEND_OBJECTIVE],
-                best_bound_values: Some(vec![RAW_BACKEND_OBJECTIVE]),
             };
             output.submit_candidate(CandidateSubmission {
                 values,
@@ -115,6 +118,8 @@ impl SolverBackend for ExactTestBackend {
                     elapsed_milliseconds: duration(1)?,
                     first_incumbent_milliseconds: Some(duration(1)?),
                     objective: Some(raw_objective),
+                    best_bound_values: None,
+                    assumption_core: None,
                     evidence_refs: Vec::new(),
                     execution: None,
                 },
@@ -168,6 +173,7 @@ fn document() -> Result<ScenarioDocument, serde_json::Error> {
 
 fn compile_context() -> CompileContext {
     CompileContext {
+        objective_context: None,
         scenario_revision: 12,
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -343,6 +349,7 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
         &source,
         context.scenario_revision,
         problem.as_ref(),
+        context.objective_context.as_ref(),
         &verification_clock,
         &id_generator,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -449,6 +456,7 @@ async fn domain_invalid_backend_candidate_is_quarantined_before_result_availabil
         &source,
         context.scenario_revision,
         problem.as_ref(),
+        context.objective_context.as_ref(),
         &verification_clock,
         &id_generator,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),

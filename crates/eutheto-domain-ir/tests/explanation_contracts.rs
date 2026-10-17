@@ -89,6 +89,29 @@ fn comparison() -> Result<SolutionComparisonV1, Box<dyn Error>> {
         ComparisonOrdering::Equivalent,
     )?)
 }
+fn comparison_v2() -> Result<SolutionComparisonV2, Box<dyn Error>> {
+    let source =
+        PortableAcceptedResult::from_json(include_bytes!("fixtures/portable_accepted_v2.json"))?;
+    let producer_id = DomainEvidenceId::new("tests.comparison.producer")?;
+    let semantic_hash = hash("same-source-scoring-semantics");
+    Ok(
+        prepare_comparison_v2(&source, &source, None)?.finish(ComparisonEnrichmentV2 {
+            scoring_contexts: Some((
+                ComparisonScoringContext {
+                    source: &source,
+                    producer_id: producer_id.clone(),
+                    semantic_hash: semantic_hash.clone(),
+                },
+                ComparisonScoringContext {
+                    source: &source,
+                    producer_id,
+                    semantic_hash,
+                },
+            )),
+            ..ComparisonEnrichmentV2::default()
+        })?,
+    )
+}
 
 fn solve_options() -> Result<SolveOptions, Box<dyn Error>> {
     Ok(SolveOptions {
@@ -114,11 +137,11 @@ fn solve_options() -> Result<SolveOptions, Box<dyn Error>> {
 }
 
 fn rebuild_run_input(
-    input: &RunInputV1,
+    input: &RunInput,
     run_id: SolveRunId,
     compiler_version: String,
-) -> Result<RunInputV1, DomainContractError> {
-    RunInputV1::new(
+) -> Result<RunInput, DomainContractError> {
+    RunInput::new(
         run_id,
         input.request_id,
         input.scenario_id,
@@ -143,11 +166,12 @@ fn rebuild_run_input(
         input.solve_options.clone(),
         input.scenario_timezone.clone(),
         input.temporary_condition_hash.clone(),
+        input.objective_context.clone(),
     )
 }
 
-fn infeasible_manifest(input: &RunInputV1) -> Result<RunManifestV1, Box<dyn Error>> {
-    Ok(RunManifestV1::new(
+fn infeasible_manifest(input: &RunInput) -> Result<RunManifest, Box<dyn Error>> {
+    Ok(RunManifest::new(
         input.run_id,
         input.checksum.clone(),
         RunTerminalOutcomeV1::NoResult {
@@ -164,12 +188,18 @@ fn infeasible_manifest(input: &RunInputV1) -> Result<RunManifestV1, Box<dyn Erro
 }
 
 struct CounterfactualFixture {
-    result: CounterfactualResultV1,
+    result: CounterfactualResult,
     request: CounterfactualJobRequestV1,
 }
 
-#[allow(clippy::too_many_lines)]
 fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
+    counterfactual_fixture_with_capture(false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn counterfactual_fixture_with_capture(
+    captured: bool,
+) -> Result<CounterfactualFixture, Box<dyn Error>> {
     let condition =
         CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
             assignment_id: DomainAssignmentId::new("assignment.target")?,
@@ -189,7 +219,7 @@ fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
     let snapshot_document_hash = hash("snapshot");
     let pack_id = PackId::new("official.synthetic")?;
     let base_run_id = uuid(0x14).parse::<SolveRunId>()?;
-    let base_run_input = RunInputV1::new(
+    let mut base_run_input = RunInput::new(
         base_run_id,
         uuid(0x16).parse::<RequestId>()?,
         scenario_id,
@@ -214,9 +244,42 @@ fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
         solve_options()?,
         "UTC".parse::<IanaTimeZone>()?,
         None,
+        None,
     )?;
     let base = result_ref(1)?;
-    let base_run_manifest = RunManifestV1::new(
+    if captured {
+        let mut chunks = vec!["x".repeat(1021); 512];
+        chunks[511].pop();
+        base_run_input.objective_context = Some(RunObjectiveContext {
+            schema_version: 2,
+            pack_id: pack_id.clone(),
+            profile_id: ObjectiveProfileId::new("official.synthetic.objective.minimum")?,
+            semantic_version: 1,
+            operation: RunObjectiveOperation::Repair,
+            external_baseline: None,
+            baseline: Some(Box::new(RunBaselineBinding {
+                original: RunBaselineOriginal {
+                    entity: DomainEntityRef {
+                        kind: DomainEntityKindId::new("synthetic.base")?,
+                        id: DomainEntityId::new("synthetic.original")?,
+                    },
+                    pair_content_hash: hash("original-pairs"),
+                    accepted_result: base.clone(),
+                    source_scenario_id: scenario_id,
+                    source_revision: 7,
+                    source_document_hash: snapshot_document_hash.clone(),
+                    source_run_id: base_run_id,
+                    source_run_input_checksum: base_run_input.checksum.clone(),
+                    source_run_manifest_checksum: hash("original-manifest"),
+                },
+                selection: RunBaselineSelection::OriginalAccepted {},
+                selected_pair_content_hash: hash("original-pairs"),
+                captured_original: Some(std::sync::Arc::new(json!(chunks))),
+            })),
+        });
+        base_run_input = rebuild_run_input(&base_run_input, base_run_id, "1.0.0".to_owned())?;
+    }
+    let base_run_manifest = RunManifest::new(
         base_run_id,
         base_run_input.checksum.clone(),
         RunTerminalOutcomeV1::Accepted {
@@ -234,7 +297,7 @@ fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
         Vec::new(),
     )?;
     let run_id = uuid(0x10).parse::<SolveRunId>()?;
-    let run_input = RunInputV1::new(
+    let run_input = RunInput::new(
         run_id,
         uuid(0x12).parse::<RequestId>()?,
         scenario_id,
@@ -259,8 +322,9 @@ fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
         solve_options()?,
         "UTC".parse::<IanaTimeZone>()?,
         Some(condition.checksum.clone()),
+        base_run_input.objective_context.clone(),
     )?;
-    let run_manifest = RunManifestV1::new(
+    let run_manifest = RunManifest::new(
         run_id,
         run_input.checksum.clone(),
         RunTerminalOutcomeV1::NoResult {
@@ -296,7 +360,7 @@ fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
         condition,
         "2026-09-03T12:00:00Z".parse()?,
     )?;
-    let result = CounterfactualResultV1::new(
+    let result = CounterfactualResult::new(
         request.clone(),
         base_run_input,
         base_run_manifest,
@@ -309,7 +373,7 @@ fn counterfactual_fixture() -> Result<CounterfactualFixture, Box<dyn Error>> {
 }
 
 fn counterfactual_comparison(
-    result: &CounterfactualResultV1,
+    result: &CounterfactualResult,
     base: AcceptedResultRefV1,
     candidate: AcceptedResultRefV1,
 ) -> Result<SolutionComparisonV1, Box<dyn Error>> {
@@ -388,39 +452,41 @@ fn assignment_evidence() -> Result<AssignmentEvidenceV1, Box<dyn Error>> {
     })
 }
 
-fn all_evidence() -> Result<Vec<ExplanationEvidenceV1>, Box<dyn Error>> {
+fn all_evidence() -> Result<Vec<ExplanationEvidenceV2>, Box<dyn Error>> {
     let counterfactual = counterfactual_fixture()?.result;
-    let optimality_status = OptimalityStatusEvidenceV1 {
+    let optimality_status = OptimalityStatusEvidence {
+        schema_version: Some(2),
         run_input: counterfactual.run_input.clone(),
         run_manifest: counterfactual.run_manifest.clone(),
         result: None,
     };
-    let comparison = comparison()?;
+    let comparison = comparison_v2()?;
     Ok(vec![
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Validation {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Validation {
             issue: validation_issue(ExplanationValidationSeverity::MustFix)?,
         })?,
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Infeasibility {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Infeasibility {
             infeasibility: InfeasibilityEvidenceV1::Unavailable {
                 reason: ConflictUnavailableReason::ConflictNotReturned,
             },
+            condition: None,
         })?,
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Assignment {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Assignment {
             assignment: assignment_evidence()?,
         })?,
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Counterfactual {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Counterfactual {
             result: Box::new(counterfactual),
         })?,
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::SolutionDifference {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::SolutionDifference {
             comparison: Box::new(comparison.clone()),
         })?,
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Repair {
-            repair: Box::new(RepairEvidenceV1 {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Repair {
+            repair: Box::new(RepairEvidenceV2 {
                 comparison,
                 causality: RepairCausalityV1::NotEstablished,
             }),
         })?,
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::OptimalityStatus {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::OptimalityStatus {
             status: Box::new(optimality_status),
         })?,
     ])
@@ -470,6 +536,7 @@ fn exact_seven_request_subjects_round_trip_strictly() -> Result<(), Box<dyn Erro
     assert_eq!(subjects.len(), expected.len());
     for (subject, kind) in subjects.into_iter().zip(expected) {
         let request = ExplanationRequestV1::new(subject)?;
+        assert_eq!(request.schema_version, EXPLANATION_REQUEST_SCHEMA_VERSION);
         assert_eq!(request.subject.kind(), kind);
         let bytes = serde_json::to_vec(&request)?;
         let wire = String::from_utf8(bytes.clone())?;
@@ -505,6 +572,10 @@ fn exact_seven_request_subjects_round_trip_strictly() -> Result<(), Box<dyn Erro
 
 #[test]
 fn exact_seven_evidence_and_result_discriminants_round_trip() -> Result<(), Box<dyn Error>> {
+    assert_eq!(EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION, 2);
+    assert_eq!(EVIDENCE_RENDER_REQUEST_V2_SCHEMA_VERSION, 2);
+    assert_eq!(EXPLANATION_RESULT_V2_SCHEMA_VERSION, 2);
+    assert_eq!(EVIDENCE_RENDER_RESULT_SCHEMA_VERSION, 1);
     let expected = [
         ExplanationKind::Validation,
         ExplanationKind::Infeasibility,
@@ -517,10 +588,18 @@ fn exact_seven_evidence_and_result_discriminants_round_trip() -> Result<(), Box<
     for (evidence, kind) in all_evidence()?.into_iter().zip(expected) {
         assert_eq!(evidence.kind(), kind);
         assert_eq!(
-            ExplanationEvidenceV1::from_json(&serde_json::to_vec(&evidence)?)?,
+            evidence.schema_version,
+            EXPLANATION_EVIDENCE_V2_SCHEMA_VERSION
+        );
+        assert_eq!(
+            ExplanationEvidenceV2::from_json(&serde_json::to_vec(&evidence)?)?,
             evidence
         );
-        let request = EvidenceRenderRequestV1::new(evidence.clone())?;
+        let request = EvidenceRenderRequestV2::new(evidence.clone())?;
+        assert_eq!(
+            request.schema_version,
+            EVIDENCE_RENDER_REQUEST_V2_SCHEMA_VERSION
+        );
         let rendered = EvidenceRenderResultV1::new(
             &request,
             vec![EvidenceMessageV1 {
@@ -532,9 +611,28 @@ fn exact_seven_evidence_and_result_discriminants_round_trip() -> Result<(), Box<
                 evidence: Vec::new(),
             }],
         )?;
-        let result = ExplanationResultV1::new(evidence, rendered)?;
         assert_eq!(
-            ExplanationResultV1::from_json(&serde_json::to_vec(&result)?)?,
+            rendered.schema_version,
+            EVIDENCE_RENDER_RESULT_SCHEMA_VERSION
+        );
+        let result = ExplanationResultV2::new(evidence, rendered)?;
+        assert_eq!(result.schema_version, EXPLANATION_RESULT_V2_SCHEMA_VERSION);
+        if kind == ExplanationKind::Validation {
+            let mut tampered = result.clone();
+            tampered.checksum = hash("tampered-result");
+            assert_eq!(
+                tampered.validate(),
+                Err(DomainContractError::ChecksumMismatch)
+            );
+            let mut old_version = serde_json::to_value(&result)?;
+            old_version["schemaVersion"] = json!(1);
+            assert!(matches!(
+                ExplanationResultV2::from_json(&serde_json::to_vec(&old_version)?),
+                Err(DomainContractError::UnsupportedVersion(1))
+            ));
+        }
+        assert_eq!(
+            ExplanationResultV2::from_json(&serde_json::to_vec(&result)?)?,
             result
         );
     }
@@ -543,13 +641,13 @@ fn exact_seven_evidence_and_result_discriminants_round_trip() -> Result<(), Box<
 
 #[test]
 fn render_result_rejects_same_kind_evidence_substitution() -> Result<(), Box<dyn Error>> {
-    let first = ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Validation {
+    let first = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Validation {
         issue: validation_issue(ExplanationValidationSeverity::MustFix)?,
     })?;
-    let second = ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Validation {
+    let second = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Validation {
         issue: validation_issue(ExplanationValidationSeverity::LikelyProblem)?,
     })?;
-    let request = EvidenceRenderRequestV1::new(first)?;
+    let request = EvidenceRenderRequestV2::new(first)?;
     let rendered = EvidenceRenderResultV1::new(
         &request,
         vec![EvidenceMessageV1 {
@@ -562,7 +660,7 @@ fn render_result_rejects_same_kind_evidence_substitution() -> Result<(), Box<dyn
         }],
     )?;
     assert!(matches!(
-        ExplanationResultV1::new(second, rendered),
+        ExplanationResultV2::new(second, rendered),
         Err(DomainContractError::InvalidExplanationContract(
             "explanation result evidence binding"
         ))
@@ -573,7 +671,8 @@ fn render_result_rejects_same_kind_evidence_substitution() -> Result<(), Box<dyn
 #[test]
 fn optimality_status_rejects_detached_run_authority() -> Result<(), Box<dyn Error>> {
     let fixture = counterfactual_fixture()?;
-    let status = OptimalityStatusEvidenceV1 {
+    let status = OptimalityStatusEvidence {
+        schema_version: Some(2),
         run_input: fixture.result.base_run_input,
         run_manifest: fixture.result.run_manifest,
         result: None,
@@ -588,34 +687,166 @@ fn optimality_status_rejects_detached_run_authority() -> Result<(), Box<dyn Erro
 }
 
 #[test]
+fn maximum_captured_original_survives_complete_status_and_counterfactual_carriers()
+-> Result<(), Box<dyn Error>> {
+    let fixture = counterfactual_fixture_with_capture(true)?;
+    let status = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::OptimalityStatus {
+        status: Box::new(OptimalityStatusEvidence {
+            schema_version: Some(2),
+            run_input: fixture.result.base_run_input.clone(),
+            run_manifest: fixture.result.base_run_manifest.clone(),
+            result: Some(fixture.request.semantics.base.clone()),
+        }),
+    })?;
+    assert_eq!(
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&status)?)?,
+        status
+    );
+    let counterfactual =
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Counterfactual {
+            result: Box::new(fixture.result),
+        })?;
+    assert_eq!(
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&counterfactual)?)?,
+        counterfactual,
+    );
+    Ok(())
+}
+
+#[test]
+fn bounded_captures_do_not_exempt_the_complete_counterfactual_carrier_limit()
+-> Result<(), Box<dyn Error>> {
+    let fixture = counterfactual_fixture_with_capture(true)?;
+    let result = fixture.result;
+    let enlarge = |manifest: RunManifest| -> Result<RunManifest, Box<dyn Error>> {
+        let warnings = (0..2000)
+            .map(|index| {
+                Ok(VerificationWarning {
+                    id: VerificationWarningId::new(format!("warning.large-{index:04}"))?,
+                    message_key: "synthetic.warning.large".to_owned(),
+                    affected_entities: Vec::new(),
+                    facts: BTreeMap::from([(
+                        VerificationFactId::new("fact.large")?,
+                        VerificationValue::Text("x".repeat(MAX_VERIFICATION_TEXT_BYTES)),
+                    )]),
+                })
+            })
+            .collect::<Result<Vec<_>, DomainIdError>>()?;
+        Ok(RunManifest::new(
+            manifest.run_id,
+            manifest.run_input_checksum,
+            manifest.outcome,
+            manifest.started_at,
+            manifest.finished_at,
+            manifest.elapsed_milliseconds,
+            manifest.first_incumbent_milliseconds,
+            manifest.first_verified_feasible_milliseconds,
+            manifest.phase_timings,
+            warnings,
+        )?)
+    };
+    // Each manifest remains legal independently; only the combined carrier is too large.
+    let base_manifest = enlarge(result.base_run_manifest)?;
+    let derived_manifest = enlarge(result.run_manifest)?;
+    assert!(matches!(
+        CounterfactualResult::new(
+            result.request,
+            result.base_run_input,
+            base_manifest,
+            result.compilation,
+            result.run_input,
+            derived_manifest,
+            result.conclusion,
+        ),
+        Err(DomainContractError::LimitExceeded(
+            "domain contract JSON bytes"
+        )),
+    ));
+    Ok(())
+}
+
+#[test]
+fn resealed_recorded_optimal_status_cannot_acquire_current_backend_proof()
+-> Result<(), Box<dyn Error>> {
+    let mut recorded =
+        PortableAcceptedResult::from_json(include_bytes!("fixtures/portable_accepted_v2.json"))?;
+    // Resealing a recorded status claim does not authenticate a backend proof.
+    let mut manifest = serde_json::to_value(&recorded.run_manifest)?;
+    manifest["outcome"]["status"] = json!("optimal");
+    manifest
+        .as_object_mut()
+        .ok_or("manifest is not an object")?
+        .remove("checksum");
+    let checksum = blake3_hex(&serde_json::to_vec(&manifest)?);
+    manifest["checksum"] = json!(checksum);
+    recorded.run_manifest = RunManifest::from_json(&serde_json::to_vec(&manifest)?)?;
+    let result = AcceptedResultRefV1::from_result(&recorded.accepted_result)?;
+    let evidence = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::OptimalityStatus {
+        status: Box::new(OptimalityStatusEvidence {
+            schema_version: Some(2),
+            run_input: recorded.run_input,
+            run_manifest: recorded.run_manifest,
+            result: Some(result),
+        }),
+    })?;
+    assert_eq!(
+        evidence.certainty,
+        ExplanationCertainty::IndependentlyVerified
+    );
+    ExplanationEvidenceV2::from_json(&serde_json::to_vec(&evidence)?)?;
+
+    let mut claimed_proof = serde_json::to_value(evidence)?;
+    claimed_proof["certainty"] = json!("backendProof");
+    claimed_proof
+        .as_object_mut()
+        .ok_or("evidence is not an object")?
+        .remove("checksum");
+    let checksum = blake3_hex(&serde_json::to_vec(&claimed_proof)?);
+    claimed_proof["checksum"] = json!(checksum);
+    assert!(matches!(
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&claimed_proof)?),
+        Err(DomainContractError::InvalidExplanationContract(
+            "evidence certainty"
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
 fn explanation_ingress_rejects_unknowns_and_certainty_kind_checksum_tampering()
 -> Result<(), Box<dyn Error>> {
     let evidence = all_evidence()?.remove(0);
     let mut value = serde_json::to_value(&evidence)?;
     value["unknown"] = json!(true);
-    assert!(ExplanationEvidenceV1::from_json(&serde_json::to_vec(&value)?).is_err());
+    assert!(ExplanationEvidenceV2::from_json(&serde_json::to_vec(&value)?).is_err());
 
     let mut value = serde_json::to_value(&evidence)?;
-    value["schemaVersion"] = json!(2);
+    value["schemaVersion"] = json!(1);
     assert!(matches!(
-        ExplanationEvidenceV1::from_json(&serde_json::to_vec(&value)?),
-        Err(DomainContractError::UnsupportedVersion(2))
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&value)?),
+        Err(DomainContractError::UnsupportedVersion(1))
     ));
 
     let mut value = serde_json::to_value(&evidence)?;
     value["certainty"] = json!("backendProof");
     assert!(matches!(
-        ExplanationEvidenceV1::from_json(&serde_json::to_vec(&value)?),
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&value)?),
         Err(DomainContractError::InvalidExplanationContract(
             "evidence certainty"
         ))
     ));
 
-    let request = EvidenceRenderRequestV1::new(evidence.clone())?;
+    let request = EvidenceRenderRequestV2::new(evidence.clone())?;
+    let mut value = serde_json::to_value(&request)?;
+    value["schemaVersion"] = json!(1);
+    assert!(matches!(
+        EvidenceRenderRequestV2::from_json(&serde_json::to_vec(&value)?),
+        Err(DomainContractError::UnsupportedVersion(1))
+    ));
     let mut value = serde_json::to_value(&request)?;
     value["kind"] = json!("assignment");
     assert!(matches!(
-        EvidenceRenderRequestV1::from_json(&serde_json::to_vec(&value)?),
+        EvidenceRenderRequestV2::from_json(&serde_json::to_vec(&value)?),
         Err(DomainContractError::InvalidExplanationContract(
             "render request kind"
         ))
@@ -624,9 +855,24 @@ fn explanation_ingress_rejects_unknowns_and_certainty_kind_checksum_tampering()
     let mut value = serde_json::to_value(&evidence)?;
     value["checksum"] = json!(hash("tampered"));
     assert!(matches!(
-        ExplanationEvidenceV1::from_json(&serde_json::to_vec(&value)?),
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&value)?),
         Err(DomainContractError::ChecksumMismatch)
     ));
+    Ok(())
+}
+
+#[test]
+fn explanation_v2_rejects_nested_comparison_checksum_tampering() -> Result<(), Box<dyn Error>> {
+    let comparison = all_evidence()?
+        .into_iter()
+        .find(|evidence| evidence.kind() == ExplanationKind::SolutionDifference)
+        .ok_or("missing solution difference evidence")?;
+    let mut value = serde_json::to_value(comparison)?;
+    value["evidence"]["comparison"]["checksum"] = json!(hash("tampered-comparison"));
+    assert_eq!(
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&value)?),
+        Err(DomainContractError::ChecksumMismatch)
+    );
     Ok(())
 }
 
@@ -699,7 +945,7 @@ fn all_four_validation_severities_are_distinct_and_strict() -> Result<(), Box<dy
 }
 
 #[test]
-fn force_and_forbid_are_the_only_checksummed_conditions() -> Result<(), Box<dyn Error>> {
+fn force_and_forbid_conditions_round_trip_with_checksums() -> Result<(), Box<dyn Error>> {
     for condition in [
         CounterfactualConditionPayloadV1::ForceAssignmentValue {
             assignment_id: DomainAssignmentId::new("assignment.target")?,
@@ -728,6 +974,73 @@ fn force_and_forbid_are_the_only_checksummed_conditions() -> Result<(), Box<dyn 
             Err(DomainContractError::ChecksumMismatch)
         ));
     }
+    Ok(())
+}
+
+#[test]
+fn replacement_condition_round_trips_and_binds_distinct_assignments() -> Result<(), Box<dyn Error>>
+{
+    let replacement =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ReplaceAssignment {
+            target_assignment_id: DomainAssignmentId::new("assignment.target")?,
+            replaced_assignment_id: DomainAssignmentId::new("assignment.incumbent")?,
+        })?;
+    let wire = serde_json::to_value(&replacement)?;
+    assert_eq!(
+        wire.pointer("/condition/type"),
+        Some(&json!("replaceAssignment"))
+    );
+    assert_eq!(
+        wire.pointer("/condition/targetAssignmentId"),
+        Some(&json!("assignment.target"))
+    );
+    assert_eq!(
+        wire.pointer("/condition/replacedAssignmentId"),
+        Some(&json!("assignment.incumbent"))
+    );
+    assert!(wire.pointer("/condition/assignmentId").is_none());
+    assert_eq!(
+        CounterfactualConditionV1::from_json(&serde_json::to_vec(&wire)?)?,
+        replacement
+    );
+
+    let mut changed_id = serde_json::to_value(&replacement)?;
+    changed_id["condition"]["targetAssignmentId"] = json!("assignment.alternative");
+    assert!(matches!(
+        CounterfactualConditionV1::from_json(&serde_json::to_vec(&changed_id)?),
+        Err(DomainContractError::ChecksumMismatch)
+    ));
+    let mut tampered = serde_json::to_value(&replacement)?;
+    tampered["checksum"] = json!(hash("wrong"));
+    assert!(matches!(
+        CounterfactualConditionV1::from_json(&serde_json::to_vec(&tampered)?),
+        Err(DomainContractError::ChecksumMismatch)
+    ));
+    assert!(matches!(
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ReplaceAssignment {
+            target_assignment_id: DomainAssignmentId::new("assignment.same")?,
+            replaced_assignment_id: DomainAssignmentId::new("assignment.same")?,
+        },),
+        Err(DomainContractError::InvalidExplanationContract(
+            "counterfactual replacement assignments must be distinct"
+        ))
+    ));
+    assert!(
+        serde_json::from_value::<CounterfactualConditionPayloadV1>(json!({
+            "type": "replaceAssignment",
+            "targetAssignmentId": "",
+            "replacedAssignmentId": "assignment.incumbent"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<CounterfactualConditionPayloadV1>(json!({
+            "type": "replaceAssignment",
+            "targetAssignmentId": "Assignment.Target",
+            "replacedAssignmentId": "assignment.incumbent"
+        }))
+        .is_err()
+    );
     assert!(
         serde_json::from_value::<CounterfactualConditionPayloadV1>(json!({
             "type": "relaxRequiredRule",
@@ -808,6 +1121,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
             None,
             Some(fixture.result.clone()),
             None,
+            None,
         ),
         Err(DomainContractError::InvalidExplanationContract(
             "counterfactual job result binding"
@@ -830,7 +1144,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
     )?;
     let reused_run_manifest = infeasible_manifest(&reused_run_input)?;
     assert!(matches!(
-        CounterfactualResultV1::new(
+        CounterfactualResult::new(
             fixture.request.clone(),
             fixture.result.base_run_input.clone(),
             fixture.result.base_run_manifest.clone(),
@@ -851,7 +1165,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
     )?;
     let changed_compiler_manifest = infeasible_manifest(&changed_compiler_input)?;
     assert!(matches!(
-        CounterfactualResultV1::new(
+        CounterfactualResult::new(
             fixture.request.clone(),
             fixture.result.base_run_input.clone(),
             fixture.result.base_run_manifest.clone(),
@@ -866,7 +1180,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
     ));
 
     let alternative = result_ref(2)?;
-    let accepted_manifest = RunManifestV1::new(
+    let accepted_manifest = RunManifest::new(
         fixture.result.run_input.run_id,
         fixture.result.run_input.checksum.clone(),
         RunTerminalOutcomeV1::Accepted {
@@ -888,7 +1202,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
         fixture.request.semantics.base.clone(),
         alternative.clone(),
     )?;
-    let verified = CounterfactualResultV1::new(
+    let verified = CounterfactualResult::new(
         fixture.request.clone(),
         fixture.result.base_run_input.clone(),
         fixture.result.base_run_manifest.clone(),
@@ -910,7 +1224,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
         substituted_result.clone(),
     )?;
     assert!(matches!(
-        CounterfactualResultV1::new(
+        CounterfactualResult::new(
             fixture.request.clone(),
             fixture.result.base_run_input.clone(),
             fixture.result.base_run_manifest.clone(),
@@ -931,7 +1245,7 @@ fn counterfactual_authority_substitution_is_rejected() -> Result<(), Box<dyn Err
     let substituted_comparison =
         counterfactual_comparison(&fixture.result, result_ref(4)?, alternative.clone())?;
     assert!(matches!(
-        CounterfactualResultV1::new(
+        CounterfactualResult::new(
             fixture.request.clone(),
             fixture.result.base_run_input.clone(),
             fixture.result.base_run_manifest.clone(),
@@ -967,11 +1281,13 @@ fn every_valid_counterfactual_job_state_timestamp_matrix_is_accepted() -> Result
             None,
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
             CounterfactualJobState::Running,
             Some(started),
+            None,
             None,
             None,
             None,
@@ -987,6 +1303,7 @@ fn every_valid_counterfactual_job_state_timestamp_matrix_is_accepted() -> Result
             Some(started),
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -996,6 +1313,7 @@ fn every_valid_counterfactual_job_state_timestamp_matrix_is_accepted() -> Result
             None,
             None,
             Some(fixture.result.clone()),
+            None,
             None,
         ),
         CounterfactualJobRecordV1::new(
@@ -1009,6 +1327,7 @@ fn every_valid_counterfactual_job_state_timestamp_matrix_is_accepted() -> Result
             Some(CounterfactualJobErrorV1 {
                 kind: CounterfactualFailureKind::CompilationFailed,
             }),
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -1019,12 +1338,14 @@ fn every_valid_counterfactual_job_state_timestamp_matrix_is_accepted() -> Result
             Some(started),
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request,
             CounterfactualJobState::Interrupted,
             Some(started),
             Some(finished),
+            None,
             None,
             None,
             None,
@@ -1070,6 +1391,7 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -1078,6 +1400,7 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             Some(uuid(0x41).parse()?),
             Some(started),
+            None,
             None,
             None,
         ),
@@ -1090,6 +1413,7 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             Some(fixture.result.clone()),
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -1100,12 +1424,14 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
             CounterfactualJobState::Completed,
             Some(started),
             Some(finished),
+            None,
             None,
             None,
             None,
@@ -1120,12 +1446,14 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             Some(started),
             Some(fixture.result.clone()),
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
             CounterfactualJobState::Failed,
             None,
             Some(finished),
+            None,
             None,
             None,
             None,
@@ -1140,6 +1468,7 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             Some(started),
             None,
             Some(error),
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -1150,12 +1479,14 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             None,
             Some(error),
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
             CounterfactualJobState::Interrupted,
             None,
             Some(finished),
+            None,
             None,
             None,
             None,
@@ -1170,6 +1501,7 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             Some(started),
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -1180,6 +1512,7 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request.clone(),
@@ -1190,11 +1523,13 @@ fn every_invalid_counterfactual_job_state_or_timestamp_shape_is_rejected()
             None,
             None,
             None,
+            None,
         ),
         CounterfactualJobRecordV1::new(
             fixture.request,
             CounterfactualJobState::Running,
             Some("2026-09-02T12:00:00Z".parse()?),
+            None,
             None,
             None,
             None,
@@ -1213,7 +1548,7 @@ fn conflict_minimality_and_group_identity_are_derived_and_validated() -> Result<
         group_id: AssumptionGroupId::new("assumption.required")?,
         required_rules: vec![uuid(1).parse()?],
     };
-    let evidence = ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Infeasibility {
+    let evidence = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Infeasibility {
         infeasibility: InfeasibilityEvidenceV1::Conflict {
             groups: vec![group],
             minimality: ConflictMinimality::ProvenMinimal,
@@ -1225,20 +1560,22 @@ fn conflict_minimality_and_group_identity_are_derived_and_validated() -> Result<
                 stop_reason: ConflictShrinkStopReason::Completed,
             },
         },
+        condition: None,
     })?;
     assert_eq!(
         evidence.certainty,
         ExplanationCertainty::ProvenMinimalConflict
     );
 
-    let invalid_core = ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Infeasibility {
+    let invalid_core = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Infeasibility {
         infeasibility: InfeasibilityEvidenceV1::Unavailable {
             reason: ConflictUnavailableReason::InvalidAssumptionCore,
         },
+        condition: None,
     })?;
     assert_eq!(invalid_core.certainty, ExplanationCertainty::Unavailable);
     assert_eq!(
-        ExplanationEvidenceV1::from_json(&serde_json::to_vec(&invalid_core)?)?,
+        ExplanationEvidenceV2::from_json(&serde_json::to_vec(&invalid_core)?)?,
         invalid_core
     );
     assert_eq!(
@@ -1258,8 +1595,9 @@ fn conflict_minimality_and_group_identity_are_derived_and_validated() -> Result<
         },
     };
     assert!(
-        ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Infeasibility {
+        ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Infeasibility {
             infeasibility: invalid,
+            condition: None,
         })
         .is_err()
     );
@@ -1296,5 +1634,431 @@ fn cross_revision_comparison_retains_both_bindings_and_rejects_tampering()
             "comparison ordering"
         ))
     ));
+    Ok(())
+}
+
+fn retained_diagnostic_fixture()
+-> Result<(RunInput, RunManifest, RunInfeasibilityEvidenceV1), Box<dyn Error>> {
+    let fixture = counterfactual_fixture()?;
+    let input = fixture.result.run_input;
+    let manifest = infeasible_manifest(&input)?;
+    let group = ConflictGroupV1 {
+        group_id: "test.diagnostic.group".parse()?,
+        required_rules: vec![uuid(0x42).parse()?],
+    };
+    let original = OriginalInfeasibilityObservationV1 {
+        run_input_checksum: input.checksum.clone(),
+        model_hash: input.model_hash.clone(),
+        worker_manifest_sha256: Some(hash("approved-worker")),
+        observed_at: "2026-09-03T12:00:01.100Z".parse()?,
+        elapsed_milliseconds: DurationMillis::new(100)?,
+    };
+    let diagnostic = DiagnosticInfeasibilityProofV1 {
+        diagnostic_started_after_milliseconds: DurationMillis::new(200)?,
+        initial: DiagnosticInfeasibilityObservationV1 {
+            binding: DiagnosticSolveBindingV1 {
+                model_hash: hash("diagnostic-model"),
+                routed_fingerprint: hash("diagnostic-route"),
+                submitted_assumptions: vec![DiagnosticSubmittedAssumptionV1 {
+                    variable_id: "test.guard".parse()?,
+                    value: true,
+                    group_id: group.group_id.clone(),
+                    required_rule_id: group.required_rules[0],
+                }],
+                native_profile: DiagnosticNativeProfileV1::NonemptyAssumptionSatisfaction,
+                parameter_digest: hash("actual-parameters"),
+                worker_manifest_sha256: hash("approved-worker"),
+                time_limit_milliseconds: DurationMillis::new(500)?,
+            },
+            dispatched_after_milliseconds: DurationMillis::new(200)?,
+            observed_after_milliseconds: DurationMillis::new(300)?,
+        },
+        initial_core: vec![group.clone()],
+        last_proven_infeasible: None,
+        attempted_trials: 0,
+        max_trials: 0,
+    };
+    let infeasibility = InfeasibilityEvidenceV1::Conflict {
+        groups: vec![group],
+        minimality: ConflictMinimality::Sufficient,
+        shrink: ConflictShrinkSummaryV1 {
+            initial_group_count: 1,
+            remaining_group_count: 1,
+            attempted_trials: 0,
+            max_trials: 0,
+            stop_reason: ConflictShrinkStopReason::NotAttempted,
+        },
+    };
+    let evidence = RunInfeasibilityEvidenceV1::new(
+        &input,
+        &manifest,
+        original,
+        Some(fixture.request.condition),
+        Some(diagnostic),
+        infeasibility,
+    )?;
+    Ok((input, manifest, evidence))
+}
+
+#[test]
+fn retained_diagnostic_roundtrip_rejects_condition_and_final_manifest_substitution()
+-> Result<(), Box<dyn Error>> {
+    let (input, manifest, evidence) = retained_diagnostic_fixture()?;
+    let decoded = RunInfeasibilityEvidenceV1::from_json(&serde_json::to_vec(&evidence)?)?;
+    assert_eq!(decoded, evidence);
+    decoded.validate_binding(&input, &manifest)?;
+    let mut later = manifest.clone();
+    later.finished_at = "2026-09-03T12:00:03Z".parse()?;
+    later.elapsed_milliseconds = Some(DurationMillis::new(2_000)?);
+    let later = RunManifest::new(
+        later.run_id,
+        later.run_input_checksum,
+        later.outcome,
+        later.started_at,
+        later.finished_at,
+        later.elapsed_milliseconds,
+        None,
+        None,
+        later.phase_timings,
+        later.verification_warnings,
+    )?;
+    assert!(decoded.validate_binding(&input, &later).is_err());
+    let wrong =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: "assignment.other".parse()?,
+            value: AssignmentValue::Boolean(true),
+        })?;
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            evidence.original.clone(),
+            Some(wrong),
+            evidence.diagnostic.clone(),
+            evidence.infeasibility.clone()
+        )
+        .is_err()
+    );
+    let mut unknown = serde_json::to_value(evidence)?;
+    unknown["schemaVersion"] = json!(2);
+    assert!(matches!(
+        RunInfeasibilityEvidenceV1::from_json(&serde_json::to_vec(&unknown)?),
+        Err(DomainContractError::UnsupportedVersion(2))
+    ));
+    Ok(())
+}
+
+#[test]
+fn empty_core_is_not_foundational_without_explicit_zero_assumption_request()
+-> Result<(), Box<dyn Error>> {
+    let (input, manifest, evidence) = retained_diagnostic_fixture()?;
+    let mut diagnostic = evidence
+        .diagnostic
+        .clone()
+        .ok_or("missing diagnostic fixture")?;
+    diagnostic.initial_core.clear();
+    let foundational = InfeasibilityEvidenceV1::Unavailable {
+        reason: ConflictUnavailableReason::FoundationalInfeasibility,
+    };
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            evidence.original.clone(),
+            evidence.condition.clone(),
+            Some(diagnostic.clone()),
+            foundational.clone()
+        )
+        .is_err()
+    );
+    diagnostic.initial.binding.submitted_assumptions.clear();
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            evidence.original.clone(),
+            evidence.condition.clone(),
+            Some(diagnostic.clone()),
+            foundational.clone()
+        )
+        .is_err()
+    );
+    diagnostic.initial.binding.native_profile =
+        DiagnosticNativeProfileV1::ZeroAssumptionSatisfaction;
+    let foundation = RunInfeasibilityEvidenceV1::new(
+        &input,
+        &manifest,
+        evidence.original,
+        evidence.condition,
+        Some(diagnostic),
+        foundational,
+    )?;
+    foundation.validate_binding(&input, &manifest)?;
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            foundation.original.clone(),
+            foundation.condition.clone(),
+            None,
+            foundation.infeasibility
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn retained_proof_rejects_boundary_late_and_restarted_dispatch_budget() -> Result<(), Box<dyn Error>>
+{
+    let (input, manifest, evidence) = retained_diagnostic_fixture()?;
+    let diagnostic = evidence
+        .diagnostic
+        .clone()
+        .ok_or("missing diagnostic fixture")?;
+    let mut late = diagnostic.clone();
+    late.initial.observed_after_milliseconds = DurationMillis::new(700)?;
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            evidence.original.clone(),
+            evidence.condition.clone(),
+            Some(late),
+            evidence.infeasibility.clone()
+        )
+        .is_err()
+    );
+    let mut restarted = diagnostic;
+    restarted.diagnostic_started_after_milliseconds = DurationMillis::new(4_500)?;
+    restarted.initial.dispatched_after_milliseconds = DurationMillis::new(4_700)?;
+    restarted.initial.observed_after_milliseconds = DurationMillis::new(4_800)?;
+    // Observation is timely, but request duration would cross the inherited parent deadline.
+    let final_manifest = RunManifest::new(
+        input.run_id,
+        input.checksum.clone(),
+        manifest.outcome,
+        manifest.started_at,
+        "2026-09-03T12:00:06Z".parse()?,
+        Some(DurationMillis::new(5_000)?),
+        None,
+        None,
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &final_manifest,
+            evidence.original,
+            evidence.condition,
+            Some(restarted),
+            evidence.infeasibility
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn native_source_asset_custody_keeps_restrictions_and_rejects_wrapper_or_byte_drift()
+-> Result<(), Box<dyn Error>> {
+    let (input, _, _) = retained_diagnostic_fixture()?;
+    let wrapper_hash = hash("full-source-wrapper");
+    let custody = RunSourceAssetBindingsV1::new(
+        &input,
+        wrapper_hash.clone(),
+        RunSourceAssetCaptureV1::Available {
+            assets: vec![RunSourceAssetRefV1 {
+                reference: "licensed/reference.bin".to_owned(),
+                sha256: hash("opaque-bytes"),
+                media_type: "application/octet-stream".to_owned(),
+                redistribution_permitted: false,
+                byte_length: 3,
+            }],
+        },
+    )?;
+    let decoded = RunSourceAssetBindingsV1::from_json(&serde_json::to_vec(&custody)?)?;
+    assert_eq!(decoded, custody);
+    decoded.validate_source(&input, &wrapper_hash)?;
+    assert!(
+        decoded
+            .validate_source(&input, &hash("different-wrapper-extension"))
+            .is_err()
+    );
+    let mut changed = decoded;
+    let RunSourceAssetCaptureV1::Available { assets } = &mut changed.capture else {
+        return Err("expected captured source assets".into());
+    };
+    assets[0].byte_length = 4;
+    assert!(matches!(
+        changed.validate(),
+        Err(DomainContractError::ChecksumMismatch)
+    ));
+    Ok(())
+}
+
+#[test]
+fn terminal_cancellation_requires_closed_matching_local_authority_reference()
+-> Result<(), Box<dyn Error>> {
+    let fixture = counterfactual_fixture()?;
+    let authority = CounterfactualTerminalAuthorityV1::TimelyInfeasibility {
+        run_id: fixture.result.run_input.run_id,
+        run_manifest_checksum: fixture.result.run_manifest.checksum.clone(),
+        evidence_checksum: hash("retained-evidence"),
+    };
+    let mut record = CounterfactualJobRecordV1::new(
+        fixture.request,
+        CounterfactualJobState::Completed,
+        Some(fixture.result.run_manifest.started_at),
+        Some(fixture.result.run_manifest.finished_at),
+        Some(uuid(0x43).parse()?),
+        Some(fixture.result.run_manifest.started_at),
+        Some(fixture.result),
+        None,
+        Some(authority),
+    )?;
+    record.validate()?;
+    record.terminal_authority = None;
+    assert!(record.validate().is_err());
+    record.terminal_authority = Some(CounterfactualTerminalAuthorityV1::VerificationAlarm {
+        run_id: uuid(0x66).parse()?,
+        run_manifest_checksum: hash("alarm-manifest"),
+        clock_failure: None,
+    });
+    assert!(record.validate().is_err());
+    Ok(())
+}
+
+#[test]
+fn terminal_authority_wire_uses_closed_camel_case_fields_for_both_variants()
+-> Result<(), Box<dyn Error>> {
+    let run_id: SolveRunId = uuid(0x60).parse()?;
+    for wire in [
+        json!({"kind":"timelyInfeasibility","runId":run_id,"runManifestChecksum":hash("manifest"),"evidenceChecksum":hash("evidence")}),
+        json!({"kind":"verificationAlarm","runId":run_id,"runManifestChecksum":hash("manifest")}),
+    ] {
+        let authority: CounterfactualTerminalAuthorityV1 = serde_json::from_value(wire.clone())?;
+        authority.validate()?;
+        assert_eq!(serde_json::to_value(authority)?, wire);
+    }
+    assert!(
+        serde_json::from_value::<CounterfactualTerminalAuthorityV1>(json!({
+            "kind":"verificationAlarm","run_id":run_id,"run_manifest_checksum":hash("manifest")
+        }))
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn small_core_cannot_be_deleted_to_claim_a_foundational_proof() -> Result<(), Box<dyn Error>> {
+    let (input, manifest, evidence) = retained_diagnostic_fixture()?;
+    let mut proof = evidence
+        .diagnostic
+        .clone()
+        .ok_or("missing diagnostic fixture")?;
+    let mut last = proof.initial.clone();
+    last.binding.model_hash = hash("zero-assumption-model");
+    last.binding.routed_fingerprint = hash("zero-assumption-request");
+    last.binding.native_profile = DiagnosticNativeProfileV1::ZeroAssumptionSatisfaction;
+    last.binding.submitted_assumptions.clear();
+    last.dispatched_after_milliseconds = DurationMillis::new(310)?;
+    last.observed_after_milliseconds = DurationMillis::new(320)?;
+    proof.last_proven_infeasible = Some(last);
+    proof.attempted_trials = 1;
+    proof.max_trials = 1;
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            evidence.original,
+            evidence.condition,
+            Some(proof),
+            InfeasibilityEvidenceV1::Unavailable {
+                reason: ConflictUnavailableReason::FoundationalInfeasibility,
+            }
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn retained_deletion_count_tracks_initial_core_not_all_submitted_assumptions()
+-> Result<(), Box<dyn Error>> {
+    let (input, manifest, evidence) = retained_diagnostic_fixture()?;
+    let mut proof = evidence
+        .diagnostic
+        .clone()
+        .ok_or("missing diagnostic fixture")?;
+    proof.initial.binding.submitted_assumptions.clear();
+    proof.initial_core.clear();
+    for number in 0..18 {
+        let assumption = DiagnosticSubmittedAssumptionV1 {
+            variable_id: format!("test.guard.{number:03}").parse()?,
+            value: true,
+            group_id: format!("test.group.{number:03}").parse()?,
+            required_rule_id: uuid(0x60 + number).parse()?,
+        };
+        if number < 17 {
+            proof.initial_core.push(ConflictGroupV1 {
+                group_id: assumption.group_id.clone(),
+                required_rules: vec![assumption.required_rule_id],
+            });
+        }
+        proof.initial.binding.submitted_assumptions.push(assumption);
+    }
+    let mut last = proof.initial.clone();
+    last.binding.model_hash = hash("last-subset-model");
+    last.binding.routed_fingerprint = hash("last-subset-request");
+    last.binding.submitted_assumptions.truncate(15);
+    last.dispatched_after_milliseconds = DurationMillis::new(310)?;
+    last.observed_after_milliseconds = DurationMillis::new(320)?;
+    proof.last_proven_infeasible = Some(last);
+    proof.attempted_trials = 1;
+    proof.max_trials = 32;
+    let mut conflict = InfeasibilityEvidenceV1::Conflict {
+        groups: proof.initial_core[..15].to_vec(),
+        minimality: ConflictMinimality::Sufficient,
+        shrink: ConflictShrinkSummaryV1 {
+            initial_group_count: 17,
+            remaining_group_count: 15,
+            attempted_trials: 1,
+            max_trials: 32,
+            stop_reason: ConflictShrinkStopReason::Inconclusive,
+        },
+    };
+    assert!(
+        RunInfeasibilityEvidenceV1::new(
+            &input,
+            &manifest,
+            evidence.original.clone(),
+            evidence.condition.clone(),
+            Some(proof.clone()),
+            conflict.clone()
+        )
+        .is_err()
+    );
+    let mut last = proof
+        .last_proven_infeasible
+        .take()
+        .ok_or("missing last request fixture")?;
+    last.binding.submitted_assumptions = proof.initial.binding.submitted_assumptions[..16].to_vec();
+    proof.last_proven_infeasible = Some(last);
+    if let InfeasibilityEvidenceV1::Conflict { groups, shrink, .. } = &mut conflict {
+        *groups = proof.initial_core[..16].to_vec();
+        shrink.remaining_group_count = 16;
+    }
+    // Discarding one non-core submitted assumption is not a deletion trial.
+    let valid = RunInfeasibilityEvidenceV1::new(
+        &input,
+        &manifest,
+        evidence.original,
+        evidence.condition,
+        Some(proof),
+        conflict,
+    )?;
+    valid.validate_binding(&input, &manifest)?;
     Ok(())
 }

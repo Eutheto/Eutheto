@@ -273,6 +273,7 @@ name = "eutheto-import"
 version = "0.1.0"
 dependencies = [
  "eutheto-command",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-types",
  "serde",

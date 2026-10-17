@@ -3,24 +3,35 @@
 
 use crate::contract::{
     CLI_EVIDENCE_FORMAT, CORPUS_VERSION, CaseId, CliCheck, CliEvidence, ExpectedDisposition,
-    FIXTURE_CLOCK, FORMAT_VERSION, LoadedCorpus, LoadedFixture, MeasurementProfile,
+    FIXTURE_CLOCK, FORMAT_VERSION, LoadedCorpus, LoadedFixture, MAX_EXPECTED_BYTES,
+    MeasurementProfile, REPAIR_PATH, RepairFixture,
 };
 use crate::files::{hash_file, read_bounded, sha256};
 use anyhow::{Context, Result, bail, ensure};
-use eutheto_domain_ir::PortableAcceptedResultV2;
+use eutheto_domain_ir::{
+    AcceptedResultRefV1, OptimizationDirection, PortableAcceptedResult, RunBaselineSelection,
+    RunObjectiveOperation,
+};
 use eutheto_export::{
     ApplicationMetadata, BackupSections, ScenarioExportSnapshot, assemble_scenario_export,
 };
-use eutheto_types::{CancellationToken, OperationControl, SolveStatus};
+use eutheto_types::{
+    ActorRef, CancellationToken, CommandEnvelope, CommandSource, DomainCommandEnvelope,
+    OperationControl, PersonId, ScenarioCommand, ScenarioSnapshotV1, SolveStatus,
+};
 use eutheto_workforce::{
-    assignment_rules::decode_workforce_assignment, assignments_csv::decode_assignments_csv,
-    model::AssignmentPair,
+    assignment_rules::decode_workforce_assignment,
+    assignments_csv::decode_assignments_csv,
+    ids::ShiftId,
+    model::{AssignmentLock, AssignmentPair, BaseSchedule, LockState, TimeWindow, WorkforceEntity},
+    temporal,
 };
 #[cfg(windows)]
 use process_wrap::std::JobObject;
 #[cfg(unix)]
 use process_wrap::std::ProcessGroup;
 use process_wrap::std::{ChildWrapper, CommandWrap};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,6 +51,7 @@ const COMMAND_GUARD: Duration = Duration::from_mins(2);
 const CLEANUP_GRACE: Duration = Duration::from_secs(10);
 
 pub(crate) fn exercise(
+    repository: &Path,
     image: &Path,
     corpus: &LoadedCorpus,
     trusted_manifest_sha256: &str,
@@ -93,8 +105,17 @@ pub(crate) fn exercise(
         observed_code: None,
         artifact_sha256: Some(worker_sha256.clone()),
     }];
+    let recipe: RepairFixture = serde_json::from_slice(&crate::generation::bound_bytes(
+        repository,
+        &corpus.manifest.repair,
+        REPAIR_PATH,
+        MAX_EXPECTED_BYTES,
+    )?)?;
     for fixture in &corpus.fixtures {
         exercise_case(&runner, fixture, &mut checks)?;
+        if fixture.expected.id == CaseId::PractitionerWorkflow {
+            exercise_repair(&runner, fixture, &recipe, &mut checks)?;
+        }
     }
     ensure!(
         hash_file(&manifest, MAX_PROCESS_BYTES)? == manifest_sha256
@@ -218,7 +239,8 @@ fn validate_input(
         None,
         Some(sha256(&fixture.bytes)),
     );
-    if fixture.expected.disposition == ExpectedDisposition::Accepted {
+    // Appendix-F passes local readiness but has a cross-rule rest/absence conflict.
+    if fixture.expected.disposition == ExpectedDisposition::Accepted || id == CaseId::AppendixF {
         let valid = runner.run(library, &["scenario", "validate", input_arg], 0, true)?;
         ensure!(
             valid["status"] == "valid"
@@ -227,16 +249,24 @@ fn validate_input(
         );
         record(checks, id, "scenario.validate", 0, None, None, None);
     }
-    if fixture.expected.disposition == ExpectedDisposition::Infeasible {
+    if matches!(
+        id,
+        CaseId::InfeasibleCoverage | CaseId::PractitionerInfeasible
+    ) {
+        let code = if id == CaseId::PractitionerInfeasible {
+            "official.workforce.qualification_shortage"
+        } else {
+            "official.workforce.candidate_shortage"
+        };
         let readiness = runner.run(library, &["scenario", "validate", input_arg], 3, true)?;
         ensure!(
             readiness["status"] == "invalid"
                 && readiness["result"]["revision"] == fixture.snapshot.revision.value()
                 && readiness["result"]["issues"]
                     .as_array()
-                    .is_some_and(|issues| issues.iter().any(|issue| issue["code"]
-                        == "official.workforce.candidate_shortage"
-                        && issue["severity"] == "error")),
+                    .is_some_and(|issues| issues
+                        .iter()
+                        .any(|issue| issue["code"] == code && issue["severity"] == "error")),
             "insufficient eligible coverage did not preserve its readiness finding"
         );
         // A readiness finding is not solver proof; the independent solve below must dispatch.
@@ -246,7 +276,7 @@ fn validate_input(
             "scenario.validate-readiness-shortage",
             3,
             None,
-            Some("official.workforce.candidate_shortage"),
+            Some(code),
             None,
         );
     }
@@ -316,8 +346,6 @@ fn accepted_solve(
     checks: &mut Vec<CliCheck>,
 ) -> Result<()> {
     let id = fixture.expected.id;
-    let library = paths.library;
-    let input_arg = text(paths.input)?;
     let directory = paths.directory;
     let output = paths.output;
     let diagnostics = paths.diagnostics;
@@ -334,7 +362,7 @@ fn accepted_solve(
     );
     check_model(diagnostics, fixture)?;
     let bytes = read_bounded(output, MAX_ARTIFACT_BYTES)?;
-    let portable = PortableAcceptedResultV2::from_json(&bytes)
+    let portable = PortableAcceptedResult::from_json(&bytes)
         .context("CLI published an invalid accepted-result codec")?;
     let value = serde_json::to_value(&portable)?;
     ensure!(
@@ -356,34 +384,435 @@ fn accepted_solve(
     );
     accepted_consumers(runner, fixture, paths, &portable, checks)?;
     scenario_roundtrip(runner, fixture, directory, checks)?;
-    if id == CaseId::RepairBefore {
-        let refused = directory.join("repair-refused.json");
-        let rejected = runner.run(
-            library,
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn exercise_repair(
+    runner: &Runner,
+    fixture: &LoadedFixture,
+    recipe: &RepairFixture,
+    checks: &mut Vec<CliCheck>,
+) -> Result<()> {
+    crate::cases::validate_repair(recipe, &fixture.snapshot)?;
+    let directory = runner.root.join(fixture.expected.id.slug());
+    let library = directory.join("library");
+    let original_path = directory.join("accepted.json");
+    let original_bytes = read_bounded(&original_path, MAX_ARTIFACT_BYTES)?;
+    let original = PortableAcceptedResult::from_json(&original_bytes)?;
+    let TimeWindow::Instant { starts_at, ends_at } = &recipe.time_window else {
+        bail!("repair recipe omitted the exact call-out interval")
+    };
+    let shifts = temporal::resolve_shifts(&fixture.snapshot.document, &runner.cancellation)?;
+    let affected: Vec<_> = shifts
+        .iter()
+        .filter(|shift| {
+            shift.interval.starts_at.instant < *ends_at
+                && shift.interval.ends_at.instant > *starts_at
+        })
+        .collect();
+    ensure!(
+        affected.len() == 1
+            && affected[0].id == recipe.target_shift_id
+            && affected[0].reporting_date.to_string() == "2027-02-10",
+        "call-out must affect exactly the authored February 10 clinic"
+    );
+    let mut protected = BTreeSet::new();
+    for value in fixture.snapshot.document.domain.locked_assignments.values() {
+        let lock = AssignmentLock::deserialize(value)?;
+        if matches!(lock.state, LockState::Hard {}) {
+            protected.insert((lock.person_id, lock.shift_id));
+        }
+    }
+    let original_pairs = selected_pairs(&original)?;
+    let unavailable_pair = movable_incumbent(&original_pairs, &protected, recipe.target_shift_id)
+        .context("accepted February 10 clinic has no movable incumbent")?;
+    let minimum_change_cost =
+        callout_change_lower_bound(&original_pairs, &shifts, unavailable_pair)?;
+    let payload = crate::cases::repair_payload(recipe, unavailable_pair.0);
+    let WorkforceEntity::Availability(callout) = &payload.entity else {
+        bail!("repair payload omitted the call-out availability")
+    };
+    let service = crate::generation::codec()?;
+    let command = CommandEnvelope {
+        command_id: "0195a5e4-7c00-7000-8000-000000000202".parse()?,
+        scenario_id: fixture.snapshot.document.scenario_id,
+        expected_revision: fixture.snapshot.revision,
+        actor: ActorRef {
+            actor_id: None,
+            display_name: "Workforce CLI repair corpus".to_owned(),
+        },
+        source: CommandSource::Cli,
+        command: ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+            command_type: recipe.command_id.clone(),
+            payload: serde_json::to_value(&payload)?,
+        }),
+    };
+    let ScenarioCommand::ApplyDomainCommand(domain_command) = &command.command else {
+        bail!("repair command omitted its domain payload")
+    };
+    let expected_entity = domain_command
+        .payload
+        .get("entity")
+        .context("repair command omitted its availability entity")?;
+    let applied = crate::generation::app(service.apply_scenario(
+        fixture.snapshot.clone(),
+        &command,
+        &runner.cancellation,
+    ))?;
+    let changed = applied.snapshot;
+    ensure!(
+        changed.revision == fixture.snapshot.revision.checked_next()?
+            && changed.revision == applied.result.new_revision,
+        "call-out command did not create an actual new scenario revision"
+    );
+    let mut restored = changed.document.clone();
+    ensure!(
+        restored
+            .domain
+            .entities
+            .remove(&callout.id.as_entity_id())
+            .as_ref()
+            == Some(expected_entity)
+            && restored == fixture.snapshot.document,
+        "call-out command changed more than the single availability record"
+    );
+    let changed_path = directory.join("callout.json");
+    let changed_bytes = crate::generation::app(service.encode_scenario(
+        &changed,
+        &OperationControl::Cancellation(runner.cancellation.clone()),
+    ))?;
+    stage(&changed_path, &changed_bytes)?;
+    let bundle = assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: "0195a5e4-7c00-7000-8000-000000000203".parse()?,
+            created_at: FIXTURE_CLOCK.to_owned(),
+            application: ApplicationMetadata {
+                name: "Eutheto Workforce CLI repair corpus".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+            title: changed.document.metadata.title.clone(),
+            scenario: changed.clone(),
+            scenario_revisions: vec![fixture.snapshot.clone()],
+            sections: BackupSections {
+                results: BTreeMap::from([(
+                    original.result_id.to_string(),
+                    serde_json::to_value(&original)?,
+                )]),
+                ..BackupSections::default()
+            },
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::new(),
+        },
+        &|document| {
+            eutheto_workforce::portable::export_portable(document).map_err(|_| {
+                eutheto_export::ExportError::InvalidModel(
+                    "Workforce repair portable encoding failed".to_owned(),
+                )
+            })
+        },
+    )?;
+    let bundle_path = directory.join("callout.eutheto");
+    stage(&bundle_path, &bundle)?;
+    let original_id = original.result_id.to_string();
+    let budget = format!("{}ms", MeasurementProfile::REVIEWED.budget_milliseconds);
+    let repaired_path = directory.join("repaired-file.json");
+    for (source, output, operation) in [
+        (
+            original_id.as_str(),
+            directory.join("repaired-id.json"),
+            "repair.changed-callout-id",
+        ),
+        (
+            text(&original_path)?,
+            repaired_path.clone(),
+            "repair.changed-callout-file",
+        ),
+    ] {
+        absent(&output)?;
+        let solved = runner.run(
+            &library,
             &[
                 "solve",
-                input_arg,
+                text(&bundle_path)?,
                 "--repair-from",
-                text(output)?,
+                source,
+                "--backend",
+                "solver.ortools-cp-sat",
+                "--mode",
+                "deep",
+                "--threads",
+                "1",
+                "--seed",
+                "1",
+                "--max-time",
+                &budget,
                 "--output",
-                text(&refused)?,
+                text(&output)?,
             ],
-            6,
-            false,
+            0,
+            true,
         )?;
-        error_code(&rejected, "solve.operation_unavailable")?;
-        absent(&refused)?;
-        // A real accepted file is not a selected baseline, and there is no selection route.
+        let status = solve_status(&solved["result"]["status"])?;
+        ensure!(
+            matches!(status, SolveStatus::Optimal | SolveStatus::Feasible)
+                && solved["result"]["independentlyVerified"] == true,
+            "repair did not complete genuine worker independent acceptance"
+        );
+        let bytes = read_bounded(&output, MAX_ARTIFACT_BYTES)?;
+        let repaired = PortableAcceptedResult::from_json(&bytes)?;
+        ensure!(
+            solved["result"]["resultId"] == serde_json::to_value(repaired.result_id)?
+                && solved["result"]["runId"] == serde_json::to_value(repaired.run_input.run_id)?,
+            "repaired artifact differs from the completed CLI run"
+        );
+        check_repaired(
+            &original,
+            &repaired,
+            &changed,
+            unavailable_pair,
+            minimum_change_cost,
+            status,
+        )?;
+        // Standalone unchanged current input suffices: C carries its run-only captured baseline.
+        let verified = runner.run(
+            &library,
+            &["solutions", "verify", text(&changed_path)?, text(&output)?],
+            0,
+            true,
+        )?;
+        ensure!(
+            verified["result"]["resultId"] == serde_json::to_value(repaired.result_id)?
+                && verified["result"]["scenarioRevision"] == changed.revision.value()
+                && verified["result"]["verification"]["accepted"] == true
+                && verified["result"]["verification"]["score"]
+                    == serde_json::to_value(&repaired.accepted_result.verification.score)?
+                && verified["result"]["historicalRunMetadata"] == "sourceProvidedUnverified",
+            "fresh repair verification changed costs, source binding or imported-history authority"
+        );
         record(
             checks,
-            id,
-            "repair.unavailable-not-selected",
-            6,
+            fixture.expected.id,
+            operation,
+            0,
+            Some(status),
             None,
-            Some("solve.operation_unavailable"),
+            Some(sha256(&bytes)),
+        );
+        record(
+            checks,
+            fixture.expected.id,
+            "repair.verify-unchanged-current-input",
+            0,
+            None,
+            None,
             None,
         );
     }
+    let preserved_output = hash_file(&repaired_path, MAX_ARTIFACT_BYTES)?;
+    let rejected = runner.run(
+        &library,
+        &[
+            "solve",
+            text(&changed_path)?,
+            "--repair-from",
+            text(&original_path)?,
+            "--output",
+            text(&repaired_path)?,
+        ],
+        3,
+        false,
+    )?;
+    error_code(&rejected, "solve.repair_original_revision_required")?;
+    ensure!(
+        hash_file(&repaired_path, MAX_ARTIFACT_BYTES)? == preserved_output,
+        "missing-original repair replaced the prior accepted output"
+    );
+    record(
+        checks,
+        fixture.expected.id,
+        "repair.missing-original-preserves-output",
+        3,
+        None,
+        Some("solve.repair_original_revision_required"),
+        Some(preserved_output),
+    );
+    for (path, bytes) in [
+        (directory.join("scenario.json"), fixture.bytes.as_slice()),
+        (original_path, original_bytes.as_slice()),
+        (changed_path, changed_bytes.as_slice()),
+        (bundle_path, bundle.as_slice()),
+    ] {
+        ensure!(
+            hash_file(&path, MAX_ARTIFACT_BYTES)? == sha256(bytes),
+            "repair or reverification changed an immutable source file"
+        );
+    }
+    ensure!(!library.exists(), "headless repair opened a stored library");
+    Ok(())
+}
+
+fn movable_incumbent(
+    selected: &BTreeSet<(PersonId, ShiftId)>,
+    protected: &BTreeSet<(PersonId, ShiftId)>,
+    target: ShiftId,
+) -> Option<(PersonId, ShiftId)> {
+    selected
+        .iter()
+        .copied()
+        .find(|pair| pair.1 == target && !protected.contains(pair))
+}
+
+fn selected_pairs(portable: &PortableAcceptedResult) -> Result<BTreeSet<(PersonId, ShiftId)>> {
+    let mut selected = BTreeSet::new();
+    for assignment in &portable.accepted_result.solution.assignments {
+        let (pair, present) = decode_workforce_assignment(assignment)
+            .map_err(|_| anyhow::anyhow!("invalid retained Workforce assignment"))?;
+        if present {
+            ensure!(
+                selected.insert((pair.person_id, pair.shift_id)),
+                "retained result contains a duplicate selected pair"
+            );
+        }
+    }
+    Ok(selected)
+}
+
+// The admitted fixture requires at least one assignment per person in this reporting
+// week and exactly68 selected pairs overall. Losing a person's sole weekly assignment
+// requires a second addition beyond the clinic replacement, hence two removals too.
+fn callout_change_lower_bound(
+    selected: &BTreeSet<(PersonId, ShiftId)>,
+    shifts: &[temporal::ResolvedShift],
+    unavailable: (PersonId, ShiftId),
+) -> Result<i64> {
+    let start = "2027-02-08".parse::<jiff::civil::Date>()?;
+    let end = "2027-02-15".parse::<jiff::civil::Date>()?;
+    let mut assignments = 0;
+    let mut target_in_week = false;
+    for pair in selected {
+        let shift = shifts
+            .iter()
+            .find(|shift| shift.id == pair.1)
+            .context("accepted assignment has no native resolved shift")?;
+        if pair.0 == unavailable.0 && shift.reporting_date >= start && shift.reporting_date < end {
+            assignments += 1;
+            target_in_week |= *pair == unavailable;
+        }
+    }
+    ensure!(
+        target_in_week,
+        "call-out is not selected in its required reporting week"
+    );
+    Ok(if assignments == 1 { 4 } else { 2 })
+}
+
+fn minimum_change_proved(cost: i64, lower_bound: i64, status: SolveStatus) -> bool {
+    cost >= lower_bound && (cost == lower_bound || status == SolveStatus::Optimal)
+}
+
+fn check_repaired(
+    original: &PortableAcceptedResult,
+    repaired: &PortableAcceptedResult,
+    changed: &ScenarioSnapshotV1,
+    unavailable_pair: (PersonId, ShiftId),
+    minimum_change_cost: i64,
+    status: SolveStatus,
+) -> Result<()> {
+    let context = repaired
+        .run_input
+        .objective_context
+        .as_ref()
+        .context("repair omitted its recorded objective context")?;
+    let binding = context
+        .baseline
+        .as_ref()
+        .context("repair omitted its original baseline")?;
+    ensure!(
+        context.schema_version == 2
+            && context.profile_id.as_str() == "official.workforce.objective.minimal-changes"
+            && context.operation == RunObjectiveOperation::Repair
+            && matches!(binding.selection, RunBaselineSelection::OriginalAccepted {})
+            && binding.original.accepted_result
+                == AcceptedResultRefV1::from_result(&original.accepted_result)?
+            && binding.original.source_scenario_id == original.scenario_id
+            && binding.original.source_revision == original.scenario_revision
+            && binding.original.source_document_hash == original.run_input.snapshot_document_hash
+            && binding.original.source_run_id == original.run_input.run_id
+            && binding.original.source_run_input_checksum == original.run_input.checksum
+            && binding.original.source_run_manifest_checksum == original.run_manifest.checksum
+            && binding.selected_pair_content_hash == binding.original.pair_content_hash
+            && repaired.scenario_id == changed.document.scenario_id
+            && repaired.scenario_revision == changed.revision.value(),
+        "repair lost exact original ancestry, captured semantics or current revision"
+    );
+    let captured = WorkforceEntity::deserialize(
+        binding
+            .captured_original
+            .as_ref()
+            .context("repair omitted its run-only baseline")?
+            .as_ref(),
+    )?;
+    let WorkforceEntity::BaseSchedule(BaseSchedule {
+        id,
+        source_solution_id,
+        source_revision,
+        assignments,
+    }) = captured
+    else {
+        bail!("repair captured something other than the closed original base record")
+    };
+    let before = selected_pairs(original)?;
+    let captured_pairs: BTreeSet<_> = assignments
+        .iter()
+        .map(|pair| (pair.person_id, pair.shift_id))
+        .collect();
+    ensure!(
+        source_solution_id == original.result_id
+            && source_revision.value() == original.scenario_revision
+            && captured_pairs == before
+            && assignments.len() == before.len()
+            && binding.original.entity
+                == eutheto_workforce::assignment_rules::workforce_baseline_reference(id, false)
+                    .map_err(|_| anyhow::anyhow!("repair captured an invalid baseline identity"))?
+            && !changed.document.domain.entities.contains_key(&id),
+        "repair changed or durably adopted the complete original baseline"
+    );
+    let after = selected_pairs(repaired)?;
+    let change_cost = i64::try_from(before.symmetric_difference(&after).count())?;
+    // A feasible result attaining the source-derived lower bound proves minimum
+    // pair cost, without asserting optimality of its later objective levels.
+    ensure!(
+        before.len() == 68
+            && after.len() == before.len()
+            && !after.contains(&unavailable_pair)
+            && after
+                .difference(&before)
+                .any(|pair| pair.1 == unavailable_pair.1)
+            && minimum_change_proved(change_cost, minimum_change_cost, status),
+        "repair did not replace the unavailable pair with demonstrated minimum pair cost"
+    );
+    let score = &repaired.accepted_result.verification.score;
+    let levels = &score.levels;
+    // Authored and Minimal-changes have different layouts: named profiles omit
+    // unmapped authored tiers. The caller freshly re-verifies the complete profile-specific score.
+    ensure!(
+        score.feasibility == 0
+            && levels.len() >= 3
+            && levels[0].level_id.as_str() == "official.workforce.objective.pair_change"
+            && levels[0].value == change_cost
+            && levels[1].level_id.as_str() == "official.workforce.objective.soft_lock"
+            && levels[1].value == 0
+            && levels.last().is_some_and(|level| {
+                level.level_id.as_str() == "official.workforce.objective.assignment.rank"
+                    && level.direction == OptimizationDirection::Minimize
+            })
+            && levels
+                .iter()
+                .take(2)
+                .all(|level| level.direction == OptimizationDirection::Minimize),
+        "repair score lost pair-change/Soft/rank ordering or exact independently counted costs"
+    );
     Ok(())
 }
 
@@ -406,10 +835,12 @@ fn rejected_solve(
                     && solve_status(&solved["result"]["status"])? == SolveStatus::Infeasible
                     && solved["result"]["resultId"].is_null()
                     && solved["result"]["independentlyVerified"] == false
-                    && solved["result"]["infeasibilityEvidence"]
-                        == json!({"type":"unavailable","reason":"conflictNotReturned"}),
+                    && solved["result"]["infeasibilityEvidence"]["type"] == "unavailable",
                 "CLI did not report truthful backend infeasibility without accepted authority"
             );
+            let unavailable_reason = solved["result"]["infeasibilityEvidence"]["reason"]
+                .as_str()
+                .context("CLI infeasibility evidence omitted its unavailable reason")?;
             absent(output)?;
             check_model(diagnostics, fixture)?;
             record(
@@ -418,7 +849,7 @@ fn rejected_solve(
                 "solve.infeasible-core-unavailable",
                 exit,
                 Some(SolveStatus::Infeasible),
-                Some("conflictNotReturned"),
+                Some(unavailable_reason),
                 None,
             );
         }
@@ -468,7 +899,7 @@ fn accepted_consumers(
     runner: &Runner,
     fixture: &LoadedFixture,
     paths: &CasePaths<'_>,
-    portable: &PortableAcceptedResultV2,
+    portable: &PortableAcceptedResult,
     checks: &mut Vec<CliCheck>,
 ) -> Result<()> {
     let library = paths.library;
@@ -482,6 +913,8 @@ fn accepted_consumers(
         verified["result"]["resultId"] == serde_json::to_value(portable.result_id)?
             && verified["result"]["scenarioRevision"] == fixture.snapshot.revision.value()
             && verified["result"]["verification"]["accepted"] == true
+            && verified["result"]["verification"]["score"]
+                == serde_json::to_value(&portable.accepted_result.verification.score)?
             && verified["result"]["historicalRunMetadata"] == "sourceProvidedUnverified",
         "fresh verification lost result binding or endorsed imported history"
     );
@@ -544,7 +977,7 @@ fn export_solutions(
     runner: &Runner,
     fixture: &LoadedFixture,
     paths: &CasePaths<'_>,
-    portable: &PortableAcceptedResultV2,
+    portable: &PortableAcceptedResult,
     selected: &[AssignmentPair],
     checks: &mut Vec<CliCheck>,
 ) -> Result<()> {
@@ -579,7 +1012,7 @@ fn export_solutions(
         );
         let bytes = read_bounded(&destination, MAX_ARTIFACT_BYTES)?;
         if format == "json" {
-            let normalized = PortableAcceptedResultV2::from_json(&bytes)?;
+            let normalized = PortableAcceptedResult::from_json(&bytes)?;
             ensure!(
                 normalized == *portable,
                 "normalized JSON changed the accepted artifact"
@@ -788,14 +1221,14 @@ fn check_score(score: &Value, fixture: &LoadedFixture) -> Result<()> {
     let levels = score["levels"]
         .as_array()
         .context("accepted score omitted levels")?;
+    let rank_level = levels.last().context("accepted score omitted final rank")?;
     ensure!(
         score["feasibility"].as_i64() == Some(expected.feasibility)
-            && levels.len() == 1
-            && levels[0]["levelId"] == "official.workforce.objective.assignment.rank"
-            && levels[0]["direction"] == "minimize",
+            && rank_level["levelId"] == "official.workforce.objective.assignment.rank"
+            && rank_level["direction"] == "minimize",
         "accepted score changed its independently expected meaning"
     );
-    let rank = levels[0]["value"]
+    let rank = rank_level["value"]
         .as_i64()
         .context("accepted rank is not an integer")?;
     ensure!(
@@ -862,7 +1295,7 @@ fn record(
     operation: &'static str,
     exit_code: i32,
     observed_status: Option<SolveStatus>,
-    observed_code: Option<&'static str>,
+    observed_code: Option<&str>,
     artifact_sha256: Option<String>,
 ) {
     checks.push(CliCheck {
@@ -1201,6 +1634,130 @@ impl Drop for ChildGuard {
             if !self.settled {
                 self.force_wrapper_cleanup();
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BTreeSet, Context, PersonId, Result, ShiftId, SolveStatus, callout_change_lower_bound,
+        minimum_change_proved, movable_incumbent,
+    };
+
+    #[test]
+    fn callout_selects_only_a_movable_native_pair_in_stable_order() -> Result<()> {
+        let first: PersonId = "0195a5e4-7c00-7000-8000-000000000001".parse()?;
+        let second: PersonId = "0195a5e4-7c00-7000-8000-000000000002".parse()?;
+        let target: ShiftId = "0195a5e4-7c00-7000-8000-000000000003".parse()?;
+        let other: ShiftId = "0195a5e4-7c00-7000-8000-000000000004".parse()?;
+        let selected = BTreeSet::from([(second, target), (first, other), (first, target)]);
+        let mut protected = BTreeSet::new();
+        assert_eq!(
+            movable_incumbent(&selected, &protected, target),
+            Some((first, target))
+        );
+        protected.insert((first, other));
+        assert_eq!(
+            movable_incumbent(&selected, &protected, target),
+            Some((first, target))
+        );
+        protected.insert((first, target));
+        assert_eq!(
+            movable_incumbent(&selected, &protected, target),
+            Some((second, target))
+        );
+        protected.insert((second, target));
+        assert_eq!(movable_incumbent(&selected, &protected, target), None);
+        assert_eq!(
+            movable_incumbent(&BTreeSet::new(), &protected, target),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn callout_bound_uses_complete_native_reporting_week() -> Result<()> {
+        let definitions = crate::cases::build()?;
+        let fixture = definitions
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == crate::contract::CaseId::PractitionerWorkflow)
+            .context("missing practitioner fixture")?;
+        let shifts = eutheto_workforce::temporal::resolve_shifts(
+            &fixture.snapshot.document,
+            &eutheto_types::CancellationToken::new(),
+        )?;
+        let person: PersonId = "0195a5e4-7c00-7000-8000-000000000001".parse()?;
+        let other: PersonId = "0195a5e4-7c00-7000-8000-000000000002".parse()?;
+        let unavailable = (person, definitions.repair.target_shift_id);
+        let shift_id = |day: &str, overnight: bool| -> Result<ShiftId> {
+            let date = day.parse::<jiff::civil::Date>()?;
+            shifts
+                .iter()
+                .find(|shift| {
+                    shift.reporting_date == date
+                        && (shift.interval.ends_at.local.as_datetime().date() > date) == overnight
+                })
+                .map(|shift| shift.id)
+                .context("missing native boundary shift")
+        };
+        let start = shift_id("2027-02-08", false)?;
+        let end = shift_id("2027-02-15", false)?;
+        let preceding_call = shift_id("2027-02-07", true)?;
+        let closing_call = shift_id("2027-02-14", true)?;
+        let mut selected = BTreeSet::from([unavailable]);
+        assert_eq!(
+            callout_change_lower_bound(&selected, &shifts, unavailable)?,
+            4
+        );
+        selected.extend([(person, preceding_call), (person, end), (other, start)]);
+        assert_eq!(
+            callout_change_lower_bound(&selected, &shifts, unavailable)?,
+            4
+        );
+        selected.insert((person, start));
+        assert_eq!(
+            callout_change_lower_bound(&selected, &shifts, unavailable)?,
+            2
+        );
+        selected.insert((person, closing_call));
+        assert_eq!(
+            callout_change_lower_bound(&selected, &shifts, unavailable)?,
+            2
+        );
+        selected.remove(&(person, start));
+        assert_eq!(
+            callout_change_lower_bound(&selected, &shifts, unavailable)?,
+            2
+        );
+        let unknown: ShiftId = "0195a5e4-7c00-7000-8000-000000000099".parse()?;
+        selected.insert((other, unknown));
+        assert!(callout_change_lower_bound(&selected, &shifts, unavailable).is_err());
+        assert!(callout_change_lower_bound(&BTreeSet::new(), &shifts, unavailable).is_err());
+        assert!(
+            callout_change_lower_bound(&BTreeSet::from([(person, start)]), &shifts, unavailable,)
+                .is_err()
+        );
+        assert!(
+            callout_change_lower_bound(&BTreeSet::from([(person, end)]), &shifts, (person, end),)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_pair_cost_requires_a_bound_or_actual_optimality() {
+        for (cost, bound, status, expected) in [
+            (4, 4, SolveStatus::Feasible, true),
+            (6, 4, SolveStatus::Feasible, false),
+            (2, 4, SolveStatus::Optimal, false),
+            (6, 4, SolveStatus::Optimal, true),
+            (2, 2, SolveStatus::Feasible, true),
+            (4, 2, SolveStatus::Feasible, false),
+            (4, 2, SolveStatus::Optimal, true),
+        ] {
+            assert_eq!(minimum_change_proved(cost, bound, status), expected);
         }
     }
 }

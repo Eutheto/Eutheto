@@ -3,7 +3,7 @@ use super::super::{
     budget::{OperationBudget, add},
     input::AssignmentInput,
 };
-use super::{Selected, Summary, Witness, arithmetic, invalid, predicates};
+use super::{InstantInterval, Selected, Summary, Witness, arithmetic, invalid, predicates};
 use crate::{
     model::{AssignmentPair, ConsecutiveMode, Scope, WorkforceRule},
     temporal::ResolvedShift,
@@ -42,9 +42,14 @@ pub(super) fn evaluate(
         let matching = matching_shifts(input, shifts, scope, budget)?;
         match mode {
             ConsecutiveMode::WorkedDays {} => {
-                evaluate_worked_days(*person_id, *id, *maximum, &matching, summary, budget)?;
+                evaluate_worked_days(
+                    input, selected, scope, *person_id, *id, *maximum, &matching, summary, budget,
+                )?;
             }
             ConsecutiveMode::Assignments { break_minutes } => evaluate_assignments(
+                input,
+                selected,
+                scope,
                 *person_id,
                 *id,
                 *maximum,
@@ -79,7 +84,11 @@ fn matching_shifts<'a>(
     Ok(matching)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_worked_days(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     person_id: PersonId,
     rule_id: RuleId,
     maximum: u32,
@@ -87,8 +96,6 @@ fn evaluate_worked_days(
     summary: &mut Summary,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
-    // A date is retained once even if several selected matching assignments report it. The map's
-    // ordering is civil-date ordering, not encoded YYYYMMDD arithmetic.
     let mut days = BTreeMap::<Date, &ResolvedShift>::new();
     for shift in matching {
         budget.step()?;
@@ -100,7 +107,8 @@ fn evaluate_worked_days(
     }
 
     let mut previous_date: Option<Date> = None;
-    let mut run_start = None;
+    let mut run_start: Option<(Date, &ResolvedShift)> = None;
+    let mut run_end: Option<(Date, &ResolvedShift)> = None;
     let mut run_length = 0_u64;
     for (date, shift) in days {
         budget.step()?;
@@ -116,25 +124,54 @@ fn evaluate_worked_days(
         if contiguous {
             run_length = add(run_length, 1)?;
         } else {
-            if let Some(first) = run_start {
+            if let (Some((start, first)), Some((end, last))) = (run_start, run_end) {
                 record_run(
-                    person_id, rule_id, maximum, first, run_length, summary, budget,
+                    input,
+                    selected,
+                    scope,
+                    person_id,
+                    rule_id,
+                    maximum,
+                    first,
+                    last,
+                    &[],
+                    Some((start, end)),
+                    run_length,
+                    summary,
+                    budget,
                 )?;
             }
-            run_start = Some(shift);
+            run_start = Some((date, shift));
             run_length = 1;
         }
+        run_end = Some((date, shift));
         previous_date = Some(date);
     }
-    if let Some(first) = run_start {
+    if let (Some((start, first)), Some((end, last))) = (run_start, run_end) {
         record_run(
-            person_id, rule_id, maximum, first, run_length, summary, budget,
+            input,
+            selected,
+            scope,
+            person_id,
+            rule_id,
+            maximum,
+            first,
+            last,
+            &[],
+            Some((start, end)),
+            run_length,
+            summary,
+            budget,
         )?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_assignments(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     person_id: PersonId,
     rule_id: RuleId,
     maximum: u32,
@@ -146,8 +183,9 @@ fn evaluate_assignments(
     let maximum_break = SignedDuration::from_mins(i64::from(break_minutes));
     let mut previous = None;
     let mut run_start = None;
+    let mut run_start_index = 0;
     let mut run_length = 0_u64;
-    for &shift in matching {
+    for (index, &shift) in matching.iter().enumerate() {
         budget.step()?;
         let joins = previous.is_some_and(|prior: &ResolvedShift| {
             prior
@@ -161,29 +199,61 @@ fn evaluate_assignments(
         if joins {
             run_length = add(run_length, 1)?;
         } else {
-            if let Some(first) = run_start {
+            if let (Some(first), Some(last)) = (run_start, previous) {
                 record_run(
-                    person_id, rule_id, maximum, first, run_length, summary, budget,
+                    input,
+                    selected,
+                    scope,
+                    person_id,
+                    rule_id,
+                    maximum,
+                    first,
+                    last,
+                    &matching[run_start_index..index],
+                    None,
+                    run_length,
+                    summary,
+                    budget,
                 )?;
             }
             run_start = Some(shift);
+            run_start_index = index;
             run_length = 1;
         }
         previous = Some(shift);
     }
-    if let Some(first) = run_start {
+    if let (Some(first), Some(last)) = (run_start, previous) {
         record_run(
-            person_id, rule_id, maximum, first, run_length, summary, budget,
+            input,
+            selected,
+            scope,
+            person_id,
+            rule_id,
+            maximum,
+            first,
+            last,
+            &matching[run_start_index..],
+            None,
+            run_length,
+            summary,
+            budget,
         )?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_run(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     person_id: PersonId,
     rule_id: RuleId,
     maximum: u32,
     first: &ResolvedShift,
+    last: &ResolvedShift,
+    run_members: &[&ResolvedShift],
+    dates: Option<(Date, Date)>,
     actual: u64,
     summary: &mut Summary,
     budget: &mut OperationBudget<'_>,
@@ -201,7 +271,96 @@ fn record_run(
     witness.upper = Some(u64::from(maximum));
     witness.actual = Some(actual);
     witness.interval = Some(predicates::interval(first));
-    summary.predicate(actual > u64::from(maximum), &witness, budget)
+    let failed = actual > u64::from(maximum);
+    if failed && summary.collecting_repair() {
+        let members = association_members(
+            input,
+            selected,
+            scope,
+            person_id,
+            run_members,
+            dates,
+            budget,
+        )?;
+        let mut observation = witness;
+        observation.interval = if dates.is_some() {
+            None
+        } else {
+            let first_interval = predicates::interval(first);
+            let mut end = predicates::interval(last).end;
+            for member in run_members {
+                budget.step()?;
+                let member_end = predicates::interval(member).end;
+                if member_end > end {
+                    end = member_end;
+                }
+            }
+            Some(InstantInterval {
+                start: first_interval.start,
+                end,
+            })
+        };
+        observation.consecutive_start_date = dates.map(|(start, _)| start);
+        observation.consecutive_end_date = dates.map(|(_, end)| end);
+        let association_kind = if dates.is_some() {
+            "maximum_consecutive_worked_days"
+        } else {
+            "maximum_consecutive_assignments"
+        };
+        summary.predicate_with_observation(
+            failed,
+            &witness,
+            &observation,
+            Some(members),
+            association_kind,
+            budget,
+        )
+    } else {
+        summary.predicate(failed, &witness, budget)
+    }
+}
+
+fn association_members(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
+    person_id: PersonId,
+    run_members: &[&ResolvedShift],
+    dates: Option<(Date, Date)>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<AssignmentPair>, AssignmentRuleError> {
+    let mut members = Vec::new();
+    if let Some(associations) = selected.associations() {
+        for pair in associations {
+            budget.step()?;
+            if pair.person_id != person_id {
+                continue;
+            }
+            let shift = input.shift(pair.shift_id).ok_or_else(invalid)?;
+            let metadata = input.metadata(shift)?;
+            if !predicates::shift_matches(shift, &metadata, scope, budget)? {
+                continue;
+            }
+            let in_run = if let Some((start, end)) = dates {
+                (start..=end).contains(&shift.reporting_date)
+            } else {
+                let mut related = false;
+                for member in run_members {
+                    budget.step()?;
+                    if member.id == pair.shift_id {
+                        related = true;
+                        break;
+                    }
+                }
+                related
+            };
+            if in_run {
+                budget.reserve(0, 1, 48)?;
+                members.push(*pair);
+            }
+        }
+    }
+    Ok(members)
 }
 
 #[cfg(test)]
@@ -332,6 +491,148 @@ mod tests {
             VerificationValue::Integer(value) => Ok(*value),
             _ => Err("observed fact is not an integer".into()),
         }
+    }
+
+    #[test]
+    fn repair_keeps_distinct_full_runs_and_nonfirst_changed_members() -> TestResult {
+        use super::super::super::{budget::OperationBudget, input::AssignmentInput};
+        use super::super::evaluate_repair_selection;
+
+        let mut value = base()?;
+        value["settings"]["horizon"] =
+            json!({"start":"2026-10-31T00:00:00Z","end":"2026-11-06T00:00:00Z"});
+        add_shift(&mut value, 30, "2026-11-02T08:00:00", "2026-11-02T10:00:00");
+        add_shift(&mut value, 32, "2026-11-04T08:00:00", "2026-11-04T10:00:00");
+        add_shift(&mut value, 33, "2026-11-05T08:00:00", "2026-11-05T10:00:00");
+        worked_rule(&mut value, 1);
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let pair = |shift: u32| -> TestResult<AssignmentPair> {
+            Ok(AssignmentPair {
+                person_id: test_support::id(1).parse()?,
+                shift_id: test_support::id(shift).parse()?,
+            })
+        };
+        let selected = [pair(8)?, pair(30)?, pair(32)?, pair(33)?];
+        let associations = [pair(30)?, pair(33)?];
+        let mut budget = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (_, _, observations) =
+            evaluate_repair_selection(&document, &input, &selected, &associations, &mut budget)?;
+        let rule_id: eutheto_types::RuleId = test_support::id(20).parse()?;
+        let runs: Vec<_> = observations
+            .iter()
+            .filter(|value| value.evaluation.rule_id == rule_id)
+            .collect();
+        assert_eq!(runs.len(), 2);
+        for (observation, member, start, end) in [
+            (runs[0], pair(30)?, "2026-11-01", "2026-11-02"),
+            (runs[1], pair(33)?, "2026-11-04", "2026-11-05"),
+        ] {
+            assert_eq!(observation.affected_pairs, [member]);
+            assert_eq!(
+                match observation
+                    .evaluation
+                    .observed
+                    .get(&VerificationFactId::new(
+                        "official.workforce.fact.consecutive_run_start_date",
+                    )?)
+                    .ok_or("run start missing")?
+                {
+                    VerificationValue::Text(value) => value,
+                    _ => return Err("run start is not text".into()),
+                },
+                start
+            );
+            assert_eq!(
+                match observation
+                    .evaluation
+                    .observed
+                    .get(&VerificationFactId::new(
+                        "official.workforce.fact.consecutive_run_end_date",
+                    )?)
+                    .ok_or("run end missing")?
+                {
+                    VerificationValue::Text(value) => value,
+                    _ => return Err("run end is not text".into()),
+                },
+                end
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn repair_assignment_run_includes_selected_nested_ending_member() -> TestResult {
+        use super::super::super::{budget::OperationBudget, input::AssignmentInput};
+        use super::super::evaluate_repair_selection;
+
+        let mut value = base()?;
+        add_shift(&mut value, 30, "2026-11-01T10:20:00", "2026-11-01T11:00:00");
+        add_shift(&mut value, 31, "2026-11-01T11:20:00", "2026-11-01T12:00:00");
+        add_shift(&mut value, 32, "2026-11-01T10:30:00", "2026-11-01T12:30:00");
+        assignments_rule(&mut value, 1, 30);
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let pair = |shift: u32| -> TestResult<AssignmentPair> {
+            Ok(AssignmentPair {
+                person_id: test_support::id(1).parse()?,
+                shift_id: test_support::id(shift).parse()?,
+            })
+        };
+        let selected = [pair(8)?, pair(30)?, pair(32)?, pair(31)?];
+        let associations = [pair(32)?];
+        let mut budget = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (_, _, observations) =
+            evaluate_repair_selection(&document, &input, &selected, &associations, &mut budget)?;
+        let rule_id: eutheto_types::RuleId = test_support::id(20).parse()?;
+        let run = observations
+            .iter()
+            .find(|value| value.evaluation.rule_id == rule_id)
+            .ok_or("assignment-run observation missing")?;
+        assert_eq!(run.affected_pairs, associations);
+        assert!(matches!(
+            run.evaluation
+                .observed
+                .get(&VerificationFactId::new("official.workforce.fact.witness_end")?),
+            Some(VerificationValue::Text(value)) if value == "2026-11-01T12:30:00Z"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_assignment_groups_follow_native_preceding_end_order() -> TestResult {
+        use super::super::super::{budget::OperationBudget, input::AssignmentInput};
+        use super::super::evaluate_repair_selection;
+
+        let mut value = base()?;
+        times(
+            &mut value["domain"]["entities"][test_support::id(8)],
+            "2026-11-01T00:00:00",
+            "2026-11-01T10:00:00",
+        );
+        add_shift(&mut value, 30, "2026-11-01T01:00:00", "2026-11-01T02:00:00");
+        add_shift(&mut value, 31, "2026-11-01T08:00:00", "2026-11-01T09:00:00");
+        assignments_rule(&mut value, 1, 30);
+        let document: ScenarioDocument = serde_json::from_value(value)?;
+        let pair = |shift: u32| -> TestResult<AssignmentPair> {
+            Ok(AssignmentPair {
+                person_id: test_support::id(1).parse()?,
+                shift_id: test_support::id(shift).parse()?,
+            })
+        };
+        let selected = [pair(8)?, pair(30)?, pair(31)?];
+        let associations = [pair(31)?];
+        let mut budget = OperationBudget::evaluation(None);
+        let input = AssignmentInput::new(&document, &mut budget)?;
+        let (_, _, observations) =
+            evaluate_repair_selection(&document, &input, &selected, &associations, &mut budget)?;
+        let rule_id: eutheto_types::RuleId = test_support::id(20).parse()?;
+        let failures: Vec<_> = observations
+            .iter()
+            .filter(|value| value.evaluation.rule_id == rule_id)
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].affected_pairs.is_empty());
+        Ok(())
     }
 
     #[test]
