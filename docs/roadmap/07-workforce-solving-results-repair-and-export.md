@@ -472,8 +472,10 @@ native attempt, independently optional objective/bound vectors and digest-backed
 terminal runtime through ordinary/counterfactual finalization and quarantine.
 Current/historical envelopes and generated guards are migrated; replay checks the
 recorded routed fingerprint without recompiling its model. Private diagnostics
-retain the manifest, while participant outputs exclude this metadata. Complete
-named-profile evaluation and the remaining presentation flows remain unfinished.
+retain the manifest, while participant outputs exclude this metadata.
+Named-profile evaluation and presentation were incomplete at this intermediate
+stage; subsequent implementation and local evidence are recorded under
+[Fairness and score policy](#fairness-and-score-policy).
 
 **Local Repair source-fact evidence, 2026-10-03 (Phase07 working tree).**
 The complete-source pack route captures and independently admits accepted A/C,
@@ -1686,7 +1688,7 @@ Pause and write an ADR if a rule cannot be independently verified, a backend nee
 Phase 07 is complete only when:
 
 - the user has tested the complete Workforce workflow, feedback is resolved, and explicit checkpoint acceptance and authorization to enter Phase 08 are recorded under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates);
-- all thirteen Required rules and all eleven preference categories satisfy the rule checklist and domain-rule definition of done;
+- all thirteen baseline Required-rule categories, the confirmed practitioner additions (Required workload quotas and distinct worked-weekend limits), and all twelve preference categories satisfy the rule checklist and domain-rule definition of done;
 - every practitioner clarification above has an explicit reviewed disposition, every confirmed requirement satisfies the same rule-completion discipline, and the synthetic combined workflow has acceptance evidence; no unresolved decision is presented as supported behavior;
 - every workforce fixture passes validation, expected status, independent verification, scoring, explanations, and accepted-solution export checks;
 - repair preserves every hard lock and minimizes changes according to the recorded score policy;
