@@ -124,3 +124,13 @@ Commit `Cargo.lock`, `pnpm-lock.yaml`, `flake.lock`, exact CI action SHAs, worke
 ## Repository identity
 
 Rust crates use `eutheto-*`; npm packages use `@eutheto/*`; project-owned media types use the `eutheto/...` namespace. The CLI executable, reverse-domain application IDs, portable project extension, hosting organization, governance/security contacts, and signing identities remain explicit roadmap gates. Do not publish placeholders as final identifiers.
+
+## Agent workflow and Ponytail
+
+Use the repository-local [Ponytail skill](.agents/skills/ponytail/SKILL.md) for coding work, with Full as the default for each task. The orchestrator may promote a task to Ultra with a stated reason when unclear assumptions, unnecessary complexity, or consequential decisions warrant challenging the approach. Pass the mode explicitly in the handoff; promotion ends with that task. Explicit user choices, including Lite or Off, win. This task-local policy supersedes the vendored skills' session-persistent mode wording. Ponytail modes do not change model reasoning effort.
+
+Route technical specifications to `planning` (`gpt-6-astra`, high reasoning), implementation to `implementation`, correctness/security/regression review to `correctness_review`, and simplification review to `complexity_review`. The latter three inherit the session model and reasoning effort. Use these roles when delegation is appropriate; simple tasks need not spawn all four. Profiles live in [`.codex/agents/`](.codex/agents/). Include scope, project instructions, user constraints, task mode, evidence, file ownership, and dependencies in every handoff.
+
+Native hosted selection of these profiles is unverified. When custom role selection is unavailable, read the profile and applicable skills directly and pass their instructions explicitly. For planning, use `gpt-6-astra` with `high` and `fork_turns="none"`, supplying the necessary context; leave model and reasoning overrides unset for the other roles. Report explicit handoffs separately from native profile discovery and do not claim installation proves activation.
+
+Preserve all project guidance and approval boundaries. Never merge to main, and obtain parent/user approval before a push or PR. Do not change dependencies or make major unclear architecture decisions without approval. Do not enable hooks, grant hook trust, write persistent mode flags, modify protected home configuration, or relocate `CODEX_HOME`. Read the permitted files directly if discovery is unavailable and report the limitation. Source provenance, license inputs, and host limitations are recorded in [`.agents/README.md`](.agents/README.md).
