@@ -10,7 +10,7 @@ This file records the source and license inputs for these vendored contributor m
 
 ## Routing and discovery
 
-Root [AGENTS.md](../AGENTS.md) preserves project guidance and defines Full by default, reasoned task-local Ultra, explicit user overrides, and role handoffs. Four standalone profiles are in [`.codex/agents/`](../.codex/agents/): planning selects `gpt-6-astra` / `high`; implementation and both reviewers omit model and reasoning settings to inherit the session.
+Root [AGENTS.md](../AGENTS.md) preserves project guidance and defines Full by default, reasoned task-local Ultra, explicit user overrides, and role handoffs. Four standalone profiles are in [`.codex/agents/`](../.codex/agents/): planning selects `gpt-6-astra` / `high`; implementation and both routine reviewers explicitly select `gpt-6.1-sol` / `high`. Astra/high is reserved for planning or genuinely difficult decisions, never routine packaging or implementation. At most two subagents may be active per project in addition to the lead. Existing workers must be stopped and explicitly relaunched when their actual settings cannot be verified; changing these files does not reconfigure a running worker.
 
 The profile format was checked on 2026-10-17 against the [official custom-agent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agents): `name`, `description`, and `developer_instructions` are required; model and reasoning settings are optional. No project config or permission override is needed for these standalone profiles.
 

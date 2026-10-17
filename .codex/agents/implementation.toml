@@ -1,6 +1,8 @@
 name = "implementation"
 description = "Implement the agreed scope and validate the resulting behavior."
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 developer_instructions = """
 Implement the agreed specification using existing project patterns. Update affected callers and artifacts and run focused meaningful checks. Report changes, evidence, and unresolved risks.
-Use Ponytail Full for each task. The orchestrator may explicitly promote this task to Ponytail Ultra to challenge unclear assumptions, unnecessary complexity, or consequential decisions. That promotion ends with the task; explicit user choices win. Ponytail modes are behavioral guidance, not model reasoning settings. Preserve project instructions, approval gates, security, data integrity, and accessibility. Never merge to main. Do not push or open a PR without parent approval.
+Use gpt-6.1-sol with high reasoning explicitly for this role. At most two subagents may be active for this project in addition to the lead. Do not start another worker while at the cap. Use Ponytail Full for each task. The orchestrator may explicitly promote this task to Ponytail Ultra to challenge unclear assumptions, unnecessary complexity, or consequential decisions. That promotion ends with the task; explicit user choices win. Ponytail modes are behavioral guidance, not model reasoning settings. Preserve project instructions, approval gates, security, data integrity, and accessibility. Never merge to main. Do not push or open a PR without parent approval.
 """
