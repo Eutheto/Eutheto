@@ -39,6 +39,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 const API_VERSION: &str = "eutheto/cli-result/v1";
@@ -910,36 +911,43 @@ fn requests_json(args: &[OsString]) -> bool {
                     .any(|arg| arg == OsStr::new("--json"))
             })
 }
-#[allow(clippy::large_futures)]
-async fn execute_cli(
+type CommandFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Outcome, (&'static str, SafeCliError)>> + 'a>>;
+
+fn execute_cli(
     cli: Cli,
     cancellation: CancellationToken,
     progress: &mut dyn eutheto_solver_api::ProgressSink,
-) -> Result<Outcome, (&'static str, SafeCliError)> {
+) -> CommandFuture<'_> {
+    // Select before polling so unrelated command futures do not share a large stack frame.
     let _ = (cli.log_level, cli.no_color, &cli.config, cli.offline);
     match cli.command {
-        Command::Info => Ok(info_outcome("info")),
-        Command::Status(_) => Ok(info_outcome("status")),
-        Command::Licenses => Ok(Outcome::new(
-            "licenses",
-            "available",
-            json!({"packages": [{"name": "eutheto-cli", "license": "Apache-2.0"}]}),
-            vec!["eutheto-cli: Apache-2.0".to_owned()],
-        )),
-        Command::Packs(args) => {
+        Command::Info => Box::pin(async { Ok(info_outcome("info")) }),
+        Command::Status(_) => Box::pin(async { Ok(info_outcome("status")) }),
+        Command::Licenses => Box::pin(async {
+            Ok(Outcome::new(
+                "licenses",
+                "available",
+                json!({"packages": [{"name": "eutheto-cli", "license": "Apache-2.0"}]}),
+                vec!["eutheto-cli: Apache-2.0".to_owned()],
+            ))
+        }),
+        Command::Packs(args) => Box::pin(async move {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("packs", error))?;
             execute_packs(&app, args).await
-        }
-        Command::Serve => Err((
-            "serve",
-            SafeCliError::unavailable(
-                "feature.serve_post_mvp",
-                "Service mode is a post-MVP capability and is unavailable.",
-            ),
-        )),
-        Command::Solutions(args) => {
+        }),
+        Command::Serve => Box::pin(async {
+            Err((
+                "serve",
+                SafeCliError::unavailable(
+                    "feature.serve_post_mvp",
+                    "Service mode is a post-MVP capability and is unavailable.",
+                ),
+            ))
+        }),
+        Command::Solutions(args) => Box::pin(async move {
             solutions::execute(
                 cli.data_dir,
                 args,
@@ -948,14 +956,14 @@ async fn execute_cli(
                 cli.config.is_some(),
             )
             .await
-        }
-        Command::Solvers(args) => {
+        }),
+        Command::Solvers(args) => Box::pin(async move {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("solvers", error))?;
             execute_solvers(&app, args).await
-        }
-        Command::Ai(_) => {
+        }),
+        Command::Ai(_) => Box::pin(async move {
             execute_deferred(
                 cli.data_dir,
                 "ai",
@@ -963,8 +971,10 @@ async fn execute_cli(
                 &cancellation,
             )
             .await
-        }
-        Command::Solve(args) => {
+        }),
+        // The selected command is already boxed; keep its solve future inline.
+        #[allow(clippy::large_futures)]
+        Command::Solve(args) => Box::pin(async move {
             solve::execute(
                 cli.data_dir,
                 args,
@@ -973,32 +983,34 @@ async fn execute_cli(
                 progress,
             )
             .await
-        }
-        Command::Bundle(args) => {
+        }),
+        Command::Bundle(args) => Box::pin(async move {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("bundle", error))?;
             execute_bundle(&app, args, &cancellation).await
+        }),
+        Command::Doctor => {
+            Box::pin(async move { execute_doctor(cli.data_dir, &cancellation).await })
         }
-        Command::Doctor => execute_doctor(cli.data_dir, &cancellation).await,
-        Command::Projects(args) => {
+        Command::Projects(args) => Box::pin(async move {
             execute_projects_cli(cli.data_dir, args, &cancellation, cli.config.is_some()).await
-        }
-        Command::Backup(args) => {
+        }),
+        Command::Backup(args) => Box::pin(async move {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("backup", error))?;
             execute_backup(&app, args, &cancellation).await
-        }
-        Command::Scenario(args) => {
+        }),
+        Command::Scenario(args) => Box::pin(async move {
             scenario_files::execute(cli.data_dir, args, &cancellation, cli.config.is_some()).await
-        }
-        Command::Settings(args) => {
+        }),
+        Command::Settings(args) => Box::pin(async move {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("settings", error))?;
             execute_settings(&app, args).await
-        }
+        }),
     }
 }
 

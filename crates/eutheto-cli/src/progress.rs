@@ -28,16 +28,11 @@ pub(super) async fn run(
         _ => ProgressArg::None,
     };
     if mode == ProgressArg::None {
-        return Box::pin(execute_cli(
-            cli,
-            cancellation,
-            &mut PresentationProgress(None),
-        ))
-        .await;
+        return execute_cli(cli, cancellation, &mut PresentationProgress(None)).await;
     }
     let (sender, mut receiver) = mpsc::channel(32);
     let mut sink = PresentationProgress(Some(sender));
-    let mut execution = Box::pin(execute_cli(cli, cancellation, &mut sink));
+    let mut execution = execute_cli(cli, cancellation, &mut sink);
     let mut failed_output = false;
     let result = loop {
         tokio::select! {
