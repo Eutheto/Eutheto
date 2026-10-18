@@ -217,7 +217,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Linux arm64 reached WebDriver setup at 117 minutes; Intel macOS reached
     # desktop compilation at 70 minutes. Keep bounded time for every check.
-    timeout-minutes: ${{ (matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm') && 150 || matrix.os == 'macos-15-intel' && 120 || 75 }}
+    # Windows source builds take 73–75 minutes; allow 90 minutes for runner variance.
+    timeout-minutes: ${{ (matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm') && 150 || matrix.os == 'macos-15-intel' && 120 || matrix.phase-check == 'windows' && 90 || 75 }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
