@@ -201,10 +201,18 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes \
             build-essential libayatana-appindicator3-dev libssl-dev \
-            libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev patchelf pkg-config rpm xvfb
+            libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev patchelf pkg-config rpm xvfb \
+            webkit2gtk-driver
+          webkit_version="$(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)"
+          test "$(dpkg-query -W -f='${Version}' webkit2gtk-driver)" = "$webkit_version"
+          driver_depends="$(dpkg-query -W -f='${Depends}' webkit2gtk-driver)"
+          [[ "$driver_depends" == *"libwebkit2gtk-4.1-0 (= $webkit_version)"* ]]
+          dpkg-query -W -f='${binary:Package}=${Version}\n' webkit2gtk-driver libwebkit2gtk-4.1-0 libegl-mesa0
+          test -x /usr/bin/WebKitWebDriver
 
       - name: Verify native host and expose pinned protoc
         shell: bash
@@ -380,7 +388,39 @@ jobs:
             --manifest-sha256 "${pdf_digest_line%% *}"
           git rev-parse HEAD
           sha256sum "$deb_root/usr/bin/eutheto-desktop" "$deb_root/usr/bin/eutheto-pdf-worker" "${pdf_manifests[0]}"
-          EUTHETO_E2E_APPLICATION="$deb_root/usr/bin/eutheto-desktop" \
+          # Native DEB processes use the host WebKit/Mesa closure; orchestration stays in NixGL.
+          native_root="$(mktemp -d "$RUNNER_TEMP/eutheto-native.XXXXXX")"
+          trap 'rm -rf -- "$native_root"' EXIT
+          native_unset=(
+            LD_LIBRARY_PATH GBM_BACKENDS_PATH LIBGL_DRIVERS_PATH LIBVA_DRIVERS_PATH
+            __EGL_VENDOR_LIBRARY_FILENAMES GTK_PATH GIO_EXTRA_MODULES GDK_PIXBUF_MODULE_FILE
+            GSETTINGS_SCHEMA_DIR GSETTINGS_SCHEMAS_PATH
+          )
+          for target in "$deb_root/usr/bin/eutheto-desktop" /usr/bin/WebKitWebDriver; do
+            test -x "$target"
+            launcher="$native_root/${target##*/}"
+            {
+              printf '#!/bin/bash\nset -euo pipefail\nunset'
+              printf ' %q' "${native_unset[@]}"
+              printf '\nexport PATH=/usr/sbin:/usr/bin:/sbin:/bin\nexport XDG_DATA_DIRS=/usr/local/share:/usr/share\nexec %q "$@"\n' "$target"
+            } > "$launcher"
+            chmod 700 "$launcher"
+          done
+          nix develop --no-update-lock-file --command eutheto-desktop-runtime /bin/bash -euo pipefail -c '
+            app="$1"; shift
+            printf "Previous NixGL loader resolution for %s\\n" "$app"
+            if ! /usr/bin/ldd "$app" | /usr/bin/sed -n "1,180p"; then
+              printf "Previous mixed-runtime loader probe failed.\\n"
+            fi
+            printf "Host loader resolution for %s\\n" "$app"
+            loader_metadata="$(/usr/bin/env "$@" PATH=/usr/sbin:/usr/bin:/sbin:/bin XDG_DATA_DIRS=/usr/local/share:/usr/share /usr/bin/ldd "$app")"
+            printf "%s\\n" "$loader_metadata" | /usr/bin/sed -n "1,180p"
+            case "$loader_metadata" in
+              *"/nix/store/"*|*"not found"*) exit 1 ;;
+            esac
+          ' bash "$deb_root/usr/bin/eutheto-desktop" "${native_unset[@]/#/--unset=}"
+          EUTHETO_E2E_APPLICATION="$native_root/eutheto-desktop" \
+          EUTHETO_NATIVE_DRIVER="$native_root/WebKitWebDriver" \
             nix develop --no-update-lock-file --command just e2e false false
 
       - name: Verify and launch the macOS app bundle

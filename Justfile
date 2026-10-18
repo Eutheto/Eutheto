@@ -334,6 +334,7 @@ bench:
 # `EUTHETO_E2E_SHIFT_CSV_ONLY=1 just e2e true` exercises native shift/time mapping, reports and recovery.
 # `EUTHETO_E2E_AVAILABILITY_CSV_ONLY=1 just e2e true` exercises native availability/time-off import and recovery.
 # Set rebuild=false only to rerun against an existing artifact when application inputs are unchanged.
+# EUTHETO_NATIVE_DRIVER may select an explicit absolute native-driver launcher.
 e2e bundled="false" rebuild="true":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -399,7 +400,7 @@ e2e bundled="false" rebuild="true":
       "$(command -v env)"
       "PATH=$PATH"
       "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
-      "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
+      "EUTHETO_NATIVE_DRIVER=${EUTHETO_NATIVE_DRIVER:-$(command -v WebKitWebDriver)}"
       "EUTHETO_XDOTOOL=$(command -v xdotool)"
       "$(command -v xvfb-run)" -a --server-args="-screen 0 1600x1200x24"
       "$(command -v eutheto-desktop-runtime)"
@@ -451,6 +452,7 @@ dco-self-test:
 # Exercise actual CI target selection and fail-closed terminal gates.
 ci-policy-test:
     python3 tests/security/test_ci_policy.py
+    python3 tests/e2e/test_native_runtime.py
 # Run the complete non-deferred Phase-01 repository suite.
 check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test rust-advisories-test fmt-check lint typecheck test
 

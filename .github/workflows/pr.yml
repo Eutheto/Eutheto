@@ -10,7 +10,6 @@ on:
       - checks_requested
   workflow_dispatch:
 
-
 permissions:
   contents: read
 
@@ -110,7 +109,21 @@ jobs:
         id: browser
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/eutheto-playwright
-        run: nix develop --no-update-lock-file --command just frontend-browser-install frontend-browser-test
+        run: |
+          nix develop --no-update-lock-file --command just frontend-browser-install
+          # Record runner sandbox policy without changing the browser or host policy.
+          uname -sr
+          for setting in /proc/sys/kernel/unprivileged_userns_clone /proc/sys/user/max_user_namespaces /proc/sys/kernel/apparmor_restrict_unprivileged_userns; do
+            if [ -r "$setting" ]; then
+              printf '%s=' "$setting"
+              cat "$setting"
+            fi
+          done
+          if [ -r /proc/self/attr/current ]; then
+            cat /proc/self/attr/current
+          fi
+          sed -n '/^NoNewPrivs:/p; /^Seccomp:/p; /^Seccomp_filters:/p' /proc/self/status
+          nix develop --no-update-lock-file --command just frontend-browser-test
 
       - name: Write sanitized check report
         if: always()
