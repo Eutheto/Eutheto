@@ -34,7 +34,6 @@ jobs:
     env:
       LANG: C
       LC_ALL: C
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/eutheto-playwright
     outputs:
       browser-outcome: ${{ steps.browser.outcome }}
     steps:
@@ -58,6 +57,7 @@ jobs:
           test "$(id -u)" != 0
           test "$(uname -m)" = arm64
           test "$(nix eval --impure --raw --expr builtins.currentSystem)" = aarch64-darwin
+          printf 'PLAYWRIGHT_BROWSERS_PATH=%s/eutheto-playwright\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           git rev-parse HEAD
           sw_vers
 
