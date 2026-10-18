@@ -355,6 +355,32 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Linux packaged recipient export UI
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          NO_AT_BRIDGE: "1"
+          EUTHETO_E2E_PRIVILEGED_NETNS: "1"
+          EUTHETO_E2E_RECIPIENT_EXPORT_ONLY: "1"
+          EUTHETO_E2E_PACKAGED_SOLVE: "1"
+        run: |
+          set -euo pipefail
+          deb_root="$RUNNER_TEMP/eutheto-deb-root"
+          test -x "$deb_root/usr/bin/eutheto-desktop"
+          test -x "$deb_root/usr/bin/eutheto-pdf-worker"
+          mapfile -d '' -t pdf_manifests < <(find "$deb_root" -type f -path '*/renderer/pdf/eutheto-pdf-worker.json' -print0)
+          if [[ ${#pdf_manifests[@]} -ne 1 ]]; then
+            echo "Expected exactly one deb-packaged PDF renderer manifest; found ${#pdf_manifests[@]}." >&2
+            exit 1
+          fi
+          pdf_digest_line="$(sha256sum apps/desktop/src-tauri/pdf-sidecar/resources/eutheto-pdf-worker.json)"
+          cargo xtask pdf verify \
+            --executable "$deb_root/usr/bin/eutheto-pdf-worker" \
+            --manifest "${pdf_manifests[0]}" \
+            --manifest-sha256 "${pdf_digest_line%% *}"
+          EUTHETO_E2E_APPLICATION="$deb_root/usr/bin/eutheto-desktop" \
+            nix develop --no-update-lock-file --command just e2e false false
+
       - name: Verify and launch the macOS app bundle
         if: runner.os == 'macOS'
         shell: bash
