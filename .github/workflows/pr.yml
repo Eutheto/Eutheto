@@ -27,11 +27,63 @@ env:
   PHASE_PACKAGE: ${{ github.event_name == 'pull_request' && github.base_ref == 'phase/06-desktop' }}
 
 jobs:
+  browser-components:
+    name: Browser components / macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      LANG: C
+      LC_ALL: C
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/eutheto-playwright
+    outputs:
+      browser-outcome: ${{ steps.browser.outcome }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          determinate: false
+          diagnostic-endpoint: ""
+          github-token: ""
+          source-tag: v3.22.2
+
+      - name: Verify native browser runner
+        shell: bash
+        run: |
+          test "$(id -u)" != 0
+          test "$(uname -m)" = arm64
+          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = aarch64-darwin
+          git rev-parse HEAD
+          sw_vers
+
+      - name: Install locked workspace dependencies
+        run: nix develop --no-update-lock-file --command just install
+
+      - name: Install pinned headless Chromium
+        run: nix develop --no-update-lock-file --command just frontend-browser-install
+
+      - name: Verify browser keyboard focus and accessibility behavior
+        id: browser
+        run: nix develop --no-update-lock-file --command just frontend-browser-test
+
   canonical-linux:
     name: ${{ github.event_name == 'pull_request' && github.base_ref == 'phase/06-desktop' && 'Phase06 package / source checks' || 'Canonical Linux / locked Nix' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    needs: browser-components
+    if: ${{ always() }}
     steps:
+      - name: Require successful sandboxed browser components
+        env:
+          BROWSER_JOB_RESULT: ${{ needs.browser-components.result }}
+        run: |
+          test "$BROWSER_JOB_RESULT" = success
+
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,35 +157,6 @@ jobs:
         if: env.PHASE_PACKAGE == 'true'
         run: nix develop --no-update-lock-file --command just frontend-build
 
-      - name: Verify browser keyboard focus and accessibility behavior
-        id: browser
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/eutheto-playwright
-        run: |
-          nix develop --no-update-lock-file --command just frontend-browser-install
-          # Record runner sandbox policy without changing the browser or host policy.
-          uname -sr
-          for setting in /proc/sys/kernel/unprivileged_userns_clone /proc/sys/user/max_user_namespaces /proc/sys/kernel/apparmor_restrict_unprivileged_userns; do
-            if [ -r "$setting" ]; then
-              printf '%s=' "$setting"
-              cat "$setting"
-            fi
-          done
-          if [ -r /proc/self/attr/current ]; then
-            cat /proc/self/attr/current
-          fi
-          sed -n '/^NoNewPrivs:/p; /^Seccomp:/p; /^Seccomp_filters:/p' /proc/self/status
-          nix develop --no-update-lock-file --command just frontend-browser-test
-
-      - name: Diagnose browser sandbox failure from accessible kernel records
-        if: failure() && steps.browser.outcome == 'failure'
-        run: |
-          if command -v journalctl >/dev/null 2>&1; then
-            journalctl --dmesg --since '-5 min' --no-pager --lines=100 --grep='apparmor.*(userns|chrome|chromium)|seccomp.*(chrome|chromium)' || true
-          else
-            printf 'Kernel journal diagnostics unavailable: journalctl is not installed.\n'
-          fi
-
       - name: Write sanitized check report
         if: always()
         env:
@@ -142,7 +165,8 @@ jobs:
           FRONTEND_OUTCOME: ${{ steps.frontend.outcome }}
           INSTALL_OUTCOME: ${{ steps.install.outcome }}
           CHECK_OUTCOME: ${{ steps.check.outcome }}
-          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+          BROWSER_OUTCOME: ${{ needs.browser-components.outputs.browser-outcome }}
+          BROWSER_JOB_RESULT: ${{ needs.browser-components.result }}
         run: |
           report_dir="$RUNNER_TEMP/eutheto-pr-report"
           mkdir -p "$report_dir"
@@ -154,6 +178,8 @@ jobs:
             "locked_install=$INSTALL_OUTCOME" \
             "non_mutating_check=$CHECK_OUTCOME" \
             "browser_components=$BROWSER_OUTCOME" \
+            "browser_job=$BROWSER_JOB_RESULT" \
+            'browser_target=macos-15/arm64' \
             > "$report_dir/status.txt"
 
       - name: Upload sanitized check report

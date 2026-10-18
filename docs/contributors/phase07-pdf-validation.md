@@ -210,7 +210,17 @@ pnpm --filter @eutheto/desktop run test:browser -- src/components/RecipientShare
 
 It uses the lock-pinned Playwright Chromium headless shell with explicit `chromiumSandbox: true`; the pinned Playwright default would otherwise disable Chromium sandboxing. The approved config change passes focused formatting, lint and TypeScript checks. No fallback disables the sandbox.
 
-This saved worktree has not executed the pinned browser case. Earlier CDN/redirect probes were proxy-blocked. The separate newly published cloud environment now downloads Playwright 1.62.1 Chrome revision 1234 and FFmpeg revision 1011 successfully, as reported by the coordination task. Sandbox-enabled launch there remains blocked by the missing Nix runtime/ELF-loader closure and namespace `EPERM` / `No usable sandbox`. These are distinct from download access. No duplicate installer, host-security change or environment bypass was attempted here. Existing PR CI is configured to attempt the browser tests on Ubuntu 24.04 after publication; its actual result must be recorded separately.
+This saved worktree has not executed the pinned browser case. Earlier CDN/redirect probes were proxy-blocked. The separate newly published cloud environment now downloads Playwright 1.62.1 Chrome revision 1234 and FFmpeg revision 1011 successfully, as reported by the coordination task. Sandbox-enabled launch there remains blocked by the missing Nix runtime/ELF-loader closure and namespace `EPERM` / `No usable sandbox`. These are distinct from download access. No duplicate installer, host-security change or environment bypass was attempted here. The prior Ubuntu 24.04 PR configuration attempted the sandboxed browser suite; its actual hosted results are separate evidence.
+
+The prepared PR workflow moves the unchanged component suite to a mandatory
+`macos-15` arm64 job, with the same pinned headless Chromium and explicit
+`chromiumSandbox: true`. Its first-run timeout is 45 minutes. The canonical Linux
+context fails unless that browser job succeeds and records its step outcome, job
+result and configured target. This macOS job has not executed before publication:
+the current Linux workspace and unchanged hosted workflows provide no supported
+Mac browser execution route. A future pass establishes macOS Chromium component
+coverage only; Linux Chromium startup, native Linux Tauri/PDF behavior and the
+manual gates below require their own evidence.
 
 The component case uses mocked native responses: it checks format-change retirement, a fresh PDF review, stale consent and matching publication receipts. It does not execute the packaged renderer or desktop picker. Do not substitute an arbitrary browser, bypass the proxy, or relax browser security.
 

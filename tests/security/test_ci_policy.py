@@ -21,7 +21,7 @@ WORKFLOWS = {
 
 
 def run_block(filename: str, job: str) -> str:
-    """Read the first literal run block in the named, single-script policy job."""
+    """Read the first literal run block in the named policy job."""
     lines = (ROOT / ".github/workflows" / filename).read_text().splitlines()
     start = lines.index(f"  {job}:") + 1
     end = next(
@@ -219,6 +219,28 @@ class CiPolicyTests(unittest.TestCase):
                     self.assertNotEqual(self.gate(name, result=result), 0)
             with self.subTest(workflow="worker", windows=result):
                 self.assertNotEqual(self.gate("worker", windows=result), 0)
+
+    def test_canonical_requires_successful_browser_job_before_other_steps(self):
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        canonical = workflow.split("  canonical-linux:\n", 1)[1]
+        header, steps = canonical.split("    steps:\n", 1)
+        self.assertIn("    needs: browser-components\n", header)
+        self.assertIn("    if: ${{ always() }}\n", header)
+        self.assertTrue(steps.startswith(
+            "      - name: Require successful sandboxed browser components\n"
+            "        env:\n"
+            "          BROWSER_JOB_RESULT: ${{ needs.browser-components.result }}\n"
+            "        run: |\n"
+        ))
+        script = run_block("pr.yml", "canonical-linux")
+        with tempfile.TemporaryDirectory(prefix="eutheto-browser-gate-") as temporary:
+            directory = Path(temporary)
+            environment = isolated_environment(directory)
+            for result in ("success", "failure", "cancelled", "skipped", "", "unknown"):
+                with self.subTest(result=result):
+                    environment["BROWSER_JOB_RESULT"] = result
+                    outcome = execute(script, directory, environment)
+                    self.assertEqual(outcome.returncode == 0, result == "success")
 
 
 class DependencyPolicyTests(unittest.TestCase):
