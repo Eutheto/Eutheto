@@ -7,6 +7,7 @@ workers/ortools/dependency-sources.json text eol=lf
 workers/ortools/VERSION text eol=lf
 protocol/solver-worker.proto text eol=lf
 protocol/version.json text eol=lf
+crates/eutheto-cli/tests/fixtures/progress-pre-terminal-bound-cutover.jsonl text eol=lf
 apps/desktop/src-tauri/Cargo.toml text eol=lf
 workers/ortools/proto/**/*.proto text eol=lf
 # Preserve reviewed upstream bytes, including fixture whitespace.
