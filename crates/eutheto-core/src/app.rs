@@ -9126,10 +9126,11 @@ mod tests {
         now: Rfc3339Timestamp,
     ) -> Result<(EuthetoApp, tempfile::TempDir), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
+        let directory_path = directory.path().canonicalize()?;
         let app = EuthetoApp::open(AppDependencies {
             paths: AppPaths {
-                database: directory.path().join("app.sqlite"),
-                safety_backups: directory.path().join("backups"),
+                database: directory_path.join("app.sqlite"),
+                safety_backups: directory_path.join("backups"),
             },
             clock: Arc::new(eutheto_types::FixedClock::new(now)),
             monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),

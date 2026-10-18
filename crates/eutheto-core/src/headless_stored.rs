@@ -2293,10 +2293,11 @@ mod alarm_cleanup_tests {
         let finished_at = Rfc3339Timestamp::parse("2026-01-01T00:00:01Z")?;
         let (request, input) = ordinary_run_fixture()?;
         let directory = tempfile::tempdir()?;
+        let directory_path = directory.path().canonicalize()?;
         let app = EuthetoApp::open(crate::AppDependencies {
             paths: crate::AppPaths {
-                database: directory.path().join("cleanup.sqlite"),
-                safety_backups: directory.path().join("backups"),
+                database: directory_path.join("cleanup.sqlite"),
+                safety_backups: directory_path.join("backups"),
             },
             clock: Arc::new(eutheto_types::FixedClock::new(finished_at)),
             monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),

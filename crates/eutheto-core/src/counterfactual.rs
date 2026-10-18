@@ -4157,7 +4157,8 @@ mod tests {
     async fn diagnostic_alarm_handle_survives_execution_and_owner_retirement()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let (store, _) = SqliteScenarioStore::open(directory.path().join("custody.sqlite")).await?;
+        let directory_path = directory.path().canonicalize()?;
+        let (store, _) = SqliteScenarioStore::open(directory_path.join("custody.sqlite")).await?;
         let packs = Arc::new(
             DomainPackRegistry::builder()
                 .register(eutheto_workforce::WorkforcePack)
