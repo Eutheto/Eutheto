@@ -11370,9 +11370,177 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
       originalRevision,
       "HTML/PDF review, format/disclosure retirement, picker cancellation, publication and no-clobber refusal cannot mutate the scenario",
     );
+
+    await keyboardActivateButton(sessionId, "Share result", "[data-accepted-schedule]");
+    await waitForElement(sessionId, ".recipient-share-dialog");
+    const beforeEditPreview = await prepareRecipientReview();
+    assert.equal(beforeEditPreview.format, "pdf");
+    assert.equal(beforeEditPreview.report.source.scenarioRevision, originalRevision);
+    assert.equal(beforeEditPreview.report.source.observedCurrentRevision, originalRevision);
+    const originalPerson = people.find((person) =>
+      timeline.items.some((assignment) => assignment.personId === person.id),
+    );
+    assert(originalPerson);
+    const editedPerson = { ...originalPerson, name: `${originalPerson.name} (current head)` };
+    const edited = await nativeRequest(sessionId, "scenario_apply_command", {
+      scenarioId,
+      expectedRevision: originalRevision,
+      commandId: requestId(),
+      actor: { actorId: null, displayName: "Recipient stale-source acceptance" },
+      truncateRedo: false,
+      command: {
+        type: "applyDomainCommand",
+        payload: {
+          commandType: "official.workforce.update_entity",
+          payload: { entity: editedPerson },
+        },
+      },
+    });
+    const editedRevision = edited.result.newRevision;
+    assert.equal(editedRevision, originalRevision + 1);
+    // A new head unmounts the inspected result while the native setup snapshot refreshes.
+    await waitFor(
+      sessionId,
+      `return !document.querySelector('.recipient-share-dialog') &&
+        !document.querySelector('.recipient-share-source') &&
+        !document.querySelector('[data-accepted-schedule]');`,
+    );
+    const acceptedIndex = await waitFor(
+      sessionId,
+      `const rows = [...document.querySelectorAll('#setup-results-details .result-summary-list > li')];
+      const index = rows.findIndex(row => [...row.querySelectorAll('code')]
+        .some(code => code.textContent.trim() === arguments[0]));
+      return index >= 0 && index + 1;`,
+      [accepted.result.solutionId],
+    );
+    const acceptedRow = `#setup-results-details .result-summary-list > li:nth-child(${acceptedIndex})`;
+    const retained = (
+      await nativeRequest(sessionId, "solution_list", { schemaVersion: 1, scenarioId })
+    ).result.solutions;
+    assert.equal(retained.length, 1, "A source edit must not replay the solve");
+    assert.deepEqual(retained[0].result, accepted.result);
+    assert.equal(retained[0].scenarioRevision, originalRevision);
+    assert.equal(retained[0].stale, true);
+    await activate(sessionId, `${acceptedRow} [data-result-inspect]`);
+    await waitForElement(sessionId, `${acceptedRow} [data-accepted-schedule] table tbody tr`);
+    await keyboardActivateButton(
+      sessionId,
+      "Share result",
+      `${acceptedRow} [data-accepted-schedule]`,
+    );
+    await waitForElement(sessionId, ".recipient-share-dialog");
+    await keyboardWorkflowSelect(sessionId, ".recipient-share-dialog select", "pdf");
+    await keyboardActivate(
+      sessionId,
+      ".recipient-share-dialog fieldset label:nth-of-type(1) input",
+      " ",
+    );
+    const stalePreview = await prepareRecipientReview();
+    assert.equal(stalePreview.format, "pdf");
+    assert.notEqual(stalePreview.previewId, beforeEditPreview.previewId);
+    assert.match(stalePreview.pdfSha256, /^[a-f0-9]{64}$/u);
+    assert.equal(stalePreview.report.source.scenarioId, scenarioId);
+    assert.equal(stalePreview.report.source.solutionId, accepted.result.solutionId);
+    assert.equal(stalePreview.report.source.acceptedResultChecksum, accepted.result.resultChecksum);
+    assert.equal(stalePreview.report.source.scenarioRevision, originalRevision);
+    assert.equal(stalePreview.report.source.observedCurrentRevision, editedRevision);
+    assert.equal(stalePreview.report.source.origin, "storedTerminal");
+    assert.equal(
+      stalePreview.report.source.verificationReportChecksum,
+      beforeEditPreview.report.source.verificationReportChecksum,
+    );
+    const staleSchedule = stalePreview.report.content.schedule;
+    assert.equal(stalePreview.report.privacy.includePersonNames, true);
+    assert.equal(
+      staleSchedule.people.find((person) => person.personId === originalPerson.id)?.label.text,
+      originalPerson.name,
+    );
+    assert.deepEqual(
+      staleSchedule.assignments.map(({ personId, shiftId }) => `${personId}/${shiftId}`).sort(),
+      timeline.items.map(({ personId, shiftId }) => `${personId}/${shiftId}`).sort(),
+    );
+    assert.deepEqual(
+      staleSchedule.people.map(({ personId }) => personId).sort(),
+      report.content.schedule.people.map(({ personId }) => personId).sort(),
+    );
+    assert.deepEqual(
+      staleSchedule.shifts.map(({ shiftId }) => shiftId).sort(),
+      report.content.schedule.shifts.map(({ shiftId }) => shiftId).sort(),
+    );
+    assert.equal(JSON.stringify(staleSchedule).includes(editedPerson.name), false);
+    const staleConsent = '.recipient-share-dialog > label.choice-row input[type="checkbox"]';
+    const staleWithoutConsent = `const dialog = document.querySelector('.recipient-share-dialog');
+      const consent = document.querySelector(arguments[0]);
+      const save = [...(dialog?.querySelectorAll('button') ?? [])]
+        .find(button => button.textContent.trim() === 'Save reviewed PDF…');
+      return dialog?.textContent.includes('This result was produced from an older project revision than the captured current head.') &&
+        consent?.checked === false && consent.disabled === false && save?.disabled === true;`;
+    await waitFor(sessionId, staleWithoutConsent, [staleConsent]);
+    await keyboardActivate(sessionId, staleConsent, " ");
+    await waitFor(
+      sessionId,
+      `return document.querySelector(arguments[0])?.checked === true &&
+        [...document.querySelectorAll('.recipient-share-dialog button')]
+          .some(button => button.textContent.trim() === 'Save reviewed PDF…' && !button.disabled);`,
+      [staleConsent],
+    );
+    const staleOutput = join(directory, "accepted-recipient-stale.pdf");
+    await keyboardActivateButton(sessionId, "Save reviewed PDF…", dialog);
+    await nativeChooser("Save recipient PDF report", staleOutput);
+    await waitFor(
+      sessionId,
+      "return document.querySelector('.recipient-share-dialog')?.textContent.includes('Native publication confirmed:');",
+    );
+    const staleCreated = await waitFor(
+      sessionId,
+      "return window.__recipientEvidence.created?.previewId === arguments[0] && window.__recipientEvidence.created;",
+      [stalePreview.previewId],
+    );
+    const stalePdf = await readFile(staleOutput);
+    assert.equal(stalePdf.subarray(0, 5).toString("ascii"), "%PDF-");
+    assert.equal(package10Sha256(stalePdf), stalePreview.pdfSha256);
+    assert.equal(staleCreated.format, "pdf");
+    assert.equal(staleCreated.filename, basename(staleOutput));
+    assert.equal(staleCreated.publication.solutionId, accepted.result.solutionId);
+    assert.equal(staleCreated.publication.sourceRevision, originalRevision);
+    assert.equal(staleCreated.publication.currentRevision, editedRevision);
+    assert.equal(staleCreated.publication.modelSha256, stalePreview.modelSha256);
+    assert.equal(staleCreated.publication.pdfSha256, stalePreview.pdfSha256);
+    await keyboardActivateButton(sessionId, "Close and release review", dialog);
+    await waitFor(sessionId, "return !document.querySelector('[role=dialog]');");
+    await keyboardActivateButton(
+      sessionId,
+      "Share result",
+      `${acceptedRow} [data-accepted-schedule]`,
+    );
+    await waitForElement(sessionId, ".recipient-share-dialog");
+    const reopenedStalePreview = await prepareRecipientReview();
+    assert.notEqual(reopenedStalePreview.previewId, stalePreview.previewId);
+    await waitFor(sessionId, staleWithoutConsent, [staleConsent]);
+    await keyboardActivate(sessionId, staleConsent, " ");
+    await keyboardActivate(
+      sessionId,
+      ".recipient-share-dialog fieldset label:nth-of-type(1) input",
+      " ",
+    );
+    await waitFor(sessionId, "return !document.querySelector('.recipient-share-source');");
+    const changedOptionsPreview = await prepareRecipientReview();
+    assert.notEqual(changedOptionsPreview.previewId, reopenedStalePreview.previewId);
+    assert.notEqual(
+      changedOptionsPreview.report.privacy.includePersonNames,
+      reopenedStalePreview.report.privacy.includePersonNames,
+    );
+    await waitFor(sessionId, staleWithoutConsent, [staleConsent]);
+    await keyboardActivateButton(sessionId, "Close and release review", dialog);
+    await waitFor(sessionId, "return !document.querySelector('[role=dialog]');");
+    assert.equal(
+      (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
+      editedRevision,
+      "Stale review, consented publication and new-review consent reset must preserve the edited head",
+    );
     await navigate(sessionId, "/projects");
     console.log(
-      "PASS: real-worker accepted result → keyboard CSV/HTML/PDF review and focus restore → exact native CSV/ICS/HTML/PDF publication, private defaults/all disclosures, format retirement, picker cancellation and PDF no-clobber",
+      "PASS: real-worker accepted result → keyboard CSV/HTML/PDF review and focus restore → exact native CSV/ICS/HTML/PDF publication, private defaults/all disclosures, format retirement, picker cancellation, PDF no-clobber and immutable stale-source consent with review reset",
     );
   } finally {
     await evaluate(
