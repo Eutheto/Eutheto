@@ -1526,22 +1526,31 @@ assignment census. This adds database-bound capture/publication evidence
 without namespaces. Exact hashes and evidence scope are in the
 [validation handoff](../contributors/phase07-pdf-validation.md).
 
-The remaining gates are actual bundled desktop PDF picker/publication and
-keyboard/focus/cancellation lifecycle; the pinned browser component case;
-spoken assistive technology and representative-user usability; macOS/Windows
-packaging and lifecycle; and maintainer checkpoint acceptance. Namespace
-preflights remain `EPERM`. The separate newly published browser environment
-now downloads the pinned archives, but sandbox-enabled launch is blocked by
-its missing Nix runtime/ELF-loader closure and namespace restrictions. The
-approved browser config explicitly enables Chromium sandboxing; static checks
-pass, while actual browser execution awaits CI or a supported environment.
-PDF-specific native E2E steps now cover
-keyboard format changes/review retirement and focus restoration, picker
-cancellation, default/all-fields publication against real captured hashes and
-receipts, and no-clobber. Those steps pass static checks and independent review
-but have not executed; they do not close desktop acceptance. No environment or
-isolation bypass is part of this work. Phase 07 is not complete and Phase 08 is
-not authorized.
+**Hosted Linux recipient-export acceptance (2026-10-18).** The
+[Linux package/UI job](https://github.com/Eutheto/Eutheto/actions/runs/39139719162/job/117711483495)
+passed for PR head `84f4ec454cc8ba7beebc10a0295710531ac33f41`, at default
+checkout `dd36544ec9f88377d1b62700101ad4adeaed5876` with the same source tree.
+The extracted unsigned DEB used the real worker to produce an accepted
+`clinic-tiny` result, then passed keyboard CSV/HTML/PDF review and focus
+restoration, native CSV/ICS/HTML/PDF publication, default/all-fields privacy
+assertions, format retirement, picker cancellation and PDF no-clobber. PDF
+checks bind captured models, saved bytes/hashes and native receipts; they do not
+independently check PDF text/layout or non-empty changes/fairness content.
+Practitioner CLI evidence above remains separate. This is automated Linux
+acceptance for that journey; see the
+[validation handoff](../contributors/phase07-pdf-validation.md)
+for runtime scope and remaining checks.
+
+The remaining gates include practitioner desktop PDF content/layout and broader
+native PDF lifecycle checks (preparation
+cancellation, stale UI consent and application-exit/helper cleanup); the pinned
+browser component case; spoken assistive technology and representative-user
+usability; macOS/Windows packaging and lifecycle; calibrated reference-machine
+benchmarks; and maintainer checkpoint acceptance. The saved cloud container's
+namespace/runtime failures remain recorded environment limits. The configured
+macOS browser job still needs hosted execution; the Linux pass establishes
+no other-platform or complete CI result. Phase 07 is not complete and Phase 08
+is not authorized.
 
 The following CEF decisions and results are retained as **historical experimental
 evidence**, superseded as the production PDF route. They do not establish Typst
