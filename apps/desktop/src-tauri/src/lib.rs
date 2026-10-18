@@ -5249,6 +5249,12 @@ mod tests {
                 "html",
             ),
             (
+                "sharePreview",
+                "solution_share_preview",
+                "solution_share_release",
+                "pdf",
+            ),
+            (
                 "exportPreview",
                 "solution_export_preview",
                 "solution_export_release",
@@ -5276,13 +5282,16 @@ mod tests {
                 "solutionId": RequestId::new(&SystemIdGenerator)?,
                 "format": format,
             });
-            if format == "html" {
+            if purpose == "sharePreview" {
                 preview["options"] = json!({});
             } else {
                 preview["personId"] = Value::Null;
             }
             for (patch, expected) in [
-                (json!({"format": "pdf"}), "setup.invalid_request"),
+                (
+                    json!({"format": if purpose == "sharePreview" { "ics" } else { "pdf" }}),
+                    "setup.invalid_request",
+                ),
                 (
                     json!({"options": {"includeHiddenNotes": true}}),
                     "setup.invalid_request",
