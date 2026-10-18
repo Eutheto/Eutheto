@@ -1530,9 +1530,12 @@ The remaining gates are actual bundled desktop PDF picker/publication and
 keyboard/focus/cancellation lifecycle; the pinned browser component case;
 spoken assistive technology and representative-user usability; macOS/Windows
 packaging and lifecycle; and maintainer checkpoint acceptance. Namespace
-preflights remain `EPERM`. The separate fresh browser task is still blocked
-by the proxy on the two approved download redirect hosts while environment
-allowlist publication is pending. PDF-specific native E2E steps now cover
+preflights remain `EPERM`. The separate newly published browser environment
+now downloads the pinned archives, but sandbox-enabled launch is blocked by
+its missing Nix runtime/ELF-loader closure and namespace restrictions. The
+approved browser config explicitly enables Chromium sandboxing; static checks
+pass, while actual browser execution awaits CI or a supported environment.
+PDF-specific native E2E steps now cover
 keyboard format changes/review retirement and focus restoration, picker
 cancellation, default/all-fields publication against real captured hashes and
 receipts, and no-clobber. Those steps pass static checks and independent review

@@ -208,9 +208,11 @@ just frontend-browser-install
 pnpm --filter @eutheto/desktop run test:browser -- src/components/RecipientShare.browser.test.ts
 ```
 
-It uses the lock-pinned Playwright Chromium headless shell. This saved environment has no cached executable; the pinned browser case has not run. The older download attempt was blocked at `cdn.playwright.dev`. In the separate fresh browser task, that host now redirects to `storage.googleapis.com` for the exact Chrome-for-Testing archive and `playwright.download.prss.microsoft.com` for the exact FFmpeg archive. Both approved redirect hosts remain proxy-blocked; allowlist publication is pending with the environment owner. No duplicate installer or download was attempted here. Do not substitute an arbitrary browser, bypass the proxy, or relax browser security. The case is typechecked and uses mocked native responses: it checks format-change retirement, a fresh PDF review, stale consent and matching publication receipts, rather than actual renderer execution.
+It uses the lock-pinned Playwright Chromium headless shell with explicit `chromiumSandbox: true`; the pinned Playwright default would otherwise disable Chromium sandboxing. The approved config change passes focused formatting, lint and TypeScript checks. No fallback disables the sandbox.
 
-Read-only HEAD requests to the exact pinned download URL, both inside and outside the development container, return Envoy HTTP 403 during proxy CONNECT before CDN TLS. The effective policy is not exposed; its environment/workspace owner is unestablished. Changing the package manager or removing Docker would not automatically resolve this observed denial.
+This saved worktree has not executed the pinned browser case. Earlier CDN/redirect probes were proxy-blocked. The separate newly published cloud environment now downloads Playwright 1.62.1 Chrome revision 1234 and FFmpeg revision 1011 successfully, as reported by the coordination task. Sandbox-enabled launch there remains blocked by the missing Nix runtime/ELF-loader closure and namespace `EPERM` / `No usable sandbox`. These are distinct from download access. No duplicate installer, host-security change or environment bypass was attempted here. Existing PR CI is configured to attempt the browser tests on Ubuntu 24.04 after publication; its actual result must be recorded separately.
+
+The component case uses mocked native responses: it checks format-change retirement, a fresh PDF review, stale consent and matching publication receipts. It does not execute the packaged renderer or desktop picker. Do not substitute an arbitrary browser, bypass the proxy, or relax browser security.
 
 ## Native PDF acceptance
 
