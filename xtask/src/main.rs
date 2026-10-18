@@ -1,6 +1,7 @@
 mod architecture;
 mod fixtures;
 mod generate;
+mod pdf;
 mod phase02_generate;
 mod protocol;
 mod protocol_generate;
@@ -58,6 +59,11 @@ enum Command {
         #[command(subcommand)]
         command: SolverCommand,
     },
+    /// Build and stage the fixed offline PDF renderer.
+    Pdf {
+        #[command(subcommand)]
+        command: PdfCommand,
+    },
     /// Third-party license artifact operations.
     Licenses {
         #[command(subcommand)]
@@ -79,6 +85,34 @@ enum Command {
 enum ArchitectureCommand {
     /// Reject missing architecture crates and forbidden transitive dependency paths.
     Verify,
+}
+
+#[derive(Debug, Subcommand)]
+enum PdfCommand {
+    /// Build a release helper with its source-bound renderer identity and font notices.
+    Build,
+    /// Build and atomically stage the helper in the independent Tauri PDF sidecar root.
+    StageDesktop,
+    /// Verify extracted final package bytes against the retained build-manifest digest.
+    Verify {
+        #[arg(long)]
+        executable: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        manifest_sha256: String,
+    },
+    /// Record final executable bytes after all platform stripping and fixups.
+    Finalize {
+        #[arg(long)]
+        authority_root: PathBuf,
+        #[arg(long)]
+        executable: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        target_triple: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -183,6 +217,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Solver { command } => run_solver(command),
+        Command::Pdf { command } => run_pdf(command),
         command => {
             let root = repository_root()?;
             match command {
@@ -213,6 +248,7 @@ fn main() -> Result<()> {
                 Command::Solver { .. } => {
                     unreachable!("solver commands are handled before root lookup")
                 }
+                Command::Pdf { .. } => unreachable!("PDF commands are handled before root lookup"),
                 Command::Licenses {
                     command: GenerateCommand::Generate,
                 } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
@@ -224,6 +260,39 @@ fn main() -> Result<()> {
                     ReleaseCommand::AssembleManifest => release::assemble_manifest(),
                 },
             }
+        }
+    }
+}
+fn run_pdf(command: PdfCommand) -> Result<()> {
+    match command {
+        PdfCommand::Build => pdf::build(&repository_root()?).map(drop),
+        PdfCommand::StageDesktop => {
+            let (manifest, digest, mut lease) = pdf::stage_desktop(&repository_root()?)?;
+            lease.commit();
+            println!(
+                "PDF build manifest: {}\nPDF manifest SHA-256: {digest}",
+                manifest.display()
+            );
+            Ok(())
+        }
+        PdfCommand::Finalize {
+            authority_root,
+            executable,
+            manifest,
+            target_triple,
+        } => {
+            let digest = pdf::finalize(&authority_root, &executable, &manifest, &target_triple)?;
+            println!("PDF manifest SHA-256: {digest}");
+            Ok(())
+        }
+        PdfCommand::Verify {
+            executable,
+            manifest,
+            manifest_sha256,
+        } => {
+            pdf::verify_staged(&executable, &manifest, &manifest_sha256)?;
+            println!("verified final PDF worker bytes against the retained build digest");
+            Ok(())
         }
     }
 }

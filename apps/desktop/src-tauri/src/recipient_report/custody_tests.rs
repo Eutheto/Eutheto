@@ -48,6 +48,37 @@ fn assert_code<T>(result: Result<T, ApiError>, code: &str) {
 }
 
 #[test]
+fn conversion_growth_is_reserved_until_owned_preparation_settles() -> TestResult {
+    let (custody, _) = fixture();
+    let scope = scope()?;
+    let baseline = custody.state().charged_bytes;
+    let first = reserve(&custody, "main", scope)?;
+    let second = reserve(&custody, "other", scope)?;
+    let mut preparing = custody.begin("main", first, scope).map_err(boxed)?;
+    let mut other = custody.begin("other", second, scope).map_err(boxed)?;
+    preparing
+        .reserve_preparation(40 * 1024 * 1024)
+        .map_err(boxed)?;
+    assert_code(
+        other.reserve_preparation(30 * 1024 * 1024),
+        "recipient.preview_capacity",
+    );
+    assert_eq!(
+        custody.release("main", scope.scenario_id, scope.kind, target(first)),
+        ReleaseAcknowledgement::Closing,
+    );
+    assert_code(
+        other.reserve_preparation(30 * 1024 * 1024),
+        "recipient.preview_capacity",
+    );
+    drop(preparing);
+    other.reserve_preparation(30 * 1024 * 1024).map_err(boxed)?;
+    drop(other);
+    assert_eq!(custody.state().charged_bytes, baseline);
+    Ok(())
+}
+
+#[test]
 fn release_before_begin_never_recreates_the_reservation() -> TestResult {
     let (custody, _) = fixture();
     let scope = scope()?;

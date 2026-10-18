@@ -3,6 +3,7 @@ import { computed, nextTick, onScopeDispose, reactive, ref, shallowRef, watch } 
 import {
   SetupOperationScope,
   type RecipientCreatedDtoV1,
+  type RecipientFileFormatV1,
   type RecipientPreviewDtoV1,
   type Revision,
   type SetupOperation,
@@ -37,6 +38,7 @@ const options = reactive({
   includeFairnessActuals: false,
 });
 const optionKeys = Object.keys(copy.options) as (keyof RecipientReportOptionsV1)[];
+const format = ref<RecipientFileFormatV1>("html");
 const open = ref(false);
 const pending = ref<"preview" | "create" | null>(null);
 const activeOperation = shallowRef<WorkspaceOperationState | null>(null);
@@ -195,6 +197,7 @@ async function prepare(): Promise<void> {
   const head = props.currentRevision;
   const epoch = home.state.libraryEpoch;
   const disclosure = { ...options };
+  const selectedFormat = format.value;
   const current = () =>
     alive &&
     token === generation &&
@@ -207,7 +210,8 @@ async function prepare(): Promise<void> {
     props.summary.result.solutionId === solutionId &&
     props.summary.result.resultChecksum === checksum &&
     props.summary.scenarioRevision === sourceRevision &&
-    props.summary.verificationChecksum === verificationChecksum;
+    props.summary.verificationChecksum === verificationChecksum &&
+    format.value === selectedFormat;
   let owned: Owner | null = null;
   pending.value = "preview";
   const started = performance.now();
@@ -224,7 +228,12 @@ async function prepare(): Promise<void> {
       },
       execute: async (report) => {
         activeOperation.value = home.state.operation;
-        const operation = captured.scope.previewRecipientReport(solutionId, disclosure, report);
+        const operation = captured.scope.previewRecipientReport(
+          solutionId,
+          disclosure,
+          report,
+          selectedFormat,
+        );
         captured.preview = operation;
         captured.previewSettled = operation.result.then(
           ({ result }) => {
@@ -243,6 +252,7 @@ async function prepare(): Promise<void> {
     const preview = response.result;
     const source = preview.report.source;
     if (
+      preview.format !== selectedFormat ||
       source.scenarioId !== scenarioId ||
       source.solutionId !== solutionId ||
       source.acceptedResultChecksum !== checksum ||
@@ -352,18 +362,26 @@ async function save(): Promise<void> {
       },
       execute: async (report) => {
         activeOperation.value = owned.home.state.operation;
-        owned.create = owned.scope.createRecipientReport(preview.previewId, staleConsent, report);
+        owned.create = owned.scope.createRecipientReport(
+          preview.previewId,
+          staleConsent,
+          report,
+          preview.format,
+        );
         return owned.create.result;
       },
       success: (result) => copy.saved(result.filename),
     });
     const publication = response.result.publication;
     if (
+      response.result.format !== preview.format ||
       publication.solutionId !== preview.report.source.solutionId ||
       publication.sourceRevision !== preview.report.source.scenarioRevision ||
       publication.currentRevision !== preview.report.source.observedCurrentRevision ||
       publication.modelSha256 !== preview.modelSha256 ||
-      publication.htmlSha256 !== preview.htmlSha256
+      (preview.format === "pdf"
+        ? !("pdfSha256" in publication) || publication.pdfSha256 !== preview.pdfSha256
+        : !("htmlSha256" in publication) || publication.htmlSha256 !== preview.htmlSha256)
     ) {
       if (current()) notice.value = copy.unknown;
     } else if (current() && owned.create?.isCurrent()) {
@@ -456,7 +474,7 @@ watch(
   { flush: "sync" },
 );
 watch(
-  options,
+  [options, format],
   () => {
     void invalidate(copy.optionsChanged);
   },
@@ -490,7 +508,14 @@ onScopeDispose(() => {
         ><span ref="heading" tabindex="-1">{{ copy.title }}</span></DialogTitle
       >
       <DialogDescription>{{ copy.description }}</DialogDescription>
-      <p>{{ copy.format }}</p>
+      <label>
+        <span>{{ copy.format }}</span>
+        <select v-model="format" :disabled="busy">
+          <option value="html">{{ copy.html }}</option>
+          <option value="pdf">{{ copy.pdf }}</option>
+        </select>
+      </label>
+      <p v-if="format === 'pdf'">{{ copy.pdfPreview }}</p>
       <p>{{ copy.offline }}</p>
       <p>{{ copy.privacy }}</p>
       <p>{{ copy.optional }}</p>
@@ -573,7 +598,7 @@ onScopeDispose(() => {
           :disabled="busy || unavailable || (staleSource && !allowStale)"
           @click="save"
         >
-          {{ copy.save }}
+          {{ format === "pdf" ? copy.savePdf : copy.save }}
         </button>
       </div>
     </DialogContent>

@@ -6818,7 +6818,10 @@ mod tests {
         let unopened = inspect_unopened_bundle_for_exact_reexport(&bytes, &policy).map(|_| ());
         for result in [semantic, unopened] {
             assert!(
-                matches!(&result, Err(ImportError::EntryTooLarge { path: rejected }) if rejected == path),
+                matches!(&result, Err(ImportError::EntryTooLarge { path: rejected }) if rejected == path)
+                    || matches!(&result, Err(ImportError::Io(error))
+                        if error.kind() == std::io::ErrorKind::InvalidData
+                            && error.to_string() == "File is larger than its declared uncompressed size"),
                 "{result:?}"
             );
         }

@@ -682,3 +682,149 @@ pub(super) fn recipient_metadata(
         },
     }
 }
+
+/// Native publication custody retaining exact rendered bytes and the approved disclosure model.
+pub struct CapturedRecipientPdf {
+    publication: CapturedPublication,
+    encoded: super::EncodedRecipientPdf,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipientPdfPublishedV1 {
+    pub schema_version: u32,
+    pub solution_id: SolutionId,
+    pub source_revision: Revision,
+    pub current_revision: Revision,
+    pub model_sha256: String,
+    pub pdf_sha256: String,
+}
+
+impl CapturedRecipientReport {
+    /// Convert the exact captured model, keeping its complete native publication custody.
+    ///
+    /// # Errors
+    /// Preserves source alarms ahead of renderer failure, cancellation and clock failure.
+    pub async fn prepare_pdf(
+        self,
+        control: OperationControl,
+    ) -> Result<CapturedRecipientPdf, AppError> {
+        tokio::spawn(async move {
+            self.publication.admit()?;
+            let rendered = super::render_recipient_pdf(self.encoded, control).await;
+            self.publication.admit()?;
+            Ok(CapturedRecipientPdf {
+                publication: self.publication,
+                encoded: rendered?,
+            })
+        })
+        .await
+        .map_err(join_error)?
+    }
+}
+
+impl CapturedRecipientPdf {
+    #[must_use]
+    pub fn metadata(&self) -> &RecipientReportMetadataV1 {
+        &self.publication.metadata
+    }
+    #[must_use]
+    pub fn canonical_model_bytes(&self) -> &[u8] {
+        self.encoded.html().canonical_model_bytes()
+    }
+    #[must_use]
+    pub fn html_bytes(&self) -> &[u8] {
+        self.encoded.html().as_bytes()
+    }
+    #[must_use]
+    pub fn pdf_bytes(&self) -> &[u8] {
+        self.encoded.as_bytes()
+    }
+    #[must_use]
+    pub fn model_sha256(&self) -> &str {
+        self.encoded.model_sha256()
+    }
+    #[must_use]
+    pub fn pdf_sha256(&self) -> &str {
+        self.encoded.pdf_sha256()
+    }
+    #[must_use]
+    pub fn html_sha256(&self) -> &str {
+        self.encoded.html().html_sha256()
+    }
+    #[must_use]
+    pub fn renderer(&self) -> &eutheto_types::RecipientPdfRendererV1 {
+        self.encoded.renderer()
+    }
+
+    /// # Errors
+    /// Returns an established native source alarm.
+    pub fn admit(&self) -> Result<(), AppError> {
+        self.publication.admit()
+    }
+
+    /// # Errors
+    /// Refuses interrupted/overflowing accounting or a native source alarm.
+    pub fn retained_bytes(&self, control: &OperationControl) -> Result<usize, AppError> {
+        self.publication.retained_bytes(
+            control,
+            size_of::<Self>(),
+            self.encoded.retained_bytes() - size_of::<super::EncodedRecipientPdf>(),
+        )
+    }
+
+    /// Publish the exact reviewed PDF under the captured source/head/library lease.
+    ///
+    /// # Errors
+    /// Refuses missing stale consent, changed revisions, native alarms and unsafe publication.
+    pub async fn publish_pdf(
+        self,
+        destination: PathBuf,
+        allow_stale: bool,
+        control: OperationControl,
+    ) -> Result<RecipientPdfPublishedV1, AppError> {
+        self.admit()?;
+        let metadata = &self.publication.metadata;
+        let result = RecipientPdfPublishedV1 {
+            schema_version: 1,
+            solution_id: metadata.source.solution_id,
+            source_revision: metadata.source.scenario_revision,
+            current_revision: metadata.current_revision,
+            model_sha256: self.encoded.model_sha256().to_owned(),
+            pdf_sha256: self.encoded.pdf_sha256().to_owned(),
+        };
+        self.publication
+            .publish(destination, allow_stale, control, move |path, control| {
+                eutheto_export::prepare_pdf_atomic_controlled(
+                    path,
+                    self.encoded.as_bytes(),
+                    control,
+                )
+            })
+            .await?;
+        Ok(result)
+    }
+}
+
+impl EuthetoApp {
+    /// Capture and render under one bounded budget, retaining all source alarm custody.
+    ///
+    /// # Errors
+    /// Refuses the same source, disclosure and lifecycle failures as HTML capture and PDF rendering.
+    pub async fn prepare_recipient_pdf(
+        &self,
+        request: RecipientReportRequestV1,
+        control: OperationControl,
+    ) -> Result<(CapturedRecipientPdf, RecipientReportV1), AppError> {
+        let control = recipient_control(control, &self.monotonic_clock)?;
+        let app = self.clone();
+        tokio::spawn(async move {
+            let (captured, report) = app
+                .prepare_recipient_report(request, control.clone())
+                .await?;
+            Ok((captured.prepare_pdf(control).await?, report))
+        })
+        .await
+        .map_err(join_error)?
+    }
+}

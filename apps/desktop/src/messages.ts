@@ -2155,9 +2155,13 @@ export const messages = {
     trigger: "Share result",
     title: "Review recipient report",
     description:
-      "Review the complete participant-friendly HTML report before choosing where to save it. This shares the full result, not the current page or filter.",
-    format: "Format: participant-friendly HTML",
-    offline: "The saved HTML report works offline. No upload is required.",
+      "Review the complete participant-friendly report before choosing where to save it. This shares the full result, not the current page or filter.",
+    format: "Report format",
+    html: "HTML",
+    pdf: "PDF",
+    pdfPreview:
+      "This review shows the complete PDF content. The saved PDF arranges it on printable pages.",
+    offline: "The saved report works offline. No upload is required.",
     privacy:
       "Generated labels still retain linkable identities; this report is not anonymous. Hidden notes, rules and preferences are excluded.",
     optional:
@@ -2175,7 +2179,7 @@ export const messages = {
     ready: "Review ready. Check the report and disclosures before saving.",
     empty: "This complete report contains no scheduled assignments.",
     initial: "Choose disclosures, then prepare a native review.",
-    optionsChanged: "Disclosures changed. Prepare a new review before saving.",
+    optionsChanged: "Format or disclosures changed. Prepare a new review before saving.",
     stale:
       "The result, project head or library changed. The old review was released; prepare a new one.",
     staleSource:
@@ -2186,6 +2190,7 @@ export const messages = {
     mismatch: "The native report did not match the visible result and its reviewed source.",
     renderFailed: "The native report could not be displayed safely. Its review has been retired.",
     save: "Save reviewed HTML…",
+    savePdf: "Save reviewed PDF…",
     saving: "Waiting for the native save picker and publication confirmation…",
     cancelled: "Operation cancelled. This approval will not be reused.",
     failed: "The report could not be saved. This approval has been retired and will not be reused.",
@@ -3057,7 +3062,10 @@ export const messages = {
     previousValues: "Previously loaded values remain visible; this refresh did not confirm them.",
     inventoryTitle: "Locked-workspace license inventory",
     inventoryBoundary:
-      "This bounded inventory describes locked workspace packages and their recorded license metadata. It is not linked-installer attribution, a list of licenses shipped in a particular installer, license approval, or release clearance. Missing or unresolved license metadata is not permission to redistribute.",
+      "This bounded inventory describes locked workspace packages, reviewed source assets and their recorded license metadata. It is not linked-installer attribution, a list of licenses shipped in a particular installer, license approval, or release clearance. Missing or unresolved license metadata is not permission to redistribute.",
+    assets: "Reviewed assets",
+    assetFiles: "Reviewed asset files",
+    assetNotices: "License and attribution notices",
     generatedBy: "Inventory generator",
     inputs: "Authoritative inventory inputs",
     search: "Search workspace packages",

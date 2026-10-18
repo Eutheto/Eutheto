@@ -2653,8 +2653,53 @@ fn write_bundle_atomic_with_failpoint(
     write_bundle_atomic_with_control(destination, bytes, failpoint, || Ok(()))
 }
 
+/// Stage verified PDF bytes under the same private, atomic no-clobber custody as reports.
+/// This checks framing only; the application admits renderer identity and disclosure custody.
+///
+/// # Errors
+/// Refuses oversized/non-PDF bytes, interrupted work, or unsafe destination/staging I/O.
+pub fn prepare_pdf_atomic_controlled(
+    destination: &Path,
+    bytes: &[u8],
+    control: &OperationControl,
+) -> Result<PreparedPublication, ExportError> {
+    control.check().map_err(ExportError::from)?;
+    if bytes.len() > eutheto_types::MAX_RECIPIENT_PDF_BYTES || !bytes.starts_with(b"%PDF-") {
+        return Err(ExportError::Verification(
+            "invalid PDF framing or size".to_owned(),
+        ));
+    }
+    prepare_atomic_with_control(destination, bytes, PublicationFailpoint::None, &mut || {
+        control.check().map_err(ExportError::from)
+    })
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn pdf_staging_preserves_no_clobber_and_cancellation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let destination = directory.path().join("report.pdf");
+        let token = CancellationToken::new();
+        let control = OperationControl::Cancellation(token.clone());
+        assert!(prepare_pdf_atomic_controlled(&destination, b"not a PDF", &control).is_err());
+        let staged = prepare_pdf_atomic_controlled(&destination, b"%PDF-1.7\nfirst", &control)?;
+        token.cancel();
+        assert!(staged.publish_controlled(&control).is_err());
+        assert!(!destination.exists());
+        let control = OperationControl::Cancellation(CancellationToken::new());
+        prepare_pdf_atomic_controlled(&destination, b"%PDF-1.7\nfirst", &control)?
+            .publish_controlled(&control)?;
+        assert!(
+            prepare_pdf_atomic_controlled(&destination, b"%PDF-1.7\nsecond", &control)
+                .and_then(|staged| staged.publish_controlled(&control))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(destination)?, b"%PDF-1.7\nfirst");
+        Ok(())
+    }
     use super::*;
     use eutheto_types::ARCHIVAL_RESULT_FORMAT;
 
@@ -2915,7 +2960,10 @@ mod tests {
         let ordered = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
         let mut archive = ZipArchive::new(Cursor::new(ordered))?;
         let names = (0..archive.len())
-            .map(|index| archive.by_index(index).map(|entry| entry.name().to_owned()))
+            .map(|index| {
+                let entry = archive.by_index(index)?;
+                entry.name().map(Cow::into_owned)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(
             names,

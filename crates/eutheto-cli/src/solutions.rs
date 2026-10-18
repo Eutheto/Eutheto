@@ -214,13 +214,15 @@ async fn export(
         include_changes: args.include_changes,
         include_fairness_actuals: args.include_fairness_actuals,
     };
-    if args.format != SolutionExportFormat::Html
-        && report_options != RecipientReportOptionsV1::default()
+    if !matches!(
+        args.format,
+        SolutionExportFormat::Html | SolutionExportFormat::Pdf
+    ) && report_options != RecipientReportOptionsV1::default()
     {
         return Err(SafeCliError::new(
             CliExitCode::Usage,
             "solution.report_options_invalid",
-            "Report disclosure switches are supported only with --format html.",
+            "Report disclosure switches are supported only with --format html or --format pdf.",
         ));
     }
     let format = match args.format {
@@ -229,10 +231,11 @@ async fn export(
         SolutionExportFormat::Ics => "ics",
         SolutionExportFormat::Json => "json",
         SolutionExportFormat::Html => "html",
-        _ => {
+        SolutionExportFormat::Pdf => "pdf",
+        SolutionExportFormat::Svg => {
             return Err(SafeCliError::unavailable(
                 "solution.export_format_unavailable",
-                "This export format is unavailable; use JSON, assignment CSV, summary CSV, Workforce iCalendar or recipient HTML.",
+                "This export format is unavailable; use JSON, assignment CSV, summary CSV, Workforce iCalendar or recipient HTML/PDF.",
             ));
         }
     };
@@ -261,8 +264,11 @@ async fn export(
             "JSON result-envelope mode requires --output; raw data cannot share stdout with the envelope.",
         ));
     }
-    if args.format == SolutionExportFormat::Html {
-        return recipient_html(data_dir, args, report_options, cancellation, has_config).await;
+    if matches!(
+        args.format,
+        SolutionExportFormat::Html | SolutionExportFormat::Pdf
+    ) {
+        return recipient_report(data_dir, args, report_options, cancellation, has_config).await;
     }
     let ids = paired_ids(&args.scenario, &args.solution)?;
     let control = OperationControl::Cancellation(cancellation.clone());
@@ -352,7 +358,8 @@ async fn export(
     Ok(outcome)
 }
 
-async fn recipient_html(
+#[allow(clippy::too_many_lines)]
+async fn recipient_report(
     data_dir: Option<PathBuf>,
     args: ExportSolutionArgs,
     options: RecipientReportOptionsV1,
@@ -363,7 +370,7 @@ async fn recipient_html(
         SafeCliError::new(
             CliExitCode::Usage,
             "solution.export_output_required",
-            "Recipient HTML requires --output for atomic no-clobber publication.",
+            "Recipient HTML/PDF requires --output for atomic no-clobber publication.",
         )
     })?;
     let budget = ParentSolveBudget::new(
@@ -392,6 +399,34 @@ async fn recipient_html(
         files::check_control(&control)?;
         // Capture and publication own their alarm/commit settlement. Do not timeout them or
         // replace their result with a post-await cancellation check.
+        if args.format == SolutionExportFormat::Pdf {
+            let (capture, _) = app
+                .prepare_recipient_pdf(
+                    RecipientReportRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        solution_id,
+                        expected_revision,
+                        options,
+                    },
+                    control.clone(),
+                )
+                .await
+                .map_err(app_error)?;
+            let outcome = recipient_outcome(
+                &capture.metadata().source,
+                options,
+                &output,
+                capture.model_sha256(),
+                capture.pdf_sha256(),
+                "pdf",
+            );
+            capture
+                .publish_pdf(output, args.allow_stale, control)
+                .await
+                .map_err(app_error)?;
+            return Ok(outcome);
+        }
         let (capture, _) = app
             .prepare_recipient_report(
                 RecipientReportRequestV1 {
@@ -411,6 +446,7 @@ async fn recipient_html(
             &output,
             capture.model_sha256(),
             capture.html_sha256(),
+            "html",
         );
         capture
             .publish_html(output, args.allow_stale, control)
@@ -431,12 +467,34 @@ async fn recipient_html(
         let (encoded, report) = service
             .export_recipient_html(loaded.snapshot()?, &portable, options, &control)
             .map_err(app_error)?;
+        if args.format == SolutionExportFormat::Pdf {
+            let encoded = eutheto_core::render_recipient_pdf(encoded, control.clone())
+                .await
+                .map_err(app_error)?;
+            let outcome = recipient_outcome(
+                &report.source,
+                options,
+                &output,
+                encoded.model_sha256(),
+                encoded.pdf_sha256(),
+                "pdf",
+            );
+            drop(report);
+            drop(portable);
+            drop(loaded);
+            eutheto_export::prepare_pdf_atomic_controlled(&output, encoded.as_bytes(), &control)
+                .map_err(|error| files::publication_error(&error, &control))?
+                .publish_controlled(&control)
+                .map_err(|error| files::publication_error(&error, &control))?;
+            return Ok(outcome);
+        }
         let outcome = recipient_outcome(
             &report.source,
             options,
             &output,
             encoded.model_sha256(),
             encoded.html_sha256(),
+            "html",
         );
         drop(report);
         drop(portable);
@@ -477,8 +535,14 @@ fn recipient_outcome(
     options: RecipientReportOptionsV1,
     output: &Path,
     model_sha256: &str,
-    html_sha256: &str,
+    artifact_sha256: &str,
+    format: &str,
 ) -> Outcome {
+    let (hash_field, label) = if format == "pdf" {
+        ("pdfSha256", "PDF")
+    } else {
+        ("htmlSha256", "HTML")
+    };
     let mut outcome = Outcome::new(
         "solutions.export",
         "exported",
@@ -490,14 +554,14 @@ fn recipient_outcome(
             "revisionAsOf": source.observed_current_revision,
             "staleAtRevisionRead": source.observed_current_revision
                 .map(|head| head != source.scenario_revision),
-            "format": "html",
+            "format": format,
             "output": output,
             "source": source,
             "privacy": options,
             "modelSha256": model_sha256,
-            "htmlSha256": html_sha256,
+            (hash_field): artifact_sha256,
         }),
-        vec!["Published freshly verified recipient HTML.".to_owned()],
+        vec![format!("Published freshly verified recipient {label}.")],
     );
     outcome.warnings.push(SafeCliWarning {
         code: "solution.recipient_linkability".to_owned(),

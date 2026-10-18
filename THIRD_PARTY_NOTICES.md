@@ -20,13 +20,19 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `anstyle-query` | `1.1.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `anstyle-wincon` | `3.0.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `anyhow` | `1.0.104` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `approx` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ar_archive_writer` | `0.5.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `arrayref` | `0.3.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `arrayvec` | `0.7.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `atk` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `atk-sys` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `atomic-waker` | `1.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `autocfg` | `1.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `az` | `1.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `base64` | `0.21.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `base64` | `0.22.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `biblatex` | `0.12.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `bincode` | `1.3.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bit-set` | `0.8.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bit-vec` | `0.8.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bitflags` | `1.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -38,7 +44,9 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `brotli-decompressor` | `5.0.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bs58` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bumpalo` | `3.20.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `by_address` | `1.2.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bytemuck` | `1.25.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `bytemuck_derive` | `1.12.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `byteorder` | `1.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `byteorder-lite` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `bytes` | `1.12.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -54,33 +62,51 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `cfg-expr` | `0.15.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cfg-if` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cfg_aliases` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `chinese-number` | `0.7.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `chinese-variant` | `1.1.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `chrono` | `0.4.45` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ciborium` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ciborium-io` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ciborium-ll` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `citationberg` | `0.7.0` | `MIT OR Apache-2.0` | `https://github.com/typst/citationberg/tree/06a591e2f237d25e1dfdedac3f3d1494c496c52d` |
 | cargo | `clap` | `4.6.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `clap_builder` | `4.6.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `clap_derive` | `4.6.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `clap_lex` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `cobs` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `codex` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `color` | `0.3.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `color_quant` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `colorchoice` | `1.0.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `combine` | `4.6.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `comemo` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `comemo-macros` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `constant_time_eq` | `0.4.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cookie` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-foundation` | `0.10.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-foundation-sys` | `0.8.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-graphics` | `0.25.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-graphics-types` | `0.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `core_maths` | `0.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cpufeatures` | `0.2.17` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cpufeatures` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `crc32fast` | `1.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `crossbeam-channel` | `0.5.16` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `crossbeam-deque` | `0.8.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `crossbeam-epoch` | `0.9.21` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `crossbeam-utils` | `0.8.22` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `crunchy` | `0.2.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `crypto-common` | `0.1.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cssparser` | `0.36.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cssparser-macros` | `0.6.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `csv` | `1.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `csv-core` | `0.1.13` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ctor` | `0.8.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ctor-proc-macro` | `0.0.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `darling` | `0.23.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `darling_core` | `0.23.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `darling_macro` | `0.23.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `data-url` | `0.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `dbus` | `0.9.12` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `defmt` | `1.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `defmt-macros` | `1.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -103,23 +129,34 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `dtor-proc-macro` | `0.0.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `dunce` | `1.0.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `dyn-clone` | `1.0.20` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ecow` | `0.2.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `either` | `1.18.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `embed-resource` | `3.0.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `embed_plist` | `1.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `enum-ordinalize` | `4.4.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `enum-ordinalize-derive` | `4.4.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `equivalent` | `1.0.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `erased-serde` | `0.4.10` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `errno` | `0.3.14` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `euclid` | `0.22.14` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `fallible-iterator` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `fallible-streaming-iterator` | `0.1.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `fancy-regex` | `0.16.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `fastrand` | `2.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `fdeflate` | `0.3.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `fearless_simd` | `0.4.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `fearless_simd` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `field-offset` | `0.3.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `find-msvc-tools` | `0.1.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `fixedbitset` | `0.5.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `flate2` | `1.1.10` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `float-cmp` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `fnv` | `1.0.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foldhash` | `0.1.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foldhash` | `0.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `font-types` | `0.11.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `fontconfig-parser` | `0.5.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `fontdb` | `0.23.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foreign-types` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foreign-types-macros` | `0.2.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foreign-types-shared` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -144,21 +181,38 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `getrandom` | `0.2.17` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `getrandom` | `0.3.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `getrandom` | `0.4.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `gif` | `0.14.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `gio` | `0.18.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `gio-sys` | `0.18.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `glib` | `0.18.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `glib-macros` | `0.18.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `glib-sys` | `0.18.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `glidesort` | `0.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `glifo` | `0.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `glob` | `0.3.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `gobject-sys` | `0.18.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `gtk` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `gtk-sys` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `gtk3-macros` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `guillotiere` | `0.7.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `half` | `2.7.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hashbrown` | `0.12.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hashbrown` | `0.15.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hashbrown` | `0.16.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hashbrown` | `0.17.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hashlink` | `0.12.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayagriva` | `0.10.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro` | `0.7.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-ccitt` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-ccitt` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-cmap` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-interpret` | `0.7.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-jbig2` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-jpeg2000` | `0.3.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-postscript` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-svg` | `0.7.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-syntax` | `0.7.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hayro-write` | `0.7.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `heck` | `0.4.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `heck` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hex` | `0.4.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -169,21 +223,33 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `httparse` | `1.10.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hyper` | `1.11.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `hyper-util` | `0.1.20` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `hypher` | `0.1.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `iana-time-zone` | `0.1.65` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `iana-time-zone-haiku` | `0.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ical` | `0.11.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ico` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_collator` | `2.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_collator_data` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_collections` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_locale` | `2.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_locale_core` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_locale_data` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_locale_fallback` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_locale_fallback_data` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_normalizer` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_normalizer_data` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_properties` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_properties_data` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `icu_provider` | `2.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_provider_blob` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_segmenter` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `icu_segmenter_data` | `2.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ident_case` | `1.0.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `idna` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `idna_adapter` | `1.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `image` | `0.25.10` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `image-webp` | `0.2.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `imagesize` | `0.14.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `indexmap` | `1.9.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `indexmap` | `2.14.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `infer` | `0.19.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -206,20 +272,29 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `js-sys` | `0.3.104` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `json-patch` | `3.0.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `jsonptr` | `0.6.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `kamadak-exif` | `0.6.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `keyboard-types` | `0.7.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `krilla` | `0.8.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `krilla-svg` | `0.8.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `kurbo` | `0.13.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libappindicator` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libappindicator-sys` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libc` | `0.2.189` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libdbus-sys` | `0.2.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libloading` | `0.7.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `libm` | `0.2.16` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libredox` | `0.1.21` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `libsqlite3-sys` | `0.38.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `linebender_resource_handle` | `0.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `linked-hash-map` | `0.5.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `linux-raw-sys` | `0.12.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `lipsum` | `0.9.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `litemap` | `0.8.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `lock_api` | `0.4.14` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `log` | `0.4.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `markup5ever` | `0.38.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `memchr` | `2.8.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `memmap2` | `0.9.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `memoffset` | `0.9.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `mime` | `0.3.17` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `miniz_oxide` | `0.8.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -228,11 +303,14 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `moxcms` | `0.8.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `muda` | `0.19.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `multimap` | `0.10.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `mutate_once` | `0.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ndk` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ndk-sys` | `0.6.0+11769913` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `new_debug_unreachable` | `1.0.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `nix` | `0.31.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `num-bigint` | `0.4.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num-conv` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `num-integer` | `0.1.47` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num-traits` | `0.2.19` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num_enum` | `0.7.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num_enum_derive` | `0.7.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -253,13 +331,20 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `objc2-ui-kit` | `0.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `objc2-user-notifications` | `0.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `objc2-web-kit` | `0.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `object` | `0.39.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `once_cell` | `1.21.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `once_cell_polyfill` | `1.70.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `option-ext` | `0.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `palette` | `0.7.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `palette_derive` | `0.7.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `palette_math` | `0.7.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `pango` | `0.18.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `pango-sys` | `0.18.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `parking_lot` | `0.12.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `parking_lot_core` | `0.9.12` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `paste` | `1.0.15` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `pdf-writer` | `0.15.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `peniko` | `0.6.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `percent-encoding` | `2.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `petgraph` | `0.8.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `phf` | `0.13.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -267,13 +352,17 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `phf_generator` | `0.13.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `phf_macros` | `0.13.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `phf_shared` | `0.13.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `pic-scale` | `0.7.12` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `pico-args` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `pin-project-lite` | `0.2.17` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `pkg-config` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `plist` | `1.10.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `png` | `0.17.16` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `png` | `0.18.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `polycool` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `portable-atomic` | `1.15.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `portable-atomic-util` | `0.2.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `postcard` | `1.1.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `potential_utf` | `0.1.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `powerfmt` | `0.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ppv-lite86` | `0.2.21` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -284,6 +373,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `proc-macro-crate` | `3.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proc-macro-error` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proc-macro-error-attr` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `proc-macro-hack` | `0.5.20+deprecated` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proc-macro2` | `1.0.107` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `process-wrap` | `10.0.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proptest` | `1.11.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -291,17 +381,25 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `prost-build` | `0.14.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `prost-derive` | `0.14.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `prost-types` | `0.14.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `psm` | `0.1.32` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `pxfm` | `0.1.30` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `quick-error` | `1.2.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `quick-error` | `2.0.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `quick-xml` | `0.41.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `quote` | `1.0.47` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `r-efi` | `5.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `r-efi` | `6.0.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rand` | `0.8.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rand` | `0.9.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rand_chacha` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rand_chacha` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rand_core` | `0.6.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rand_core` | `0.9.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rand_xorshift` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `raw-window-handle` | `0.6.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rayon` | `1.12.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rayon-core` | `1.13.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `read-fonts` | `0.39.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `redox_syscall` | `0.5.18` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `redox_users` | `0.5.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ref-cast` | `1.0.27` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -310,14 +408,22 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `regex-automata` | `0.4.18` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `regex-syntax` | `0.8.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `reqwest` | `0.13.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `resvg` | `0.47.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rfd` | `0.16.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rgb` | `0.8.53` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `roman-numerals-rs` | `3.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `roxmltree` | `0.20.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `roxmltree` | `0.21.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rsqlite-vfs` | `0.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rusqlite` | `0.40.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rust_decimal` | `1.43.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustc-hash` | `2.1.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustc_version` | `0.4.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustix` | `1.1.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustversion` | `1.0.23` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rusty-fork` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rustybuzz` | `0.20.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ryu` | `1.0.23` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `same-file` | `1.0.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `schemars` | `0.8.22` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `schemars` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -332,11 +438,13 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `serde_derive` | `1.0.229` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_derive_internals` | `0.29.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_json` | `1.0.151` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `serde_path_to_error` | `0.1.20` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_repr` | `0.1.21` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_spanned` | `0.6.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_spanned` | `1.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_with` | `3.22.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serde_with_macros` | `3.22.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `serde_yaml` | `0.9.34+deprecated` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serialize-to-javascript` | `0.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `serialize-to-javascript-impl` | `0.1.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `servo_arc` | `0.4.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -344,24 +452,35 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `shlex` | `2.0.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `signal-hook-registry` | `1.4.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `simd-adler32` | `0.3.10` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `simplecss` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `siphasher` | `1.0.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `skrifa` | `0.42.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `slab` | `0.4.12` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `slotmap` | `1.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `smallvec` | `1.15.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `socket2` | `0.6.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `softbuffer` | `0.4.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `soup3` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `soup3-sys` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `spin` | `0.9.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `sqlite-wasm-rs` | `0.5.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `stable_deref_trait` | `1.2.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `stacker` | `0.1.25` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `strict-num` | `0.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `string_cache` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `string_cache_codegen` | `0.6.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `strsim` | `0.11.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `strum` | `0.27.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `strum_macros` | `0.27.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `subsetter` | `0.2.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `svgtypes` | `0.16.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `swift-rs` | `1.0.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `syn` | `1.0.109` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `syn` | `2.0.119` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `syn` | `3.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `sync_wrapper` | `1.0.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `synstructure` | `0.13.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `syntect` | `5.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `system-deps` | `6.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tao` | `0.35.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tao-macros` | `0.1.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -379,6 +498,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `tauri-winres` | `0.3.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tempfile` | `3.27.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tendril` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `thin-vec` | `0.2.21` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `thiserror` | `1.0.69` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `thiserror` | `2.0.20` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `thiserror-impl` | `1.0.69` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -386,6 +506,8 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `time` | `0.3.55` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `time-core` | `0.1.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `time-macros` | `0.2.32` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `tiny-skia` | `0.12.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `tiny-skia-path` | `0.12.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tinystr` | `0.8.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tinyvec` | `1.12.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tinyvec_macros` | `0.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -411,23 +533,58 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `tracing-core` | `0.1.36` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tray-icon` | `0.24.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `try-lock` | `0.2.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `ttf-parser` | `0.25.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `two-face` | `0.4.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typed-arena` | `2.0.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `typed-path` | `0.12.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `typeid` | `1.0.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `typenum` | `1.20.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-assets` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-eval` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-html` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-layout` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-library` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-macros` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-pdf` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-realize` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-svg` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-syntax` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-timing` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `typst-utils` | `0.15.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unarray` | `0.1.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unic-char-property` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unic-char-range` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unic-common` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unic-langid` | `0.9.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unic-langid-impl` | `0.9.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unic-langid-macros` | `0.9.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unic-langid-macros-impl` | `0.9.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unic-ucd-ident` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unic-ucd-version` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-bidi` | `0.3.18` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-bidi-mirroring` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-ccc` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unicode-ident` | `1.0.24` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-math-class` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-normalization` | `0.1.26` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-properties` | `0.1.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-script` | `0.5.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unicode-segmentation` | `1.13.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unicode-vo` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unsafe-libyaml` | `0.2.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `unscanny` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `url` | `2.5.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `urlpattern` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `usvg` | `0.47.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `utf16_iter` | `1.0.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `utf8_iter` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `utf8parse` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `uuid` | `1.26.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `vcpkg` | `0.2.15` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `vello_common` | `0.0.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `vello_common` | `0.0.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `vello_cpu` | `0.0.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `version-compare` | `0.2.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `version_check` | `0.9.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `vswhom` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -443,6 +600,11 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `wasm-bindgen-macro-support` | `0.2.127` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `wasm-bindgen-shared` | `0.2.127` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `wasm-streams` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `wasmi` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `wasmi_collections` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `wasmi_core` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `wasmi_ir` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `wasmparser` | `0.239.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `web-sys` | `0.3.104` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `web_atoms` | `0.2.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `webkit2gtk` | `2.0.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -450,6 +612,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `webview2-com` | `0.38.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `webview2-com-macros` | `0.8.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `webview2-com-sys` | `0.38.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `weezl` | `0.1.12` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `winapi` | `0.3.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `winapi-i686-pc-windows-gnu` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `winapi-util` | `0.1.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -511,10 +674,15 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `winnow` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `winreg` | `0.55.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `wit-bindgen` | `0.57.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `write-fonts` | `0.48.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `write16` | `1.0.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `writeable` | `0.6.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `wry` | `0.55.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `x11` | `2.21.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `x11-dl` | `2.21.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `xmlwriter` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `xmp-writer` | `0.3.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `yaml-rust` | `0.4.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `yoke` | `0.8.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `yoke-derive` | `0.8.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zerocopy` | `0.8.56` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -524,7 +692,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `zerotrie` | `0.2.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zerovec` | `0.11.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zerovec-derive` | `0.11.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `zip` | `8.6.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `zip` | `9.0.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zlib-rs` | `0.6.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zmij` | `1.0.23` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zopfli` | `0.8.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -1221,6 +1389,154 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `zod` | `3.25.76` | `NOASSERTION` | `https://registry.npmjs.org/zod/-/zod-3.25.76.tgz` |
 | npm | `zod-to-json-schema` | `3.25.2` | `NOASSERTION` | `https://registry.npmjs.org/zod-to-json-schema/-/zod-to-json-schema-3.25.2.tgz` |
 
+## Reviewed bundled assets
+
+### Libertinus Serif typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `OFL-1.1`
+
+- [crates/eutheto-pdf-worker/fonts/LibertinusSerif-Regular.otf](crates/eutheto-pdf-worker/fonts/LibertinusSerif-Regular.otf) — SHA256 `fcf06307a77367394fcb0ccb241e59eea70dba3d732be309647611224679c733`
+- [crates/eutheto-pdf-worker/fonts/LibertinusSerif-Bold.otf](crates/eutheto-pdf-worker/fonts/LibertinusSerif-Bold.otf) — SHA256 `0264914210ed51b3231ebc92ce529e9f2e166ba9eebf0cd4a579558690a27b64`
+- [crates/eutheto-pdf-worker/fonts/LibertinusSerif-Italic.otf](crates/eutheto-pdf-worker/fonts/LibertinusSerif-Italic.otf) — SHA256 `9a393d63d6e05f620d3dc0190dfd35a8ede58c0808cf0fc9de7fcb9c723e4c24`
+- [crates/eutheto-pdf-worker/fonts/LibertinusSerif-BoldItalic.otf](crates/eutheto-pdf-worker/fonts/LibertinusSerif-BoldItalic.otf) — SHA256 `47a665259f09f554f5d133d7718cdad43ff462c6a6b2328f38023465e62d57ce`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+
+### DejaVu Sans Mono typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `Bitstream-Vera`
+
+- [crates/eutheto-pdf-worker/fonts/DejaVuSansMono.ttf](crates/eutheto-pdf-worker/fonts/DejaVuSansMono.ttf) — SHA256 `b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+
+### Typst Foxit standard PDF fonts typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `BSD-3-Clause`
+
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitDingbats.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitDingbats.pfb) — SHA256 `845c752392b6c914fb989c75a08b7792b88f542d2499042ef2889f8c814a16ed`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixed.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixed.pfb) — SHA256 `b6c8fe53f134b8b6d4578cd2d544df4cee9624c4efa8d51a560fb40ea296101b`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedBold.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedBold.pfb) — SHA256 `f1b7159702973f54fc86254ea38bcf3712b2a736eb3a0995751e9f4bb45ad603`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedBoldItalic.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedBoldItalic.pfb) — SHA256 `8a000945843bd31add06aee63bf9fd41b7578b4f3242a4b7cd46349ad9d24d4d`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedItalic.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedItalic.pfb) — SHA256 `5007faf8320fa1fcc08b8894b356ad976f60b992ba29ee5272578bbdebaf3876`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSans.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSans.pfb) — SHA256 `a02339e95d20db14cbdfc1c6baf359cd36a091d5434925c3a4040f60e1a1af9e`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansBold.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansBold.pfb) — SHA256 `7bdfa36de1d5757dcfaf8b8a4be95c6e41c40fa70dbed9d78bf979a7b9959054`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansBoldItalic.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansBoldItalic.pfb) — SHA256 `555ce45924338e2e4b32821910221ce85da691fd59a9723c4c971a7c5627fc8b`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansItalic.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansItalic.pfb) — SHA256 `7751cbefeda351708dae8c4a88db043411bc39ab2ae2097685da845d4d16f307`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerif.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerif.pfb) — SHA256 `4f57d2b9d884af8f907bf22df6019b52d86cbf6214fdbd02b1ae05472a543f35`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifBold.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifBold.pfb) — SHA256 `0bdf4b04e964139818d51eda03d566ba999fc3ba2421b1c6c51f9dc969022e80`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifBoldItalic.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifBoldItalic.pfb) — SHA256 `a406cac82583bf98175cb62c87ed5e95c45fbb34eece63a10b0a13e793cb2e10`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifItalic.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifItalic.pfb) — SHA256 `610ae0687198045c4db5d1a6650fd5e92536631706382eb8b72e38df578d0ae9`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSymbol.pfb](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSymbol.pfb) — SHA256 `47967d055530e7357088a08403115425643ec2cdfd6201ba8af0fbd7116c1539`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+
+### Typst v4 ICC profiles typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `CC0-1.0`
+
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/sGrey-v4.icc](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/sGrey-v4.icc) — SHA256 `00c0f94e09127520a17dc0e1d9264b5702081d96dbdb1549ee88e3631ce42a9d`
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/sRGB-v4.icc](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/sRGB-v4.icc) — SHA256 `c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+
+### Typst CMYK profile typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `CC0-1.0`
+
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/CMYK-to-XYZ.icc](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/CMYK-to-XYZ.icc) — SHA256 `73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+- [crates/eutheto-pdf-worker/fonts/COMPACT-ICC-LICENSE](crates/eutheto-pdf-worker/fonts/COMPACT-ICC-LICENSE) — SHA256 `469d87b5fa48f8aaf69e25f4fcac3a309c97dbb7d561b917638abdb640e004d9`
+- [crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE](crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE) — SHA256 `98cc7df3c2af3303c9418eb749425bf85e51a1d43d03898e2abd494cea1b52d4`
+
+### Typst ICU segmentation data typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `Unicode-3.0`
+
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icu/icu_cj_segment.postcard](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icu/icu_cj_segment.postcard) — SHA256 `734673dd556f10f4423c52fd2e7cf52111a38a1a1554f7fe0a7f3e56efc66842`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+- [crates/eutheto-pdf-worker/fonts/ICU4X-LICENSE](crates/eutheto-pdf-worker/fonts/ICU4X-LICENSE) — SHA256 `f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2`
+- [crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE](crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE) — SHA256 `98cc7df3c2af3303c9418eb749425bf85e51a1d43d03898e2abd494cea1b52d4`
+
+### Typst HTML source data typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `Apache-2.0 AND BSD-3-Clause AND LicenseRef-W3C-Document-2015`
+
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/html/data.rs](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/html/data.rs) — SHA256 `593214ab0d92d12c9ef603a983958a432f46be278d805152d38a65818fb266b8`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+- [crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE](crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE) — SHA256 `98cc7df3c2af3303c9418eb749425bf85e51a1d43d03898e2abd494cea1b52d4`
+- [crates/eutheto-pdf-worker/fonts/W3C-DOCUMENT-LICENSE-2015](crates/eutheto-pdf-worker/fonts/W3C-DOCUMENT-LICENSE-2015) — SHA256 `99e12eb0d2b8a0f1e1b075e8314ac2697e6cdc422ede17a3621a61ea82b5b487`
+
+### Typst MathML source data typst-assets-0.15.1
+
+Source: https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate
+
+License: `Apache-2.0 AND W3C-20150513`
+
+- [crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/mathml/data.rs](crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/mathml/data.rs) — SHA256 `39e0cb9c455f669e0202486ae9602f693569b8ea3ded42e87e8b7dfa926d99b4`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE](crates/eutheto-pdf-worker/fonts/UPSTREAM-NOTICE) — SHA256 `80ac46fb7d70f1c30bf0c14d3408e6a6f0f9cc9997a00b592aa0d2c8a5243a9d`
+- [crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE](crates/eutheto-pdf-worker/fonts/UPSTREAM-LICENSE) — SHA256 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`
+- [crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE](crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE) — SHA256 `98cc7df3c2af3303c9418eb749425bf85e51a1d43d03898e2abd494cea1b52d4`
+
+### citationberg unchanged upstream library source 0.7.0+06a591e2f237d25e1dfdedac3f3d1494c496c52d
+
+Source: https://github.com/typst/citationberg/tree/06a591e2f237d25e1dfdedac3f3d1494c496c52d
+
+License: `MIT OR Apache-2.0`
+
+- [vendor/citationberg/.github/workflows/ci.yml](vendor/citationberg/.github/workflows/ci.yml) — SHA256 `458d6165e1043cf85ddc522dd0e067f15e5c68135ad73a22f5592317c67cac52`
+- [vendor/citationberg/.gitignore](vendor/citationberg/.gitignore) — SHA256 `445869d4b87420500b16037f8bcc9770e653ba87d724b63abb90ef8eeace7d15`
+- [vendor/citationberg/Cargo.toml](vendor/citationberg/Cargo.toml) — SHA256 `f905c07f33086a5c0ab71590fa80573105acefb40f82daf8833f3426fbcf42b6`
+- [vendor/citationberg/README.md](vendor/citationberg/README.md) — SHA256 `167d6516291ea4b838497e46b6ea05dffe93a0b5e1fccc868ac619528f85c732`
+- [vendor/citationberg/assets/citationberg.png](vendor/citationberg/assets/citationberg.png) — SHA256 `e6ad2ccc426abe70734c3efa7c2b8cf7d31df38e56273efbe8c5f1d573a51b8b`
+- [vendor/citationberg/rustfmt.toml](vendor/citationberg/rustfmt.toml) — SHA256 `02ed44fa483d79cb29e2030e990fa0a840ca4db57c2ce9935e10d1e85142718e`
+- [vendor/citationberg/src/json.rs](vendor/citationberg/src/json.rs) — SHA256 `165d98428083ea90ddbb6bf09390db004367126894e6329a64c05fb98d434b08`
+- [vendor/citationberg/src/lib.rs](vendor/citationberg/src/lib.rs) — SHA256 `5a629461bd9f5cb86f348e6e37e88b968f6452971831d9002b190d3b7637eeb0`
+- [vendor/citationberg/src/taxonomy.rs](vendor/citationberg/src/taxonomy.rs) — SHA256 `9fd79e4130829a452dc9407485f7f678433d99099b9e472cf1294f08bb5d5f03`
+- [vendor/citationberg/src/util.rs](vendor/citationberg/src/util.rs) — SHA256 `5ba785ff6b1bb9b1d04966e12b597bdcfe9d6f9ca538f2182298d383c55b8af1`
+- [vendor/citationberg/LICENSE-APACHE](vendor/citationberg/LICENSE-APACHE) — SHA256 `4f9b38f04a6d2bc35e3e2ec089732cf4b9b57f9c765d1ec82dce1f806be03747`
+- [vendor/citationberg/LICENSE-MIT](vendor/citationberg/LICENSE-MIT) — SHA256 `23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3`
+- [vendor/citationberg/NOTICE](vendor/citationberg/NOTICE) — SHA256 `e1305318de03582a116ff7fda2925e4c4d18af2bc88b070bccf819c4a5412d10`
+- [vendor/citationberg.provenance.json](vendor/citationberg.provenance.json) — SHA256 `3e822fea1e6f637ccf20687d8595c9c90975ee30e5b61129dcf699774329f8fc`
+
+### citationberg unchanged upstream CSL test fixtures (source only) 0.7.0+06a591e2f237d25e1dfdedac3f3d1494c496c52d
+
+Source: https://github.com/typst/citationberg/tree/06a591e2f237d25e1dfdedac3f3d1494c496c52d
+
+License: `CC-BY-SA-3.0`
+
+- [vendor/citationberg/tests/dependent/academic-questions.csl](vendor/citationberg/tests/dependent/academic-questions.csl) — SHA256 `1e9fd1710c60522ae36fbb0d4fa50d74ab9f69731e67cdc8fbbb7c4a43af1051`
+- [vendor/citationberg/tests/dependent/accounts-of-chemical-research.csl](vendor/citationberg/tests/dependent/accounts-of-chemical-research.csl) — SHA256 `19ca705ebdf14183a9b33d6ac801f7e54dd80d0444d7708013e9580f23bef567`
+- [vendor/citationberg/tests/independent/art-history.csl](vendor/citationberg/tests/independent/art-history.csl) — SHA256 `6a002cb035565a10fd66d353872ddddde7baef7efabe72dcfea008833633c2ed`
+- [vendor/citationberg/tests/independent/chicago-author-date.csl](vendor/citationberg/tests/independent/chicago-author-date.csl) — SHA256 `0e8c35572c05819de3774dc6ff57eb7f90e3ac7c16a8495449b10a4e5e11a2f2`
+- [vendor/citationberg/tests/independent/chicago-fullnote-bibliography.csl](vendor/citationberg/tests/independent/chicago-fullnote-bibliography.csl) — SHA256 `9be535c9144a63a5c51a041febd80d60d9c1a0a41fada47fe29ef87c0be23953`
+- [vendor/citationberg/tests/independent/ieee.csl](vendor/citationberg/tests/independent/ieee.csl) — SHA256 `913bcf74362f2a66d042cee1d8ac80e35020adace619a98285241995d0127262`
+- [vendor/citationberg/tests/locales/locales-en-US.xml](vendor/citationberg/tests/locales/locales-en-US.xml) — SHA256 `9ed8350a124d66b9ea258018bcbfa74c7278fdfb78c4408fc58e5c6b73914b5f`
+- [vendor/citationberg/tests/locales/locales-zh-CN.xml](vendor/citationberg/tests/locales/locales-zh-CN.xml) — SHA256 `85cade24d6ef21cb08c98c022f8c0d49c33a0a842e2233518c7c19cc773eab65`
+- [vendor/citationberg/NOTICE](vendor/citationberg/NOTICE) — SHA256 `e1305318de03582a116ff7fda2925e4c4d18af2bc88b070bccf819c4a5412d10`
+- [vendor/citationberg-fixtures.CC-BY-SA-3.0.txt](vendor/citationberg-fixtures.CC-BY-SA-3.0.txt) — SHA256 `3f941b3b89cf7b8370ceb83cc76d2120d471b58735d8ca60238a751a48d7f72f`
+- [vendor/citationberg-fixtures.NOTICE](vendor/citationberg-fixtures.NOTICE) — SHA256 `23dfe44cabf0ae107c17a683f1166a43296357a40857685922c97642e866d268`
+- [vendor/citationberg-fixtures.provenance.json](vendor/citationberg-fixtures.provenance.json) — SHA256 `ea40ce2d491af67be62b2dcf4a7a21fa2c9877ecb8b1b5882b9e76f1f9d8a488`
+
 ## Review state
 
-1211 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+0 reviewed asset group(s) have `NOASSERTION`: exact source bytes and attribution are recorded, but their license conclusion remains unresolved.
+
+1378 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

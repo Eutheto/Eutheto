@@ -232,7 +232,7 @@ fn with_newer_unknown_semantics(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>
         let mut entry = archive.by_index(index)?;
         let mut content = Vec::new();
         entry.read_to_end(&mut content)?;
-        entries.insert(entry.name().to_owned(), content);
+        entries.insert(entry.name()?.into_owned(), content);
     }
     let mut manifest: serde_json::Value = serde_json::from_slice(
         entries
@@ -284,7 +284,7 @@ fn with_unknown_pack_and_invalid_domain(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn
         let mut entry = archive.by_index(index)?;
         let mut content = Vec::new();
         entry.read_to_end(&mut content)?;
-        entries.insert(entry.name().to_owned(), content);
+        entries.insert(entry.name()?.into_owned(), content);
     }
     let scenario_path = entries
         .keys()

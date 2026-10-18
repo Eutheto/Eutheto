@@ -7,11 +7,11 @@ use crate::{
     ApiError, ApiResult, DesktopState, NativeOperationRequest, boundary_error, map_app_error,
     response, selected_basename,
 };
-use eutheto_core::{CapturedRecipientReport, RecipientHtmlPublishedV1, RecipientReportRequestV1};
+use eutheto_core::{RecipientHtmlPublishedV1, RecipientPdfPublishedV1, RecipientReportRequestV1};
 use eutheto_types::{
-    ApiErrorDto, DurationMillis, MAX_RECIPIENT_REPORT_BYTES, OperationControl, OperationId,
-    OperationInterruption, RecipientReportOptionsV1, RecipientReportV1, RequestId, Revision,
-    ScenarioId, SolutionId,
+    ApiErrorDto, DurationMillis, MAX_RECIPIENT_PDF_BYTES, MAX_RECIPIENT_REPORT_BYTES,
+    OperationControl, OperationId, OperationInterruption, RecipientPdfRendererV1,
+    RecipientReportOptionsV1, RecipientReportV1, RequestId, Revision, ScenarioId, SolutionId,
 };
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
@@ -32,6 +32,16 @@ const OPERATION_MILLISECONDS: u64 = 30_000;
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RecipientFileFormatV1 {
     Html,
+    Pdf,
+}
+
+impl RecipientFileFormatV1 {
+    fn capture_format(self) -> CaptureFormat {
+        match self {
+            Self::Html => CaptureFormat::Html,
+            Self::Pdf => CaptureFormat::Pdf,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -56,6 +66,10 @@ struct RecipientPreviewDtoV1 {
     library_revision: Revision,
     model_sha256: String,
     html_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pdf_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pdf_renderer: Option<RecipientPdfRendererV1>,
     expires_after_milliseconds: u64,
     report: RecipientReportV1,
 }
@@ -80,7 +94,14 @@ struct RecipientCreatedDtoV1 {
     preview_id: RequestId,
     format: RecipientFileFormatV1,
     filename: String,
-    publication: RecipientHtmlPublishedV1,
+    publication: RecipientPublicationV1,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum RecipientPublicationV1 {
+    Html(RecipientHtmlPublishedV1),
+    Pdf(RecipientPdfPublishedV1),
 }
 
 #[derive(Deserialize)]
@@ -180,12 +201,26 @@ pub(super) async fn solution_share_preview<R: tauri::Runtime>(
                     )
                     .await
                     .map_err(|error| Box::new(map_app_error(error)))?;
-                let charged_bytes = preview_charge(&capture, &report, &control)?;
                 let library_revision = capture.metadata().library_revision;
                 let model_sha256 = capture.model_sha256().to_owned();
                 let html_sha256 = capture.html_sha256().to_owned();
-                let preview_id =
-                    reservation.stage(CapturedReport::Recipient(capture), charged_bytes)?;
+                let capture = CapturedReport::Recipient(capture);
+                let (capture, pdf_sha256, pdf_renderer) =
+                    if request.format == RecipientFileFormatV1::Pdf {
+                        reserve_pdf_preparation(&mut reservation, &capture, &report, &control)?;
+                        let pdf = capture
+                            .into_recipient()?
+                            .prepare_pdf(control.clone())
+                            .await
+                            .map_err(|error| Box::new(map_app_error(error)))?;
+                        let digest = pdf.pdf_sha256().to_owned();
+                        let renderer = pdf.renderer().clone();
+                        (CapturedReport::Pdf(pdf), Some(digest), Some(renderer))
+                    } else {
+                        (capture, None, None)
+                    };
+                let charged_bytes = preview_charge(&capture, &report, &control)?;
+                let preview_id = reservation.stage(capture, charged_bytes)?;
                 let result = RecipientPreviewDtoV1 {
                     schema_version: 1,
                     preview_id,
@@ -193,6 +228,8 @@ pub(super) async fn solution_share_preview<R: tauri::Runtime>(
                     library_revision,
                     model_sha256,
                     html_sha256,
+                    pdf_sha256,
+                    pdf_renderer,
                     expires_after_milliseconds: 600_000,
                     report,
                 };
@@ -211,8 +248,32 @@ pub(super) async fn solution_share_preview<R: tauri::Runtime>(
         .await
 }
 
+fn reserve_pdf_preparation(
+    reservation: &mut PreparingReport,
+    capture: &CapturedReport,
+    report: &RecipientReportV1,
+    control: &OperationControl,
+) -> Result<(), ApiError> {
+    let growth = preview_charge(capture, report, control)?
+        .checked_add(MAX_RECIPIENT_PDF_BYTES + MAX_RECIPIENT_REPORT_BYTES + 4 * FRAME_BYTES)
+        .ok_or_else(|| {
+            Box::new(boundary_error(
+                "recipient.preview_capacity",
+                "The PDF review exceeds its retained resource limit.",
+                None,
+            ))
+        })?;
+    // Reserve PDF output and bounded model/I/O buffers before conversion;
+    // the existing charge already includes source, HTML and response growth.
+    let reserved = reservation.reserve_preparation(growth);
+    capture
+        .admit()
+        .map_err(|error| Box::new(map_app_error(error)))?;
+    reserved
+}
+
 fn preview_charge(
-    capture: &CapturedRecipientReport,
+    capture: &CapturedReport,
     report: &RecipientReportV1,
     control: &OperationControl,
 ) -> Result<usize, ApiError> {
@@ -312,7 +373,7 @@ pub(super) async fn solution_share_create<R: tauri::Runtime>(
             expected_revision: request.expected_revision,
             kind: CaptureKind::Recipient,
         },
-        CaptureFormat::Html,
+        request.format.capture_format(),
     )?);
     let readmission = Arc::clone(&consuming);
     let operation = claim(
@@ -338,20 +399,39 @@ pub(super) async fn solution_share_create<R: tauri::Runtime>(
                 let selected = select_destination(
                     handle,
                     control.clone(),
-                    CaptureFormat::Html,
-                    "shared-plan.html".to_owned(),
+                    request.format.capture_format(),
+                    match request.format {
+                        RecipientFileFormatV1::Html => "shared-plan.html",
+                        RecipientFileFormatV1::Pdf => "shared-plan.pdf",
+                    }
+                    .to_owned(),
                 )
                 .await;
                 // Picker/clock/cancellation failure cannot hide an established exact-source alarm.
                 consuming.admit()?;
                 let (destination, filename) = selected?;
                 execution.report(OperationPhaseV1::PublishingFile);
-                let capture = consuming.take_capture()?.into_recipient()?;
-                let publication = capture
-                    .publish_html(destination, request.allow_stale, control)
-                    .await
-                    .map_err(|error| Box::new(map_app_error(error)))?;
-                let revision = publication.current_revision;
+                let capture = consuming.take_capture()?;
+                let (publication, revision) = match request.format {
+                    RecipientFileFormatV1::Html => {
+                        let receipt = capture
+                            .into_recipient()?
+                            .publish_html(destination, request.allow_stale, control)
+                            .await
+                            .map_err(|error| Box::new(map_app_error(error)))?;
+                        let revision = receipt.current_revision;
+                        (RecipientPublicationV1::Html(receipt), revision)
+                    }
+                    RecipientFileFormatV1::Pdf => {
+                        let receipt = capture
+                            .into_pdf()?
+                            .publish_pdf(destination, request.allow_stale, control)
+                            .await
+                            .map_err(|error| Box::new(map_app_error(error)))?;
+                        let revision = receipt.current_revision;
+                        (RecipientPublicationV1::Pdf(receipt), revision)
+                    }
+                };
                 let result = RecipientCreatedDtoV1 {
                     schema_version: 1,
                     preview_id: request.preview_id,
@@ -414,6 +494,12 @@ pub(super) async fn select_destination<R: tauri::Runtime>(
                 "HTML report",
                 &["html", "htm"],
                 "Choose an HTML destination ending in .html or .htm.",
+            ),
+            CaptureFormat::Pdf => (
+                "Save recipient PDF report",
+                "PDF report",
+                &["pdf"],
+                "Choose a PDF destination ending in .pdf.",
             ),
             CaptureFormat::Schedule(eutheto_core::ScheduleExportFormatV1::Ics) => (
                 "Save calendar",

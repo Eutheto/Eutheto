@@ -30,6 +30,8 @@ Arrows describe allowed knowledge, not blanket permission to import every layer 
 
 The planned OR-Tools path crosses a versioned worker protocol into one supervised child per solve. The worker receives numeric/stable model identifiers rather than names, notes, credentials, AI content, or unrelated paths. Frames are length/count bounded and validated before use. A worker exit, mismatch, malformed response, timeout, or cancellation returns a typed failure and cannot mutate scenario state. See [ADR-004](../adr/004-ortools-worker.md).
 
+The recipient PDF helper is a separate rendering boundary. It consumes only the validated recipient disclosure model, including the labels the user selected for sharing. It cannot establish solution acceptance or publication authority. Core retains those decisions and the exact rendered bytes. Typst belongs only in the helper; the CLI, desktop adapter and Core must not link the renderer. See [recipient PDF rendering](recipient-pdf.md).
+
 A future in-process Pumpkin adapter is explicitly experimental and must satisfy dedicated-thread, cancellation, panic, compatibility, packaging, and benchmark gates before its label can change ([ADR-005](../adr/005-pumpkin-experimental-backend.md)). A future third-party pack boundary is sandboxed WASM/components, never native dynamic libraries ([ADR-009](../adr/009-domain-pack-loading.md)). Neither is a Phase-00 capability.
 
 ## Data ownership rules

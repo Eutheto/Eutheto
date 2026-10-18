@@ -543,7 +543,7 @@ struct ExportSolutionArgs {
     solution: PathBuf,
     #[arg(long, value_enum)]
     format: SolutionExportFormat,
-    /// Explicit no-clobber destination; required for HTML and JSON envelope mode.
+    /// Explicit no-clobber destination; required for HTML/PDF and JSON envelope mode.
     /// Other formats may write raw stdout in human mode.
     #[arg(long)]
     output: Option<PathBuf>,
@@ -553,19 +553,19 @@ struct ExportSolutionArgs {
     /// Explicitly authorize publishing an accepted result known stale as of its revision read.
     #[arg(long = "allow-stale")]
     allow_stale: bool,
-    /// Include person names in HTML instead of generated aliases.
+    /// Include person names in HTML/PDF instead of generated aliases.
     #[arg(long)]
     include_person_names: bool,
-    /// Include authored plan, assignment-type and location labels in HTML.
+    /// Include authored plan, assignment-type and location labels in HTML/PDF.
     #[arg(long)]
     include_authored_labels: bool,
-    /// Include staffing totals for every source shift in HTML.
+    /// Include staffing totals for every source shift in HTML/PDF.
     #[arg(long)]
     include_staffing: bool,
-    /// Include recorded plan changes in HTML without authenticating imported history.
+    /// Include recorded plan changes in HTML/PDF without authenticating imported history.
     #[arg(long)]
     include_changes: bool,
-    /// Include configured workload actuals in HTML, not private preference scores.
+    /// Include configured workload actuals in HTML/PDF without private preference scores.
     #[arg(long)]
     include_fairness_actuals: bool,
 }

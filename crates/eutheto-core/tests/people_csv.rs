@@ -1041,7 +1041,7 @@ fn large_opaque_bundle(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut entry = archive.by_index(index)?;
         let mut contents = Vec::new();
         entry.read_to_end(&mut contents)?;
-        entries.insert(entry.name().to_owned(), contents);
+        entries.insert(entry.name()?.into_owned(), contents);
     }
     let mut checksums: Checksums =
         serde_json::from_slice(entries.get(CHECKSUMS_PATH).ok_or("missing checksums")?)?;

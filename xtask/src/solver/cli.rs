@@ -51,7 +51,7 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
     );
     let target = cli_target(&artifact_target)?;
     let staging = stage.staging();
-    let copied_payload =
+    let mut copied_payload =
         copy_artifact_to_layout(&artifact, &staging, "", "solver/ortools", target)?;
     let resources = staging.join("solver/ortools");
     let worker = staging.join(target.bundled_worker);
@@ -59,6 +59,9 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
         validate_staged_layout(repository, &resources, &worker, target)? == manifest_sha256,
         "staged CLI solver manifest differs from the approved artifact"
     );
+    let (pdf_manifest, pdf_digest, pdf_bytes) = crate::pdf::stage_cli(repository, &staging)?;
+    copied_payload.entries += crate::pdf::CLI_PAYLOAD_ENTRIES;
+    copied_payload.bytes += pdf_bytes;
 
     // Isolate the executable from ordinary source and desktop Cargo builds. The package lease
     // covers this build directory as well as staging until the completed image is published.
@@ -79,6 +82,8 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
         .current_dir(repository)
         .env(MANIFEST_PATH_ENV, resources.join("solver-manifest.json"))
         .env(SOLVER_MANIFEST_DIGEST_ENV, &manifest_sha256)
+        .env(crate::pdf::MANIFEST_PATH_ENV, &pdf_manifest)
+        .env(crate::pdf::MANIFEST_SHA_ENV, &pdf_digest)
         .status()
         .context("failed to start the manifest-bound CLI build")?;
     ensure!(
@@ -97,6 +102,11 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
         validate_staged_layout(repository, &resources, &worker, target)? == manifest_sha256,
         "CLI solver resources changed during the build"
     );
+    crate::pdf::verify_staged(
+        &staging.join(crate::pdf::worker_name(host_target)),
+        &pdf_manifest,
+        &pdf_digest,
+    )?;
     #[cfg(windows)]
     if let Some(lease) = &mut native_lease {
         lease.commit()?;

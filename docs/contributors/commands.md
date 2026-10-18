@@ -28,6 +28,8 @@ On a native platform route, first satisfy that platform's documented prerequisit
 | --- | --- |
 | `just bootstrap` | Explicit first-checkout entry point; installs the locked Rust and pnpm dependency graphs. |
 | `just install` | Fetches Cargo dependencies with `--locked` and installs pnpm dependencies with `--frozen-lockfile`. |
+| `just rust-advisories` | Enforces UTC exception expiry and exact Phase 07 maintenance scope against raw audit findings, then checks locked Cargo advisories, licenses, bans and sources. See the [maintenance policy](../../CONTRIBUTING.md#temporary-phase-07-maintenance-dispositions). |
+| `just rust-advisories-test` | Runs offline regression tests for expiry, exact package/source identity and rejection of vulnerability exemptions. |
 | `just generate` | Delegates deterministic checked-in artifact generation to `cargo xtask generate`. |
 | `just generate-check` | Rejects drift between authoritative inputs and checked-in generated artifacts. |
 | `just protocol-check` | Verifies the versioned worker-protocol assets through `xtask`. |
@@ -59,7 +61,7 @@ Never hand-edit a generated product. Change its authoritative input, run `just g
 | `just test` | Runs the Rust, documentation, and UI test recipes. |
 | `just coverage` | Runs the Rust workspace through `cargo llvm-cov nextest` with the full-shell tools. Coverage is diagnostic and does not replace behavioral tests. |
 | `just bench` | Builds the exact pinned native OR-Tools worker, runs the checked-in Phase-03 primitive Planning IR corpus through the production adapter under fixed seed/thread/budget settings, writes versioned raw evidence under `.cache/benchmarks/`, and prints it. The evidence is not a product SLA and grants no candidate acceptance. |
-| `just e2e` | Fails with the Phase-11 packaged-desktop/WebDriver gate until supported targets and prerequisites exist. It does not pretend that a Vite browser test proves a packaged Tauri application. |
+| `just e2e` | Runs the Linux native Tauri/WebKit WebDriver path in a separate network namespace, using isolated disposable application directories. `just e2e true` builds and tests the bundled application; `just e2e true false` reuses an unchanged existing bundle. Requires the native drivers, virtual display, and permitted namespace creation. See the [Phase 07 PDF validation handoff](phase07-pdf-validation.md) for current coverage and environment blockers. |
 
 ### Applications and builds
 

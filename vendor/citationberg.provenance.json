@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "package": "citationberg",
+  "version": "0.7.0",
+  "repository": "https://github.com/typst/citationberg",
+  "commit": "06a591e2f237d25e1dfdedac3f3d1494c496c52d",
+  "tree": "688dc29cab1ef36a40dcf5b1b8de6fd3721bb8ae",
+  "source": "https://github.com/typst/citationberg/tree/06a591e2f237d25e1dfdedac3f3d1494c496c52d",
+  "license": "MIT OR Apache-2.0",
+  "releasedBase": {
+    "tag": "v0.7.0",
+    "registryArchive": "https://static.crates.io/crates/citationberg/citationberg-0.7.0.crate",
+    "sha256": "756ff1e3d43a9ecc8183932fb4d9fd3971236f3ce4acb62fe51d1cd43297547d"
+  },
+  "upstreamChange": "The exact commit differs from v0.7.0 only in Cargo.toml: quick-xml version 0.38.1 becomes 0.41.0; serialize and overlapped-lists are unchanged.",
+  "localChanges": [],
+  "files": [
+    {
+      "path": "vendor/citationberg/.github/workflows/ci.yml",
+      "sha256": "458d6165e1043cf85ddc522dd0e067f15e5c68135ad73a22f5592317c67cac52"
+    },
+    {
+      "path": "vendor/citationberg/.gitignore",
+      "sha256": "445869d4b87420500b16037f8bcc9770e653ba87d724b63abb90ef8eeace7d15"
+    },
+    {
+      "path": "vendor/citationberg/Cargo.toml",
+      "sha256": "f905c07f33086a5c0ab71590fa80573105acefb40f82daf8833f3426fbcf42b6"
+    },
+    {
+      "path": "vendor/citationberg/LICENSE-APACHE",
+      "sha256": "4f9b38f04a6d2bc35e3e2ec089732cf4b9b57f9c765d1ec82dce1f806be03747"
+    },
+    {
+      "path": "vendor/citationberg/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "path": "vendor/citationberg/NOTICE",
+      "sha256": "e1305318de03582a116ff7fda2925e4c4d18af2bc88b070bccf819c4a5412d10"
+    },
+    {
+      "path": "vendor/citationberg/README.md",
+      "sha256": "167d6516291ea4b838497e46b6ea05dffe93a0b5e1fccc868ac619528f85c732"
+    },
+    {
+      "path": "vendor/citationberg/assets/citationberg.png",
+      "sha256": "e6ad2ccc426abe70734c3efa7c2b8cf7d31df38e56273efbe8c5f1d573a51b8b"
+    },
+    {
+      "path": "vendor/citationberg/rustfmt.toml",
+      "sha256": "02ed44fa483d79cb29e2030e990fa0a840ca4db57c2ce9935e10d1e85142718e"
+    },
+    {
+      "path": "vendor/citationberg/src/json.rs",
+      "sha256": "165d98428083ea90ddbb6bf09390db004367126894e6329a64c05fb98d434b08"
+    },
+    {
+      "path": "vendor/citationberg/src/lib.rs",
+      "sha256": "5a629461bd9f5cb86f348e6e37e88b968f6452971831d9002b190d3b7637eeb0"
+    },
+    {
+      "path": "vendor/citationberg/src/taxonomy.rs",
+      "sha256": "9fd79e4130829a452dc9407485f7f678433d99099b9e472cf1294f08bb5d5f03"
+    },
+    {
+      "path": "vendor/citationberg/src/util.rs",
+      "sha256": "5ba785ff6b1bb9b1d04966e12b597bdcfe9d6f9ca538f2182298d383c55b8af1"
+    },
+    {
+      "path": "vendor/citationberg/tests/dependent/academic-questions.csl",
+      "sha256": "1e9fd1710c60522ae36fbb0d4fa50d74ab9f69731e67cdc8fbbb7c4a43af1051"
+    },
+    {
+      "path": "vendor/citationberg/tests/dependent/accounts-of-chemical-research.csl",
+      "sha256": "19ca705ebdf14183a9b33d6ac801f7e54dd80d0444d7708013e9580f23bef567"
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/art-history.csl",
+      "sha256": "6a002cb035565a10fd66d353872ddddde7baef7efabe72dcfea008833633c2ed"
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/chicago-author-date.csl",
+      "sha256": "0e8c35572c05819de3774dc6ff57eb7f90e3ac7c16a8495449b10a4e5e11a2f2"
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/chicago-fullnote-bibliography.csl",
+      "sha256": "9be535c9144a63a5c51a041febd80d60d9c1a0a41fada47fe29ef87c0be23953"
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/ieee.csl",
+      "sha256": "913bcf74362f2a66d042cee1d8ac80e35020adace619a98285241995d0127262"
+    },
+    {
+      "path": "vendor/citationberg/tests/locales/locales-en-US.xml",
+      "sha256": "9ed8350a124d66b9ea258018bcbfa74c7278fdfb78c4408fc58e5c6b73914b5f"
+    },
+    {
+      "path": "vendor/citationberg/tests/locales/locales-zh-CN.xml",
+      "sha256": "85cade24d6ef21cb08c98c022f8c0d49c33a0a842e2233518c7c19cc773eab65"
+    }
+  ]
+}

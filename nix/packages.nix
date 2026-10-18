@@ -15,6 +15,7 @@ let
     pkgs = packagePkgs;
     inherit src;
     ortools-worker = if supportsOrtoolsWorker then ortools-worker else null;
+    pdf-worker = if supportsOrtoolsWorker then pdf-worker else null;
   };
   solver-artifact-tool = import ./solver-artifact-tool.nix {
     pkgs = packagePkgs;
@@ -25,13 +26,17 @@ let
   ortools-worker = import ./ortools-worker.nix {
     inherit pkgs solver-artifact-tool src;
   };
+  pdf-worker = import ./pdf-worker.nix {
+    pkgs = packagePkgs;
+    inherit src solver-artifact-tool;
+  };
 in
 {
   default = eutheto-cli;
   inherit eutheto-cli;
 }
 // pkgs.lib.optionalAttrs supportsOrtoolsWorker {
-  inherit ortools-worker;
+  inherit ortools-worker pdf-worker;
 }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   desktop-runtime = tooling.desktopRuntime;

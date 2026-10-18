@@ -1050,6 +1050,64 @@ fn export_solutions(
             Some(sha256(&bytes)),
         );
     }
+    if matches!(id, CaseId::PractitionerWorkflow | CaseId::LargeSupported) {
+        export_recipient_pdf(runner, fixture, paths, portable, checks)?;
+    }
+    Ok(())
+}
+
+// Exercise the actual packaged helper through the public CLI. This checks byte
+// publication and source binding; independent PDF text/layout inspection is a
+// separate acceptance gate, not something a file signature can establish.
+fn export_recipient_pdf(
+    runner: &Runner,
+    fixture: &LoadedFixture,
+    paths: &CasePaths<'_>,
+    portable: &PortableAcceptedResult,
+    checks: &mut Vec<CliCheck>,
+) -> Result<()> {
+    let destination = paths.directory.join("recipient.pdf");
+    let exported = runner.run(
+        paths.library,
+        &[
+            "solutions",
+            "export",
+            text(paths.input)?,
+            text(paths.output)?,
+            "--format",
+            "pdf",
+            "--output",
+            text(&destination)?,
+        ],
+        0,
+        true,
+    )?;
+    let result = &exported["result"];
+    ensure!(
+        result["resultId"] == serde_json::to_value(portable.result_id)?
+            && result["scenarioRevision"] == fixture.snapshot.revision.value()
+            && result["historicalRunMetadata"] == "sourceProvidedUnverified"
+            && result["format"] == "pdf",
+        "recipient PDF lost verified source binding or endorsed historical metadata"
+    );
+    let bytes = read_bounded(
+        &destination,
+        u64::try_from(eutheto_types::MAX_RECIPIENT_PDF_BYTES)?,
+    )?;
+    let digest = sha256(&bytes);
+    ensure!(
+        bytes.starts_with(b"%PDF-") && result["pdfSha256"] == digest,
+        "recipient PDF publication differs from its exact-byte receipt"
+    );
+    record(
+        checks,
+        fixture.expected.id,
+        "solutions.export-pdf-exact-byte-publication",
+        0,
+        None,
+        None,
+        Some(digest),
+    );
     Ok(())
 }
 

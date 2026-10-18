@@ -874,6 +874,13 @@ export interface OperationReleasedV1 {
   readonly schemaVersion: 1;
   readonly acknowledgement: "released" | "cancellationRequested" | "notActive";
 }
+export type RecipientFileFormatV1 = "html" | "pdf";
+export interface RecipientPdfRendererV1 {
+  readonly version: 1;
+  readonly typstVersion: "0.15.1";
+  readonly templateSha256: string;
+  readonly fontsSha256: string;
+}
 export interface RecipientPreviewRequestV1 {
   readonly requestId: UuidV7;
   readonly schemaVersion: 1;
@@ -881,16 +888,18 @@ export interface RecipientPreviewRequestV1 {
   readonly scenarioId: UuidV7;
   readonly expectedRevision: Revision;
   readonly solutionId: SolutionId;
-  readonly format: "html";
+  readonly format: RecipientFileFormatV1;
   readonly options: RecipientReportOptionsV1;
 }
 export interface RecipientPreviewDtoV1 {
   readonly schemaVersion: 1;
   readonly previewId: UuidV7;
-  readonly format: "html";
+  readonly format: RecipientFileFormatV1;
   readonly libraryRevision: Revision;
   readonly modelSha256: string;
   readonly htmlSha256: string;
+  readonly pdfSha256?: string;
+  readonly pdfRenderer?: RecipientPdfRendererV1;
   readonly expiresAfterMilliseconds: 600000;
   readonly report: RecipientReportV1;
 }
@@ -901,7 +910,7 @@ export interface RecipientCreateRequestV1 {
   readonly scenarioId: UuidV7;
   readonly expectedRevision: Revision;
   readonly previewId: UuidV7;
-  readonly format: "html";
+  readonly format: RecipientFileFormatV1;
   readonly allowStale: boolean;
 }
 export interface RecipientHtmlPublishedV1 {
@@ -912,12 +921,20 @@ export interface RecipientHtmlPublishedV1 {
   readonly modelSha256: string;
   readonly htmlSha256: string;
 }
+export interface RecipientPdfPublishedV1 {
+  readonly schemaVersion: 1;
+  readonly solutionId: SolutionId;
+  readonly sourceRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly modelSha256: string;
+  readonly pdfSha256: string;
+}
 export interface RecipientCreatedDtoV1 {
   readonly schemaVersion: 1;
   readonly previewId: UuidV7;
-  readonly format: "html";
+  readonly format: RecipientFileFormatV1;
   readonly filename: string;
-  readonly publication: RecipientHtmlPublishedV1;
+  readonly publication: RecipientHtmlPublishedV1 | RecipientPdfPublishedV1;
 }
 export type RecipientReleaseTargetV1 =
   | { readonly kind: "preview"; readonly previewId: UuidV7 }
@@ -1092,6 +1109,18 @@ export interface LicenseInventoryPackageV2 {
   readonly source: string;
   readonly checksum?: { readonly algorithm: "SHA256" | "SHA512"; readonly value: string };
 }
+export interface LicenseInventoryAssetFileV2 {
+  readonly path: string;
+  readonly sha256: string;
+}
+export interface LicenseInventoryAssetV2 {
+  readonly name: string;
+  readonly version: string;
+  readonly source: string;
+  readonly licenseConcluded: string;
+  readonly files: readonly LicenseInventoryAssetFileV2[];
+  readonly notices: readonly LicenseInventoryAssetFileV2[];
+}
 /** Locked-workspace metadata, not linked-artifact attribution or license approval. */
 export interface LicenseInventoryV2 {
   readonly scope: "lockedWorkspace";
@@ -1103,6 +1132,7 @@ export interface LicenseInventoryV2 {
     "xtask/supply-chain-inputs.json",
   ];
   readonly packages: readonly LicenseInventoryPackageV2[];
+  readonly assets?: readonly LicenseInventoryAssetV2[];
 }
 
 export type CsvDialect = "comma" | "semicolon" | "tab";
@@ -6033,34 +6063,59 @@ const RECIPIENT_FRAME_WIRE_BYTES = (RECIPIENT_FRAME_BYTES * 9) / 8 + RECIPIENT_F
 const recipientPreviewShape = shape<RecipientPreviewDtoV1>({
   schemaVersion: literal(1),
   previewId: isUuid,
-  format: literal("html"),
+  format: choices("html", "pdf"),
   libraryRevision: isRevision,
   modelSha256: isDigest,
   htmlSha256: isDigest,
+  pdfSha256: optional(isDigest),
+  pdfRenderer: optional(
+    shape<RecipientPdfRendererV1>({
+      version: literal(1),
+      typstVersion: literal("0.15.1"),
+      templateSha256: isDigest,
+      fontsSha256: isDigest,
+    }),
+  ),
   expiresAfterMilliseconds: literal(600000),
   report: (value: unknown): value is RecipientReportV1 =>
     boundedJson(value, MAX_RECIPIENT_REPORT_BYTES) && isRecipientReportV1(value),
 });
 // Structural checks and digests do not establish native source/publication custody.
 const isRecipientPreview = (value: unknown): value is RecipientPreviewDtoV1 =>
-  boundedJson(value, RECIPIENT_PREVIEW_COMPACT_BYTES) && recipientPreviewShape(value);
+  boundedJson(value, RECIPIENT_PREVIEW_COMPACT_BYTES) &&
+  recipientPreviewShape(value) &&
+  (value.format === "pdf"
+    ? value.pdfSha256 !== undefined && value.pdfRenderer !== undefined
+    : value.pdfSha256 === undefined && value.pdfRenderer === undefined);
 const recipientCreatedShape = shape<RecipientCreatedDtoV1>({
   schemaVersion: literal(1),
   previewId: isUuid,
-  format: literal("html"),
+  format: choices("html", "pdf"),
   filename: (value: unknown): value is string =>
     isText(value) && value.length > 0 && value !== "." && value !== ".." && !/[/\0]/.test(value),
-  publication: shape<RecipientHtmlPublishedV1>({
-    schemaVersion: literal(1),
-    solutionId: isUuid,
-    sourceRevision: isRevision,
-    currentRevision: isRevision,
-    modelSha256: isDigest,
-    htmlSha256: isDigest,
-  }),
+  publication: union<RecipientHtmlPublishedV1 | RecipientPdfPublishedV1>(
+    shape<RecipientHtmlPublishedV1>({
+      schemaVersion: literal(1),
+      solutionId: isUuid,
+      sourceRevision: isRevision,
+      currentRevision: isRevision,
+      modelSha256: isDigest,
+      htmlSha256: isDigest,
+    }),
+    shape<RecipientPdfPublishedV1>({
+      schemaVersion: literal(1),
+      solutionId: isUuid,
+      sourceRevision: isRevision,
+      currentRevision: isRevision,
+      modelSha256: isDigest,
+      pdfSha256: isDigest,
+    }),
+  ),
 });
 const isRecipientCreated = (value: unknown): value is RecipientCreatedDtoV1 =>
-  boundedJson(value, RECIPIENT_FRAME_BYTES) && recipientCreatedShape(value);
+  boundedJson(value, RECIPIENT_FRAME_BYTES) &&
+  recipientCreatedShape(value) &&
+  (value.format === "pdf" ? "pdfSha256" in value.publication : "htmlSha256" in value.publication);
 const isRecipientReleaseTarget = union<RecipientReleaseTargetV1>(
   shape({ kind: literal("preview"), previewId: isUuid }),
   shape({ kind: literal("operation"), operationId: isUuid }),
@@ -6297,6 +6352,26 @@ const isInventoryPackage = shape<LicenseInventoryPackageV2>({
   source: inventoryText(1024),
   checksum: optional(isInventoryChecksum),
 });
+const isInventoryAssetFile = shape<LicenseInventoryAssetFileV2>({
+  path: (value: unknown): value is string =>
+    inventoryText(1024)(value) &&
+    !value.includes("\\") &&
+    value
+      .split("/")
+      .every((part) => part.length > 0 && part !== "." && part !== ".." && !part.includes(":")),
+  sha256: isDigest,
+});
+const isInventoryAssetFiles = (value: unknown): value is readonly LicenseInventoryAssetFileV2[] =>
+  arrayOf(isInventoryAssetFile, 4096)(value) && value.length > 0;
+const isInventoryAsset = shape<LicenseInventoryAssetV2>({
+  name: inventoryText(1024),
+  version: inventoryText(1024),
+  source: (value: unknown): value is string =>
+    inventoryText(1024)(value) && value.startsWith("https://"),
+  licenseConcluded: inventoryText(4096),
+  files: isInventoryAssetFiles,
+  notices: isInventoryAssetFiles,
+});
 const inventoryShape = shape<LicenseInventoryV2>({
   scope: literal("lockedWorkspace"),
   schemaVersion: literal(2),
@@ -6308,6 +6383,7 @@ const inventoryShape = shape<LicenseInventoryV2>({
     value[1] === "pnpm-lock.yaml" &&
     value[2] === "xtask/supply-chain-inputs.json",
   packages: arrayOf(isInventoryPackage, 4096),
+  assets: optional(arrayOf(isInventoryAsset, 4096)),
 });
 const isLicenseInventory = (value: unknown): value is LicenseInventoryV2 =>
   boundedJson(value, INVENTORY_COMPACT_BYTES) && inventoryShape(value);
@@ -8052,18 +8128,24 @@ export class SetupOperationScope extends OperationScope<ScenarioOperationContext
     solutionId: SolutionId,
     options: RecipientReportOptionsV1,
     onProgress?: (event: OperationProgressV1) => void,
+    format: RecipientFileFormatV1 = "html",
   ): SetupOperation<RecipientPreviewDtoV1> {
     const revision = requireSetupRevision(this);
-    if (!isUuid(solutionId) || !isRecipientReportOptionsV1(options))
+    if (
+      !isUuid(solutionId) ||
+      !isRecipientReportOptionsV1(options) ||
+      !choices("html", "pdf")(format)
+    )
       throw new RangeError(
         "A canonical solution identity and explicit recipient disclosure options are required",
       );
     const operation = this.run(
       "solution_share_preview",
       { kind: "sharePreview" },
-      { schemaVersion: 1, solutionId, format: "html", options },
+      { schemaVersion: 1, solutionId, format, options },
       (value: unknown): value is RecipientPreviewDtoV1 =>
         isRecipientPreview(value) &&
+        value.format === format &&
         value.report.source.scenarioId === this.context.scenarioId &&
         value.report.source.observedCurrentRevision === revision &&
         value.report.source.solutionId === solutionId &&
@@ -8095,18 +8177,20 @@ export class SetupOperationScope extends OperationScope<ScenarioOperationContext
     previewId: UuidV7,
     allowStale: boolean,
     onProgress?: (event: OperationProgressV1) => void,
+    format: RecipientFileFormatV1 = "html",
   ): SetupOperation<RecipientCreatedDtoV1> {
     const revision = requireSetupRevision(this);
-    if (!isUuid(previewId) || !isBoolean(allowStale))
+    if (!isUuid(previewId) || !isBoolean(allowStale) || !choices("html", "pdf")(format))
       throw new RangeError(
         "A canonical recipient preview identity and explicit stale consent are required",
       );
     return this.run(
       "solution_share_create",
       { kind: "shareCreate" },
-      { schemaVersion: 1, previewId, format: "html", allowStale },
+      { schemaVersion: 1, previewId, format, allowStale },
       (value: unknown): value is RecipientCreatedDtoV1 =>
         isRecipientCreated(value) &&
+        value.format === format &&
         value.previewId === previewId &&
         value.publication.currentRevision === revision,
       RECIPIENT_FRAME_WIRE_BYTES,

@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 
 import * as generated from "./generated";
 import { isWorkforceSetupQueryResult } from "./generated-domain-pack-contracts";
+import recipientReport from "../../../../crates/eutheto-pdf-worker/tests/fixtures/report.json";
 import acceptedDetail from "./fixtures/accepted-detail-native.json";
 import optimalityStatus from "./fixtures/optimality-status-native.json";
 import peopleCsvNative from "./fixtures/people-csv-native.json";
@@ -4062,6 +4063,98 @@ describe("settings library operations and native review custody", () => {
   });
 });
 
+describe("recipient PDF publication binding", () => {
+  it.each([
+    "valid",
+    "missing-digest",
+    "missing-renderer",
+    "wrong-format",
+    "wrong-version",
+  ] as const)("binds PDF preview metadata: %s", async (variant) => {
+    const native = nativeOperations();
+    const scope = new generated.SetupOperationScope(recipientReport.source.scenarioId, 2);
+    const operation = scope.previewRecipientReport(
+      recipientReport.source.solutionId,
+      recipientReport.privacy,
+      undefined,
+      "pdf",
+    );
+    native.prepared();
+    const input = await native.claimed.promise;
+    expect(input.request.format).toBe("pdf");
+    native.terminal.resolve(
+      response(
+        input,
+        {
+          schemaVersion: 1,
+          previewId: solveRunId,
+          format: variant === "wrong-format" ? "html" : "pdf",
+          libraryRevision: 2,
+          modelSha256: "a".repeat(64),
+          htmlSha256: "b".repeat(64),
+          ...(variant === "missing-digest" ? {} : { pdfSha256: "c".repeat(64) }),
+          ...(variant === "missing-renderer"
+            ? {}
+            : {
+                pdfRenderer: {
+                  version: 1,
+                  typstVersion: variant === "wrong-version" ? "0.15.0" : "0.15.1",
+                  templateSha256: "d".repeat(64),
+                  fontsSha256: "e".repeat(64),
+                },
+              }),
+          expiresAfterMilliseconds: 600000,
+          report: recipientReport,
+        },
+        2,
+      ),
+    );
+    if (variant === "valid")
+      await expect(operation.result).resolves.toMatchObject({ result: { format: "pdf" } });
+    else await expect(operation.result).rejects.toMatchObject(invalidResponse);
+    scope.dispose();
+  });
+
+  it.each(["valid", "html-receipt", "wrong-format", "wrong-preview"] as const)(
+    "binds PDF approval and receipt: %s",
+    async (variant) => {
+      const native = nativeOperations();
+      const scope = new generated.SetupOperationScope(scenarioId, 3);
+      const operation = scope.createRecipientReport(solveRunId, false, undefined, "pdf");
+      native.prepared();
+      const input = await native.claimed.promise;
+      expect(input.request.format).toBe("pdf");
+      const publication = {
+        schemaVersion: 1,
+        solutionId: operationId,
+        sourceRevision: 3,
+        currentRevision: 3,
+        modelSha256: "a".repeat(64),
+        ...(variant === "html-receipt"
+          ? { htmlSha256: "b".repeat(64) }
+          : { pdfSha256: "b".repeat(64) }),
+      };
+      native.terminal.resolve(
+        response(
+          input,
+          {
+            schemaVersion: 1,
+            previewId: variant === "wrong-preview" ? operationId : solveRunId,
+            format: variant === "wrong-format" ? "html" : "pdf",
+            filename: "report.pdf",
+            publication,
+          },
+          3,
+        ),
+      );
+      if (variant === "valid")
+        await expect(operation.result).resolves.toMatchObject({ result: { publication } });
+      else await expect(operation.result).rejects.toMatchObject(invalidResponse);
+      scope.dispose();
+    },
+  );
+});
+
 function licenseInventory(): generated.LicenseInventoryV2 {
   return {
     scope: "lockedWorkspace",
@@ -4101,6 +4194,37 @@ describe("bounded offline inventory and redacted path reads", () => {
       Promise.resolve(response(input, checksummed)),
     );
     expect((await generated.getLicenseInventory()).result.packages).toEqual(checksummed.packages);
+  });
+
+  it("preserves reviewed font assets and rejects unsafe attribution metadata", async () => {
+    const asset = {
+      name: "Reviewed font",
+      version: "1",
+      source: "https://example.invalid/font",
+      licenseConcluded: "OFL-1.1",
+      files: [{ path: "fonts/font.otf", sha256: "a".repeat(64) }],
+      notices: [{ path: "fonts/LICENSE", sha256: "b".repeat(64) }],
+    };
+    const inventory = { ...licenseInventory(), assets: [asset] };
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, inventory)),
+    );
+    expect((await generated.getLicenseInventory()).result).toEqual(inventory);
+    for (const patch of [
+      { files: [] },
+      { notices: [] },
+      { source: "file:///font" },
+      { files: [{ path: "../font.otf", sha256: "a".repeat(64) }] },
+      { files: [{ path: "fonts/font.otf", sha256: "A".repeat(64) }] },
+      { files: [{ path: "fonts/font.otf", sha256: "a".repeat(64), trusted: true }] },
+      { name: "é".repeat(513) },
+      { trusted: true },
+    ]) {
+      tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+        Promise.resolve(response(input, { ...inventory, assets: [{ ...asset, ...patch }] })),
+      );
+      await expect(generated.getLicenseInventory()).rejects.toMatchObject(invalidResponse);
+    }
   });
 
   it.each([

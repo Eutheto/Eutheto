@@ -1,0 +1,332 @@
+{
+  "schemaVersion": 1,
+  "metadataLicense": "Apache-2.0",
+  "upstreamCommit": "06a591e2f237d25e1dfdedac3f3d1494c496c52d",
+  "fixtureLicense": "CC-BY-SA-3.0",
+  "scope": "Exactly eight unchanged CSL/XML test data files, not production library code or runtime embedded assets.",
+  "reviewDate": "2026-10-18",
+  "reviewBasis": "Existing deny.toml package-scoped review and ADR-003 preservation of third-party data terms; no general license allowlist or policy exception change.",
+  "legalText": {
+    "path": "vendor/citationberg-fixtures.CC-BY-SA-3.0.txt",
+    "source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/CC-BY-SA-3.0.txt",
+    "canonicalLicenseUri": "https://creativecommons.org/licenses/by-sa/3.0/",
+    "sha256": "3f941b3b89cf7b8370ceb83cc76d2120d471b58735d8ca60238a751a48d7f72f",
+    "bytes": 22240,
+    "retrieval": "SPDX license-list-data v3.27.0 verbatim text; direct canonical-site download returned HTTP403, official legalcode was separately read through the web tool."
+  },
+  "sourceReads": "Upstream rustdoc example and cfg(test) module read fixtures from the filesystem; no production include_str/include_bytes fixture embedding.",
+  "fixtures": [
+    {
+      "path": "vendor/citationberg/tests/dependent/academic-questions.csl",
+      "sha256": "1e9fd1710c60522ae36fbb0d4fa50d74ab9f69731e67cdc8fbbb7c4a43af1051",
+      "title": "Academic Questions",
+      "id": "http://www.zotero.org/styles/academic-questions",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [],
+      "links": [
+        {
+          "href": "http://www.zotero.org/styles/academic-questions",
+          "rel": "self"
+        },
+        {
+          "href": "http://www.zotero.org/styles/springer-humanities-brackets",
+          "rel": "independent-parent"
+        },
+        {
+          "href": "http://www.springer.com/cda/content/document/cda_downloaddocument/Key_Style_Points_1.0.pdf",
+          "rel": "documentation"
+        },
+        {
+          "href": "http://www.springer.com/cda/content/document/cda_downloaddocument/manuscript-guidelines-1.0.pdf",
+          "rel": "documentation"
+        }
+      ]
+    },
+    {
+      "path": "vendor/citationberg/tests/dependent/accounts-of-chemical-research.csl",
+      "sha256": "19ca705ebdf14183a9b33d6ac801f7e54dd80d0444d7708013e9580f23bef567",
+      "title": "Accounts of Chemical Research",
+      "id": "http://www.zotero.org/styles/accounts-of-chemical-research",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [],
+      "links": [
+        {
+          "href": "http://www.zotero.org/styles/accounts-of-chemical-research",
+          "rel": "self"
+        },
+        {
+          "href": "http://www.zotero.org/styles/american-chemical-society",
+          "rel": "independent-parent"
+        },
+        {
+          "href": "http://pubs.acs.org/paragonplus/submission/achre4/achre4_authguide.pdf",
+          "rel": "documentation"
+        }
+      ]
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/art-history.csl",
+      "sha256": "6a002cb035565a10fd66d353872ddddde7baef7efabe72dcfea008833633c2ed",
+      "title": "Art History",
+      "id": "http://www.zotero.org/styles/art-history",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [
+        {
+          "role": "author",
+          "name": "Julian Onions",
+          "uri": ""
+        }
+      ],
+      "links": [
+        {
+          "href": "http://www.zotero.org/styles/art-history",
+          "rel": "self"
+        },
+        {
+          "href": "http://onlinelibrary.wiley.com/journal/10.1111/%28ISSN%291467-8365/homepage/ForAuthors.html",
+          "rel": "documentation"
+        }
+      ]
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/chicago-author-date.csl",
+      "sha256": "0e8c35572c05819de3774dc6ff57eb7f90e3ac7c16a8495449b10a4e5e11a2f2",
+      "title": "Chicago Manual of Style 17th edition (author-date)",
+      "id": "http://www.zotero.org/styles/chicago-author-date",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [
+        {
+          "role": "author",
+          "name": "Julian Onions",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Sebastian Karcher",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Richard Karnesky",
+          "uri": "http://arc.nucapt.northwestern.edu/Richard_Karnesky"
+        },
+        {
+          "role": "contributor",
+          "name": "Andrew Dunning",
+          "uri": "https://orcid.org/0000-0003-0464-5036"
+        },
+        {
+          "role": "contributor",
+          "name": "Matthew Roth",
+          "uri": " https://orcid.org/0000-0001-7902-6331"
+        },
+        {
+          "role": "contributor",
+          "name": "Brenton M. Wiernik",
+          "uri": ""
+        }
+      ],
+      "links": [
+        {
+          "href": "http://www.zotero.org/styles/chicago-author-date",
+          "rel": "self"
+        },
+        {
+          "href": "http://www.chicagomanualofstyle.org/tools_citationguide.html",
+          "rel": "documentation"
+        }
+      ]
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/chicago-fullnote-bibliography.csl",
+      "sha256": "9be535c9144a63a5c51a041febd80d60d9c1a0a41fada47fe29ef87c0be23953",
+      "title": "Chicago Manual of Style 17th edition (full note)",
+      "id": "http://www.zotero.org/styles/chicago-fullnote-bibliography",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [
+        {
+          "role": "author",
+          "name": "Julian Onions",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Simon Kornblith",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Elena Razlogova",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Frank Bennett",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Andrew Dunning",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Sebastian Karcher",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Brenton M. Wiernik",
+          "uri": ""
+        }
+      ],
+      "links": [
+        {
+          "href": "http://www.zotero.org/styles/chicago-fullnote-bibliography",
+          "rel": "self"
+        },
+        {
+          "href": "http://www.chicagomanualofstyle.org/tools_citationguide.html",
+          "rel": "documentation"
+        }
+      ]
+    },
+    {
+      "path": "vendor/citationberg/tests/independent/ieee.csl",
+      "sha256": "913bcf74362f2a66d042cee1d8ac80e35020adace619a98285241995d0127262",
+      "title": "IEEE",
+      "id": "http://www.zotero.org/styles/ieee",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [
+        {
+          "role": "author",
+          "name": "Michael Berkowitz",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Julian Onions",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Rintze Zelle",
+          "uri": "http://twitter.com/rintzezelle"
+        },
+        {
+          "role": "contributor",
+          "name": "Stephen Frank",
+          "uri": "http://www.zotero.org/sfrank"
+        },
+        {
+          "role": "contributor",
+          "name": "Sebastian Karcher",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Giuseppe Silano",
+          "uri": "http://giuseppesilano.net"
+        },
+        {
+          "role": "contributor",
+          "name": "Patrick O'Brien",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Brenton M. Wiernik",
+          "uri": ""
+        },
+        {
+          "role": "contributor",
+          "name": "Oliver Couch",
+          "uri": ""
+        }
+      ],
+      "links": [
+        {
+          "href": "http://www.zotero.org/styles/ieee",
+          "rel": "self"
+        },
+        {
+          "href": "http://journals.ieeeauthorcenter.ieee.org/wp-content/uploads/sites/7/IEEE_Reference_Guide.pdf",
+          "rel": "documentation"
+        },
+        {
+          "href": "https://journals.ieeeauthorcenter.ieee.org/your-role-in-article-production/ieee-editorial-style-manual/",
+          "rel": "documentation"
+        }
+      ]
+    },
+    {
+      "path": "vendor/citationberg/tests/locales/locales-en-US.xml",
+      "sha256": "9ed8350a124d66b9ea258018bcbfa74c7278fdfb78c4408fc58e5c6b73914b5f",
+      "title": "",
+      "id": "",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [
+        {
+          "role": "translator",
+          "name": "Andrew Dunning",
+          "uri": "https://orcid.org/0000-0003-0464-5036"
+        },
+        {
+          "role": "translator",
+          "name": "Sebastian Karcher",
+          "uri": "https://orcid.org/0000-0001-8249-7388"
+        },
+        {
+          "role": "translator",
+          "name": "Rintze M. Zelle",
+          "uri": "https://orcid.org/0000-0003-1779-8883"
+        },
+        {
+          "role": "translator",
+          "name": "Denis Meier",
+          "uri": ""
+        },
+        {
+          "role": "translator",
+          "name": "Brenton M. Wiernik",
+          "uri": "https://orcid.org/0000-0001-9560-6336"
+        }
+      ],
+      "links": []
+    },
+    {
+      "path": "vendor/citationberg/tests/locales/locales-zh-CN.xml",
+      "sha256": "85cade24d6ef21cb08c98c022f8c0d49c33a0a842e2233518c7c19cc773eab65",
+      "title": "",
+      "id": "",
+      "rightsUri": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "rightsText": "This work is licensed under a Creative Commons Attribution-ShareAlike 3.0 License",
+      "credits": [
+        {
+          "role": "translator",
+          "name": "rongls",
+          "uri": ""
+        },
+        {
+          "role": "translator",
+          "name": "sati-bodhi",
+          "uri": ""
+        },
+        {
+          "role": "translator",
+          "name": "Heromyth",
+          "uri": ""
+        }
+      ],
+      "links": []
+    }
+  ],
+  "limits": "Package-scoped factual attribution review, not general legal/release clearance. No fixture edits or broader CC-licensed dependency adoption authorized."
+}

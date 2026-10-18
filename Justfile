@@ -144,6 +144,22 @@ test: test-rust test-doc test-ui
 coverage:
     cargo llvm-cov nextest --workspace --locked
 
+# Build the release PDF helper and its exact executable/renderer manifest.
+pdf-worker-build:
+    cargo xtask pdf build
+
+# Stage the offline renderer independently of the solver sidecar.
+pdf-worker-stage-desktop:
+    cargo xtask pdf stage-desktop
+
+# Build the pinned, finalized Nix PDF worker artifact.
+pdf-worker-build-nix:
+    nix build .#pdf-worker
+
+# Verify final extracted package bytes using the independently retained build digest.
+pdf-worker-verify executable manifest manifest_sha256:
+    cargo xtask pdf verify --executable "{{ executable }}" --manifest "{{ manifest }}" --manifest-sha256 "{{ manifest_sha256 }}"
+
 # Build the pinned Nix OR-Tools worker artifact.
 worker-build-nix:
     nix build .#ortools-worker
@@ -359,10 +375,21 @@ e2e bundled="false" rebuild="true":
       mkdir -p "$e2e_root/application"
       tar -xf "$e2e_root/archive/data.tar" -C "$e2e_root/application"
       if [[ ! -x "$e2e_root/application/usr/bin/eutheto-desktop" ||
-            ! -x "$e2e_root/application/usr/bin/ortools-worker" ]]; then
-        printf 'error: unsigned desktop bundle is missing its application or solver\n' >&2
+            ! -x "$e2e_root/application/usr/bin/ortools-worker" ||
+            ! -x "$e2e_root/application/usr/bin/eutheto-pdf-worker" ]]; then
+        printf 'error: unsigned desktop bundle is missing its application, solver, or PDF renderer\n' >&2
         exit 1
       fi
+      mapfile -d '' -t pdf_manifests < <(find "$e2e_root/application" -type f -path '*/renderer/pdf/eutheto-pdf-worker.json' -print0)
+      if [[ ${#pdf_manifests[@]} -ne 1 ]]; then
+        printf 'error: expected exactly one packaged PDF renderer manifest\n' >&2
+        exit 1
+      fi
+      pdf_digest_line="$(sha256sum apps/desktop/src-tauri/pdf-sidecar/resources/eutheto-pdf-worker.json)"
+      cargo xtask pdf verify \
+        --executable "$e2e_root/application/usr/bin/eutheto-pdf-worker" \
+        --manifest "${pdf_manifests[0]}" \
+        --manifest-sha256 "${pdf_digest_line%% *}"
       export EUTHETO_E2E_APPLICATION="$e2e_root/application/usr/bin/eutheto-desktop"
       export EUTHETO_E2E_PACKAGED_SOLVE=1
     elif [[ "{{ rebuild }}" == "true" ]]; then
@@ -396,25 +423,12 @@ e2e bundled="false" rebuild="true":
 # Enforce Rust advisory policy, including the reviewed deny.toml exceptions.
 rust-advisories:
     python3 -c 'from datetime import date, datetime, timezone; import sys; expiry = date.fromisoformat("2026-11-30"); today = datetime.now(timezone.utc).date(); sys.exit(f"RustSec exception review expired on {expiry}; update or remove each exception") if today > expiry else None'
+    python3 scripts/check_rust_advisories.py
     cargo deny --locked check advisories licenses bans sources
-    cargo audit --deny warnings \
-        --ignore RUSTSEC-2024-0370 \
-        --ignore RUSTSEC-2024-0411 \
-        --ignore RUSTSEC-2024-0412 \
-        --ignore RUSTSEC-2024-0413 \
-        --ignore RUSTSEC-2024-0414 \
-        --ignore RUSTSEC-2024-0415 \
-        --ignore RUSTSEC-2024-0416 \
-        --ignore RUSTSEC-2024-0417 \
-        --ignore RUSTSEC-2024-0418 \
-        --ignore RUSTSEC-2024-0419 \
-        --ignore RUSTSEC-2024-0420 \
-        --ignore RUSTSEC-2024-0429 \
-        --ignore RUSTSEC-2025-0075 \
-        --ignore RUSTSEC-2025-0080 \
-        --ignore RUSTSEC-2025-0081 \
-        --ignore RUSTSEC-2025-0098 \
-        --ignore RUSTSEC-2025-0100
+
+# Exercise maintenance expiry, exact package scope, and vulnerability rejection.
+rust-advisories-test:
+    python3 tests/security/test_rust_advisories.py
 
 # Generate and validate the Phase-01 third-party license inventory.
 licenses:
@@ -437,7 +451,7 @@ dco-self-test:
 ci-policy-test:
     python3 tests/security/test_ci_policy.py
 # Run the complete non-deferred Phase-01 repository suite.
-check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test fmt-check lint typecheck test
+check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test rust-advisories-test fmt-check lint typecheck test
 
 # Run real clean-tree checks, then stop at the unresolved Phase-11 release gate.
 release-preflight: check

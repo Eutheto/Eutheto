@@ -2,8 +2,8 @@
 
 use crate::{ApiError, boundary_error, map_app_error};
 use eutheto_core::{
-    CapturedRecipientReport, CapturedScheduleExport, RecipientReportMetadataV1,
-    ScheduleExportFormatV1,
+    CapturedRecipientPdf, CapturedRecipientReport, CapturedScheduleExport,
+    RecipientReportMetadataV1, ScheduleExportFormatV1,
 };
 use eutheto_types::{
     ApiErrorDto, IdGenerator, MonotonicClock, OperationId, RequestId, Revision, ScenarioId,
@@ -43,49 +43,70 @@ pub(crate) enum CaptureKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CaptureFormat {
     Html,
+    Pdf,
     Schedule(ScheduleExportFormatV1),
 }
 
 pub(crate) enum CapturedReport {
     Recipient(CapturedRecipientReport),
+    Pdf(CapturedRecipientPdf),
     Schedule(CapturedScheduleExport),
 }
 
 impl CapturedReport {
     fn kind(&self) -> CaptureKind {
         match self {
-            Self::Recipient(_) => CaptureKind::Recipient,
+            Self::Recipient(_) | Self::Pdf(_) => CaptureKind::Recipient,
             Self::Schedule(_) => CaptureKind::Schedule,
         }
     }
     fn format(&self) -> CaptureFormat {
         match self {
             Self::Recipient(_) => CaptureFormat::Html,
+            Self::Pdf(_) => CaptureFormat::Pdf,
             Self::Schedule(value) => CaptureFormat::Schedule(value.format()),
         }
     }
-    fn metadata(&self) -> &RecipientReportMetadataV1 {
+    pub(super) fn metadata(&self) -> &RecipientReportMetadataV1 {
         match self {
             Self::Recipient(value) => value.metadata(),
+            Self::Pdf(value) => value.metadata(),
             Self::Schedule(value) => value.metadata(),
         }
     }
-    fn admit(&self) -> Result<(), eutheto_types::AppError> {
+    pub(super) fn admit(&self) -> Result<(), eutheto_types::AppError> {
         match self {
             Self::Recipient(value) => value.admit(),
+            Self::Pdf(value) => value.admit(),
             Self::Schedule(value) => value.admit(),
         }
     }
     pub fn into_recipient(self) -> Result<CapturedRecipientReport, ApiError> {
         match self {
             Self::Recipient(value) => Ok(value),
-            Self::Schedule(_) => Err(binding_mismatch().into()),
+            Self::Pdf(_) | Self::Schedule(_) => Err(binding_mismatch().into()),
+        }
+    }
+    pub fn into_pdf(self) -> Result<CapturedRecipientPdf, ApiError> {
+        match self {
+            Self::Pdf(value) => Ok(value),
+            Self::Recipient(_) | Self::Schedule(_) => Err(binding_mismatch().into()),
+        }
+    }
+    pub(super) fn retained_bytes(
+        &self,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<usize, eutheto_types::AppError> {
+        match self {
+            Self::Recipient(value) => value.retained_bytes(control),
+            Self::Pdf(value) => value.retained_bytes(control),
+            Self::Schedule(value) => value.retained_bytes(control),
         }
     }
     pub fn into_schedule(self) -> Result<CapturedScheduleExport, ApiError> {
         match self {
             Self::Schedule(value) => Ok(value),
-            Self::Recipient(_) => Err(binding_mismatch().into()),
+            Self::Recipient(_) | Self::Pdf(_) => Err(binding_mismatch().into()),
         }
     }
 }
@@ -529,6 +550,23 @@ pub(crate) struct PreparingReport {
 }
 
 impl PreparingReport {
+    /// Charge bounded conversion growth before starting the PDF helper. Release and
+    /// window closure keep this charge until the owned preparation task settles.
+    pub fn reserve_preparation(&mut self, charged_bytes: usize) -> Result<(), ApiError> {
+        let mut state = self.custody.state();
+        self.custody.now(&mut state)?;
+        let index = state
+            .entries
+            .iter()
+            .position(|entry| entry.operation_id == self.operation_id)
+            .ok_or_else(unavailable)?;
+        let entry = &state.entries[index];
+        if entry.closing || !matches!(entry.phase, Phase::Preparing) || self.capture.is_some() {
+            return Err(unavailable().into());
+        }
+        state.charge_entry(index, charged_bytes)
+    }
+
     pub fn stage(
         &mut self,
         capture: CapturedReport,

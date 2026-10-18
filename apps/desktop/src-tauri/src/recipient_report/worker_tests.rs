@@ -3,8 +3,9 @@
 use super::*;
 use custody::ReportCustody;
 use eutheto_core::{
-    AppCommand, AppCommandResult, AppDependencies, AppPaths, CapturedScheduleExport, EuthetoApp,
-    ScheduleExportFormatV1, ScheduleExportPreviewV1, ScheduleExportRequestV1, StoredSolveRequest,
+    AppCommand, AppCommandResult, AppDependencies, AppPaths, CapturedRecipientReport,
+    CapturedScheduleExport, EuthetoApp, ScheduleExportFormatV1, ScheduleExportPreviewV1,
+    ScheduleExportRequestV1, StoredSolveRequest,
 };
 use eutheto_solver_api::{OutputError, ProgressSink, SolveProgressEvent};
 use eutheto_solver_ortools::{ORTOOLS_BACKEND_ID, VerifiedWorkerArtifact, registry_with_ortools};
@@ -323,15 +324,14 @@ async fn encode_for_operation(
         .map_err(boxed)?;
     let (capture, report) = capture(fixture).await?;
     let control = OperationControl::Cancellation(CancellationToken::new());
-    let charge = preview_charge(&capture, &report, &control).map_err(boxed)?;
     let html = capture.html_bytes().to_vec();
     let expected_report = serde_json::to_value(&report)?;
     let library_revision = capture.metadata().library_revision;
     let model_sha256 = capture.model_sha256().to_owned();
     let html_sha256 = capture.html_sha256().to_owned();
-    let preview_id = preparing
-        .stage(CapturedReport::Recipient(capture), charge)
-        .map_err(boxed)?;
+    let capture = CapturedReport::Recipient(capture);
+    let charge = preview_charge(&capture, &report, &control).map_err(boxed)?;
+    let preview_id = preparing.stage(capture, charge).map_err(boxed)?;
     let response = encode_preview(
         request_id()?,
         fixture.scope.expected_revision,
@@ -342,6 +342,8 @@ async fn encode_for_operation(
             library_revision,
             model_sha256,
             html_sha256,
+            pdf_sha256: None,
+            pdf_renderer: None,
             expires_after_milliseconds: 600_000,
             report,
         },
@@ -650,7 +652,7 @@ async fn ready_single_use_publication_and_encoded_receipt_preserve_native_custod
             preview_id: pending.preview_id,
             format: RecipientFileFormatV1::Html,
             filename: "recipient.html".to_owned(),
-            publication,
+            publication: RecipientPublicationV1::Html(publication),
         },
         consuming,
     )
@@ -979,6 +981,12 @@ async fn html_and_schedule_share_count_window_and_retained_byte_limits() -> Test
             },
         ),
         ReleaseAcknowledgement::NotActive
+    );
+    assert_code(
+        fixture
+            .custody
+            .consume("main", html.preview_id, fixture.scope, CaptureFormat::Pdf),
+        "recipient.preview_binding_mismatch",
     );
     // Cross-kind refusals did not spend the HTML review's single use either.
     drop(consume(&fixture, html.preview_id).map_err(boxed)?);

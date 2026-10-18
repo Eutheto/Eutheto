@@ -298,20 +298,30 @@ fn ics_export_rejects_unverified_result_before_publishing() -> Result<(), Box<dy
 }
 
 #[test]
-fn html_export_requires_a_destination_before_reading_sources() -> Result<(), Box<dyn Error>> {
-    let directory = private_tempdir()?;
-    let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
-        .args(["--data-dir"])
-        .arg(directory.path())
-        .args(["solutions", "export"])
-        .arg(directory.path().join("missing-scenario.json"))
-        .arg(directory.path().join("missing-result.json"))
-        .args(["--format", "html"])
-        .output()?;
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert!(std::str::from_utf8(&output.stderr)?.contains("solution.export_output_required"));
-    assert_eq!(fs::read_dir(directory.path())?.count(), 0);
+fn recipient_export_requires_a_destination_before_reading_sources() -> Result<(), Box<dyn Error>> {
+    for format in ["html", "pdf"] {
+        let directory = private_tempdir()?;
+        let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
+            .args(["--data-dir"])
+            .arg(directory.path())
+            .args(["solutions", "export"])
+            .arg(directory.path().join("missing-scenario.json"))
+            .arg(directory.path().join("missing-result.json"))
+            .args([
+                "--format",
+                format,
+                "--include-person-names",
+                "--include-authored-labels",
+                "--include-staffing",
+                "--include-changes",
+                "--include-fairness-actuals",
+            ])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(std::str::from_utf8(&output.stderr)?.contains("solution.export_output_required"));
+        assert_eq!(fs::read_dir(directory.path())?.count(), 0);
+    }
     Ok(())
 }
 
@@ -350,38 +360,40 @@ fn report_disclosures_cannot_silently_affect_other_formats() -> Result<(), Box<d
 }
 
 #[test]
-fn html_export_rejects_unverified_file_without_a_database_or_output() -> Result<(), Box<dyn Error>>
-{
-    let directory = private_tempdir()?;
-    let scenario = directory.path().join("scenario.json");
-    let solution = directory.path().join("unverified.json");
-    let destination = directory.path().join("report.html");
-    create_workforce_scenario(directory.path(), &scenario)?;
-    fs::write(&solution, b"{}")?;
-    let (output, envelope) = run_json(
-        directory.path(),
-        &[
-            "solutions",
-            "export",
-            scenario.to_str().ok_or("non-UTF-8 path")?,
-            solution.to_str().ok_or("non-UTF-8 path")?,
-            "--format",
-            "html",
-            "--output",
-            destination.to_str().ok_or("non-UTF-8 path")?,
-        ],
-    )?;
-    assert_eq!(output.status.code(), Some(8), "{envelope}");
-    assert_eq!(envelope["error"]["code"], "solution.portable_invalid");
-    assert!(!destination.exists());
-    let entries = fs::read_dir(directory.path())?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    assert_eq!(
-        entries,
-        ["scenario.json", "unverified.json"]
-            .map(std::ffi::OsString::from)
-            .into()
-    );
+fn recipient_export_rejects_unverified_file_without_a_database_or_output()
+-> Result<(), Box<dyn Error>> {
+    for format in ["html", "pdf"] {
+        let directory = private_tempdir()?;
+        let scenario = directory.path().join("scenario.json");
+        let solution = directory.path().join("unverified.json");
+        let destination = directory.path().join("report.html");
+        create_workforce_scenario(directory.path(), &scenario)?;
+        fs::write(&solution, b"{}")?;
+        let (output, envelope) = run_json(
+            directory.path(),
+            &[
+                "solutions",
+                "export",
+                scenario.to_str().ok_or("non-UTF-8 path")?,
+                solution.to_str().ok_or("non-UTF-8 path")?,
+                "--format",
+                format,
+                "--output",
+                destination.to_str().ok_or("non-UTF-8 path")?,
+            ],
+        )?;
+        assert_eq!(output.status.code(), Some(8), "{envelope}");
+        assert_eq!(envelope["error"]["code"], "solution.portable_invalid");
+        assert!(!destination.exists());
+        let entries = fs::read_dir(directory.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        assert_eq!(
+            entries,
+            ["scenario.json", "unverified.json"]
+                .map(std::ffi::OsString::from)
+                .into()
+        );
+    }
     Ok(())
 }

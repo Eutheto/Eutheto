@@ -144,6 +144,33 @@ onScopeDispose(() => {
             </dd>
           </div>
         </dl>
+        <section v-if="inventory.assets?.length" aria-labelledby="about-assets-title">
+          <h3 id="about-assets-title">{{ messages.about.assets }}</h3>
+          <ul class="preview-list">
+            <li v-for="asset in inventory.assets" :key="`${asset.name}-${asset.version}`">
+              <Collapsible>
+                <CollapsibleTrigger class="button-secondary">
+                  {{ asset.name }} {{ asset.version }} — {{ asset.licenseConcluded }}
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <p class="identifier">{{ messages.about.source }}: {{ asset.source }}</p>
+                  <h4>{{ messages.about.assetFiles }}</h4>
+                  <ul>
+                    <li v-for="file in asset.files" :key="file.path" class="identifier">
+                      {{ file.path }} — SHA256: {{ file.sha256 }}
+                    </li>
+                  </ul>
+                  <h4>{{ messages.about.assetNotices }}</h4>
+                  <ul>
+                    <li v-for="file in asset.notices" :key="file.path" class="identifier">
+                      {{ file.path }} — SHA256: {{ file.sha256 }}
+                    </li>
+                  </ul>
+                </CollapsibleContent>
+              </Collapsible>
+            </li>
+          </ul>
+        </section>
         <div class="stacked-form">
           <label for="about-search">{{ messages.about.search }}</label>
           <input

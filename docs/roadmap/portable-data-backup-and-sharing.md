@@ -322,7 +322,7 @@ Suggested filenames are `<scenario-title>-Plan-v<plan-number>.html`, the equival
 
 The standalone renderer includes reviewed `@media print` behavior: remove controls without paper meaning; preserve dates/plan version; expand or summarize appropriate details; avoid clipped timelines; control page breaks/repeated headers; support grayscale; retain accessible readable type; and add concise provenance.
 
-PDF is a secondary MVP output from the same validated Share Result Model and reviewed report/print renderer, using a controlled local headless/webview print pipeline or equivalent deterministic project-owned renderer. It cannot use a separate privacy model or silently contact remote resources. Phase 11 closes target packaging, reliability, and dependency/license evidence; failure leaves no partial PDF.
+PDF is a secondary MVP output from the same validated Share Result Model through a controlled local renderer. The [Phase-07 decision](07-workforce-solving-results-repair-and-export.md#privacy-preview-print-and-pdf) approved a fixed Typst document layout on 2026-10-17, replacing the earlier browser-print direction while preserving complete content and disclosure parity with HTML. It cannot use a separate privacy model or silently contact remote resources. Phase 11 closes target packaging, reliability, and dependency/license evidence; failure leaves no partial PDF.
 
 ## APIs and product state
 

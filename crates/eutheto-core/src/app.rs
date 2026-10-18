@@ -110,8 +110,11 @@ pub use history::*;
 #[path = "manual.rs"]
 mod manual;
 pub use manual::*;
+#[path = "recipient_pdf.rs"]
+mod recipient_pdf;
 #[path = "recipient_report.rs"]
 mod recipient_report;
+pub use recipient_pdf::*;
 pub use recipient_report::*;
 
 #[path = "result_publication.rs"]
