@@ -1433,7 +1433,112 @@ candidate remain unverified.
 
 The intent-led UI separates **Share Result** from **Export editable scenario** and **Back up everything**. MVP has one strong participant-friendly default plus advanced allowed field/section switches; it reserves coordinator/full-analysis/custom profile IDs for later or separately justified delivery. The preview renders the exact Share Result payload and lists whether names/aliases, full addresses, source calendar titles, notes, constraint details, rejected alternatives, objective details, transportation, and external links are included. Potentially sensitive options default off.
 
-Reviewed print styles remove controls without paper meaning, retain date/plan version/status, avoid clipped schedules, control page breaks/repeated context, support grayscale, and include concise provenance. Direct PDF uses the same validated Share Result Model and controlled local report/print renderer; it cannot have a broader privacy model or remote dependencies. Atomic temporary output and cleanup apply to HTML/PDF.
+Reviewed print styles remove controls without paper meaning, retain date/plan version/status, avoid clipped schedules, control page breaks/repeated context, support grayscale, and include concise provenance. Direct PDF uses the same validated Share Result Model through a controlled local renderer; it cannot have a broader privacy model or remote dependencies. Atomic temporary output and cleanup apply to HTML/PDF.
+
+**Typst direction approved 2026-10-17; implementation and acceptance pending.**
+The maintainer approved replacing the browser-based PDF approach with Typst after
+review of the official project's maintenance and adoption evidence. PDF will use
+a fixed project-owned document layout over the exact captured, privacy-reviewed
+Share Result Model. HTML keeps its existing renderer. Equivalent complete content,
+provenance and disclosure are required; pixel-identical layouts are not.
+Pin compatible official crates and reviewed fonts without upgrading unrelated
+packages or the project toolchain. An initial representative-output and
+cancellation gate precedes full desktop/CLI integration. A bounded dedicated
+helper must admit only the fixed template, captured data and embedded fonts,
+with no user templates, package downloads, system-font discovery or arbitrary
+file access. Preserve existing source admission, operation budgets, stale
+consent, review custody and atomic publication. Dependency/font notices, exact
+artifact packaging, supported-platform evidence and manual acceptance remain
+required. Approval of this direction is not evidence that PDF export works.
+
+**Local Typst renderer proof (2026-10-17).** The initial helper passed seven
+tests, including real rendering, retained-parent-pipe completion, active EOF and
+cancellation termination, closed external resolution, and explicit refusal of
+unsupported glyphs. Independent PDF text and bounding-box inspection checked a
+20-page, 231,230-byte tagged A4 output from a deliberately synthetic 23,339-byte
+model: all 24 assignment identities appeared once in the census, all 12 work
+entries and selected sections remained present, signed rational and zero values
+survived, Greek/Cyrillic/accented labels rendered, and hostile template/HTML text
+remained literal. Inspection found and corrected long-label margin overflow and
+missing repeated page context; the resulting pages passed bounds and repeated
+context checks, with a representative page also visually inspected. Unsupported
+CJK text fails explicitly instead of silently losing glyphs. This is a renderer
+fixture, not the accepted 12-person/48-shift/68-assignment practitioner workflow.
+At that initial renderer gate, packaged desktop/CLI integration, actual
+practitioner output, supported-platform checks and the manual checkpoint
+remained pending. The boundary is documented in
+[recipient PDF rendering](../architecture/recipient-pdf.md).
+
+**Packaged CLI/practitioner evidence (2026-10-17).** After the approved,
+hash-checked seven-file development-runtime setup, all seven native recipient
+custody tests passed with the actual approved OR-Tools worker. Canonical CLI
+corpus smoke passed 110 checks across 15 cases, including two exact-byte PDF
+publication checks. The actual synthetic practitioner source solved and was
+independently verified; default and all-fields HTML/PDF exports preserved all
+68 selected assignments and their person/work pairs, 48 work instances with
+their intervals, and 12 people. Privacy switches, names/authored-label exclusion,
+optional sections, receipt hashes, per-page context, word bounds, unchanged
+source and no-clobber refusal passed. Independent review checked the full pair
+census and installed runtime/artifact identities; representative rendered pages
+were visually inspected. Default PDF: 25 pages, 307,424 bytes, SHA-256
+`6f9d067b796cdbc62579ccb2ca93208e96c46182253d3edcd516943756679087`;
+all-fields PDF: 32 pages, 378,753 bytes, SHA-256
+`861cdd71f65a3bb0ec35c891040c02e9b0d5c4f552d4fca1855a40938dbf3fbc`.
+This establishes CLI publication and native custody tests, not desktop picker,
+keyboard/focus or cancellation integration. At this checkpoint, dependency
+decisions, browser/desktop acceptance, assistive technology, supported-platform
+evidence and manual acceptance remained open; see the
+[validation handoff](../contributors/phase07-pdf-validation.md).
+
+**Approved dependency remediation and revalidation (2026-10-18).** The exact
+unchanged citationberg commit `06a591e2f237d25e1dfdedac3f3d1494c496c52d`
+is vendored with preserved provenance, resolving quick-xml 0.41.0; ZIP 9.0.5
+retains the existing feature selection in both workspace and fuzz locks.
+The six exact maintenance dispositions expire after 2026-11-16 UTC, without
+automatic renewal. The standard enforced security gate passes against a fresh
+official advisory database with zero vulnerabilities; the five quick-xml/ZIP
+vulnerability IDs are never ignored. All 21 upstream source files remain
+unchanged, with a checked complete file census. The eight CSL test fixtures
+retain separate CC-BY-SA-3.0 terms and attribution, distinct from the library's
+MIT/Apache license and production renderer assets. Scoped license review makes
+no general legal or release-clearance claim.
+
+Upstream XML compatibility, archive/import/export and backup/restore regressions,
+fuzz compilation, strict affected-crate lint, generated artifacts, native custody
+and PDF helper regressions pass. The canonical CLI/PDF package rebuild and 110
+CLI corpus checks across 15 cases pass. Complete practitioner default/all-fields
+HTML/PDF acceptance passes again with 68 selected assignments, 48 work instances
+and 12 people. Default PDF: 25 pages, 307,608 bytes, SHA-256
+`af065ca6e437512091f260c26cfa20bf8e893bdb240afc04d97443eb877c50d8`;
+all-fields PDF: 32 pages, 378,832 bytes, SHA-256
+`e1badb1c2bf18268f9d8b6ec474727db8deab8b2eaa512cd4dd49f61172bb0a4`.
+Browser/desktop acceptance, assistive technology, supported-platform evidence
+and the maintainer checkpoint remain open.
+
+**Stored-library CLI follow-up (2026-10-18).** A disposable `clinic-tiny`
+project was populated and solved through public commands using the canonical
+package and actual worker. Stored-UUID default/all-fields PDF exports preserved
+all ten accepted assignments across five shifts and two assigned people,
+matched receipt hashes, enforced no-clobber and left the scenario unchanged.
+After a public edit advanced the head, export refused without explicit stale
+consent; consented export retained the original accepted revision and complete
+assignment census. This adds database-bound capture/publication evidence
+without namespaces. Exact hashes and evidence scope are in the
+[validation handoff](../contributors/phase07-pdf-validation.md).
+
+The remaining gates are actual bundled desktop PDF picker/publication and
+keyboard/focus/cancellation lifecycle; the pinned browser component case;
+spoken assistive technology and representative-user usability; macOS/Windows
+packaging and lifecycle; and maintainer checkpoint acceptance. Namespace
+preflights remain `EPERM`. The separate fresh browser task is still blocked
+by the proxy on the two approved download redirect hosts while environment
+allowlist publication is pending. No environment or isolation bypass is part
+of this work. Phase 07 is not complete and Phase 08 is not authorized.
+
+The following CEF decisions and results are retained as **historical experimental
+evidence**, superseded as the production PDF route. They do not establish Typst
+acceptance, require completing CEF adoption for Typst, or approve the missing
+cleanup/governance ADR proposals.
 
 **PDF runtime decision approved during EXPORT-001 planning.** Ship a controlled
 local browser renderer for direct PDF so it consumes the same approved offline
