@@ -1,4 +1,4 @@
-import { withVueTs, vueTsConfigs } from "@vue/eslint-config-typescript";
+import tseslint from "typescript-eslint";
 import pluginVue from "eslint-plugin-vue";
 
 const readonly = "readonly";
@@ -66,16 +66,57 @@ const vitestGlobals = {
   vi: readonly,
 };
 
-export default withVueTs(
-  {
-    rootDir: import.meta.dirname,
-  },
+export default [
   {
     name: "eutheto/ignores",
     ignores: ["node_modules/**", "dist/**", ".vite/**", "coverage/**", "src-tauri/target/**"],
   },
-  pluginVue.configs["flat/recommended"],
-  vueTsConfigs.strictTypeChecked,
+  ...pluginVue.configs["flat/recommended"],
+  ...tseslint.configs.strictTypeChecked.map((config) =>
+    config.files ? { ...config, files: [...config.files, "**/*.vue"] } : config,
+  ),
+  ...pluginVue.configs["flat/base"],
+  {
+    name: "eutheto/vue-typescript",
+    files: ["*.vue", "**/*.vue"],
+    languageOptions: {
+      parserOptions: {
+        parser: tseslint.parser,
+        ecmaVersion: 2024,
+        ecmaFeatures: { jsx: false },
+        extraFileExtensions: [".vue"],
+        projectService: true,
+      },
+    },
+    rules: {
+      "vue/block-lang": ["error", { script: { lang: ["ts"], allowNoLang: false } }],
+    },
+  },
+  {
+    ...tseslint.configs.disableTypeChecked,
+    name: "eutheto/javascript",
+    files: ["**/*.js", "**/*.jsx", "**/*.cjs", "**/*.mjs"],
+  },
+  {
+    name: "eutheto/typescript",
+    files: ["**/*.ts", "**/*.tsx", "**/*.mts"],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { projectService: true, extraFileExtensions: [".vue"] },
+    },
+  },
+  {
+    // Preserve the retired Vue TypeScript wrapper's existing operation-rule behavior.
+    name: "eutheto/vue-operation-compatibility",
+    files: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.vue"],
+    rules: {
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+    },
+  },
   {
     name: "eutheto/tauri-api-boundary",
     files: ["**/*.{js,mjs,cjs,ts,mts,cts,tsx,vue}"],
@@ -139,4 +180,4 @@ export default withVueTs(
       globals: vitestGlobals,
     },
   },
-);
+];

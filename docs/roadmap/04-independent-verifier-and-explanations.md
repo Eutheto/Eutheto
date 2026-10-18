@@ -306,6 +306,8 @@ Every event carries `eventVersion`, timestamp, request/job/scenario IDs, and rev
 
 Phase 04 owns the minimum shared frontend foundation required by the eight explanation components below. Lock and configure Tailwind CSS and `@tailwindcss/vite` 4.3.3, shadcn-vue 2.8.2 as a source generator, Reka UI 2.10.4, `@lucide/vue` 1.37.0, and only the directly used support packages: `class-variance-authority` 0.7.1, `clsx` 2.1.1, `tailwind-merge` 3.6.0, and `tw-animate-css` 1.4.0. Generated wrappers are reviewed, application-owned source rather than a second runtime design authority.
 
+**Approved maintenance — 2026-10-18:** the unused `shadcn-vue` 2.8.2 development generator is retired, superseding its installation requirement above. Existing reviewed component source remains application-owned; the Tailwind, Reka, Lucide, and support-package foundation is retained. Future component changes are authored and reviewed in the repository without the generator.
+
 The initial primitive set is Reka Dialog, Popover, Tabs, Tooltip, and Collapsible plus application-owned Badge and Card wrappers. Add another primitive only when one of the eight required components needs it. Map the existing semantic tokens into the Tailwind/shadcn variables; do not create a parallel token vocabulary or component convention. Tailwind preflight and global resets must preserve the existing base styles. Phase 06 consumes and extends this foundation instead of selecting or locking a second stack.
 
 Build and integrate application-owned `ValidationSummary`, `ConflictCard`, `SolutionStatus`, `ScoreBreakdown`, `ExplanationPanel`, `AssignmentInspector`, `ChangeSetPreview`, and `ErrorRecoveryPanel` on shadcn-vue/Reka primitives and semantic tokens.

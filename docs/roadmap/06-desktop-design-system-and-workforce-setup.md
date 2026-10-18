@@ -47,7 +47,7 @@ UI001's adopted runtime/browser subset was reverified on **2026-09-09**; exact a
 | `@tauri-apps/plugin-updater`                |           2.10.1 | Release use is later; retain typed boundary and compatible Rust plugin/config.                                                                                                          |
 | `@tauri-apps/plugin-shell`                  |            2.3.5 | Minimize use; strict scope permits only exact bundled sidecar where needed.                                                                                                             |
 | Tailwind CSS / `@tailwindcss/vite`          |    4.3.3 / 4.3.3 | Tailwind 4 is CSS-first and uses the Vite plugin. Audit v3 syntax; shadcn-vue uses `tw-animate-css`, and CSS variable utilities use `var(...)` semantics rather than stale v3 snippets. |
-| shadcn-vue                                  |            2.8.2 | Component generator/source, not runtime design authority. It migrated from Radix Vue to Reka; generated code is owned/reviewed by `eutheto`.                                            |
+| shadcn-vue                                  | retired 2026-10-18 | Historical component generator/source, not an installed requirement or runtime design authority. It migrated from Radix Vue to Reka; generated code is owned/reviewed by `eutheto`.                                            |
 | Reka UI                                     |           2.10.4 | Current direct-registry version; use accessible headless behavior, not stale Radix Vue APIs.                                                                                            |
 | `@lucide/vue`                               |           1.39.0 | Preserve the installed Phase-04 foundation pin; icons require visible/accessible labels where meaning is not decorative.                                                                |
 | TanStack Vue Table                          |            9.2.4 | Breaking v9 API: use `useTable`, not v8 `useVueTable`, and configure features explicitly.                                                                                               |
@@ -66,6 +66,8 @@ UI001's adopted runtime/browser subset was reverified on **2026-09-09**; exact a
 `@pinia/colada` **1.4.2**, `@vue/compiler-sfc` **3.5.42**, `@vue/devtools-api` **8.2.1**, and `@lucide/vue` **1.39.0** are mandatory direct dependencies at these exact versions, not undeclared transitive dependencies.
 
 Tailwind CSS, `@tailwindcss/vite`, shadcn-vue, Reka UI, `@lucide/vue`, `tw-animate-css`, `tailwind-merge`, `class-variance-authority`, and `clsx` are locked and minimally configured by Phase 04. Phase 06 must consume and extend those exact pins, application-owned wrappers, and mapped semantic tokens rather than re-locking dependencies or introducing a parallel design convention.
+
+**Approved maintenance — 2026-10-18:** the unused `shadcn-vue` 2.8.2 development generator is retired, superseding its installation requirement in the baseline above. Existing reviewed component source and the remaining foundation pins continue under application ownership; future component changes are authored and reviewed in the repository without the generator.
 
 Tauri remains major **2**. The Rust crate patch/version set is pinned alongside npm packages after checking current compatible releases. Breaking-major adoption is clean-cut: no compatibility aliases or mixed old/new APIs in examples, generated code, configuration, or tests.
 
