@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 LICENSE text eol=lf
 NOTICE text eol=lf
+migrations/*.sql text eol=lf
 workers/ortools/patches/*.patch text eol=lf
 workers/ortools/source-contract.json text eol=lf
 workers/ortools/dependency-sources.json text eol=lf
