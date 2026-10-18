@@ -4,7 +4,7 @@
 
 The Rust core validates scenarios, translates supported Workforce requirements into a solver-neutral planning model, routes compatible work to the isolated OR-Tools backend, and independently verifies candidates against the original domain meaning. The complete desktop planning experience and additional domains remain roadmap work.
 
-> **Project status:** [Phases 00–05](docs/roadmap/README.md) established the reproducible core, isolated OR-Tools worker, independent verification, registered Workforce domain, and headless exports. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) setup passed its applicable native checkpoint and protected-main checks and integrated through [PR #59](https://github.com/Eutheto/Eutheto/pull/59). Active [Phase 07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) development includes fourteen Required rule kinds, twelve authored preference kinds, native Optimize, accepted-result calendars/tables and summaries, explanations, reviewed manual changes/Repair, Alternatives/comparison, CSV/calendar exports and privacy-reviewed offline HTML. A debug desktop without the bundled worker truthfully reports Optimize unavailable. Direct PDF, final Phase07 manual acceptance, solver-naive and spoken native screen-reader QA, Seating, AI and signed releases remain incomplete or unverified.
+> **Project status:** [Phases 00–05](docs/roadmap/README.md) established the reproducible core, isolated OR-Tools worker, independent verification, registered Workforce domain, and headless exports. [Phase 06](docs/roadmap/06-desktop-design-system-and-workforce-setup.md) setup passed its applicable native checkpoint and protected-main checks and integrated through [PR #59](https://github.com/Eutheto/Eutheto/pull/59). Active [Phase 07](docs/roadmap/07-workforce-solving-results-repair-and-export.md) development includes fourteen Required rule kinds, twelve authored preference kinds, native Optimize, accepted-result calendars/tables and summaries, explanations, reviewed manual changes/Repair, Alternatives/comparison, CSV/calendar exports and privacy-reviewed offline HTML/PDF reports. A debug desktop without the bundled worker truthfully reports Optimize unavailable. Bundled desktop PDF acceptance, final Phase07 manual acceptance, solver-naive and spoken native screen-reader QA, Seating, AI and signed releases remain incomplete or unverified.
 
 ## Product direction
 
@@ -119,8 +119,9 @@ verification and scoring, and real headless file/stored optimization through the
 approved OR-Tools worker. The CLI can fully validate scenarios, retain verified
 results, explain recorded assignments, and export accepted JSON, assignment CSV,
 Workforce person/shift summary CSV, or combined/per-person iCalendar.
-This remains a bounded development planner: Phase07 adds the desktop flows below;
-direct PDF, manual acceptance, Seating, AI and signed releases remain roadmap work.
+This remains a bounded development planner: Phase07 adds the desktop flows and
+recipient HTML/PDF reports below; final manual acceptance, Seating, AI and signed
+releases remain roadmap work.
 
 Phase 06 now provides first launch, Workforce project creation, a searchable
 active/archived library, a revision-bound setup overview, a bounded change-history
@@ -322,14 +323,19 @@ and rule differences; incompatible objective profiles have no aggregate score
 ranking. Viewing an alternative does not apply it or change the authored scenario.
 
 Open **Inspect schedule → Share result** to review and save a participant-friendly,
-single-file HTML report. Rust captures the complete accepted result, not the visible
-page or filter. Person names, authored labels, staffing, changes and fairness actuals
+single-file HTML or fixed-layout PDF report. Rust captures the complete accepted
+result, not the visible page or filter. Person names, authored labels, staffing, changes and fairness actuals
 are off by default; the preview lists included, excluded and unavailable information.
 Generated aliases remain linkable, not anonymous. Older accepted results require
 explicit consent and retain their original revision. Saving uses the native file
 picker, never overwrites an existing file, and consumes that review even on
-cancellation; prepare a fresh review to try again. The HTML works offline.
-Direct PDF remains unavailable.
+cancellation; prepare a fresh review to try again. Both formats work offline.
+PDF uses a dedicated fixed Typst worker and the same captured report model and
+privacy choices as HTML; its layout differs from browser printing. Packaged CLI
+PDF export has been checked with full practitioner reports, stored stale results and
+no-clobber publication. Bundled desktop PDF picker/lifecycle, assistive-technology,
+supported-platform and final manual acceptance remain unverified. See the
+[renderer contract](docs/architecture/recipient-pdf.md).
 
 Use **Inspect schedule → Export CSV/calendar** for assignment CSV, people/shift
 summary CSV, or a combined calendar. Each accepted-person row also offers a
@@ -583,6 +589,7 @@ optimizer solutions export ./scenario.json ./result.json --format ics --output .
 optimizer solutions export ./scenario.json ./result.json --format ics --person-id "$person_id" --output ./person.ics
 optimizer solutions export ./scenario.json ./result.json --format html --output ./shared-plan.html
 optimizer solutions export "$scenario_id" "$solution_id" --format html --output ./shared-plan.html
+optimizer --format json solutions export ./scenario.json ./result.json --format pdf --output ./shared-plan.pdf
 ```
 
 For two stored accepted results, compare an explicit base and candidate under
@@ -632,23 +639,25 @@ concurrent edit may occur after the observation and before no-clobber publicatio
 so these exports make no claim of being current at publication time. `--output`
 never overwrites an existing file.
 
-Workforce `--format html` publishes the same offline recipient report as the
-desktop Share review. A named `--output` is required; HTML is never written to
-stdout. Person names, authored labels, staffing totals, assignment changes, and
+Workforce `--format html` and `--format pdf` publish the offline recipient report
+from the same model as the desktop Share review. A named `--output` is required;
+neither format is written to stdout. Person names, authored labels, staffing totals, assignment changes, and
 configured fairness actuals are independently opt-in through
 `--include-person-names`, `--include-authored-labels`, `--include-staffing`,
 `--include-changes`, and `--include-fairness-actuals`. These flags are valid only
-for HTML. Even with every option off, stable identities and schedule structure
+for HTML/PDF. Even with every option off, stable identities and schedule structure
 remain linkable; this is not anonymization.
 
-Stored HTML captures an immutable accepted source and checks the live head under
+Stored HTML/PDF captures an immutable accepted source and checks the live head under
 the publication lease; `--allow-stale` explicitly authorizes a historical source.
-Explicit-file HTML independently verifies the complete supplied snapshot/result
+Explicit-file HTML/PDF independently verifies the complete supplied snapshot/result
 without opening a library. Its live head remains unknown, and recorded original
 and baseline comparisons do not establish native historical custody. Both paths
 share one 30-second preparation/publication budget and preserve an existing
-destination. JSON CLI receipts include the report-model and exact HTML SHA-256
-digests.
+destination. JSON CLI receipts include `modelSha256` and the exact artifact digest
+(`htmlSha256` or `pdfSha256`), source revisions and selected privacy options.
+PDF requires the packaged renderer and its build-bound manifest; builds without
+that manifest report PDF unavailable.
 
 To require one qualified Physician on each scoped shift in the checked-in
 synthetic `clinic-tiny` scenario, save this as `skill-mix-command.json`:
@@ -951,15 +960,14 @@ The desktop starting-plan importer has the smaller 10,000-data-record limit abov
 it creates unverified intent, not an accepted solution.
 
 Without `--output`, human-format JSON, CSV and iCalendar exports write exact raw
-bytes to stdout. HTML and global `--format json` always require an export
+bytes to stdout. HTML/PDF and global `--format json` always require an export
 destination so data cannot mix with the one terminal result envelope.
 Exits are 0 success, 2 usage, 3 validation,
 4 backend-reported compiled-model infeasibility (without a mapped original-rule
 conflict), 5 no verified result within limits, 6 unavailable/incompatible
 backend or capability, 7 verification alarm, 8 file/storage failure, 10 revision
 conflict, and 130 cancellation. Service cancellation, standalone migration,
-configuration files for these new operations, and CLI PDF result exports remain
-explicitly unavailable.
+configuration files for these new operations remain explicitly unavailable.
 
 ## Contributing
 
