@@ -4,7 +4,7 @@ import { spawn, execFile } from "node:child_process";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { cpus, platform, release } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { isWorkforceResultScheduleViewData } from "../src/api/generated-domain-pack-contracts.ts";
@@ -10998,6 +10998,16 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
   assert(source);
   const { scenarioId } = await package10CreateFixture(sessionId, source);
   const dialog = '[role="dialog"]';
+  async function prepareRecipientReview() {
+    await waitFor(
+      sessionId,
+      `return [...document.querySelectorAll('.recipient-share-dialog button')]
+        .some(button => button.textContent.trim() === 'Prepare review' && !button.disabled);`,
+    );
+    await keyboardActivateButton(sessionId, "Prepare review", dialog);
+    await waitForElement(sessionId, ".recipient-share-source", 60_000);
+    return evaluate(sessionId, "return window.__recipientEvidence.preview;");
+  }
   try {
     await navigate(sessionId, "/projects");
     await command("POST", `/session/${encodeURIComponent(sessionId)}/refresh`, {});
@@ -11177,18 +11187,198 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
     assert.equal(report.content.schedule.staffing, null);
     assert.equal(report.content.schedule.changes, null);
     assert.equal(report.content.schedule.fairnessActuals, null);
-    await activateButton(sessionId, "Close and release review", dialog);
+    // Observe real native replies without replacing, holding, or altering their delivery.
+    await evaluate(
+      sessionId,
+      `const callbacks = window.__TAURI_INTERNALS__.callbacks;
+      const descriptor = Object.getOwnPropertyDescriptor(callbacks, 'get'), original = callbacks.get;
+      const evidence = { preview: null, created: null };
+      evidence.restore = () => descriptor ? Object.defineProperty(callbacks, 'get', descriptor) : Reflect.deleteProperty(callbacks, 'get');
+      window.__recipientEvidence = evidence;
+      Object.defineProperty(callbacks, 'get', { configurable: true, value: function(id) {
+        const callback = original.call(this, id);
+        if (!callback) return callback;
+        return data => {
+          if (data?.result?.previewId && data.result.report) evidence.preview = data.result;
+          if (data?.result?.previewId && data.result.publication) evidence.created = data.result;
+          callback(data);
+        };
+      }});`,
+    );
+    // An HTML review cannot authorize PDF: change format by keyboard and recapture.
+    const htmlPreview = await prepareRecipientReview();
+    assert.equal(htmlPreview.format, "html");
+    await keyboardWorkflowSelect(sessionId, ".recipient-share-dialog select", "pdf");
+    await waitFor(
+      sessionId,
+      `return !document.querySelector('.recipient-share-source') &&
+        [...document.querySelectorAll('.recipient-share-dialog button')]
+          .some(button => button.textContent.trim() === 'Prepare review' && !button.disabled);`,
+    );
+    assert.equal(
+      await evaluate(
+        sessionId,
+        `return [...document.querySelectorAll('.recipient-share-dialog button')]
+          .some(button => button.textContent.trim().startsWith('Save reviewed'));`,
+      ),
+      false,
+      "Changing format retires the HTML save authority",
+    );
+    const firstPdfPreview = await prepareRecipientReview();
+    assert.equal(firstPdfPreview.format, "pdf");
+    assert.notEqual(firstPdfPreview.previewId, htmlPreview.previewId);
+    await screenshot(sessionId, "packaged-keyboard-recipient-pdf-review.png");
+    await keyboardActivateButton(sessionId, "Close and release review", dialog);
     await waitFor(sessionId, "return !document.querySelector('[role=dialog]');");
+    await waitFor(
+      sessionId,
+      `const root = document.querySelector('[data-accepted-schedule]');
+      return document.activeElement === [...(root?.querySelectorAll('button') ?? [])]
+        .find(button => button.textContent.trim() === 'Share result');`,
+    );
+    await keyboardActivateButton(sessionId, "Share result", "[data-accepted-schedule]");
+    await waitForElement(sessionId, ".recipient-share-dialog");
+    assert.equal(
+      await evaluate(
+        sessionId,
+        "return document.querySelector('.recipient-share-dialog select').value;",
+      ),
+      "pdf",
+    );
+    const cancelledPdfPreview = await prepareRecipientReview();
+    assert.notEqual(cancelledPdfPreview.previewId, firstPdfPreview.previewId);
+    await keyboardActivateButton(sessionId, "Save reviewed PDF…", dialog);
+    await nativeChooser("Save recipient PDF report");
+    await waitFor(
+      sessionId,
+      `return !document.querySelector('.recipient-share-source') &&
+        [...document.querySelectorAll('.recipient-share-dialog button')]
+          .some(button => button.textContent.trim() === 'Prepare review' && !button.disabled);`,
+    );
+    let retiredPreviewId = cancelledPdfPreview.previewId;
+    for (const disclose of [false, true]) {
+      if (disclose) {
+        retiredPreviewId = (await prepareRecipientReview()).previewId;
+        for (let index = 1; index <= 5; index += 1) {
+          await keyboardActivate(
+            sessionId,
+            `.recipient-share-dialog fieldset label:nth-of-type(${index}) input`,
+            " ",
+          );
+          await waitFor(
+            sessionId,
+            "return document.querySelector('.recipient-share-dialog fieldset')?.disabled === false;",
+          );
+        }
+        await waitFor(sessionId, "return !document.querySelector('.recipient-share-source');");
+      }
+      const preview = await prepareRecipientReview();
+      assert.equal(preview.format, "pdf");
+      assert.notEqual(preview.previewId, retiredPreviewId);
+      assert.match(preview.pdfSha256, /^[a-f0-9]{64}$/u);
+      assert.equal(preview.pdfRenderer.typstVersion, "0.15.1");
+      assert.equal(preview.report.source.scenarioId, scenarioId);
+      assert.equal(preview.report.source.solutionId, accepted.result.solutionId);
+      assert.equal(preview.report.source.acceptedResultChecksum, accepted.result.resultChecksum);
+      assert.equal(preview.report.source.scenarioRevision, originalRevision);
+      assert.equal(preview.report.source.observedCurrentRevision, originalRevision);
+      assert.equal(preview.report.source.origin, "storedTerminal");
+      assert.equal(
+        preview.report.source.verificationReportChecksum,
+        report.source.verificationReportChecksum,
+      );
+      assert.deepEqual(preview.report.privacy, {
+        includePersonNames: disclose,
+        includeAuthoredLabels: disclose,
+        includeStaffing: disclose,
+        includeChanges: disclose,
+        includeFairnessActuals: disclose,
+      });
+      const schedule = preview.report.content.schedule;
+      assert.deepEqual(
+        schedule.assignments.map(({ personId, shiftId }) => `${personId}/${shiftId}`).sort(),
+        timeline.items.map(({ personId, shiftId }) => `${personId}/${shiftId}`).sort(),
+      );
+      assert.deepEqual(
+        schedule.people.map(({ personId }) => personId).sort(),
+        report.content.schedule.people.map(({ personId }) => personId).sort(),
+      );
+      assert.deepEqual(
+        schedule.shifts.map(({ shiftId }) => shiftId).sort(),
+        report.content.schedule.shifts.map(({ shiftId }) => shiftId).sort(),
+      );
+      for (const person of schedule.people) {
+        const authored = people.find((candidate) => candidate.id === person.personId);
+        assert(authored);
+        assert.equal(person.label.kind, disclose ? "authored" : "generated");
+        assert.equal(person.label.text === authored.name, disclose);
+      }
+      for (const section of ["staffing", "changes", "fairnessActuals"])
+        assert.equal(schedule[section] !== null, disclose);
+      const pdfOutput = join(
+        directory,
+        `accepted-recipient-${disclose ? "all-fields" : "default"}.pdf`,
+      );
+      await keyboardActivateButton(sessionId, "Save reviewed PDF…", dialog);
+      await nativeChooser("Save recipient PDF report", pdfOutput);
+      await waitFor(
+        sessionId,
+        "return document.querySelector('.recipient-share-dialog')?.textContent.includes('Native publication confirmed:');",
+      );
+      const created = await waitFor(
+        sessionId,
+        "return window.__recipientEvidence.created?.previewId === arguments[0] && window.__recipientEvidence.created;",
+        [preview.previewId],
+      );
+      const pdf = await readFile(pdfOutput);
+      assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
+      assert.equal(package10Sha256(pdf), preview.pdfSha256);
+      assert.equal(created.format, "pdf");
+      assert.equal(created.filename, basename(pdfOutput));
+      assert.equal(created.publication.solutionId, accepted.result.solutionId);
+      assert.equal(created.publication.sourceRevision, originalRevision);
+      assert.equal(created.publication.currentRevision, originalRevision);
+      assert.equal(created.publication.modelSha256, preview.modelSha256);
+      assert.equal(created.publication.pdfSha256, preview.pdfSha256);
+      retiredPreviewId = preview.previewId;
+    }
+    // Even a chooser overwrite confirmation cannot authorize replacing an existing file.
+    const existingPdf = join(directory, "existing-recipient.pdf");
+    const sentinel = "Disposable no-clobber sentinel";
+    await writeFile(existingPdf, sentinel);
+    await prepareRecipientReview();
+    await keyboardActivateButton(sessionId, "Save reviewed PDF…", dialog);
+    await nativeChooser("Save recipient PDF report", existingPdf, true);
+    await waitFor(
+      sessionId,
+      `return !document.querySelector('.recipient-share-source') &&
+        document.querySelector('.recipient-share-dialog [role=alert]')?.textContent.includes('already exists') &&
+        [...document.querySelectorAll('.recipient-share-dialog button')]
+          .some(button => button.textContent.trim() === 'Prepare review' && !button.disabled);`,
+    );
+    assert.equal(await readFile(existingPdf, "utf8"), sentinel);
+    await keyboardActivateButton(sessionId, "Close and release review", dialog);
+    await waitFor(sessionId, "return !document.querySelector('[role=dialog]');");
+    await waitFor(
+      sessionId,
+      `const root = document.querySelector('[data-accepted-schedule]');
+      return document.activeElement === [...(root?.querySelectorAll('button') ?? [])]
+        .find(button => button.textContent.trim() === 'Share result');`,
+    );
     assert.equal(
       (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
       originalRevision,
-      "Report preparation, picker cancellation and publication cannot mutate the scenario",
+      "HTML/PDF review, format/disclosure retirement, picker cancellation, publication and no-clobber refusal cannot mutate the scenario",
     );
     await navigate(sessionId, "/projects");
     console.log(
-      "PASS: real-worker accepted result → keyboard CSV/share review and focus restore → exact native CSV/ICS publication and private HTML defaults",
+      "PASS: real-worker accepted result → keyboard CSV/HTML/PDF review and focus restore → exact native CSV/ICS/HTML/PDF publication, private defaults/all disclosures, format retirement, picker cancellation and PDF no-clobber",
     );
   } finally {
+    await evaluate(
+      sessionId,
+      "window.__recipientEvidence?.restore(); delete window.__recipientEvidence;",
+    ).catch(() => undefined);
     await package10DeleteFixture(sessionId, scenarioId);
   }
 }

@@ -1532,8 +1532,13 @@ spoken assistive technology and representative-user usability; macOS/Windows
 packaging and lifecycle; and maintainer checkpoint acceptance. Namespace
 preflights remain `EPERM`. The separate fresh browser task is still blocked
 by the proxy on the two approved download redirect hosts while environment
-allowlist publication is pending. No environment or isolation bypass is part
-of this work. Phase 07 is not complete and Phase 08 is not authorized.
+allowlist publication is pending. PDF-specific native E2E steps now cover
+keyboard format changes/review retirement and focus restoration, picker
+cancellation, default/all-fields publication against real captured hashes and
+receipts, and no-clobber. Those steps pass static checks and independent review
+but have not executed; they do not close desktop acceptance. No environment or
+isolation bypass is part of this work. Phase 07 is not complete and Phase 08 is
+not authorized.
 
 The following CEF decisions and results are retained as **historical experimental
 evidence**, superseded as the production PDF route. They do not establish Typst
