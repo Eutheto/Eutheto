@@ -1541,14 +1541,14 @@ acceptance for that journey; see the
 [validation handoff](../contributors/phase07-pdf-validation.md)
 for runtime scope and remaining checks.
 
-The remaining gates include practitioner desktop PDF content/layout and broader
-native PDF lifecycle checks (preparation
+At the `84f4ec4` hosted checkpoint, remaining gates included practitioner desktop
+PDF content/layout and broader native PDF lifecycle checks (preparation
 cancellation, stale UI consent and application-exit/helper cleanup); the pinned
 browser component case; spoken assistive technology and representative-user
 usability; macOS/Windows packaging and lifecycle; calibrated reference-machine
 benchmarks; and maintainer checkpoint acceptance. The saved cloud container's
-namespace/runtime failures remain recorded environment limits. The configured
-macOS browser job still needs hosted execution; the Linux pass establishes
+namespace/runtime failures remain recorded environment limits. That run did not
+execute the configured macOS browser job; its Linux pass establishes
 no other-platform or complete CI result. Phase 07 is not complete and Phase 08
 is not authorized.
 
