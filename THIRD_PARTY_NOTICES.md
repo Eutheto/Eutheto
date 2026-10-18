@@ -708,32 +708,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `@babel/runtime` | `7.29.7` | `NOASSERTION` | `https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz` |
 | npm | `@babel/types` | `7.29.8` | `NOASSERTION` | `https://registry.npmjs.org/@babel/types/-/types-7.29.8.tgz` |
 | npm | `@blazediff/core` | `1.9.1` | `NOASSERTION` | `https://registry.npmjs.org/@blazediff/core/-/core-1.9.1.tgz` |
-| npm | `@esbuild/aix-ppc64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.2.tgz` |
-| npm | `@esbuild/android-arm` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.2.tgz` |
-| npm | `@esbuild/android-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz` |
-| npm | `@esbuild/android-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.2.tgz` |
-| npm | `@esbuild/darwin-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.2.tgz` |
-| npm | `@esbuild/darwin-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.2.tgz` |
-| npm | `@esbuild/freebsd-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.2.tgz` |
-| npm | `@esbuild/freebsd-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.2.tgz` |
-| npm | `@esbuild/linux-arm` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.2.tgz` |
-| npm | `@esbuild/linux-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.2.tgz` |
-| npm | `@esbuild/linux-ia32` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.2.tgz` |
-| npm | `@esbuild/linux-loong64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.2.tgz` |
-| npm | `@esbuild/linux-mips64el` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.2.tgz` |
-| npm | `@esbuild/linux-ppc64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.2.tgz` |
-| npm | `@esbuild/linux-riscv64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz` |
-| npm | `@esbuild/linux-s390x` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.2.tgz` |
-| npm | `@esbuild/linux-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz` |
-| npm | `@esbuild/netbsd-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.2.tgz` |
-| npm | `@esbuild/netbsd-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.2.tgz` |
-| npm | `@esbuild/openbsd-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.2.tgz` |
-| npm | `@esbuild/openbsd-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.2.tgz` |
-| npm | `@esbuild/openharmony-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.2.tgz` |
-| npm | `@esbuild/sunos-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.2.tgz` |
-| npm | `@esbuild/win32-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.2.tgz` |
-| npm | `@esbuild/win32-ia32` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.2.tgz` |
-| npm | `@esbuild/win32-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.2.tgz` |
 | npm | `@eslint-community/eslint-utils` | `4.10.1` | `NOASSERTION` | `https://registry.npmjs.org/@eslint-community/eslint-utils/-/eslint-utils-4.10.1.tgz` |
 | npm | `@eslint-community/regexpp` | `4.12.2` | `NOASSERTION` | `https://registry.npmjs.org/@eslint-community/regexpp/-/regexpp-4.12.2.tgz` |
 | npm | `@eslint/config-array` | `0.23.5` | `NOASSERTION` | `https://registry.npmjs.org/@eslint/config-array/-/config-array-0.23.5.tgz` |
@@ -878,14 +852,11 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `assertion-error` | `2.0.1` | `NOASSERTION` | `https://registry.npmjs.org/assertion-error/-/assertion-error-2.0.1.tgz` |
 | npm | `ast-kit` | `2.2.0` | `NOASSERTION` | `https://registry.npmjs.org/ast-kit/-/ast-kit-2.2.0.tgz` |
 | npm | `ast-walker-scope` | `0.9.0` | `NOASSERTION` | `https://registry.npmjs.org/ast-walker-scope/-/ast-walker-scope-0.9.0.tgz` |
-| npm | `atob` | `2.1.2` | `NOASSERTION` | `https://registry.npmjs.org/atob/-/atob-2.1.2.tgz` |
 | npm | `available-typed-arrays` | `1.0.7` | `NOASSERTION` | `https://registry.npmjs.org/available-typed-arrays/-/available-typed-arrays-1.0.7.tgz` |
 | npm | `axe-core` | `4.13.0` | `NOASSERTION` | `https://registry.npmjs.org/axe-core/-/axe-core-4.13.0.tgz` |
-| npm | `balanced-match` | `1.0.2` | `NOASSERTION` | `https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz` |
 | npm | `balanced-match` | `4.0.4` | `NOASSERTION` | `https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz` |
 | npm | `birpc` | `2.9.0` | `NOASSERTION` | `https://registry.npmjs.org/birpc/-/birpc-2.9.0.tgz` |
 | npm | `boolbase` | `1.0.0` | `NOASSERTION` | `https://registry.npmjs.org/boolbase/-/boolbase-1.0.0.tgz` |
-| npm | `brace-expansion` | `1.1.21` | `NOASSERTION` | `https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz` |
 | npm | `brace-expansion` | `5.0.12` | `NOASSERTION` | `https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz` |
 | npm | `call-bind` | `1.0.9` | `NOASSERTION` | `https://registry.npmjs.org/call-bind/-/call-bind-1.0.9.tgz` |
 | npm | `call-bind-apply-helpers` | `1.0.2` | `NOASSERTION` | `https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz` |
@@ -898,17 +869,14 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `color-convert` | `2.0.1` | `NOASSERTION` | `https://registry.npmjs.org/color-convert/-/color-convert-2.0.1.tgz` |
 | npm | `color-name` | `1.1.4` | `NOASSERTION` | `https://registry.npmjs.org/color-name/-/color-name-1.1.4.tgz` |
 | npm | `commander` | `14.0.3` | `NOASSERTION` | `https://registry.npmjs.org/commander/-/commander-14.0.3.tgz` |
-| npm | `concat-map` | `0.0.1` | `NOASSERTION` | `https://registry.npmjs.org/concat-map/-/concat-map-0.0.1.tgz` |
 | npm | `confbox` | `0.1.8` | `NOASSERTION` | `https://registry.npmjs.org/confbox/-/confbox-0.1.8.tgz` |
 | npm | `confbox` | `0.2.4` | `NOASSERTION` | `https://registry.npmjs.org/confbox/-/confbox-0.2.4.tgz` |
 | npm | `config-chain` | `1.1.13` | `NOASSERTION` | `https://registry.npmjs.org/config-chain/-/config-chain-1.1.13.tgz` |
 | npm | `convert-source-map` | `2.0.0` | `NOASSERTION` | `https://registry.npmjs.org/convert-source-map/-/convert-source-map-2.0.0.tgz` |
 | npm | `cross-spawn` | `7.0.6` | `NOASSERTION` | `https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz` |
-| npm | `css` | `3.0.0` | `NOASSERTION` | `https://registry.npmjs.org/css/-/css-3.0.0.tgz` |
 | npm | `cssesc` | `3.0.0` | `NOASSERTION` | `https://registry.npmjs.org/cssesc/-/cssesc-3.0.0.tgz` |
 | npm | `csstype` | `3.2.3` | `NOASSERTION` | `https://registry.npmjs.org/csstype/-/csstype-3.2.3.tgz` |
 | npm | `debug` | `4.4.3` | `NOASSERTION` | `https://registry.npmjs.org/debug/-/debug-4.4.3.tgz` |
-| npm | `decode-uri-component` | `0.2.2` | `NOASSERTION` | `https://registry.npmjs.org/decode-uri-component/-/decode-uri-component-0.2.2.tgz` |
 | npm | `deep-equal` | `2.2.3` | `NOASSERTION` | `https://registry.npmjs.org/deep-equal/-/deep-equal-2.2.3.tgz` |
 | npm | `deep-is` | `0.1.4` | `NOASSERTION` | `https://registry.npmjs.org/deep-is/-/deep-is-0.1.4.tgz` |
 | npm | `define-data-property` | `1.1.4` | `NOASSERTION` | `https://registry.npmjs.org/define-data-property/-/define-data-property-1.1.4.tgz` |
@@ -925,7 +893,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `es-get-iterator` | `1.1.3` | `NOASSERTION` | `https://registry.npmjs.org/es-get-iterator/-/es-get-iterator-1.1.3.tgz` |
 | npm | `es-module-lexer` | `2.3.2` | `NOASSERTION` | `https://registry.npmjs.org/es-module-lexer/-/es-module-lexer-2.3.2.tgz` |
 | npm | `es-object-atoms` | `1.1.2` | `NOASSERTION` | `https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz` |
-| npm | `esbuild` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz` |
 | npm | `escape-string-regexp` | `4.0.0` | `NOASSERTION` | `https://registry.npmjs.org/escape-string-regexp/-/escape-string-regexp-4.0.0.tgz` |
 | npm | `eslint` | `10.9.1` | `NOASSERTION` | `https://registry.npmjs.org/eslint/-/eslint-10.9.1.tgz` |
 | npm | `eslint-plugin-vue` | `10.10.0` | `NOASSERTION` | `https://registry.npmjs.org/eslint-plugin-vue/-/eslint-plugin-vue-10.10.0.tgz` |
@@ -950,7 +917,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `flat-cache` | `4.0.1` | `NOASSERTION` | `https://registry.npmjs.org/flat-cache/-/flat-cache-4.0.1.tgz` |
 | npm | `flatted` | `3.4.4` | `NOASSERTION` | `https://registry.npmjs.org/flatted/-/flatted-3.4.4.tgz` |
 | npm | `for-each` | `0.3.5` | `NOASSERTION` | `https://registry.npmjs.org/for-each/-/for-each-0.3.5.tgz` |
-| npm | `fs.realpath` | `1.0.0` | `NOASSERTION` | `https://registry.npmjs.org/fs.realpath/-/fs.realpath-1.0.0.tgz` |
 | npm | `fsevents` | `2.3.2` | `NOASSERTION` | `https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz` |
 | npm | `fsevents` | `2.3.3` | `NOASSERTION` | `https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz` |
 | npm | `function-bind` | `1.1.2` | `NOASSERTION` | `https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz` |
@@ -958,7 +924,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `get-intrinsic` | `1.3.0` | `NOASSERTION` | `https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz` |
 | npm | `get-proto` | `1.0.1` | `NOASSERTION` | `https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz` |
 | npm | `glob` | `13.0.6` | `NOASSERTION` | `https://registry.npmjs.org/glob/-/glob-13.0.6.tgz` |
-| npm | `glob` | `7.2.3` | `NOASSERTION` | `https://registry.npmjs.org/glob/-/glob-7.2.3.tgz` |
 | npm | `glob-parent` | `6.0.2` | `NOASSERTION` | `https://registry.npmjs.org/glob-parent/-/glob-parent-6.0.2.tgz` |
 | npm | `gopd` | `1.2.0` | `NOASSERTION` | `https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz` |
 | npm | `graceful-fs` | `4.2.11` | `NOASSERTION` | `https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz` |
@@ -972,8 +937,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `ignore` | `5.3.2` | `NOASSERTION` | `https://registry.npmjs.org/ignore/-/ignore-5.3.2.tgz` |
 | npm | `ignore` | `7.0.6` | `NOASSERTION` | `https://registry.npmjs.org/ignore/-/ignore-7.0.6.tgz` |
 | npm | `imurmurhash` | `0.1.4` | `NOASSERTION` | `https://registry.npmjs.org/imurmurhash/-/imurmurhash-0.1.4.tgz` |
-| npm | `inflight` | `1.0.6` | `NOASSERTION` | `https://registry.npmjs.org/inflight/-/inflight-1.0.6.tgz` |
-| npm | `inherits` | `2.0.4` | `NOASSERTION` | `https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz` |
 | npm | `ini` | `1.3.8` | `NOASSERTION` | `https://registry.npmjs.org/ini/-/ini-1.3.8.tgz` |
 | npm | `internal-slot` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/internal-slot/-/internal-slot-1.1.0.tgz` |
 | npm | `is-arguments` | `1.2.0` | `NOASSERTION` | `https://registry.npmjs.org/is-arguments/-/is-arguments-1.2.0.tgz` |
@@ -1036,7 +999,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `magic-string-ast` | `1.0.3` | `NOASSERTION` | `https://registry.npmjs.org/magic-string-ast/-/magic-string-ast-1.0.3.tgz` |
 | npm | `math-intrinsics` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz` |
 | npm | `minimatch` | `10.2.6` | `NOASSERTION` | `https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz` |
-| npm | `minimatch` | `3.1.5` | `NOASSERTION` | `https://registry.npmjs.org/minimatch/-/minimatch-3.1.5.tgz` |
 | npm | `minipass` | `7.1.3` | `NOASSERTION` | `https://registry.npmjs.org/minipass/-/minipass-7.1.3.tgz` |
 | npm | `mlly` | `1.8.2` | `NOASSERTION` | `https://registry.npmjs.org/mlly/-/mlly-1.8.2.tgz` |
 | npm | `mrmime` | `2.0.1` | `NOASSERTION` | `https://registry.npmjs.org/mrmime/-/mrmime-2.0.1.tgz` |
@@ -1053,13 +1015,11 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `object.assign` | `4.1.7` | `NOASSERTION` | `https://registry.npmjs.org/object.assign/-/object.assign-4.1.7.tgz` |
 | npm | `obug` | `2.1.4` | `NOASSERTION` | `https://registry.npmjs.org/obug/-/obug-2.1.4.tgz` |
 | npm | `ohash` | `2.0.12` | `NOASSERTION` | `https://registry.npmjs.org/ohash/-/ohash-2.0.12.tgz` |
-| npm | `once` | `1.4.0` | `NOASSERTION` | `https://registry.npmjs.org/once/-/once-1.4.0.tgz` |
 | npm | `optionator` | `0.9.4` | `NOASSERTION` | `https://registry.npmjs.org/optionator/-/optionator-0.9.4.tgz` |
 | npm | `p-limit` | `3.1.0` | `NOASSERTION` | `https://registry.npmjs.org/p-limit/-/p-limit-3.1.0.tgz` |
 | npm | `p-locate` | `5.0.0` | `NOASSERTION` | `https://registry.npmjs.org/p-locate/-/p-locate-5.0.0.tgz` |
 | npm | `path-browserify` | `1.0.1` | `NOASSERTION` | `https://registry.npmjs.org/path-browserify/-/path-browserify-1.0.1.tgz` |
 | npm | `path-exists` | `4.0.0` | `NOASSERTION` | `https://registry.npmjs.org/path-exists/-/path-exists-4.0.0.tgz` |
-| npm | `path-is-absolute` | `1.0.1` | `NOASSERTION` | `https://registry.npmjs.org/path-is-absolute/-/path-is-absolute-1.0.1.tgz` |
 | npm | `path-key` | `3.1.1` | `NOASSERTION` | `https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz` |
 | npm | `path-scurry` | `2.0.2` | `NOASSERTION` | `https://registry.npmjs.org/path-scurry/-/path-scurry-2.0.2.tgz` |
 | npm | `pathe` | `2.0.3` | `NOASSERTION` | `https://registry.npmjs.org/pathe/-/pathe-2.0.3.tgz` |
@@ -1074,7 +1034,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `pngjs` | `7.0.0` | `NOASSERTION` | `https://registry.npmjs.org/pngjs/-/pngjs-7.0.0.tgz` |
 | npm | `possible-typed-array-names` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/possible-typed-array-names/-/possible-typed-array-names-1.1.0.tgz` |
 | npm | `postcss` | `8.5.26` | `NOASSERTION` | `https://registry.npmjs.org/postcss/-/postcss-8.5.26.tgz` |
-| npm | `postcss-selector-parser` | `7.1.5` | `NOASSERTION` | `https://registry.npmjs.org/postcss-selector-parser/-/postcss-selector-parser-7.1.5.tgz` |
+| npm | `postcss-selector-parser` | `7.1.6` | `NOASSERTION` | `https://registry.npmjs.org/postcss-selector-parser/-/postcss-selector-parser-7.1.6.tgz` |
 | npm | `prelude-ls` | `1.2.1` | `NOASSERTION` | `https://registry.npmjs.org/prelude-ls/-/prelude-ls-1.2.1.tgz` |
 | npm | `prettier` | `3.9.6` | `NOASSERTION` | `https://registry.npmjs.org/prettier/-/prettier-3.9.6.tgz` |
 | npm | `pretty-format` | `27.5.1` | `NOASSERTION` | `https://registry.npmjs.org/pretty-format/-/pretty-format-27.5.1.tgz` |
@@ -1087,8 +1047,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `reka-ui` | `2.10.4` | `NOASSERTION` | `https://registry.npmjs.org/reka-ui/-/reka-ui-2.10.4.tgz` |
 | npm | `rolldown` | `1.2.6` | `NOASSERTION` | `https://registry.npmjs.org/rolldown/-/rolldown-1.2.6.tgz` |
 | npm | `safe-regex-test` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/safe-regex-test/-/safe-regex-test-1.1.0.tgz` |
-| npm | `safer-buffer` | `2.1.2` | `NOASSERTION` | `https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz` |
-| npm | `sax` | `1.2.4` | `NOASSERTION` | `https://registry.npmjs.org/sax/-/sax-1.2.4.tgz` |
 | npm | `scule` | `1.3.0` | `NOASSERTION` | `https://registry.npmjs.org/scule/-/scule-1.3.0.tgz` |
 | npm | `semver` | `7.8.5` | `NOASSERTION` | `https://registry.npmjs.org/semver/-/semver-7.8.5.tgz` |
 | npm | `set-function-length` | `1.2.2` | `NOASSERTION` | `https://registry.npmjs.org/set-function-length/-/set-function-length-1.2.2.tgz` |
@@ -1101,16 +1059,11 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `side-channel-weakmap` | `1.0.2` | `NOASSERTION` | `https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz` |
 | npm | `siginfo` | `2.0.0` | `NOASSERTION` | `https://registry.npmjs.org/siginfo/-/siginfo-2.0.0.tgz` |
 | npm | `sirv` | `3.0.2` | `NOASSERTION` | `https://registry.npmjs.org/sirv/-/sirv-3.0.2.tgz` |
-| npm | `source-map` | `0.6.1` | `NOASSERTION` | `https://registry.npmjs.org/source-map/-/source-map-0.6.1.tgz` |
-| npm | `source-map` | `0.7.6` | `NOASSERTION` | `https://registry.npmjs.org/source-map/-/source-map-0.7.6.tgz` |
 | npm | `source-map-js` | `1.2.2` | `NOASSERTION` | `https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.2.tgz` |
-| npm | `source-map-resolve` | `0.6.0` | `NOASSERTION` | `https://registry.npmjs.org/source-map-resolve/-/source-map-resolve-0.6.0.tgz` |
 | npm | `stackback` | `0.0.2` | `NOASSERTION` | `https://registry.npmjs.org/stackback/-/stackback-0.0.2.tgz` |
 | npm | `std-env` | `4.2.0` | `NOASSERTION` | `https://registry.npmjs.org/std-env/-/std-env-4.2.0.tgz` |
 | npm | `stop-iteration-iterator` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/stop-iteration-iterator/-/stop-iteration-iterator-1.1.0.tgz` |
-| npm | `stylus` | `0.57.0` | `NOASSERTION` | `https://registry.npmjs.org/stylus/-/stylus-0.57.0.tgz` |
 | npm | `supports-color` | `7.2.0` | `NOASSERTION` | `https://registry.npmjs.org/supports-color/-/supports-color-7.2.0.tgz` |
-| npm | `supports-color` | `8.1.1` | `NOASSERTION` | `https://registry.npmjs.org/supports-color/-/supports-color-8.1.1.tgz` |
 | npm | `tailwind-merge` | `3.6.0` | `NOASSERTION` | `https://registry.npmjs.org/tailwind-merge/-/tailwind-merge-3.6.0.tgz` |
 | npm | `tailwindcss` | `4.3.3` | `NOASSERTION` | `https://registry.npmjs.org/tailwindcss/-/tailwindcss-4.3.3.tgz` |
 | npm | `tapable` | `2.3.3` | `NOASSERTION` | `https://registry.npmjs.org/tapable/-/tapable-2.3.3.tgz` |
@@ -1121,7 +1074,6 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `totalist` | `3.0.1` | `NOASSERTION` | `https://registry.npmjs.org/totalist/-/totalist-3.0.1.tgz` |
 | npm | `ts-api-utils` | `2.5.0` | `NOASSERTION` | `https://registry.npmjs.org/ts-api-utils/-/ts-api-utils-2.5.0.tgz` |
 | npm | `tslib` | `2.8.1` | `NOASSERTION` | `https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz` |
-| npm | `tsx` | `4.23.13` | `NOASSERTION` | `https://registry.npmjs.org/tsx/-/tsx-4.23.13.tgz` |
 | npm | `tw-animate-css` | `1.4.0` | `NOASSERTION` | `https://registry.npmjs.org/tw-animate-css/-/tw-animate-css-1.4.0.tgz` |
 | npm | `type-check` | `0.4.0` | `NOASSERTION` | `https://registry.npmjs.org/type-check/-/type-check-0.4.0.tgz` |
 | npm | `type-fest` | `4.41.0` | `NOASSERTION` | `https://registry.npmjs.org/type-fest/-/type-fest-4.41.0.tgz` |
@@ -1149,10 +1101,8 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `which-typed-array` | `1.1.22` | `NOASSERTION` | `https://registry.npmjs.org/which-typed-array/-/which-typed-array-1.1.22.tgz` |
 | npm | `why-is-node-running` | `2.3.0` | `NOASSERTION` | `https://registry.npmjs.org/why-is-node-running/-/why-is-node-running-2.3.0.tgz` |
 | npm | `word-wrap` | `1.2.5` | `NOASSERTION` | `https://registry.npmjs.org/word-wrap/-/word-wrap-1.2.5.tgz` |
-| npm | `wrappy` | `1.0.2` | `NOASSERTION` | `https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz` |
 | npm | `ws` | `8.21.3` | `NOASSERTION` | `https://registry.npmjs.org/ws/-/ws-8.21.3.tgz` |
 | npm | `xml-name-validator` | `5.0.0` | `NOASSERTION` | `https://registry.npmjs.org/xml-name-validator/-/xml-name-validator-5.0.0.tgz` |
-| npm | `yaml` | `2.9.0` | `NOASSERTION` | `https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz` |
 | npm | `yocto-queue` | `0.1.0` | `NOASSERTION` | `https://registry.npmjs.org/yocto-queue/-/yocto-queue-0.1.0.tgz` |
 
 ## Reviewed bundled assets
@@ -1305,4 +1255,4 @@ License: `CC-BY-SA-3.0`
 
 0 reviewed asset group(s) have `NOASSERTION`: exact source bytes and attribution are recorded, but their license conclusion remains unresolved.
 
-1144 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+1094 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
