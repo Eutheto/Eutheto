@@ -33,6 +33,8 @@ Exact `phase/06-desktop` PRs use the bounded [Phase06 integration trial](../docs
 
 Dependency migration isolation distinguishes upstream inputs from explicitly listed project-owned files. The local Nix packaging definitions are `checks.nix`, `eutheto-cli.nix`, `packages.nix`, `pdf-worker.nix`, and `source-filter.nix`. Existing worker C++ sources/tests, the worker README, and the project-owned solver manifest/build/payload evidence schemas are also local feature surfaces. These edits do not create a migration family on their own, so they can accompany one genuine major dependency update. Worker, benchmark, security, and ownership gates still apply. OR-Tools source contracts, dependency pins, patches, CMake inputs, protocol migrations, Nix inputs, other Nix definitions, and unknown/new Nix or worker paths retain migration classification. Only `.proto` files in the worker `proto/` subtree use the separate schema migration family. Renames retain both deleted and added paths for classification. `just ci-policy-test` exercises these boundaries against real Git changes, including rejected mixed migrations.
 
+Lockfile inventory classification detects newly introduced majors for existing package names; pure pruning adds no migration family, and direct-manifest major crossings are checked independently.
+
 ## Automation invariants
 
 All GitHub automation follows these invariants:

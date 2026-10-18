@@ -276,6 +276,79 @@ class DependencyPolicyTests(unittest.TestCase):
             self.assertEqual(git("status", "--porcelain", "--untracked-files=all"), "")
             return result, outputs
 
+    @staticmethod
+    def lock_inventory(path, identities):
+        if path == "Cargo.lock":
+            return "".join(
+                f'[[package]]\nname = "{name}"\nversion = "{version}.0.0"\n'
+                for name, version in identities
+            )
+        return "packages:\n" + "".join(
+            f"  '{name}@{version}.0.0': {{}}\n" for name, version in identities
+        )
+
+    def test_lock_inventory_pruning_does_not_create_major_family(self):
+        for path in ("Cargo.lock", "pnpm-lock.yaml"):
+            with self.subTest(path=path):
+                result, outputs = self.classify({
+                    path: self.lock_inventory(path, [("probe", 2), ("new", 3)]),
+                }, before={
+                    path: self.lock_inventory(path, [
+                        ("probe", 1), ("probe", 2), ("removed", 7),
+                    ]),
+                })
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["major_families"], "none")
+
+    def test_lock_inventory_introduced_majors_select_their_family(self):
+        for path, name, family in (
+            ("Cargo.lock", "probe", "rust-major"),
+            ("Cargo.lock", "tauri", "tauri-major"),
+            ("pnpm-lock.yaml", "probe", "node-major"),
+            ("pnpm-lock.yaml", "@tauri-apps/api", "tauri-major"),
+        ):
+            for old, new in (((1,), (1, 2)), ((2,), (1, 2)), ((1,), (2,)), ((2,), (1,))):
+                with self.subTest(path=path, name=name, old=old, new=new):
+                    result, outputs = self.classify({
+                        path: self.lock_inventory(path, [(name, version) for version in new]),
+                    }, before={
+                        path: self.lock_inventory(path, [(name, version) for version in old]),
+                    })
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs["major_families"], family)
+
+    def test_lock_inventory_actual_mixed_families_still_reject(self):
+        result, outputs = self.classify({
+            path: self.lock_inventory(path, [("probe", 1), ("probe", 2)])
+            for path in ("Cargo.lock", "pnpm-lock.yaml")
+        }, before={
+            path: self.lock_inventory(path, [("probe", 1)])
+            for path in ("Cargo.lock", "pnpm-lock.yaml")
+        })
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("combines independently reviewed", result.stderr)
+        self.assertIn("node-major, rust-major", result.stderr)
+        self.assertEqual(outputs, {})
+
+    def test_direct_manifest_crossings_survive_lock_inventory_pruning(self):
+        before = {
+            "Cargo.lock": self.lock_inventory("Cargo.lock", [("zip", 8), ("zip", 9)]),
+            "pnpm-lock.yaml": self.lock_inventory("pnpm-lock.yaml", [("probe", 1), ("probe", 2)]),
+            "package.json": '{"dependencies":{"probe":"1.0.0"}}\n',
+        }
+        pruned = {
+            "Cargo.lock": self.lock_inventory("Cargo.lock", [("zip", 9)]),
+            "pnpm-lock.yaml": self.lock_inventory("pnpm-lock.yaml", [("probe", 2)]),
+        }
+        for path, content, family in (
+            ("Cargo.toml", '[dependencies]\nzip = "=9.0.5"\n', "rust-major"),
+            ("package.json", '{"dependencies":{"probe":"2.0.0"}}\n', "node-major"),
+        ):
+            with self.subTest(path=path):
+                result, outputs = self.classify({**pruned, path: content}, before=before)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["major_families"], family)
+
     def test_rust_major_with_local_packaging_and_worker_feature_is_one_family(self):
         paths = (
             "nix/checks.nix", "nix/eutheto-cli.nix", "nix/packages.nix",

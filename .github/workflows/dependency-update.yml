@@ -219,7 +219,8 @@ jobs:
               after_by_name = majors_by_name(after)
               detected = set()
               for name in before_by_name.keys() & after_by_name.keys():
-                  if before_by_name[name] != after_by_name[name]:
+                  # Pure pruning introduces no major version for the surviving name.
+                  if after_by_name[name] - before_by_name[name]:
                       detected.add(tauri_family if 'tauri' in name.lower() else other_family)
               return detected
 
