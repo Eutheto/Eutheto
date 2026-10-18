@@ -71,7 +71,9 @@ jobs:
           ).returncode != 0:
               base = git('rev-parse', 'HEAD^').strip()
 
-          changed = sorted(filter(None, git('diff', '--name-only', base, head).splitlines()))
+          changed = sorted(filter(None, git(
+              'diff', '--name-only', '--no-renames', '-z', base, head
+          ).split('\0')))
           changed_set = set(changed)
           dependency_names = {
               'Cargo.toml', 'Cargo.lock', 'package.json', 'pnpm-lock.yaml',
@@ -282,11 +284,36 @@ jobs:
                   families.add('rust-toolchain-major')
           if 'flake.lock' in changed_set:
               families.add('nix-input-migration')
-          if any(path.startswith('nix/') for path in changed):
+          local_packaging_definitions = {
+              'nix/checks.nix', 'nix/eutheto-cli.nix', 'nix/packages.nix',
+              'nix/pdf-worker.nix', 'nix/source-filter.nix',
+          }
+          local_worker_files = {
+              'workers/ortools/README.md',
+              'workers/ortools/src/main.cc',
+              'workers/ortools/src/sha256.cc',
+              'workers/ortools/src/sha256.h',
+              'workers/ortools/src/wire.cc',
+              'workers/ortools/src/wire.h',
+              'workers/ortools/src/worker.cc',
+              'workers/ortools/src/worker.h',
+              'workers/ortools/tests/callback_tests.cc',
+              'workers/ortools/tests/candidate_benchmarks.cc',
+              'workers/ortools/tests/native_tests.cc',
+              'workers/ortools/solver-build-evidence.schema.json',
+              'workers/ortools/solver-manifest.schema.json',
+              'workers/ortools/solver-payload-evidence.schema.json',
+          }
+          # Only known project-owned files are local; new/upstream inputs fail closed.
+          if any(
+              path.startswith('nix/') and path not in local_packaging_definitions
+              for path in changed
+          ):
               families.add('nix-definition-migration')
           if any(
               path.startswith('workers/ortools/')
-              and not path.startswith('workers/ortools/proto/')
+              and not (path.startswith('workers/ortools/proto/') and path.endswith('.proto'))
+              and path not in local_worker_files
               for path in changed
           ):
               families.add('ortools-migration')
