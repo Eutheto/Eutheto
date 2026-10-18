@@ -378,6 +378,8 @@ jobs:
             --executable "$deb_root/usr/bin/eutheto-pdf-worker" \
             --manifest "${pdf_manifests[0]}" \
             --manifest-sha256 "${pdf_digest_line%% *}"
+          git rev-parse HEAD
+          sha256sum "$deb_root/usr/bin/eutheto-desktop" "$deb_root/usr/bin/eutheto-pdf-worker" "${pdf_manifests[0]}"
           EUTHETO_E2E_APPLICATION="$deb_root/usr/bin/eutheto-desktop" \
             nix develop --no-update-lock-file --command just e2e false false
 
