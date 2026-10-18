@@ -215,10 +215,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    # The full Phase06 Linux checks and WebDriver acceptance reached the final
-    # launch smoke at the former 75/90-minute limits in PR58. Keep a bounded
-    # margin for the complete native matrix; other targets retain 75 minutes.
-    timeout-minutes: ${{ (matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm') && 120 || 75 }}
+    # Linux arm64 reached WebDriver setup at 117 minutes; Intel macOS reached
+    # desktop compilation at 70 minutes. Keep bounded time for every check.
+    timeout-minutes: ${{ (matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm') && 150 || matrix.os == 'macos-15-intel' && 120 || 75 }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -326,7 +325,8 @@ jobs:
         env:
           NO_AT_BRIDGE: "1"
           EUTHETO_E2E_PRIVILEGED_NETNS: "1"
-        run: nix develop --no-update-lock-file --command just e2e
+          EUTHETO_E2E_APPLICATION: ${{ github.workspace }}/.cache/cargo-target/release/eutheto-desktop
+        run: nix develop --no-update-lock-file --command just e2e false false
 
       - name: Launch the shell under a Linux virtual display
         if: runner.os == 'Linux'
@@ -428,7 +428,6 @@ jobs:
               exit 1
               ;;
           esac
-
 
   ortools-candidate-source-build-probe:
     name: ${{ matrix.name }} / OR-Tools candidate source build

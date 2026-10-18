@@ -397,6 +397,7 @@ e2e bundled="false" rebuild="true":
     fi
     e2e_command=(
       "$(command -v env)"
+      "PATH=$PATH"
       "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
       "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
       "EUTHETO_XDOTOOL=$(command -v xdotool)"
