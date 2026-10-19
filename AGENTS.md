@@ -29,6 +29,18 @@ Use this authority order when requirements conflict:
 - Before a PR is merged into `main`, review and make needed updates to root `README.md` and `AGENTS.md`. Keep verified capabilities, setup/usage, limitations, and documentation navigation in README; keep durable contributor rules, architecture boundaries, command authority, and verification guidance here. Do not duplicate transient task status or detailed phase checklists in either file.
 - Respect explicit manual-testing checkpoints in the roadmap. Hosted checks, a merged PR, or agent confidence do not substitute for maintainer checkpoint acceptance or authorize dependent production work.
 
+## Agent orchestration
+
+Use the repository-local [Ponytail skills](.agents/README.md) directly when automatic discovery is unavailable. Ponytail Full is the default for each task. A reasoned escalation to Ultra is task-local and ends with that task; explicit user choices take precedence. Modes are behavioral instructions, separate from model reasoning effort. Keep vendored skills unchanged.
+
+The lead, implementation, correctness_review and complexity_review use explicitly requested `gpt-6.1-sol` with `high` reasoning. Use `gpt-6-astra` / `high` for difficult technical planning or consequential decisions; hand routine implementation and review back to Sol/high. Use the four roles in [`.codex/agents/`](.codex/agents/) and give each worker a concrete scope, ownership, dependencies and verification expectations. At most two subagents may be active per project in addition to the lead. This is orchestration policy; hosted enforcement has not been established. Check existing workers before launching another.
+
+Named TOML profiles remain available for local clients that support them. Their presence does not register hosted roles. In hosted execution, pass role instructions and explicit model/effort settings directly through the platform delegation tool when supported, and report this handoff distinction. Model-setting admission and task completion are separate evidence; neither independently attests the backend model. Do not describe requested settings as verified runtime identity. File edits do not reconfigure running workers.
+
+Keep static configuration checks, optional nested CLI diagnostics, actual hosted delegation smoke and device/runtime checks separate. `just codex-static-check` verifies repository inputs only. Do not require nested `codex app-server` startup for hosted readiness. Managed read-only `CODEX_HOME` or project-trust failures in a nested CLI do not establish hosted delegation failure; retain those diagnostic errors when that diagnostic is requested. Do not claim checks not run or weaken validators to obtain success.
+
+Never modify protected home, relocate or replace `CODEX_HOME`, inject `BASH_ENV`, grant hook trust, or execute untrusted hooks to activate this setup. Preserve existing pinned Nix/Docker startup. Do not change project packages, architecture, security, credentials, network or billing without explicit approval. Do not push, create a PR, merge, deploy or publish saved-environment settings without approval. Repository configuration changes do not update saved-environment settings. See [hosted/local verification and publication guidance](docs/contributors/codex-cloud.md).
+
 ## Architecture boundaries
 
 Dependency direction is presentation → thin Tauri adapter → application services → domain packs → planning core → backend adapters/infrastructure.
