@@ -57,10 +57,11 @@ shell reveals the still-active target after rendering. It follows both
 `:focus-visible` events and actual Tab keyup, including native date hosts that
 omit the focus event or classification. Disconnected targets, superseded focus
 and intervening pointer input cancel a pending reveal.
-When an eligibility matrix returns after an independent inspector read, the page
-also preserves an already-visible focused inspector after inserting the matrix. It keeps
-the same focus and checks the current scenario, revision, library epoch and
-loaded window before scrolling.
+When the eligibility matrix, overview or work table inserts content, the page
+also keeps an already-visible focused control in the same project workspace
+visible. It preserves focus and checks the current scenario, revision, library
+epoch and exact loaded view before scrolling; new focus and deliberate prior
+scrolling remain undisturbed.
 
 Project creation, listing, and opening use closed V1 native requests. Rust
 resolves the included calendar dates to exact local-midnight boundaries and

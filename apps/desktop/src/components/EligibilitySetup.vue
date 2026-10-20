@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
+import { preserveVisibleFocus } from "../focus-visibility";
 import { useEligibilitySetup } from "../eligibility-setup";
 import { formatNumber, messages } from "../messages";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
@@ -26,43 +27,19 @@ const warningPage = ref(0);
 const warnings = computed(() => review.state.review?.warnings.changes ?? []);
 watch(
   () => state.window,
-  async (loaded) => {
-    const owner = root.value;
-    const target = document.activeElement;
-    if (loaded === null || !(target instanceof HTMLElement) || !owner?.contains(target)) return;
-    const before = target.getBoundingClientRect();
-    if (
-      before.width <= 0 ||
-      before.height <= 0 ||
-      before.bottom <= 0 ||
-      before.top >= innerHeight ||
-      before.right <= 0 ||
-      before.left >= innerWidth
-    )
-      return;
-    await nextTick();
-    if (
-      state.window !== loaded ||
-      root.value !== owner ||
-      !owner.isConnected ||
-      owner.ownerDocument !== document ||
-      !owner.contains(target) ||
-      !target.isConnected ||
-      document.activeElement !== target ||
-      loaded.context.scenarioId !== props.project.scenarioId ||
-      loaded.context.revision !== props.project.revision ||
-      loaded.context.epoch !== props.home.state.libraryEpoch
-    )
-      return;
-    // Restoring the matrix can displace an already-focused inspector without another focus event.
-    const bounds = target.getBoundingClientRect();
-    if (
-      bounds.top < 0 ||
-      bounds.bottom > innerHeight ||
-      bounds.left < 0 ||
-      bounds.right > innerWidth
-    )
-      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  (loaded) => {
+    if (loaded === null) return;
+    const component = root.value;
+    // The matrix also displaces the workspace footer without another focus event.
+    void preserveVisibleFocus(
+      component,
+      () =>
+        state.window === loaded &&
+        root.value === component &&
+        loaded.context.scenarioId === props.project.scenarioId &&
+        loaded.context.revision === props.project.revision &&
+        loaded.context.epoch === props.home.state.libraryEpoch,
+    );
   },
   { flush: "pre" },
 );

@@ -2717,13 +2717,21 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
     const previous = await evaluate(
       sessionId,
       `const trace = [];
+      const loaded = () => ({matrix: !!document.querySelector('[data-eligibility-matrix]'),
+        work: !!document.querySelector('[aria-labelledby="assignment-inspection-heading"] table')});
       const listener = event => {
         const target = event.target;
-        trace.push({active: target === document.activeElement, tag: target?.tagName,
-          id: target?.id, timestamp: event.timeStamp});
+        trace.push({type: 'focusin', active: target === document.activeElement, tag: target?.tagName,
+          id: target?.id, timestamp: event.timeStamp, loaded: loaded()});
+      };
+      const keyListener = event => {
+        if (trace.length < 8) trace.push({type: 'keyup', key: event.key, code: event.code,
+          tag: event.target?.tagName, id: event.target?.id, timestamp: event.timeStamp,
+          loaded: loaded()});
       };
       document.addEventListener('focusin', listener, {once: true});
-      window.__euthetoFocusStep = {trace, listener};
+      document.addEventListener('keyup', keyListener);
+      window.__euthetoFocusStep = {trace, listener, keyListener};
       return document.activeElement;`,
     );
     await keyboardKey(sessionId, "\uE004", reverse);
@@ -2733,8 +2741,11 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
       const rect = node?.getBoundingClientRect();
       const step = window.__euthetoFocusStep;
       document.removeEventListener('focusin', step.listener);
+      document.removeEventListener('keyup', step.keyListener);
       delete window.__euthetoFocusStep;
       return {matches: node?.matches(arguments[0]) ?? false, changed: node !== arguments[1],
+        loaded: {matrix: !!document.querySelector('[data-eligibility-matrix]'),
+          work: !!document.querySelector('[aria-labelledby="assignment-inspection-heading"] table')},
         focusVisible: node?.matches(':focus-visible'), focus: node?.matches(':focus'), trace: step.trace,
         segmented: node instanceof HTMLInputElement && ['date', 'time', 'datetime-local'].includes(node.type),
         visible: !!rect && rect.width > 0 && rect.height > 0 &&
@@ -2963,7 +2974,16 @@ async function packagedKeyboardWorkflowAcceptance(sessionId) {
   await keyboardActivate(sessionId, "form button[type=submit]", "\uE007", 64);
   await waitForElement(sessionId, "#work-review-heading");
   await keyboardWorkflowButton(sessionId, "Apply");
-  await waitForElement(sessionId, "#work-records-heading");
+  // The records heading stays mounted while Apply refreshes and reveals shifts.
+  await waitFor(
+    sessionId,
+    `const heading = document.querySelector('#work-window-heading');
+    const rect = heading?.getBoundingClientRect();
+    return document.activeElement === heading && !!rect && rect.height > 0 &&
+      rect.bottom > 0 && rect.top < innerHeight &&
+      document.querySelector('#work-review-heading') === null &&
+      !!document.querySelector('[aria-labelledby="work-window-heading"] table');`,
+  );
 
   await keyboardWorkflowRoute(sessionId, "/eligibility");
   await waitForElement(sessionId, "#eligibility-setup-heading");
@@ -14897,7 +14917,20 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
     120_000,
   );
   console.log("Native 200-shift fixture admission milliseconds:", Date.now() - fixtureStarted);
-  await navigate(sessionId, `/project/${scenarioId}/validation`);
+  const validationHref = `#/project/${scenarioId}/validation`;
+  await activate(sessionId, `a[href=${JSON.stringify(validationHref)}]`);
+  // The fixture commit can refresh Work. Leave only after that read settles;
+  // never discard a draft or cancel an operation to get through this guard.
+  await waitFor(
+    sessionId,
+    `return window.location.hash === arguments[0] ||
+      [...document.querySelectorAll('[role="dialog"] button')].some(button =>
+        button.textContent.trim() === 'Leave view' && !button.disabled);`,
+    [validationHref],
+  );
+  if ((await evaluate(sessionId, "return window.location.hash;")) !== validationHref)
+    await activateButton(sessionId, "Leave view", '[role="dialog"]');
+  await waitFor(sessionId, "return window.location.hash === arguments[0];", [validationHref]);
   await waitFor(sessionId, "return document.querySelector('[data-full-validation-state]');");
   await evaluate(
     sessionId,
