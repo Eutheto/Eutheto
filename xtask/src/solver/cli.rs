@@ -51,7 +51,7 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
     );
     let target = cli_target(&artifact_target)?;
     let staging = stage.staging();
-    let copied_payload =
+    let mut copied_payload =
         copy_artifact_to_layout(&artifact, &staging, "", "solver/ortools", target)?;
     let resources = staging.join("solver/ortools");
     let worker = staging.join(target.bundled_worker);
@@ -59,6 +59,9 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
         validate_staged_layout(repository, &resources, &worker, target)? == manifest_sha256,
         "staged CLI solver manifest differs from the approved artifact"
     );
+    let (pdf_manifest, pdf_digest, pdf_bytes) = crate::pdf::stage_cli(repository, &staging)?;
+    copied_payload.entries += crate::pdf::CLI_PAYLOAD_ENTRIES;
+    copied_payload.bytes += pdf_bytes;
 
     // Isolate the executable from ordinary source and desktop Cargo builds. The package lease
     // covers this build directory as well as staging until the completed image is published.
@@ -79,6 +82,8 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
         .current_dir(repository)
         .env(MANIFEST_PATH_ENV, resources.join("solver-manifest.json"))
         .env(SOLVER_MANIFEST_DIGEST_ENV, &manifest_sha256)
+        .env(crate::pdf::MANIFEST_PATH_ENV, &pdf_manifest)
+        .env(crate::pdf::MANIFEST_SHA_ENV, &pdf_digest)
         .status()
         .context("failed to start the manifest-bound CLI build")?;
     ensure!(
@@ -97,6 +102,11 @@ pub(crate) fn build_cli(repository: &Path, supplied: Option<(&Path, &str)>) -> R
         validate_staged_layout(repository, &resources, &worker, target)? == manifest_sha256,
         "CLI solver resources changed during the build"
     );
+    crate::pdf::verify_staged(
+        &staging.join(crate::pdf::worker_name(host_target)),
+        &pdf_manifest,
+        &pdf_digest,
+    )?;
     #[cfg(windows)]
     if let Some(lease) = &mut native_lease {
         lease.commit()?;
@@ -166,7 +176,7 @@ pub(crate) fn smoke_cli(repository: &Path, image: &Path) -> Result<()> {
     smoke_tampered_images(&image, &scenario, root)?;
 
     println!(
-        "packaged CLI smoke passed: relocated file/stored solve, fresh verification, explanation, JSON/CSV export, worker/manifest tamper rejection"
+        "packaged CLI smoke passed: relocated file/stored solve and unverified external repair, fresh verification, V3 accepted comparison, explanation, JSON/CSV export, worker/manifest tamper rejection"
     );
     Ok(())
 }
@@ -233,6 +243,13 @@ fn smoke_file_mode(executable: &Path, commands: &Path, root: &Path) -> Result<st
         root,
         "file",
     )?;
+    smoke_external_repair(
+        executable,
+        &unusable_data,
+        path_text(&scenario)?,
+        root,
+        "file",
+    )?;
     ensure!(
         fs::read(&blocked)? == b"file-mode must not replace this file" && !unusable_data.exists(),
         "file-mode CLI touched its unusable library location"
@@ -295,6 +312,66 @@ fn smoke_stored_mode(executable: &Path, commands: &Path, root: &Path) -> Result<
         root,
         "stored",
     )?;
+    smoke_stored_comparison(executable, &library, root, stored_id)?;
+    smoke_external_repair(executable, &library, stored_id, root, "stored")?;
+    Ok(())
+}
+
+fn smoke_stored_comparison(
+    executable: &Path,
+    library: &Path,
+    root: &Path,
+    stored_id: &str,
+) -> Result<()> {
+    let first = run_cli(executable, library, &["solutions", "list", stored_id], 0)?;
+    let first_id = first["result"]["solutions"][0]["result"]["solutionId"]
+        .as_str()
+        .context("first stored solution omitted its identity")?;
+    let second_output = root.join("stored-second-result.json");
+    let second = run_cli(
+        executable,
+        library,
+        &[
+            "solve",
+            stored_id,
+            "--backend",
+            "solver.ortools-cp-sat",
+            "--mode",
+            "balanced",
+            "--threads",
+            "1",
+            "--seed",
+            "2",
+            "--max-time",
+            "10s",
+            "--output",
+            path_text(&second_output)?,
+        ],
+        0,
+    )?;
+    let candidate_id = second["result"]["resultId"]
+        .as_str()
+        .context("second accepted solve omitted its identity")?;
+    ensure!(
+        candidate_id != first_id,
+        "distinct runs must retain distinct result identities"
+    );
+    let compared = run_cli(
+        executable,
+        library,
+        &["solutions", "compare", stored_id, first_id, candidate_id],
+        0,
+    )?;
+    ensure!(
+        compared["command"] == "solutions.compare"
+            && compared["status"] == "compared"
+            && compared["result"]["schemaVersion"] == 3
+            && compared["result"]["comparison"]["score"]["type"] == "comparable"
+            && compared["result"]["comparison"]["base"]["acceptedResult"]["solutionId"] == first_id
+            && compared["result"]["comparison"]["candidate"]["acceptedResult"]["solutionId"]
+                == candidate_id,
+        "relocated CLI compared response omitted the independently accepted result pair"
+    );
     Ok(())
 }
 
@@ -394,7 +471,95 @@ fn smoke_fixture_commands() -> Result<serde_json::Value> {
             }}
         }}));
     }
+    commands.push(json!({"type":"applyDomainCommand","payload":{
+        "commandType":"official.workforce.add_entity","payload":{"entity":{
+            "kind":"externalStartingPlan","schemaVersion":1,"id":id(50),
+            "name":"Unverified empty import","assignments":[],
+            "originalImport":{"sourceBlake3":"a".repeat(64),"pairContentHash":"b".repeat(64)}
+        }}
+    }}));
     Ok(serde_json::Value::Array(commands))
+}
+
+fn smoke_external_repair(
+    executable: &Path,
+    data: &Path,
+    scenario: &str,
+    root: &Path,
+    label: &str,
+) -> Result<()> {
+    let before = run_cli(executable, data, &["scenario", "validate", scenario], 0)?;
+    let output = root.join(format!("{label}-external-repair.json"));
+    let solved = run_cli(
+        executable,
+        data,
+        &[
+            "solve",
+            scenario,
+            "--repair-external",
+            &workforce_fixture::id(50),
+            "--backend",
+            "solver.ortools-cp-sat",
+            "--threads",
+            "1",
+            "--seed",
+            "1",
+            "--max-time",
+            "10s",
+            "--output",
+            path_text(&output)?,
+        ],
+        0,
+    )?;
+    let portable = read_smoke_json(&output)?;
+    let context = &portable["runInput"]["objectiveContext"];
+    ensure!(
+        solved["result"]["independentlyVerified"] == true
+            && context["schemaVersion"] == 3
+            && context["operation"] == "repair"
+            && context.get("baseline").is_none()
+            && context["externalBaseline"]["entity"]["id"]
+                == format!("official.workforce.{}", workforce_fixture::id(50))
+            && portable["acceptedResult"]["verification"]["score"]["levels"][0]["value"] == 1,
+        "external repair did not retain unverified source identity and the exact added-pair cost"
+    );
+    let expected_assignment = format!(
+        "official.workforce.assignment.{}.{}",
+        workforce_fixture::id(1),
+        workforce_fixture::id(8),
+    );
+    let assignments = portable["acceptedResult"]["solution"]["assignments"]
+        .as_array()
+        .context("external repair omitted assignments")?;
+    ensure!(
+        assignments.len() == 1
+            && assignments[0]["id"] == expected_assignment
+            && assignments[0]["value"] == serde_json::json!({"type":"boolean","value":true}),
+        "unverified empty import became a Required exclusion or bypassed coverage"
+    );
+    let solution = if label == "stored" {
+        solved["result"]["resultId"]
+            .as_str()
+            .context("external repair omitted result identity")?
+    } else {
+        path_text(&output)?
+    };
+    let verified = run_cli(
+        executable,
+        data,
+        &["solutions", "verify", scenario, solution],
+        0,
+    )?;
+    ensure!(
+        verified["result"]["verification"]["accepted"] == true,
+        "external repair result failed fresh verification"
+    );
+    let after = run_cli(executable, data, &["scenario", "validate", scenario], 0)?;
+    ensure!(
+        after["result"]["revision"] == before["result"]["revision"],
+        "external repair mutated the scenario"
+    );
+    Ok(())
 }
 
 fn smoke_solve_flow(
@@ -532,10 +697,10 @@ fn smoke_verify_result(
             .context("stored list omitted solutions")?;
         ensure!(
             solutions.len() == 1
+                && listed["result"]["freshlyVerified"] == false
                 && solutions[0]["result"]["solutionId"] == result_id
                 && solutions[0]["scenarioRevision"] == revision
                 && solutions[0]["stale"] == false,
-            "accepted stored run was not retained at the solved revision"
         );
     } else {
         ensure!(
@@ -599,7 +764,7 @@ fn smoke_export_result(
     let assignment = portable["acceptedResult"]["solution"]["assignments"][0]["id"]
         .as_str()
         .context("accepted export source omitted assignment identity")?;
-    for format in ["json", "csv"] {
+    for format in ["json", "csv", "summary-csv"] {
         let export = root.join(format!("{label}-export.{format}"));
         let exported = run_cli(
             executable,
@@ -626,7 +791,7 @@ fn smoke_export_result(
                 read_smoke_json(&export)? == *portable,
                 "JSON export changed the accepted artifact"
             );
-        } else {
+        } else if format == "csv" {
             let expected = format!(
                 "eutheto/assignments,1\nassignment_id,person_id,shift_id\n{assignment},{},{}\n",
                 workforce_fixture::id(1),
@@ -636,6 +801,47 @@ fn smoke_export_result(
                 super::read_bounded_file(&export, 16 * 1024 * 1024, "assignment CSV export")?
                     == expected.as_bytes(),
                 "CSV export did not preserve the exact selected schedule and v1 framing"
+            );
+        } else {
+            let bytes = super::read_bounded_file(
+                &export,
+                16 * 1024 * 1024,
+                "Workforce summary CSV export",
+            )?;
+            let text = std::str::from_utf8(&bytes).context("summary CSV is not UTF-8")?;
+            let rows = text.lines().collect::<Vec<_>>();
+            let people = rows
+                .get(2)
+                .copied()
+                .unwrap_or_default()
+                .split(',')
+                .collect::<Vec<_>>();
+            let shifts = rows
+                .get(3)
+                .copied()
+                .unwrap_or_default()
+                .split(',')
+                .collect::<Vec<_>>();
+            ensure!(
+                rows.len() == 4
+                    && rows[0] == "eutheto/workforce-summary,1"
+                    && rows[1].starts_with("kind,person_id,person_name,shift_id,shift_name,")
+                    && people.len() == 18
+                    && people[0] == "person"
+                    && people[1] == workforce_fixture::id(1)
+                    && people[2] == "River"
+                    && people[5] == "America/New_York"
+                    && people[8] == "current"
+                    && people[9] == "1"
+                    && shifts.len() == 18
+                    && shifts[0] == "shift"
+                    && shifts[3] == workforce_fixture::id(8)
+                    && shifts[4] == "Clinic"
+                    && shifts[8] == "current"
+                    && shifts[9..14] == ["1", "1", "1", "1", "0"]
+                    && shifts[16] == "2026-11-01T05:30:00Z"
+                    && shifts[17] == "2026-11-01T07:30:00Z",
+                "summary CSV lost source person/shift, DST instants or exact required margin"
             );
         }
     }

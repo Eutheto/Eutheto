@@ -165,7 +165,7 @@ pub(crate) fn outputs(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let before = definitions
         .fixtures
         .iter()
-        .find(|case| case.id == CaseId::RepairBefore)
+        .find(|case| case.id == definitions.repair.before_case)
         .context("repair before case absent")?;
     cases::validate_repair(&definitions.repair, &before.snapshot)?;
     let repair = json(&definitions.repair)?;
@@ -349,7 +349,7 @@ pub(crate) fn load(root: &Path) -> Result<LoadedCorpus> {
     )?)?;
     let before = fixtures
         .iter()
-        .find(|case| case.manifest.id == CaseId::RepairBefore)
+        .find(|case| case.manifest.id == repair.before_case)
         .context("repair before case absent")?;
     cases::validate_repair(&repair, &before.snapshot)?;
     Ok(LoadedCorpus {

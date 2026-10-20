@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import type {
   AssignmentEvidenceV1,
   AssignmentValue,
-  CounterfactualResultV1,
+  CounterfactualResult,
   MetricValue,
 } from "../../api/generated";
 import { Badge, Card } from "../ui";
@@ -24,7 +24,7 @@ interface Props {
   readonly stabilityContribution: string;
   readonly state: ExplanationUiState;
   readonly diagnosticState: DiagnosticState;
-  readonly diagnosticResult?: CounterfactualResultV1 | null;
+  readonly diagnosticResult?: CounterfactualResult | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {

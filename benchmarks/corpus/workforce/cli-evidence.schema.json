@@ -34,7 +34,9 @@
               "dst-spring",
               "dst-fall",
               "large-supported",
-              "large-pressure"
+              "large-pressure",
+              "practitioner-workflow",
+              "practitioner-infeasible"
             ],
             "type": "string"
           },
@@ -120,7 +122,7 @@
       "type": "string"
     },
     "corpusVersion": {
-      "const": 1
+      "const": 2
     },
     "format": {
       "const": "eutheto/workforce-cli-corpus-evidence"
@@ -144,6 +146,6 @@
     "workerManifestSha256",
     "checks"
   ],
-  "title": "Workforce corpus v1 cli-evidence",
+  "title": "Workforce corpus v2 cli-evidence",
   "type": "object"
 }

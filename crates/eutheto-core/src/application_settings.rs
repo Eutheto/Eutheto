@@ -347,7 +347,7 @@ impl EuthetoApp {
             ));
         }
         let token = cancellation.child();
-        let _guard = super::setup::CancelOnDrop(token.clone());
+        let _guard = super::setup::CancelOnDrop::new(token.clone());
         let app = self.clone();
         tokio::spawn(async move { app.apply_nonsecret_settings_owned(request, token).await })
             .await

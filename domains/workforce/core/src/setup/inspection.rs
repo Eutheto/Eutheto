@@ -13,7 +13,7 @@ use crate::{
     assignment_rules::{
         AssignmentRuleError, InstantInterval, RejectionCause,
         analysis::{
-            analyze_with_budget,
+            analyze_source_with_budget,
             support::{person_scope, shift_scope},
             supported_rule,
         },
@@ -385,8 +385,9 @@ pub(super) fn assignment_inspection(
     budget.visit()?;
     let mut authority =
         OperationBudget::analysis(Some(budget.control()), PlanningIrLimitsV1::DEFAULT);
-    let analysis = analyze_with_budget(document, &mut authority, PlanningIrLimitsV1::DEFAULT)
-        .map_err(|error| operation_error(&error))?;
+    let analysis =
+        analyze_source_with_budget(document, &mut authority, PlanningIrLimitsV1::DEFAULT)
+            .map_err(|error| operation_error(&error))?;
     let pair = AssignmentPair {
         person_id: parameters.person_id,
         shift_id: parameters.shift_id,
@@ -874,7 +875,7 @@ mod tests {
             Some(WorkforcePositionV1::Ordinal { next_ordinal: 0 }),
         )?;
         assert!(!first.candidate_in_implemented_assignment_graph);
-        assert_eq!(first.remaining_required_rule_count, 1);
+        assert_eq!(first.remaining_required_rule_count, 0);
         assert_eq!(first.rejections.total_items, 2);
         let first_row = first.rejections.items.first().ok_or("first rejection")?;
         assert_eq!(first_row.ordinal, 0);
@@ -891,7 +892,7 @@ mod tests {
         )?;
         let second = inspect(&document, 1, 7, Some(position))?;
         assert!(!second.candidate_in_implemented_assignment_graph);
-        assert_eq!(second.remaining_required_rule_count, 1);
+        assert_eq!(second.remaining_required_rule_count, 0);
         assert_eq!(second.rejections.total_items, 2);
         let second_row = second.rejections.items.first().ok_or("second rejection")?;
         assert_eq!(second_row.ordinal, 1);
@@ -925,7 +926,7 @@ mod tests {
             Some(WorkforcePositionV1::Ordinal { next_ordinal: 0 }),
         )?;
         assert!(candidate.candidate_in_implemented_assignment_graph);
-        assert_eq!(candidate.remaining_required_rule_count, 1);
+        assert_eq!(candidate.remaining_required_rule_count, 0);
         assert_eq!(candidate.rejections.total_items, 0);
         assert!(candidate.rejections.items.is_empty());
         assert!(candidate.rejections.continuation.is_none());

@@ -27,6 +27,9 @@ let
     "dist"
     "node_modules"
     "playwright-report"
+    "pdf-sidecar"
+    "pdf-sidecar.staging"
+    "pdf-sidecar.previous"
     "result"
     "target"
     "test-results"
@@ -42,6 +45,7 @@ let
     "compile_commands.json"
     "npm-debug.log"
     "pnpm-debug.log"
+    "pdf-sidecar.lock"
     "yarn-error.log"
   ];
   excludedSuffixes = [

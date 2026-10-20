@@ -31,7 +31,7 @@ const CP_MODEL_PROTO_SHA256: &str =
     "c967180600fab5db4fc8b7477fef56c3c6d3c0714b1f0355697f96d147f77d96";
 const SAT_PARAMETERS_PROTO_SHA256: &str =
     "9a5e08486a63414191870bd9953f9e561af221e165654913a33662bf1b674308";
-const CAPABILITIES: [&str; 7] = [
+const CAPABILITIES: [&str; 8] = [
     "cp-sat",
     "deterministic-time",
     "intermediate-solutions",
@@ -39,6 +39,7 @@ const CAPABILITIES: [&str; 7] = [
     "progress",
     "solution-projection",
     "solution-stats",
+    "sufficient-assumptions",
 ];
 const PATH_TOKENS: [&str; 7] = [
     "@artifact-root@",

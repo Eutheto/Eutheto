@@ -11,8 +11,30 @@ use std::{
 const CONTEXT: &[u8] = b"eutheto/workforce/planning-id/v1\0";
 pub(super) const RANK_LEVEL: &str = "official.workforce.objective.assignment.rank";
 pub(super) const RANK_CATEGORY: &str = "official.workforce.score.assignment.rank";
+pub(super) const PREFERENCE_LEVEL_PREFIX: &str = "official.workforce.objective.preference.";
+pub(super) const TIME_PREFERENCE_CATEGORY: &str = "official.workforce.score.preference.time";
+pub(super) const ASSIGNMENT_TYPE_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.assignment_type";
+pub(super) const LOCATION_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.location";
+pub(super) const REQUESTED_TIME_OFF_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.requested_time_off";
+pub(super) const ASSIGNMENT_TARGET_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.assignment_target";
+pub(super) const WEEKEND_TARGET_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.weekend_target";
+pub(super) const WORKLOAD_BALANCE_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.workload_balance";
+pub(super) const ADJACENCY_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.adjacency";
+pub(super) const BASE_STABILITY_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.base_stability";
+pub(super) const TOGETHER_SEPARATE_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.together_separate";
+pub(super) const PREFERRED_COVERAGE_PREFERENCE_CATEGORY: &str =
+    "official.workforce.score.preference.preferred_coverage";
 pub(super) const ASSIGNMENT_KIND: &str = "official.workforce.assignment";
-pub(super) const WORKFORCE_PROJECTION_VERSION: u32 = 1;
+pub(crate) const WORKFORCE_PROJECTION_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum IdentityKind {

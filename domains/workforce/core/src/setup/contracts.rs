@@ -123,6 +123,7 @@ pub enum WorkforceEntityKindV1 {
     Availability,
     CoverageRequirement,
     BaseSchedule,
+    ExternalStartingPlan,
     ScorePolicy,
 }
 

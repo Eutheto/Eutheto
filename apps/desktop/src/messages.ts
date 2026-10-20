@@ -21,52 +21,98 @@ export function formatUnit(value: number, unit: string, locale?: string): string
 }
 
 export const messages = {
-  ruleSetup: {
-    heading: "Required rules",
+  repair: {
+    heading: "Manual changes and repair",
     description:
-      "Required rules must hold for the people and shifts they cover. The counts show which records a rule covers, not whether a schedule is possible. Inactive rules are not enforced.",
+      "Review one change against the complete current selection. Native review checks all Required rules; visible pages never limit the schedule being checked.",
+    read: "Refresh current selection",
+    loading: "Reading the admitted current selection…",
+    stale:
+      "The source or library changed. Your draft is retained, but its approval is no longer usable. Refresh and review again.",
+    noSource:
+      "Manual changes need an adopted, natively admitted original accepted result. Adopt a saved result as the original base first.",
+    review: "Review manual change",
+    apply: "Apply reviewed manual change",
+    cancel: "Cancel manual draft",
+    cancelOperation: "Request cancellation",
+    cancelled: "The operation was cancelled before publishing a review. Your draft is retained.",
+    redo: "Apply and explicitly discard the redo branch",
+    committed:
+      "The manual change and protection were committed as one command. Use History to undo that command.",
+    alarm:
+      "The command committed, but native source admission reported a failure (category and code below). Do not retry this mutation. Repair and result authority are disabled until a fresh native read establishes a usable source.",
+    unknown:
+      "The transport outcome is unknown. Reconcile this exact command in History before any fresh Apply.",
+    preference: "Use a Time preference instead",
+    preferenceScope:
+      "This is a Time preference for the selected person and work interval, not an exact-shift guarantee. Other matching or overlapping work can match. Required rules are not weakened; choose Prefer or Avoid, priority and a positive weight, then review and apply the normal setup command before re-optimizing.",
+    diagnosticScope:
+      "Current accepted-source global diagnostic: this asks about the explicitly inspected accepted result and its recorded rules, with other assignments free. It does not freeze or prove the complete current manual B proposal. Required rules remain enforced.",
+    diagnosticUnavailable:
+      "A replacement diagnostic needs an explicitly inspected accepted result from the current source, a selected incumbent, an unselected target, and native assignment decisions. If no usable current accepted result is chosen, solve the current source and Inspect its result. Native failed-rule review above still describes the current manual proposal.",
+    diagnosticPageLimit:
+      "The exact native assignment was not found within 10 pages of 50 assignments for this shift. This automatic diagnostic lookup is unavailable beyond that resource limit; inspect and page the chosen accepted schedule to use its assignment diagnostic instead. Your manual draft and Required-rule review are unchanged.",
+    repairPlan: "Repair plan",
+    repairEstimate:
+      "The model estimate is for Authored Optimize only, not Repair. It is suppressed here and does not gate native Repair.",
+    repairDescription:
+      "Repair uses the complete committed manual B, then minimizes pair changes and Soft protection penalties before authored preferences. Hard protection is never silently relaxed.",
+    optimizeDescription:
+      "Ordinary Optimize uses the authored objective, separately from Repair. Backend options report runtime availability only.",
+    diffHeading: "Recorded repair changes",
+    diffBoundary:
+      "This compares chosen accepted C with its immutable recorded baseline B (or original A), never the current head. B is a manual frame: accepted verification is not established. Original A→C comparison remains separate.",
+    diffAbsent: "This result has no recorded repair baseline.",
+    missingEndpoint: "Historical endpoint unavailable; the exact native identity is retained.",
+  },
+  ruleSetup: {
+    heading: "Rules and preferences",
+    description:
+      "Required rules must hold for the people and shifts they cover. Preferences guide trade-offs for matching people, assignments, times, locations and requested time off. Inactive records are retained but not enforced.",
     refresh: "Refresh catalog and rule list",
     catalogHeading: "Rule catalog",
     requiredHeading: "Required rules",
     availableKinds: "Add a Required rule",
-    otherKinds: "Rules not available in this build",
+    availablePreferenceKinds: "Add a Preference",
+    otherKinds: "Kinds not available in this build",
     moreRuleContext: "Planning dates and saved revision",
     preferencesHeading: "Preferences",
     implemented: "Available",
     notImplemented: "Not available in this build",
     notImplementedHint:
       "This capability is defined by the domain pack but is not implemented. It cannot be created, edited or enforced by this build.",
-    preferenceHint: "Preference authoring is not available in this build.",
+    preferenceHint:
+      "Available preferences can be created, edited, activated, deactivated and deleted here. Native validation and review remain authoritative.",
     list: "Rule list",
-    listEmpty: "No rules of this class are saved.",
+    listEmpty: "No rules or preferences of this class are saved.",
     create: "Create rule",
     createKind: "Choose a rule kind",
     edit: "Edit",
     discard: "Discard",
-    preview: "Review rule changes",
+    preview: "Review changes",
     reviewDelete: "Review deletion",
     reviewToggle: "Review activation change",
-    save: "Save reviewed rule",
-    saved: "The reviewed rule command completed.",
-    saving: "Saving reviewed rule…",
-    deleted: "Rule deleted.",
+    save: "Save reviewed change",
+    saved: "The reviewed setup command completed.",
+    saving: "Saving reviewed setup change…",
+    deleted: "Record deleted.",
     close: "Close",
-    identity: "Rule identity",
+    identity: "Record identity",
     baseline: "Saved input revision",
     unsaved: "Unsaved draft changes.",
     stale:
       "The saved revision or library changed. Review the current saved state before continuing.",
-    reviewCurrent: "Review current saved rule",
+    reviewCurrent: "Review current saved record",
     active: "Active",
     inactive: "Inactive",
     toggleActive: "Change activation",
-    strength: "Strength",
+    strength: "Class",
     strengthAlwaysRequired: "Required",
     strengthDescription:
-      "Required rules must hold. Preferences guide trade-offs; their authoring is not available in this build.",
+      "Required rules must hold. Available preferences guide trade-offs without making an otherwise valid plan invalid.",
     classEditable: "Class can be changed",
-    classLocked: "Class is locked for this rule",
-    unsupportedClass: "This class is not editable",
+    classLocked: "Class is locked for this record",
+    unsupportedClass: "This record kind is not editable",
     previewHeading: "Who and what this rule covers",
     previewHelp:
       "These counts are for the saved or proposed rule shown here. They show what the rule covers, not whether a workable schedule exists.",
@@ -105,11 +151,279 @@ export const messages = {
     confirmApply: "Confirm save",
     diagnostics: "Rule diagnostics",
     diagnosticsHelp: "Native validation findings for this exact draft.",
+    maximumInvalid: "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
+    preferenceWeightInvalid:
+      "Enter at most 32 digits for an exact whole-number weight from 1 to 1,000,000.",
+    calendarRequired: "Choose an existing reporting calendar.",
+    targetCountInvalid:
+      "Enter at most 32 digits for an exact whole-number target from 0 to 4,294,967,295.",
+    workloadBucketRequired: "Choose an existing workload bucket.",
+    rollingDurationInvalid:
+      "Enter at most 32 digits for an exact whole-number rolling duration from 1 to 4,294,967,295 minutes.",
+    qualificationMinimumInvalid:
+      "Enter at most 32 digits for an exact whole-number minimum from 0 to 65,535.",
+    maximumHoursInvalid:
+      "Enter at most 32 digits for an exact whole number of minutes from 0 to 4,294,967,295.",
+    quotaMinimumInvalid: "Enter an exact whole-number minimum from 0 to 4,294,967,295.",
+    quotaMaximumInvalid:
+      "Enter an exact whole-number maximum from 0 to 4,294,967,295, or leave blank for no upper limit.",
+    quotaRangeInvalid: "The maximum must be greater than or equal to the minimum.",
+    quotaCountMembershipInvalid:
+      "Assignment counts support reporting date or shift start, not intersection.",
+    breakMinutesInvalid:
+      "Enter at most 32 digits for an exact elapsed whole-minute break from 0 to 4,294,967,295.",
+    maximumConsecutiveModeInvalid: "Choose a consecutive-work mode.",
+    consecutiveWorkModeInvalid: "Choose a consecutive-work mode.",
+    consecutiveWorkThresholdInvalid:
+      "Enter at most 32 digits for an exact whole number from 0 to 4,294,967,295.",
+    consecutiveWorkAssignmentTypesRequired:
+      "Choose at least one work type for this active preference.",
+    consecutiveWorkCalendarRequired:
+      "Choose an anchored-week calendar for this active weekend preference.",
+    consecutiveWorkWeekdaysRequired:
+      "Choose Saturday or Sunday for this active weekend preference.",
+    mutualModeInvalid: "Choose a restriction mode.",
+    adjacencyModeInvalid: "Choose an adjacency mode.",
+    togetherSeparateModeInvalid: "Choose a together/separate mode.",
+    preferenceDirectionInvalid: "Choose Prefer or Avoid.",
+    groupDirectionInvalid: "Choose Together or Separate.",
+    togetherSeparateDuplicatePeople: "Each person may appear only once.",
+    adjacencyGapInvalid:
+      "Enter at most 32 digits for an exact whole-number gap from 0 to 4,294,967,295 minutes.",
+    baseScheduleRequired: "Choose an existing base schedule.",
+    timeWindowRequired: "Add at least one time window.",
+    timeWeekdaysRequired: "Choose at least one weekday.",
+    timeStartRequired: "Enter a start time.",
+    timeEndRequired: "Enter an end time.",
+    timeDayOffsetInvalid: "Enter a whole-number day offset from 0 to 255.",
+    preferenceScopeMismatch: "The native preference scope did not match the reviewed record.",
+    fixedAssignmentPersonRequired: "Choose a person for this active fixed assignment.",
+    fixedAssignmentShiftRequired: "Choose a shift for this active fixed assignment.",
+    fixedAssignmentTargetOutsideScope:
+      "The named person and shift must both be members of the reviewed native scope before an active fixed assignment can be saved.",
+    fixedAssignmentScopeHelp:
+      "The default full scope is intentional. Narrowing the scope remains explicit, and native review must prove that the exact named person and shift are included.",
+    fixedAssignmentScopeProofLimit:
+      "Native scope review reached its bounded page limit before proving the named target. Narrow the scope or retry the review.",
+    fixedAssignmentScopeRequired:
+      "An active fixed assignment can be saved only after native review proves that its exact named person and shift are in the reviewed native scope.",
+    mutualAssignmentRestrictionScopeHelp:
+      "Choose the people who must be kept apart. Native review checks the selected people against this scope, including people selected through tags and teams.",
+    mutualAssignmentRestrictionScopeProofLimit:
+      "Native scope review reached its bounded page limit before proving the selected people. Narrow the scope or retry the review.",
+    mutualAssignmentRestrictionPairRequired:
+      "A new active assignment restriction needs at least two selected people in its reviewed native scope. Switch to Inactive or add people, tags, or teams before saving.",
+    mutualAssignmentRestrictionScopeRequired:
+      "An active assignment restriction can be saved only after native review proves its selected people in the reviewed scope.",
+    transitionTimeScopeHelp:
+      "Select the locations whose authored transition matrix entries may apply. Native review checks the selected locations against the prospective rule scope; this editor never calculates or parses travel times.",
+    transitionTimeScopeProofLimit:
+      "Native shift-scope review reached its bounded page limit before proving two selected locations. Narrow the scope or retry the review.",
+    transitionTimePairRequired:
+      "A newly active transition-time rule needs at least two selected locations proved in its reviewed native shift scope. Switch to Inactive or add locations before saving.",
+    transitionTimeScopeRequired:
+      "An active transition-time rule can be saved only after native review proves at least two selected locations in its reviewed native shift scope.",
     repairField: "Open field",
+
     fields: {
       name: "Name",
-      kind: "Rule kind",
+      kind: "Rule or preference kind",
       scope: "People and assignments",
+      workloadBucket: "Workload bucket",
+      priority: "Preference priority",
+      workloadPolicy: "Score-policy workload policy",
+      workloadPolicyChoose: "Choose an authored workload policy",
+      workloadPolicyHelp:
+        "Choose only a workload policy from the current persisted ScorePolicy singleton. Its peer group selects people; this preference scope narrows matching shifts. Every owned period, including an empty period, is scored using the policy's authored target mode.",
+      workloadPolicyRequired: "Choose an authored ScorePolicy workload policy.",
+      workloadPolicyInvalid:
+        "Choose a workload policy that exists in the current persisted ScorePolicy singleton.",
+      workloadPoliciesLoading: "Reading workload policies from the persisted ScorePolicy…",
+      workloadPoliciesEmpty:
+        "The persisted ScorePolicy has no workload policies. Add one in Score policy before authoring this preference.",
+      workloadPoliciesError:
+        "The persisted ScorePolicy workload policies could not be read. Refresh before authoring this preference.",
+      weight: "Preference weight",
+      weightHelp:
+        "Higher weights matter more within the selected priority. Native validation requires a positive weight no greater than 1,000,000.",
+      direction: "Preference direction",
+      prefer: "Prefer matching work",
+      avoid: "Avoid matching work",
+      baseSchedule: "Existing base schedule",
+      baseScheduleHelp:
+        "Choose a saved base captured from an accepted result. On Setup, use Review as repair base.",
+      baseScheduleUnavailable:
+        "No base schedule is saved. First accept a result, then on Setup choose Review as repair base.",
+      maximumGapMinutes: "Maximum adjacency gap (minutes)",
+      maximumGapMinutesHelp:
+        "The maximum elapsed gap between matching assignments and their base-schedule neighbors.",
+      adjacencyMode: "Adjacent assignment direction",
+      adjacencyModeHelp:
+        "Choose whether the base-schedule neighbor is before, after, or either side of the matching assignment.",
+      adjacencyBefore: "Before",
+      adjacencyAfter: "After",
+      adjacencyEither: "Either",
+      togetherSeparatePeople: "People for together/separate preference",
+      togetherSeparatePeopleHelp:
+        "Select persisted people. Only pairs who are both assigned are scored; this preference never requires someone to work.",
+      groupDirection: "Group direction",
+      together: "Together",
+      separate: "Separate",
+      coverageRequirements: "Preferred coverage requirements",
+      coverageRequirementsHelp:
+        "Select only persisted coverage requirements. The preference matches these authored requirements.",
+      coverageRequirementsUnavailable:
+        "No persisted coverage requirement exists, so this preference cannot be created yet.",
+      assignmentTypes: "Preferred work types",
+      assignmentTypesHelp:
+        "Select the assignment types this preference matches. Native validation checks every selected identity.",
+      consecutiveWorkAssignmentTypes: "Matching work types",
+      consecutiveWorkAssignmentTypesHelp:
+        "Select the assignment types that form consecutive-work windows. Active preferences require at least one type; native validation checks every selected identity.",
+      locations: "Preferred locations",
+      locationsHelp:
+        "Select the locations this preference matches. Native validation checks every selected identity.",
+      availabilities: "Requested time-off records",
+      availabilitiesHelp:
+        "Select requested-time-off availability records. Approved time off and unavailable records are not valid for this preference.",
+      timeWindow: "Preferred time window",
+      timeWindowHelp:
+        "Choose one exact instant interval or one or more weekly local-time windows. Native validation checks timestamp and local interval semantics in the scenario time zone.",
+      timeWindowKind: "Time-window type",
+      instantWindow: "Exact instants",
+      weeklyWindow: "Weekly local times",
+      startsAt: "Starts at (RFC 3339)",
+      endsAt: "Ends at (RFC 3339)",
+      weekdays: "Weekdays",
+      startTime: "Starts at (local time)",
+      endTime: "Ends at (local time)",
+      endDayOffset: "End-day offset",
+      addTimeWindow: "Add a weekly time window",
+      removeTimeWindow: "Remove this weekly time window",
+      windowNumber: (number: string) => `Weekly time window ${number}`,
+      monday: "Monday",
+      tuesday: "Tuesday",
+      wednesday: "Wednesday",
+      thursday: "Thursday",
+      friday: "Friday",
+      saturday: "Saturday",
+      sunday: "Sunday",
+      noWorkloadBuckets:
+        "No workload buckets are configured. Create one in Work before authoring this rule.",
+      workloadBucketHelp:
+        "Choose the named workload bucket whose minute measurement this rule limits. Native validation checks the bucket and its contributions.",
+      quotaCalendar: "Quota calendar",
+      quotaCalendarHelp:
+        "Choose the calendar whose complete owned periods include those with no eligible or selected shifts.",
+      quotaHelp:
+        "Required for every matching person in each owned calendar period, even an empty one. Only selected, explicitly scheduled shifts count; leave and overtime do not silently satisfy or waive a quota.",
+      quotaMeasure: "Count which work?",
+      quotaAssignments: "Matching assignments",
+      quotaMinutes: "Minutes in a workload bucket",
+      quotaMinimum: "Minimum per period",
+      quotaMaximum: "Maximum per period (optional)",
+      quotaMaximumHelp:
+        "Leave blank for no upper limit; set equal to the minimum for an exact quota. A named bucket measures elapsed or scheduled minutes according to its native definition.",
+      window: "Work window",
+      windowKind: "Window type",
+      calendarWindow: "Calendar periods",
+      rollingWindow: "Rolling window",
+      membership: "Window membership",
+      reportingDateMembership: "Reporting date",
+      startInstantMembership: "Shift start instant",
+      intersectionMembership: "Shift intersection",
+      windowHelp:
+        "Calendar periods use the selected calendar. Rolling windows use a positive duration measured backward from each selected shift start. Native validation checks membership compatibility with the selected bucket and window.",
+      rollingDuration: "Rolling window duration in minutes",
+      rollingDurationHelp: "Enter a positive whole number of minutes.",
+      calendar: "Reporting-date calendar",
+      calendarHelp:
+        "Choose an existing calendar. Each matching assignment is assigned by its reporting date to one period owned by this calendar; assignments without an owning period count in no period.",
+      maximum: "Total assignment cap per reporting-date period",
+      maximumHelp:
+        "Total cap for each person's matching assignments in each reporting-date period. Overlapping assignments each count once. Zero forbids any matching assignment.",
+      maximumWorkedWeekends: "Maximum distinct worked weekends",
+      maximumWorkedWeekendsHelp:
+        "Count distinct local weekends from Saturday 00:00 through Monday 00:00. Any positive overlap from a selected source shift counts, including an overnight tail; only source-owned shifts count at the planning-horizon edge. No adjacent rotation or free-weekend guarantee is inferred.",
+      targetCount: "Target matching assignments per reporting-date period",
+      targetCountHelp:
+        "Set the target number of matching assignments for each person in each reporting-date period represented by matching source shifts and owned by the selected calendar. Zero means the preference favors no matching assignments; matching assignments whose reporting date has no owning period count in no period.",
+      weekendTargetCount: "Target distinct worked weekends per person",
+      weekendTargetCountHelp:
+        "Set the target number of distinct local Saturday 00:00 through Monday 00:00 weekends for each scoped person across the entire planning horizon. Any positive overlap from a selected source shift counts, including an overnight tail. This is a total target, not a per-period target or hard cap; a person with no matching shifts still incurs the target difference.",
+      consecutiveWorkThreshold: "Consecutive-work threshold",
+      consecutiveWorkThresholdHelp:
+        "Threshold 1 charges each consecutive pair. Higher thresholds charge each contiguous window that exceeds the selected threshold; zero charges no windows.",
+      consecutiveWorkMode: "Consecutive-work mode",
+      consecutiveWorkModeHelp:
+        "Reporting days join matching work by consecutive source reporting dates. Weekends join matching work by consecutive anchored-week periods and selected Saturday/Sunday overlap.",
+      reportingDays: "Reporting days",
+      reportingDaysHelp:
+        "Use distinct source reporting dates. Native planning does not infer adjacent rotations or missing-day coverage.",
+      weekends: "Weekends",
+      weekendsHelp:
+        "Use consecutive periods from the selected anchored-week calendar, charging only selected Saturday and/or Sunday overlap.",
+      consecutiveWorkCalendar: "Anchored-week calendar",
+      consecutiveWorkCalendarHelp:
+        "Choose a calendar whose authored period is an anchored week. Native validation rejects day, pay-period and custom calendars; the selected calendar only anchors weekend reporting periods.",
+      consecutiveWorkWeekdays: "Weekend days to match",
+      consecutiveWorkWeekdaysHelp:
+        "Select Saturday, Sunday, or both. Active weekend preferences require at least one day; native validation checks the authored set.",
+      maximumConsecutive: "Maximum consecutive count",
+      maximumConsecutiveHelp:
+        "Limit each person's matching work to this many consecutive worked days or assignments. Zero forbids any matching assignment.",
+      maximumConsecutiveScopeHelp:
+        "The selected people and shift scope determines which assignments match. Use scope filters for nights, assignment types, locations, teams and categories.",
+      maximumConsecutiveMode: "Consecutive-work mode",
+      maximumConsecutiveModeHelp:
+        "Choose whether consecutive work is measured by distinct reporting dates or by matching assignments joined across a bounded elapsed break.",
+      workedDays: "Worked days (distinct reporting dates)",
+      workedDaysHelp:
+        "Each matching reporting date counts once. Runs join only successive civil dates; gaps in candidate occurrence coverage do not change this date-based grouping.",
+      assignments: "Matching assignments",
+      assignmentsHelp:
+        "Matching assignments are ordered by start instant. Adjacent matches join when the elapsed break is at most the allowed break; nonmatching selected shifts do not break a matching run, and overlaps also join.",
+      breakMinutes: "Allowed break between matching assignments (minutes)",
+      breakMinutesHelp:
+        "Enter an exact whole elapsed-minute break from 0 to 4,294,967,295. Zero joins only touching or overlapping matches.",
+      maximumMinutes: "Maximum minutes",
+      maximumMinutesHelp:
+        "Limit the selected bucket's minute measurement for each person in each selected window. Enter zero to forbid any matching contribution.",
+      fixedAssignmentPerson: "Named person",
+      fixedAssignmentShift: "Named shift",
+      fixedAssignmentMode: "Exact pair requirement",
+      fixedAssignmentRequired: "Require this assignment",
+      fixedAssignmentExcluded: "Exclude this assignment",
+      mutualPeople: "People to keep apart",
+      mutualPeopleHelp:
+        "Select the people who must not be assigned together. Select at least two people for a new active rule.",
+      mutualMode: "Restriction mode",
+      mutualModeHelp:
+        "Choose whether the restriction applies within one shift or across overlapping shifts.",
+      transitionLocations: "Locations for transition time",
+      transitionLocationsHelp:
+        "Select named locations. The native rule applies only when two matching shifts at distinct selected locations have an explicitly configured directed source-to-target transition entry; an absent entry and the reverse direction impose no inferred requirement. A configured pair need not occur in today's shifts.",
+      sameShift: "Same shift",
+      overlappingShifts: "Overlapping shifts",
+      fixedAssignmentShiftStart: "Show shifts from",
+      fixedAssignmentShiftEnd: "Until (exclusive)",
+      qualificationMinimums: "Qualification minimums per matching shift",
+      qualificationMinimumHelp:
+        "Each row requires a minimum number of distinct assigned people whose qualifications match the selected all and any expressions.",
+      qualificationMinimum: "Minimum qualifying people",
+      allQualifications: "Require all selected qualifications",
+      anyQualifications: "Require at least one selected qualification",
+      qualificationMinimumNumber: (number: string) => `Qualification minimum ${number}`,
+      qualificationMinimumPageStatus: (rows: string, page: string) =>
+        `Total qualification minimum rows: ${rows} · Page: ${page}.`,
+      addQualificationMinimum: "Add a qualification minimum",
+      removeQualificationMinimum: "Remove this qualification minimum",
+      removeQualificationMinimumNumber: (number: string) =>
+        `Remove qualification minimum ${number}`,
+      requiredSkillMixEmpty:
+        "No qualification minima are configured. This rule currently imposes no qualification requirement; add a minimum to enforce a skill mix.",
+      requiredSkillMixInactiveEmpty:
+        "This inactive rule has no qualification minima. It is retained but imposes no qualification requirement.",
       beforeScope: "Before scope",
       afterScope: "After scope",
       minimumMinutes: "Minimum rest duration",
@@ -133,15 +447,25 @@ export const messages = {
       minimumRest: "Require rest between assignments",
       maximumHours: "Maximum hours",
       maximumConsecutive: "Maximum consecutive work",
+      maximumWorkedWeekends: "Maximum worked weekends",
       maximumAssignmentCount: "Maximum assignment count",
+      workloadQuota: "Required workload quota",
       requiredSkillMix: "Required skill mix",
       fixedAssignment: "Fixed assignments",
       mutualAssignmentRestriction: "Assignment restrictions",
       transitionTime: "Transition time",
       baseStability: "Base stability",
+      adjacency: "Adjacent assignments",
+      togetherSeparate: "Together or separate",
+      preferredCoverage: "Preferred coverage",
       consecutiveWork: "Consecutive work",
       location: "Location",
       workload: "Workload",
+      time: "Prefer work times",
+      assignmentType: "Prefer work types",
+      requestedTimeOff: "Requested time off",
+      assignmentTarget: "Assignment-count target",
+      weekendTarget: "Distinct weekend target",
     },
     table: {
       heading: "Rules",
@@ -176,14 +500,332 @@ export const messages = {
     inactiveHelp: "This rule is retained but not enforced.",
     activeScopeRequired:
       "An active rule needs a successful preview with at least one person and assignment. Minimum rest needs people, before assignments and after assignments. Correct the scope or explicitly choose Inactive, then preview again.",
+    quotaScopeRequired:
+      "An active Required quota needs a successful preview with at least one matching person. Zero matching shifts do not waive its minimum in any owned period.",
+    maximumWorkedWeekendsScopeRequired:
+      "An active maximum worked weekends rule needs at least one person in its reviewed scope. Zero matching shifts and zero earned weekends are valid.",
+    weekendTargetScopeRequired:
+      "An active weekend-target preference needs at least one person in its reviewed scope. Zero matching shifts are valid and still incur the target difference.",
+    maximumHoursPreviewHelp:
+      "The counts below are scope-only counts. Membership in the selected workload bucket is enforced by Rust for the reviewed rule and is not proved by this scope preview.",
+    preferenceScopeHelp:
+      "The selected people and assignment filters determine which work the preference can match. Native review checks this exact scope.",
+    workloadBalanceScopeHelp:
+      "The ScorePolicy workload policy is the sole people-peer authority. Keep its peer group separate from this preference scope: the scope narrows matching shifts, and every owned period, including an empty one, is scored with the policy's authored target mode. There is no implied workload policy or target.",
+    preferenceTimeSentence: (direction: string, window: string) =>
+      `${direction} assignments whose resolved interval overlaps the selected ${window} time window.`,
+    preferenceAssignmentTypeSentence: (direction: string, count: string) =>
+      `${direction} assignments of one of the ${count} selected work types.`,
+    preferenceConsecutiveWorkSentence: (
+      threshold: string,
+      mode: "reportingDays" | "weekends",
+      assignmentTypeCount: string,
+      calendar: string,
+      weekdays: string,
+    ) => {
+      const charge =
+        threshold === "0"
+          ? "threshold 0 charges no windows"
+          : threshold === "1"
+            ? "threshold 1 charges consecutive pairs"
+            : `threshold ${threshold} charges each exceeding contiguous window`;
+      return mode === "reportingDays"
+        ? `Charge consecutive matching work for ${assignmentTypeCount} selected work types by source reporting date: ${charge}. No adjacent rotation or inferred missing-day context is added.`
+        : `Charge consecutive matching work for ${assignmentTypeCount} selected work types by anchored-week calendar ${calendar} on ${weekdays}: ${charge}. No default weekend days or inferred adjacent rotation is added.`;
+    },
+    preferenceLocationSentence: (direction: string, count: string) =>
+      `${direction} assignments at one of the ${count} selected locations.`,
+    preferenceRequestedTimeOffSentence: (count: string) =>
+      `Avoid assigning someone during one of the ${count} selected requested-time-off records when no Required leave restriction applies.`,
+    preferenceAssignmentTargetSentence: (target: string, calendar: string) =>
+      `Aim for ${target} matching assignments per person in each owned reporting-date period of calendar ${calendar} within the planning horizon, including periods with no matching shifts; the preference scores the absolute difference from that target using its priority scale and weight.`,
+    preferenceWeekendTargetSentence: (target: string) =>
+      `Aim for ${target} distinct local Saturday 00:00 through Monday 00:00 weekends per scoped person across the entire planning horizon, where any positive overlap from a selected source shift counts, including an overnight tail. This is a total target, not a per-period target or hard cap; a person with no matching shifts still incurs the target difference, and target 0 has no objective when no eligible weekends exist. The absolute difference is multiplied by the mapped coefficient for the preference priority and its weight.`,
+    workloadBalanceSentence: (policyId: string, targetMode: string, peerGroup: string) =>
+      `Balance workload with authored ScorePolicy workload policy ${policyId}: ${targetMode} across its ${peerGroup} peer group. This preference scope narrows matching shifts; every owned period, including empty periods, is scored, with no implied defaults.`,
+    preferenceAdjacencySentence: (
+      direction: string,
+      baseSchedule: string,
+      gap: string,
+      mode: string,
+    ) =>
+      `${direction} assignments against base schedule ${baseSchedule} with a maximum ${gap}-minute gap on the ${mode} side.`,
+    preferenceBaseStabilitySentence: (baseSchedule: string) =>
+      `Prefer assignments that remain stable against base schedule ${baseSchedule}.`,
+    preferenceTogetherSeparateSentence: (direction: string, people: string, mode: string) =>
+      `${direction} selected people [${people}] on ${mode === "sameShift" ? "the same shift" : "overlapping shifts"}.`,
+    preferencePreferredCoverageSentence: (ids: string) =>
+      `Prefer the persisted coverage requirements [${ids}].`,
+    noCalendars:
+      "No calendars are configured. Create a calendar in Work before authoring this rule.",
+    manageCalendars: "Go to Work to create a calendar",
+    maximumAssignmentCountSentence: (maximum: string) =>
+      `Allow at most ${maximum} matching assignments for each person in each reporting-date calendar period. A total cap of zero forbids any matching assignment.`,
+    maximumWorkedWeekendsSentence: (maximum: string) =>
+      `Limit each person to at most ${maximum} distinct local weekends. Each weekend is the local Saturday 00:00 through Monday 00:00 interval, and any positive overlap from a selected source shift counts, including an overnight tail; only source-owned shifts count at the planning-horizon edge. No adjacent rotation or free-weekend guarantee is inferred. A maximum of zero forbids any matching weekend.`,
+    workloadQuotaSentence: (
+      minimum: string,
+      maximum: string | null,
+      unit: string,
+      membership: string,
+    ) =>
+      `Require ${minimum}${maximum === null ? " or more" : `–${maximum}`} ${unit.toLowerCase()} for each matching person in every owned calendar period using ${membership.toLowerCase()} membership. Empty periods still require the minimum; only selected scheduled work receives credit.`,
+    maximumConsecutiveSentence: (
+      maximum: string,
+      mode: "workedDays" | "assignments",
+      breakMinutes: string,
+    ) =>
+      mode === "workedDays"
+        ? `Limit each person's matching work to at most ${maximum} consecutive worked days, counted by distinct reporting dates. A maximum of zero forbids any matching assignment.`
+        : `Limit each person's matching work to at most ${maximum} consecutive matching assignments when adjacent elapsed breaks are at most ${breakMinutes} minutes. A maximum of zero forbids any matching assignment.`,
+    maximumHoursSentence: (maximum: string, window: string) =>
+      `Limit each person's selected workload bucket to at most ${maximum} minutes in each ${window}.`,
     minimumRestSentence: (minutes: string) =>
       `Require at least ${minutes} minutes of rest between the before and after assignments.`,
-    reviewActions: {
-      create: "Create Required rule",
-      update: "Update Required rule",
-      activation: "Change rule activation",
-      delete: "Delete Required rule",
+    requiredSkillMixSentence: (count: string) =>
+      `For each matching shift, the proposed rule has ${count} independent qualification minimums; each row counts distinct assigned people.`,
+    requiredSkillMixMinimumSentence: (minimum: string, all: string, any: string) => {
+      const expressions = [
+        all === "" ? "" : `all of [${all}]`,
+        any === "" ? "" : `at least one of [${any}]`,
+      ]
+        .filter(Boolean)
+        .join(" and ");
+      return `At least ${minimum} distinct assigned people per matching shift must match ${expressions || "the selected qualification expression"}.`;
     },
+    fixedAssignmentSentence: (personId: string, shiftId: string, assigned: boolean) =>
+      assigned
+        ? `Require person ${personId} to work shift ${shiftId}.`
+        : `Exclude person ${personId} from shift ${shiftId}.`,
+    mutualAssignmentRestrictionSentence: (count: string, mode: string) =>
+      `Keep ${count} selected people apart on ${mode === "sameShift" ? "the same shift" : "overlapping shifts"}.`,
+    transitionTimeSentence: (count: string) =>
+      `Apply native configured directional travel time between matching shifts at two of the ${count} selected locations: the earlier shift's location is the source and the later shift's location is the target. Only an authored source-to-target entry applies; an absent entry and the reverse direction impose no inferred travel-time requirement.`,
+    reviewActions: {
+      create: "Create record",
+      update: "Update record",
+      activation: "Change record activation",
+      delete: "Delete record",
+    },
+  },
+  acceptedSchedule: {
+    heading: "Accepted schedule",
+    open: "Inspect schedule",
+    verification: {
+      heading: "Independent result check",
+      loading: "Checking the saved schedule against its original scenario…",
+      error: "The schedule could not be independently checked",
+      retry: "Check this result again",
+      current: "Verified schedule ready. Every recorded Required rule passed.",
+      older: (revision: string) =>
+        `Verified schedule for earlier saved revision ${revision}. This does not validate the current scenario.`,
+      required: (count: number) => `${String(count)} Required rule checks passed in this result.`,
+      recordedStatus: "Recorded run conclusion (not a fresh proof)",
+      preferences: "Verified preference scores",
+      satisfaction: (withoutPenalty: number, total: number) =>
+        `${String(withoutPenalty)} of ${String(total)} recorded Preference priority scores have no penalty. A nonzero score reflects modeled tradeoffs, not a failed Required rule.`,
+      preferenceHelp: "Penalty by priority and preference kind; lower values are preferred.",
+      priority: (order: number) => `Preference priority ${String(order)}`,
+      noPreferences: "No preference score levels were recorded.",
+      warnings: "Verifier warnings",
+    },
+    close: "Close schedule",
+    stale: "This accepted schedule was made for an older saved revision.",
+    timeZone: "Project time zone",
+    view: "Schedule view",
+    kinds: {
+      people: "By person",
+      shifts: "By shift",
+      timeline: "Timeline by start time",
+      assignments: "Assignments",
+      fairness: "Fairness distribution",
+      baseDiff: "Changes from base",
+      health: "Plan health",
+      calendarPeople: "Person calendar",
+      calendarShifts: "Shift and location calendar",
+    },
+    person: "Person",
+    shift: "Shift",
+    location: "Location",
+    start: "Starts",
+    end: "Ends",
+    minimum: "Staffing minimum",
+    selected: "Assigned",
+    margin: "From minimum (people)",
+    coverage: {
+      preferred: "Preferred staffing",
+      maximum: "Staffing maximum",
+      standing: "Staffing balance",
+      belowMinimum: (count: number) => `Below minimum by ${String(count)}`,
+      aboveMaximum: (count: number) => `Above maximum by ${String(count)}`,
+      belowPreferred: (count: number) => `Within bounds; below preference by ${String(count)}`,
+      abovePreferred: (count: number) => `Within bounds; above preference by ${String(count)}`,
+      within: "Within authored bounds",
+    },
+    inspection: {
+      heading: "Recorded assignment evidence",
+      column: "Assignment evidence",
+      open: "Inspect evidence",
+      inspect: (person: string, work: string, start: string) =>
+        `Inspect evidence for ${person}, ${work}, ${start}`,
+      close: "Close assignment evidence",
+      checkpoint:
+        "This verified checkpoint can be inspected now. Pair-local recorded evidence requires a saved terminal accepted result; it is not inferred from the checkpoint.",
+      loading: "Loading recorded assignment evidence. Close this panel to keep working.",
+      retry: "Retry assignment evidence",
+      limits:
+        "These are recorded decision, foundational source and active Required-rule checks, plus bounded matching source preference terms where available. Pair-local penalties use the source score policy; an unselected term is not a feasible alternative or whole-plan score difference. These facts do not prove why the solver preferred this pair, its aggregate preference or fairness score, current-scenario validity, or optimality.",
+      recordedDecision: "Recorded selection and pair-local evaluation.",
+      requiredCheck: "Pair-local foundational source or Required-rule check for this selection.",
+      preferenceFact:
+        "Matching source preference term and pair-local penalty for this selected pair.",
+      preferenceLimit: "Bounded preference evidence; additional source matches may exist.",
+      otherEvidence: "Recorded assignment evidence.",
+      sourceCheckIds: "Source check IDs (person, leave, or Required rule)",
+      preferenceRuleIds: "Authored preference rule IDs",
+      yes: "Yes",
+      no: "No",
+      assignments: "Recorded assignment IDs",
+      messageCount: (first: number, last: number, total: number) =>
+        `Evidence messages ${String(first)}–${String(last)} of ${String(total)}`,
+      previous: "Previous evidence messages",
+      next: "Next evidence messages",
+      empty: "No pair-local messages were returned for this assignment.",
+    },
+    actions: "Inspect",
+    clearFilter: "Show all assignments",
+    personFilter: "Assignments for person",
+    shiftFilter: "Assignments for shift",
+    localDateFilter: "Local start date",
+    locationFilter: "Shifts at location",
+    clearLocation: "Show all locations",
+    showLocation: (name: string) => `Show shifts at ${name}`,
+    loading: "Loading accepted schedule…",
+    retry: "Retry schedule",
+    count: (total: number, page: number) => `${String(total)} saved rows · page ${String(page)}`,
+    empty: {
+      people: "No people in this accepted scenario.",
+      shifts: "No shifts in this accepted scenario.",
+      calendarPeople: "No people in this accepted scenario.",
+      calendarShifts: "No shifts start in these original-scenario dates.",
+      assignments: "No selected assignments match this view.",
+      timeline: "No selected assignments match this timeline.",
+      baseDiff: "This verified schedule has the same assignments as its saved base plan.",
+      fairness: "No active workload-balance policy has distribution rows.",
+      health:
+        "No active Required time checks or source coverage observations apply to this accepted result.",
+    },
+    baseDiff: {
+      noBase:
+        "This accepted result's original scenario had no base plan. There is no base-difference claim for this result.",
+      source: "Recorded base source result ID (not independently checked by this view)",
+      sourceRevision: "Recorded base source revision",
+      description:
+        "Added and removed person–shift assignments relative to the base in this accepted result's original scenario. The base record alone does not establish its source's acceptance; current edits do not rewrite this evidence.",
+      change: "Change",
+      added: "Added to result",
+      removed: "Removed from result",
+    },
+    calendar: {
+      description:
+        "Seven civil dates in the original accepted scenario. Each shift appears on its resolved local start date; overnight work appears once. An empty cell is not a Required-rule verdict.",
+      originalDates: (start: string, end: string) =>
+        `Original planning dates: ${start} to before ${end}`,
+      shownDates: (start: string, end: string) => `Shown dates: ${start} to before ${end}`,
+      previousWeek: "Previous dates",
+      nextWeek: "Next dates",
+      virtual: "Use scrolling grid",
+      paged: "Use keyboard-friendly pages",
+      previousRows: "Previous visible rows",
+      nextRows: "Next visible rows",
+      help: "Arrow keys move between calendar cells. Tab reaches cell actions. The paged table shows the same native rows without virtual scrolling.",
+      personCorner: "Person",
+      shiftCorner: "Shift and location",
+      region: "Accepted schedule calendar",
+      noShift: "No shift starts here",
+      count: (count: number) => `${String(count)} assigned`,
+      totalSelected: (count: number) => `${String(count)} assigned total`,
+      openAssignments: "View assignments",
+      openShift: "View shift assignments",
+      sample: (shown: number, total: number) =>
+        `${String(shown)} of ${String(total)} assignments listed in this cell`,
+      dayLabel: (owner: string, date: string, count: number) =>
+        `${owner}, ${date}: ${String(count)} assigned`,
+      viewDay: (name: string, date: string) =>
+        `View all assignments for ${name} starting on ${date}`,
+      viewShift: (name: string, date: string) =>
+        `View all assignments for ${name} starting on ${date}`,
+      staffing: "Authored staffing",
+      sourceError: "The original accepted calendar date window is invalid.",
+    },
+    fairness: {
+      policy: "Policy",
+      period: "Period",
+      measure: "Measure",
+      target: "Target",
+      actual: "Actual",
+      deviation: "Deviation",
+      groupActual: "Group actual range and spread",
+      groupDeviation: "Group deviation range and spread",
+      spread: "Spread",
+      spreadDetails: " in authored bucket units",
+    },
+    health: {
+      description:
+        "Original-scenario Required time checks and authored source coverage, not a prediction for unsaved or later edits. Positive margins meet the shown limit; negative margins miss it. No applicable work is not a measured zero.",
+      check: "Check",
+      source: "Source",
+      context: "Person, shift or interval",
+      direction: "Limit",
+      threshold: "Threshold",
+      observed: "Observed",
+      margin: "Remaining margin",
+      units: "Units",
+      status: "Status",
+      showEvidence: "Exact observation",
+      affected: "Affected assignments",
+      checkLabels: {
+        minimumRest: "Minimum rest",
+        maximumHours: "Maximum hours",
+        transitionTime: "Directed travel time",
+        coverageHeadcount: "Staffing headcount",
+        coverageQualification: "Qualified staffing",
+      },
+      directionLabels: {
+        minimum: "At least",
+        maximum: "At most",
+        exact: "Exactly",
+      },
+      statusLabels: {
+        satisfied: "Met",
+        violated: "Missed",
+        noApplicable: "No applicable work",
+      },
+      unitsLabels: {
+        minutes: "minutes",
+        people: "people",
+      },
+      ownerLabels: {
+        shiftTemplate: "Shift template",
+        shiftInstance: "Shift instance",
+        coverageRequirement: "Standalone coverage requirement",
+      },
+      rule: "Required rule",
+      rank: (index: number) => `Qualification minimum ${String(index + 1)}`,
+      person: "Person ID",
+      shift: "Shift ID",
+      otherShift: "Other shift ID",
+      interval: "UTC interval",
+      assignmentIds: (displayed: number, total: number) =>
+        `${String(displayed)} of ${String(total)} selected assignment IDs shown`,
+    },
+    showPerson: (name: string) => `Show assignments for ${name}`,
+    showShift: (name: string) => `Show assignments for ${name}`,
+    noLocation: "No location",
+    notAvailable: "Not available",
+    previous: "Previous page",
+    next: "Next page",
+    sourceChanged: "The accepted result or saved revision changed. Reopen the schedule.",
   },
   assignmentInspection: {
     heading: "Check a person and a shift",
@@ -287,7 +929,7 @@ export const messages = {
     },
     proposed: "Person after import",
     chooseProposed: "Choose a changed person to inspect",
-    proposalMismatch: "The native row and proposed person identities do not agree.",
+    proposalMismatch: "The native row and proposed record identities do not agree.",
     limits:
       "At most 10,000 data records and 1,000 changed people can be applied in one atomic batch. Narrow or skip rows if the native mutation limit is reached; imports are never split automatically.",
     apply: "Apply exactly this reviewed import",
@@ -295,18 +937,18 @@ export const messages = {
     applied: "The native import committed as one command batch.",
     noChanges: "The native import made no changes and created no history entry.",
     consumed:
-      "This snapshot has been consumed. Its rejection report remains available; choose a new source for another import.",
+      "This snapshot has been consumed. Its row report remains available; choose a new source for another import.",
     uncertain:
       "The apply outcome is unknown. Do not replay it. Use the root command-history recovery before another mutation; choose a fresh source for any later import.",
     redo: "This import would discard the redo branch. Confirm that consequence to retry the same review.",
     confirmRedo: "Discard redo branch and apply this review",
     report: "Retained native rejection report",
     readReport: "Read the rejected-row report",
-    readingReport: "Reading the native rejected-row report",
-    reportReady: "The retained native rejection report is ready.",
+    readingReport: "Reading the native row report",
+    reportReady: "The retained native row report is ready.",
     saveReport: "Save the rejected-row report",
-    savingReport: "Saving the native rejected-row report",
-    reportSaved: "The native rejected-row report was saved.",
+    savingReport: "Saving the native row report",
+    reportSaved: "The native row report was saved.",
     reportEmpty: "The native report contains no rejected rows.",
     reportHelp:
       "Reports contain bounded logical record numbers and rejection codes, not raw source cells. They are ephemeral and are discarded when this source is replaced or this route is closed.",
@@ -320,6 +962,446 @@ export const messages = {
     back: "Back to People",
     sourceResetFailed:
       "The old native CSV resources could not be released. Retry cleanup before selecting another source.",
+  },
+  eligibilityMatrix: {
+    navigate: "Import eligibility from pasted matrix",
+    opening: "Capturing pasted eligibility matrix",
+    opened: "The pasted matrix is retained for native review.",
+    detecting: "Checking the complete pasted matrix",
+    detected: "Matrix shape and source limits checked.",
+    heading: "Import eligibility from a pasted matrix",
+    description:
+      "Review sparse configured person/type membership from text you explicitly paste here. Only listed pairs change. This does not edit qualifications or establish assignment feasibility.",
+    grammar:
+      "Native tab-separated grammar: the first logical record has an empty corner or personId, followed by assignment type references. Each later record starts with a person reference and has the same width. Membership is exactly true, false, or empty; empty preserves current membership. Names are never inferred.",
+    limits:
+      "At most 1 MiB of complete UTF-8 text, 10,000 membership cells, 2–64 columns, 10,001 logical records, 16 KiB per decoded cell, 256 KiB per record and 256 bytes per identity token. Blank, invalid and skipped cells still count. Ragged records are rejected, never padded or truncated.",
+    fingerprintHelp:
+      "The source fingerprint binds the complete text submitted here, not original clipboard bytes. The textarea may normalize line endings. No clipboard access or browser matrix parsing is used.",
+    text: "Tab-separated eligibility text",
+    capture: "Capture pasted text for native review",
+    replace: "Release source and edit pasted text",
+    replaceHelp:
+      "The retained source is immutable. Replace releases it before editing, keeping your pasted text but clearing mappings, cell decisions, approval and the retained report. Save the report first if needed.",
+    overflow:
+      "The complete input exceeds 1 MiB of UTF-8 text. All pasted text was cleared; no truncated prefix was accepted. Paste a smaller complete matrix.",
+    empty: "Paste a complete matrix before capturing it.",
+    source: "Retained pasted eligibility source",
+    detect: "Check complete native matrix",
+    census: (columns: string, records: string, cells: string) =>
+      `Native census: ${columns} columns, ${records} logical records including the header, ${cells} membership cells.`,
+    samples: "Native matrix samples",
+    inspect: "Inspect one native matrix record",
+    selectedRecord: "Selected native matrix record",
+    column: "Column (displayed one-based)",
+    decisions: "Native cell decisions",
+    cells: "Eligibility membership cells",
+    duplicatePolicy:
+      "Every included invalid or duplicate resolved pair blocks the import, including blank duplicates. Explicitly skip exact native cells to resolve conflicts. Logical records include the header; displayed columns start at one.",
+    skipCount: (count: string) =>
+      `${count} cells explicitly skipped; all still count toward limits.`,
+    skipCell: (record: string, column: string) => `Skip record ${record}, column ${column}`,
+    skipAll: "Skip all membership cells",
+    cellPages: "Eligibility cell pages",
+    previousCells: "Previous cells",
+    nextCells: "Next cells",
+    blocked: "Blocked — resolve or explicitly skip the affected cells.",
+    fingerprint: "Submitted text fingerprint:",
+    pending:
+      "Native matrix operation in progress. Cancellation and its result are shown in the workspace operation panel.",
+    consumed:
+      "This pasted source has been consumed, including a no-change apply. Its report remains available. Replace it before another import.",
+    reportHelp:
+      "Every excluded native cell is retained, including explicit skips: up to 10,000 cells and 1 MiB, without raw source text. Save this ephemeral report before replacing the source or leaving.",
+    noExclusions: "No excluded cells.",
+    excluded: "Excluded eligibility cells",
+  },
+  eligibilityCsv: {
+    heading: "Import eligibility from CSV",
+    description:
+      "Update configured person/type membership with sparse CSV rows. Only listed pairs change; absent pairs remain unchanged. This does not edit qualifications or prove that a person can work a shift or that a feasible schedule exists.",
+    navigate: "Import eligibility from CSV",
+    back: "Back to Eligibility",
+    framing:
+      "Explicitly map comma-, semicolon- or tab-separated UTF-8 with three distinct columns. Membership must be exactly true or false: blanks, spaces, different case and numbers are invalid. At most 16 MiB, 10,000 data records and 64 columns, including skipped records.",
+    replaceHelp:
+      "Choosing another source discards its mappings, decisions and retained report. Save the report first if needed.",
+    source: "Selected eligibility source",
+    mapping: "Map sparse eligibility rows",
+    personColumn: "Person column",
+    typeColumn: "Assignment type column",
+    membershipColumn: "Membership column",
+    chooseColumn: "Choose a column",
+    column: (number: string) => `Column ${number}`,
+    columnsHelp:
+      "Other columns are ignored. The browser never parses the CSV or infers identities from names.",
+    invalidMapping:
+      "Choose a delimiter, header policy, 3–64 columns and three distinct person, assignment type and membership columns.",
+    mappings: "Exact token mappings",
+    mappingsHelp:
+      "Typed endpoint IDs need no mapping. Other tokens match exactly, including spaces and case. Person and assignment type maps are separate. Names are never matched automatically, and mappings cannot shadow typed IDs. Native review enforces the portable nonsecret token policy.",
+    addMappingLegend: "Add one explicit endpoint mapping",
+    endpoint: "Endpoint",
+    person: "Person",
+    assignmentType: "Assignment type",
+    token: "Exact CSV token",
+    personForToken: "Person for token",
+    typeForToken: "Assignment type for token",
+    endpointId: "Exact endpoint identity",
+    endpointHelp:
+      "Native review checks that this identity exists and belongs to the selected endpoint kind.",
+    invalidToken:
+      "Enter an exact, nonempty token of at most 256 UTF-8 bytes without control characters.",
+    invalidEndpoint: "Choose a native endpoint or enter its exact typed UUID.",
+    duplicateMapping:
+      "Remove the existing mapping for this token first. Each endpoint permits at most 10,000 mappings.",
+    addMapping: "Add token mapping",
+    removeMapping: "Remove mapping",
+    removeMappingLabel: (endpoint: string, token: string) =>
+      `Remove ${endpoint} mapping for ${token}`,
+    noMappings: "No token mappings. Only exact typed endpoint IDs will resolve.",
+    mappingPages: "Token mapping pages",
+    previousMappings: "Previous mappings",
+    nextMappings: "Next mappings",
+    inspect: "Inspect one native CSV record",
+    inspectRecord: "Logical record to inspect",
+    inspectSelected: "Inspect selected record",
+    inspecting: "Reading selected record…",
+    missingRecord: "No such logical record in this source.",
+    selectedRecord: "Selected native CSV record",
+    inertText: "Inert source text",
+    truncated: "(truncated sample)",
+    decisions: "Record decisions",
+    currentFindings: "Native findings from this review.",
+    previousFindings: "Previous findings only. Review again after changing any decision.",
+    duplicatePolicy:
+      "Every unskipped invalid or duplicate typed person/type pair blocks the whole import, even if duplicate values agree. No winner is chosen automatically.",
+    skipCount: (count: string) =>
+      `${count} records explicitly skipped. Skips still count toward source limits.`,
+    skipAll: "Skip all data records",
+    clearSkips: "Clear all skip decisions",
+    skipRecord: (record: string) => `Skip record ${record}`,
+    inspectRow: (record: string) => `Inspect record ${record}`,
+    records: "Eligibility data records",
+    status: "Native status",
+    personIdentity: "Person identity",
+    typeIdentity: "Assignment type identity",
+    before: "Before membership",
+    after: "After membership",
+    decision: "Decision",
+    unresolved: "Unresolved",
+    unknown: "Not resolved",
+    recordPages: "Eligibility record pages",
+    previousRecords: "Previous records",
+    nextRecords: "Next records",
+    review: "Review configured eligibility changes",
+    blocked: "Blocked — resolve or explicitly skip the affected records.",
+    revision: (revision: string) =>
+      `Revision ${revision}. Only this exact native review can be approved; revision changes require re-review.`,
+    batch: (count: string) =>
+      `${count} changed people in one ordinary atomic command batch. Unrelated Person fields are preserved.`,
+    fingerprint: "Original source fingerprint:",
+    replaceReport:
+      "Reviewing again replaces the previous exclusion report. Save it first if needed.",
+    approve: "I approve exactly this native eligibility review",
+    command: "Command identity:",
+    pending:
+      "Native CSV operation in progress. Cancellation and its result are shown in the workspace operation panel.",
+    history: "Open History for command recovery",
+    report: "Complete native exclusion report",
+    reportHelp:
+      "Every excluded data record is retained, including explicit skips: up to 10,000 rows and 1 MiB, without raw source cells. This report is ephemeral; save it before replacing the source or leaving.",
+    readReport: "Read exclusion report",
+    saveReport: "Save exclusion report",
+    noExclusions: "No excluded records.",
+    excluded: "Excluded eligibility records",
+    skipped: "Explicitly skipped",
+    yes: "Yes",
+    no: "No",
+    issue: "Native issue",
+    none: "None",
+    reportPages: "Exclusion report pages",
+    previousExclusions: "Previous exclusions",
+    nextExclusions: "Next exclusions",
+    validationPages: "Validation pages",
+    previousFindingsPage: "Previous findings",
+    nextFindingsPage: "Next findings",
+  },
+  shiftCsv: {
+    title: "Import shifts from CSV",
+    heading: "Import stored shift instances from CSV",
+    description:
+      "Add manual shifts or update stored manual and detached instances. Generated occurrences and templates are not targets. Native review checks the complete proposed changes; it does not prove schedule feasibility.",
+    back: "Back to Work",
+    framing:
+      "Choose comma, semicolon or tab, an explicit header policy and 1–64 columns. Sources are bounded to 16 MiB and 10,000 data records, including skips. At most 1,000 changed instances are applied in one atomic batch; imports are never split.",
+    replaceHelp:
+      "Choosing another source discards mappings, decisions and the retained report. Save the report first if needed.",
+    source: "Selected shift CSV source",
+    mapping: "Map shift instance fields",
+    identityColumn: "Native shift identity column",
+    unmapped: "Unmapped",
+    column: (number: string) => `Column ${number}`,
+    fields: {
+      assignmentTypeId: "Assignment type",
+      locationId: "Location",
+      startsAt: "Start local time",
+      endsAt: "End local time",
+      coverage: "Complete coverage JSON",
+      tags: "Tags JSON",
+      reportingAttribution: "Reporting attribution",
+    },
+    blank: "Empty cell policy",
+    preserve: "Preserve existing value",
+    clear: "Clear existing value",
+    columnsHelp:
+      "Use each selected column once. Unmapped update fields remain unchanged. Empty mapped update cells follow the selected policy; only location and tags may be cleared. New shifts require nonblank assignment type, start, end, coverage and reporting attribution. Only absent location, empty tags and Manual origin are defaults. Coverage and tags are parsed only by native authority.",
+    structuredHelp:
+      'Coverage is a complete object: {"kind":"exact","count":1,"qualificationMinimums":[]} or {"kind":"atLeast","minimum":1,"qualificationMinimums":[]} with optional preferredCount and maximumCount. Qualification minimum entries contain minimum and qualifications with allQualificationIds and anyQualificationIds arrays. Tags are a JSON array of strings. Reporting attribution is exactly startLocalDate or endLocalDate.',
+    timeHelp:
+      "Start and end accept offset-free local intent only, resolved with the saved scenario timezone and gap/fold policy. Offsets and zone annotations are refused; the end is never rolled forward. Review both local intent and native resolved instant/offset.",
+    invalidMapping:
+      "Choose a delimiter, header policy, 1–64 columns and distinct in-range field and optional identity columns.",
+    mappings: "Exact reference aliases",
+    mappingsHelp:
+      "Map exact tokens, including case and spaces, to assignment type, location or qualification identities. Qualification aliases resolve inside Coverage JSON. Typed IDs need no alias and cannot be shadowed. Native review validates reference kind and the nonsecret token policy.",
+    addMappingLegend: "Add one explicit reference alias",
+    endpoint: "Reference kind",
+    endpoints: {
+      assignmentType: "Assignment type",
+      location: "Location",
+      qualification: "Qualification",
+    },
+    token: "Exact CSV token",
+    endpointId: "Exact reference identity",
+    referenceForToken: (kind: string) => `Reference for exact token · ${kind}`,
+    invalidToken:
+      "Enter an exact nonempty token of at most 256 UTF-8 bytes without control characters.",
+    invalidEndpoint: "Choose a native reference or enter its exact typed identity.",
+    duplicateMapping: "Remove the existing alias first. At most 10,000 exact aliases are allowed.",
+    addMapping: "Add reference alias",
+    removeMapping: "Remove alias",
+    removeMappingLabel: (token: string) => `Remove alias for ${token}`,
+    noMappings: "No aliases. Only exact typed references will resolve.",
+    mappingPages: "Reference alias pages",
+    previousMappings: "Previous aliases",
+    nextMappings: "Next aliases",
+    inspect: "Inspect one native CSV record",
+    inspectRecord: "Logical record to inspect",
+    inspectSelected: "Inspect selected record",
+    inspecting: "Reading selected record…",
+    missingRecord: "No such logical record in this source.",
+    selectedRecord: "Selected native CSV record",
+    inertText: "Inert source text",
+    truncated: "(truncated sample)",
+    decisions: "Shift identity decisions and complete field review",
+    currentFindings: "Native findings from this review.",
+    previousFindings: "Previous findings only. Review again after changing any decision.",
+    duplicatePolicy:
+      "Every unskipped invalid or duplicate typed target blocks the whole import. No first or last winner is chosen.",
+    identityHelp:
+      "Native Supplied identities cannot be redirected: Add retains that same ID. Absent identities require an explicit newly minted Add or a selected stored Update. Invalid identities may only be skipped or corrected by changing interpretation.",
+    records: "Shift CSV data records",
+    status: "Native status",
+    identity: "Native source identity",
+    target: "Resolved target identity",
+    absent: "Absent",
+    invalid: "Invalid",
+    supplied: "Supplied",
+    unresolved: "Unresolved",
+    before: "Before stored instance",
+    after: "After proposed instance",
+    noRecord: "No shift details in this preview",
+    unchanged: "Unchanged — before record remains the complete resulting meaning.",
+    local: "Original local intent",
+    instant: "Resolved instant",
+    offset: "Resolved offset",
+    origin: "Origin (preserved on update)",
+    addRecord: (record: string) => `Add record ${record}`,
+    updateRecord: (record: string) => `Update record ${record}`,
+    skipRecord: (record: string) => `Skip record ${record}`,
+    resetRecord: (record: string) => `Clear decision for record ${record}`,
+    inspectRow: (record: string) => `Inspect record ${record}`,
+    updateTarget: (record: string) => `Stored shift for record ${record}`,
+    decision: "Explicit decision",
+    recordPages: "Shift record pages",
+    previousRecords: "Previous records",
+    nextRecords: "Next records",
+    review: "Review native shift instance changes",
+    blocked: "Blocked — resolve or explicitly skip the affected records.",
+    revision: (revision: string) =>
+      `Revision ${revision}. Approval binds exactly this native review; changed revisions require re-review.`,
+    batch: (count: string) =>
+      `${count} changed instances in one ordinary atomic command batch. Unmapped fields and detached origin are preserved.`,
+    fingerprint: "Original source fingerprint:",
+    replaceReport: "Reviewing again replaces the exclusion report. Save it first if needed.",
+    approve: "I approve exactly this native shift review",
+    command: "Command identity:",
+    pending: "Native CSV operation in progress. Cancel from the workspace operation panel.",
+    history: "Open History for command recovery",
+    report: "Complete native shift exclusion report",
+    reportHelp:
+      "Every excluded record, including skips, is retained up to 10,000 rows / 1 MiB without raw source cells. Save this ephemeral report before replacing the source or leaving.",
+    readReport: "Read exclusion report",
+    saveReport: "Save exclusion report",
+    noExclusions: "No excluded records.",
+    excluded: "Excluded shift records",
+    skipped: "Explicitly skipped",
+    yes: "Yes",
+    no: "No",
+    issue: "Native issue",
+    none: "None",
+    reportPages: "Exclusion report pages",
+    previousExclusions: "Previous exclusions",
+    nextExclusions: "Next exclusions",
+    validationPages: "Validation pages",
+    previousFindingsPage: "Previous findings",
+    nextFindingsPage: "Next findings",
+  },
+  availabilityCsv: {
+    title: "Import availability from CSV",
+    heading: "Import availability and time off from CSV",
+    description:
+      "Add or update saved availability records of all four kinds, with instant or weekly windows. Native review checks the complete proposed changes; it does not prove schedule feasibility. Imports create no Required rule or preference.",
+    back: "Back to Availability",
+    framing:
+      "Choose comma, semicolon or tab, an explicit header policy and 1–64 columns. Sources are bounded to 16 MiB and 10,000 data records, including skips. At most 1,000 changed records are applied in one atomic batch; imports are never split.",
+    replaceHelp:
+      "Choosing another source discards mappings, decisions and the retained report. Save the report first if needed.",
+    source: "Selected availability CSV source",
+    mapping: "Map availability fields",
+    identityColumn: "Native availability identity column",
+    unmapped: "Unmapped",
+    column: (number: string) => `Column ${number}`,
+    fields: {
+      personId: "Person",
+      availabilityKind: "Availability kind",
+      startsAt: "Start local time",
+      endsAt: "End local time",
+      weeklyWindows: "Complete weekly windows JSON",
+      effectiveStartDate: "Effective start date",
+      effectiveEndDateExclusive: "Effective stop date (exclusive)",
+      assignmentTypeIds: "Assignment type restrictions JSON",
+      locationIds: "Location restrictions JSON",
+      source: "Source",
+      note: "Note",
+    },
+    blank: "Empty cell policy",
+    preserve: "Preserve existing value",
+    clear: "Clear existing value",
+    columnsHelp:
+      "Use each selected column once. Unmapped update fields remain unchanged. Only exactly empty cells invoke Preserve or Clear; source and note whitespace is authored content. Only restrictions, source and note may be cleared. New records require a person, explicit kind, complete effective dates and one complete window. Absent restrictions are unrestricted; source and note may default to empty text. The effective stop date is not included.",
+    structuredHelp:
+      'Kind is exactly unavailable, availableOnly, approvedTimeOff or requestedTimeOff. Restrictions are complete JSON arrays of exact native references or role-scoped aliases. Empty arrays and duplicates after resolution are invalid; explicit Clear removes a restriction. Weekly windows are a complete native JSON array, for example [{"weekdays":["monday"],"startTime":"08:00:00","endTime":"16:00:00","endDayOffset":0}]. Do not mix nonblank weekly and instant edits.',
+    timeHelp:
+      "Start and end accept offset-free local intent only, resolved with the saved scenario timezone and gap/fold policy. Offsets and zone annotations are refused; the end is never rolled forward. Review both local intent and native resolved instant/offset. An instant update preserves an unmapped sibling exactly; new records and weekly-to-instant switches require both endpoints.",
+    weeklyHelp:
+      "Weekly windows remain authored local recurrence in their original order and multiplicity. Future occurrences resolve under the scenario time policy; this review does not eagerly expand or clip them to the planning horizon.",
+    enforcementHelp:
+      "Unavailable and available-only windows affect shifts only through applicable active Required availability rules. Approved time off independently blocks applicable overlaps. Requested time off is used only by preferences that explicitly reference it; it does not itself block a shift or confer approval. Imports create no rule or preference.",
+    invalidMapping:
+      "Choose a delimiter, header policy, 1–64 columns and distinct in-range field and optional identity columns.",
+    mappings: "Exact reference aliases",
+    mappingsHelp:
+      "Map exact tokens, including case and spaces, separately for person, assignment type and location. Identical tokens may intentionally select different IDs in different roles. Restrictions resolve each array element through its own role. Typed IDs need no alias and cannot be shadowed. Native review validates kind and the nonsecret token policy.",
+    addMappingLegend: "Add one explicit reference alias",
+    endpoint: "Reference kind",
+    endpoints: {
+      person: "Person",
+      assignmentType: "Assignment type",
+      location: "Location",
+    },
+    token: "Exact CSV token",
+    endpointId: "Exact reference identity",
+    endpointHelp:
+      "Browse or search native references, or enter an exact typed reference. Labels do not resolve CSV tokens implicitly.",
+    referenceForToken: (kind: string) => `Reference for exact token · ${kind}`,
+    invalidToken:
+      "Enter an exact nonempty token of at most 256 UTF-8 bytes without control characters.",
+    invalidEndpoint: "Choose a native reference or enter its exact typed identity.",
+    duplicateMapping:
+      "Remove the existing alias in this role first. At most 10,000 exact aliases per role are allowed; native review also bounds the combined mapping.",
+    addMapping: "Add reference alias",
+    removeMapping: "Remove alias",
+    removeMappingLabel: (kind: string, token: string) => `Remove ${kind} alias for ${token}`,
+    noMappings: "No aliases. Only exact typed references will resolve.",
+    mappingPages: "Reference alias pages",
+    previousMappings: "Previous aliases",
+    nextMappings: "Next aliases",
+    inspect: "Inspect one native CSV record",
+    inspectRecord: "Logical record to inspect",
+    inspectSelected: "Inspect selected record",
+    inspecting: "Reading selected record…",
+    missingRecord: "No such logical record in this source.",
+    selectedRecord: "Selected native CSV record",
+    inertText: "Inert source text",
+    truncated: "(truncated sample)",
+    decisions: "Availability identity decisions and complete raw field review",
+    currentFindings: "Native findings from this review.",
+    previousFindings: "Previous findings only. Review again after changing any decision.",
+    duplicatePolicy:
+      "Every unskipped invalid or duplicate typed target blocks the whole import. No first or last winner is chosen.",
+    identityHelp:
+      "Native Supplied identities cannot be redirected: an unresolved supplied ID needs explicit same-ID Add. Only native Absent identities permit newly minted Add or a selected stored Update. Invalid identities may only be skipped or corrected by changing interpretation.",
+    projectionHelp:
+      "Missing projected details do not prove record absence or that an identity is available. Only the native identity and status determine which decisions are offered.",
+    records: "Availability CSV data records",
+    status: "Native status",
+    identity: "Native source identity",
+    target: "Resolved target identity",
+    absent: "Absent",
+    invalid: "Invalid",
+    supplied: "Supplied",
+    unresolved: "Unresolved",
+    before: "Before stored record",
+    after: "After proposed record",
+    noRecord: "No availability details in this preview",
+    unchanged: "Unchanged — before record remains the complete resulting meaning.",
+    local: "Original local intent",
+    instant: "Resolved instant",
+    offset: "Resolved offset",
+    temporalFacts: "Native mapped endpoint facts",
+    noTemporalFacts: "No mapped instant endpoint facts in this preview.",
+    addRecord: (record: string) => `Add record ${record}`,
+    updateRecord: (record: string) => `Update record ${record}`,
+    skipRecord: (record: string) => `Skip record ${record}`,
+    resetRecord: (record: string) => `Clear decision for record ${record}`,
+    inspectRow: (record: string) => `Inspect record ${record}`,
+    updateTarget: (record: string) => `Stored availability for record ${record}`,
+    decision: "Explicit decision",
+    recordPages: "Availability record pages",
+    previousRecords: "Previous records",
+    nextRecords: "Next records",
+    review: "Review native availability changes",
+    blocked: "Blocked — resolve or explicitly skip the affected records.",
+    revision: (revision: string) =>
+      `Revision ${revision}. Approval binds exactly this native review; changed revisions require re-review.`,
+    batch: (count: string) =>
+      `${count} changed records in one ordinary atomic command batch. Unmapped fields and unchanged raw spelling are preserved.`,
+    fingerprint: "Original source fingerprint:",
+    replaceReport: "Reviewing again replaces the exclusion report. Save it first if needed.",
+    approve: "I approve exactly this native availability review",
+    command: "Command identity:",
+    pending: "Native CSV operation in progress. Cancel from the workspace operation panel.",
+    history: "Open History for command recovery",
+    report: "Complete native availability exclusion report",
+    reportHelp:
+      "Every excluded record, including skips, is retained up to 10,000 rows / 1 MiB without raw source cells. Save this ephemeral report before replacing the source or leaving.",
+    readReport: "Read exclusion report",
+    saveReport: "Save exclusion report",
+    noExclusions: "No excluded records.",
+    excluded: "Excluded availability records",
+    skipped: "Explicitly skipped",
+    yes: "Yes",
+    no: "No",
+    issue: "Native issue",
+    none: "None",
+    reportPages: "Exclusion report pages",
+    previousExclusions: "Previous exclusions",
+    nextExclusions: "Next exclusions",
+    validationPages: "Validation pages",
+    previousFindingsPage: "Previous findings",
+    nextFindingsPage: "Next findings",
   },
   work: {
     heading: "Work and shift setup",
@@ -603,6 +1685,165 @@ export const messages = {
       noChanges: "No generated occurrence changes or reconciliation are required.",
       reconciliationRequired: "Native occurrence reconciliation is required.",
       matchingRows: (count: string) => `Rows matching this filter: ${count}`,
+    },
+  },
+  scorePolicy: {
+    heading: "Score policy",
+    description:
+      "Create or edit a workforce score policy without changing person FTE or enabling an unconfigured fairness policy. Native review remains authoritative for references and workload semantics.",
+    empty:
+      "No score policy has been saved. Create one to choose priority levels and score authored preferences; no workload-balance policy is added automatically.",
+    loading: "Reading the saved score policy…",
+    loadingDetail: "Reading the complete saved score policy…",
+    refresh: "Refresh saved score policy",
+    retry: "Retry score policy read",
+    unsupported: "Score policy editing is available only for the official workforce domain pack.",
+    identityMismatch:
+      "The native score policy detail did not match the requested singleton identity.",
+    singletonMismatch: "The native score policy page returned more than one singleton.",
+    create: "Create score policy",
+    edit: "Edit score policy",
+    close: "Close editor",
+    review: "Review score policy changes",
+    reviewHelp:
+      "Review is a native command preview for this exact saved revision. Nothing is saved until you explicitly apply this review.",
+    backToDraft: "Return to unsaved score policy",
+    apply: "Apply this reviewed score policy",
+    redo: "Discard redo history and apply this reviewed score policy",
+    discard: "Discard draft",
+    stale:
+      "The saved revision or library changed while this draft was open. Rebase against the current policy before reviewing.",
+    createStale:
+      "Refresh the saved policy list. Your unsaved draft remains open, but a second policy cannot be created if another policy was saved.",
+    rebase: "Read current policy and rebase draft",
+    rebaseHelp:
+      "Independent top-level fields rebase automatically. Nested workload policies are one whole field; a concurrent nested change requires an explicit choice.",
+    conflicts: "Conflicting fields",
+    conflictHelp: "Choose the saved value or your draft for every conflicting whole field.",
+    useCurrent: "Use saved value",
+    keepDraft: "Keep draft value",
+    current: "Current saved policy",
+    proposed: "Proposed policy",
+    identity: "Stable policy identity",
+    revision: "Reviewed saved revision",
+    noChanges: "No changes were proposed.",
+    warnings: "Native review warnings",
+    changes: "Native changes",
+    changePage: "Change pages",
+    previous: "Previous change page",
+    next: "Next change page",
+    first: "First change page",
+    saved: "The reviewed score policy command completed.",
+    saving: "Applying reviewed score policy…",
+    errors: "Native or incomplete-input errors",
+    levels: "Ordered score levels",
+    levelsHelp:
+      "Level order is retained exactly. Labels are presentation text; level keys are native tokens referenced by the four mappings.",
+    addLevel: "Add score level",
+    moveLevelUp: "Move this score level up",
+    moveLevelDown: "Move this score level down",
+    removeLevel: "Remove this score level",
+    levelNumber: (number: string) => `Score level ${number}`,
+    levelKey: "Level key",
+    levelLabel: "Level label",
+    profileKey: "Profile key",
+    profileKeyHelp:
+      "The native profile token is retained exactly; it does not turn scoring on or assign fairness.",
+    tieBreak: "Tie-break",
+    stableAssignmentRank: "Stable assignment rank",
+    tieBreakHelp: "The required stable tie-break is shown and cannot be silently changed.",
+    priorityMapping: "Priority mappings",
+    priorityMappingHelp:
+      "Exactly four mappings are required, one for each native preference priority. Scales are positive and bounded; native validation checks duplicate priorities and level references.",
+    mappingNumber: (number: string) => `Priority mapping ${number}`,
+    mappingLevel: "Mapped level",
+    mappingPriority: "Preference priority",
+    mappingScale: "Positive scale (1–1,000,000)",
+    priority: {
+      low: "Low",
+      normal: "Normal",
+      high: "High",
+      veryHigh: "Very high",
+    },
+    workloadPolicies: "Workload policies",
+    workloadPoliciesHelp:
+      "Each policy keeps its stable UUID. Bucket, calendar, people and teams are native references; native validation checks membership and target coverage.",
+    addWorkloadPolicy: "Add workload policy",
+    removeWorkloadPolicy: "Remove this workload policy",
+    workloadPolicyNumber: (number: string) => `Workload policy ${number}`,
+    workloadIdentity: "Workload policy UUID",
+    workloadIdentityHelp: "This immutable identity is preserved when the policy is edited.",
+    bucket: "Workload bucket",
+    bucketHelp: "Choose an existing native workload bucket.",
+    calendar: "Calendar",
+    calendarHelp: "Choose an existing native calendar.",
+    membership: "Window membership",
+    membershipOptions: {
+      reportingDate: "Reporting date",
+      startInstant: "Shift start instant",
+      intersection: "Shift intersection",
+    },
+    peerGroup: "Peer group",
+    peerGroupHelp:
+      "Choose people and optionally teams. Native review proves every referenced identity.",
+    peopleMode: "People selection",
+    peopleModes: {
+      all: "All people",
+      selected: "Selected people",
+      filter: "People by tags",
+    },
+    people: "People",
+    peopleHelp: "Selected people are native person references loaded through bounded pages.",
+    allTags: "All tags",
+    anyTags: "Any tags",
+    tagsHelp: "Enter comma- or newline-separated tags; native validation evaluates tag membership.",
+    teams: "Teams",
+    teamsHelp: "Optional native team references narrow the peer group.",
+    targetMode: "Target mode",
+    targetModeHelp:
+      "Choose explicitly. Equal share is distinct from weighted equal share and never changes person FTE.",
+    targetModes: {
+      choose: "Choose a target mode",
+      explicit: "Explicit per-person targets",
+      personTargets: "Use each person's saved target",
+      weightedEqualShare: "Weighted equal share (person FTE weights)",
+      equalShare: "Equal share (ignore person FTE weights)",
+    },
+    explicitTargets: "Explicit person targets",
+    explicitTargetsHelp:
+      "Every peer must be represented exactly once. The native validator checks membership and references.",
+    addTarget: "Add explicit person target",
+    removeTarget: "Remove this explicit target",
+    targetNumber: (number: string) => `Explicit target ${number}`,
+    targetPerson: "Target person",
+    targetValue: "Target amount",
+    penalty: "Deviation penalty",
+    penaltyHelp:
+      "Choose a penalty explicitly. Piecewise breakpoints are cumulative and remain in authored order; non-convex slopes are left to native validation.",
+    penaltyModes: {
+      choose: "Choose a penalty mode",
+      absolute: "Absolute deviation",
+      piecewise: "Piecewise cumulative penalty",
+    },
+    breakpoints: "Cumulative penalty breakpoints",
+    breakpointHelp:
+      "Native validation requires the first breakpoint at zero, increasing deviations, and bounded slopes. This editor does not sort or enforce convexity.",
+    addBreakpoint: "Add breakpoint",
+    removeBreakpoint: "Remove this breakpoint",
+    breakpointNumber: (number: string) => `Cumulative breakpoint ${number}`,
+    fromDeviation: "From cumulative deviation",
+    slope: "Slope (0–1,000,000)",
+    noWorkloadPolicies:
+      "No workload policies are configured. Add one only when its references and target mode are intentional.",
+    rawStructured: "Structured value",
+    absent: "Not present",
+    invalid: "Complete the marked fields before native review.",
+    fields: {
+      levels: "Ordered score levels",
+      priorityMapping: "Priority mappings",
+      workloadPolicies: "Workload policies",
+      profileKey: "Profile key",
+      tieBreak: "Tie-break",
     },
   },
   people: {
@@ -906,9 +2147,123 @@ export const messages = {
     title: "Eutheto",
     lede: "Set up your work schedule on this device.",
     boundary:
-      "This development desktop edits projects and portable files. To create a schedule, use the CLI for now. Optimization screens and the .eutheto file extension are not final.",
+      "This local desktop edits projects and portable files. Supported Workforce projects can be validated and optimized here; unsupported builds keep optimization unavailable.",
     noSelection: "No project selected",
     selectedProject: (title: string) => `Selected project: ${title}`,
+  },
+  recipientShare: {
+    trigger: "Share result",
+    title: "Review recipient report",
+    description:
+      "Review the complete participant-friendly report before choosing where to save it. This shares the full result, not the current page or filter.",
+    format: "Report format",
+    html: "HTML",
+    pdf: "PDF",
+    pdfPreview:
+      "This review shows the complete PDF content. The saved PDF arranges it on printable pages.",
+    offline: "The saved report works offline. No upload is required.",
+    privacy:
+      "Generated labels still retain linkable identities; this report is not anonymous. Hidden notes, rules and preferences are excluded.",
+    optional:
+      "Selected optional sections may be unavailable in this source. Missing information is reported as unavailable, never invented.",
+    disclosures: "Optional disclosures (off by default)",
+    options: {
+      includePersonNames: "Person names",
+      includeAuthoredLabels: "Authored labels",
+      includeStaffing: "Staffing",
+      includeChanges: "Changes",
+      includeFairnessActuals: "Fairness actuals",
+    },
+    preview: "Prepare review",
+    preparing: "Preparing the native report review…",
+    ready: "Review ready. Check the report and disclosures before saving.",
+    empty: "This complete report contains no scheduled assignments.",
+    initial: "Choose disclosures, then prepare a native review.",
+    optionsChanged: "Format or disclosures changed. Prepare a new review before saving.",
+    stale:
+      "The result, project head or library changed. The old review was released; prepare a new one.",
+    staleSource:
+      "This result was produced from an older project revision than the captured current head.",
+    consent: "I understand that I am sharing this older result, not a result for the current head.",
+    expired: "This review expired. Prepare a new review before saving.",
+    unavailable: "The local project is not ready. Sharing requires an available native project.",
+    mismatch: "The native report did not match the visible result and its reviewed source.",
+    renderFailed: "The native report could not be displayed safely. Its review has been retired.",
+    save: "Save reviewed HTML…",
+    savePdf: "Save reviewed PDF…",
+    saving: "Waiting for the native save picker and publication confirmation…",
+    cancelled: "Operation cancelled. This approval will not be reused.",
+    failed: "The report could not be saved. This approval has been retired and will not be reused.",
+    unknown:
+      "The save outcome could not be confirmed. The report may already have been saved. Check the selected destination; this approval will not be replayed.",
+    saved: (filename: string) => `Native publication confirmed: ${filename}`,
+    close: "Close and release review",
+    cleaning: "Releasing the native review…",
+    source: "Reviewed source",
+    solution: "Solution ID",
+    checksum: "Accepted result checksum",
+    verificationChecksum: "Verification checksum",
+    sourceRevision: "Source revision",
+    head: "Captured project head",
+    libraryRevision: "Captured library revision",
+    libraryEpoch: "Captured library epoch",
+  },
+  scheduleExport: {
+    trigger: "Export CSV/calendar",
+    title: "Review schedule export",
+    description:
+      "Native export captures the complete accepted source, not the visible page, dates or filters. Saving publishes the exact reviewed bytes locally.",
+    format: "Export format",
+    formats: {
+      assignmentsCsv: "Assignment CSV",
+      summaryCsv: "People/shift summary CSV",
+      ics: "Calendar (ICS)",
+    },
+    disclosures: {
+      assignmentsCsv:
+        "Contains selected assignment, person and shift IDs only. These identities are linkable, not anonymous. Source revision is identified by this review and the filename, not inside the CSV bytes.",
+      summaryCsv:
+        "Contains person and shift IDs and names, timezone, revision labels, assignment counts, coverage values and shift times. Includes people with no assignments.",
+      ics: "Contains selected assignments with person and work labels, IDs, location names when available, UTC event times, source timezone and historical revision/status labels. It is not a portable acceptance proof.",
+    },
+    privacy: "HTML Share disclosure switches do not apply to these fixed CSV/calendar formats.",
+    wholeSource: "Scope: the complete accepted source.",
+    personScope: (label: string) => `Scope: calendar for ${label} only.`,
+    personId: "Selected person ID",
+    emptyPerson:
+      "A person with no selected assignments produces an empty calendar and remains selectable.",
+    preview: "Prepare native review",
+    preparing: "Preparing the native export review…",
+    initial: "Choose a format, then prepare a native review.",
+    ready: "Review the source, format disclosures and partial sample before saving.",
+    formatChanged: "Format changed. Prepare a new review before saving.",
+    stale:
+      "The result, project head or library changed. The old review was released; prepare a new one.",
+    staleSource:
+      "This export uses an older source revision, not a result for the captured current head.",
+    consent: "I understand that I am exporting this older result.",
+    expired: "This review expired. Prepare a new review before saving.",
+    unavailable: "The local project is not ready. Export requires an available native project.",
+    mismatch: "The native export did not match the visible result and its reviewed source.",
+    save: "Save reviewed export…",
+    saving: "Waiting for the native save picker and publication confirmation…",
+    cancelled: "Operation cancelled. This approval will not be reused.",
+    failed: "The export could not be saved. This approval has been retired and will not be reused.",
+    unknown:
+      "The save outcome could not be confirmed. The export may already have been saved. Check the selected destination; this approval will not be replayed.",
+    saved: (filename: string) => `Native publication confirmed: ${filename}`,
+    close: "Close and release review",
+    cleaning: "Releasing the native export review…",
+    byteCount: "Complete artifact bytes",
+    sha256: "Complete artifact SHA-256",
+    sample: "Partial inert text sample",
+    sampleDescription:
+      "This bounded text sample is not a full-file review or a parsed calendar/table. The native artifact covers the selected complete source; its full byte count and digest are shown above.",
+    truncated: "The sample was truncated to the native preview limit.",
+    sampleComplete:
+      "The artifact fits within the sample limit; this is still a text sample, not a parsed review.",
+    emptySample: "The native text sample is empty.",
+    personAction: (name: string) => `Export calendar for ${name}`,
   },
   operations: {
     pending: "Working with the saved project",
@@ -1061,7 +2416,7 @@ export const messages = {
       "Start a local work project or review an existing portable file. No account or connection is required.",
     workSchedule: "Work schedule",
     workDescription:
-      "Set up people, shifts and dates here. Creating an optimized schedule still requires the CLI.",
+      "Set up people, shifts and dates here. After validation, supported Workforce projects can be optimized on this device.",
     startWork: "Start a work project",
     eventSeating: "Event seating",
     seatingDescription:
@@ -1134,14 +2489,14 @@ export const messages = {
     calendarSummary: "Planning calendar",
     calendarDetails: "Calendar settings and saved counts",
     validationDetails: "Validation findings",
-    resultsDetails: "Optimization and accepted results",
+    resultsDetails: "Optimization and retained result records",
     peopleStep: "Add people and qualifications, then review who can work and when.",
     workStep: "Set up work types (kinds of shifts), shifts and how many people they need.",
     rulesStep: "Add the requirements your schedule must meet.",
     validationStep: "Check the complete saved setup before trying to optimize.",
-    existingResults: (count: string) => `${count} accepted results are saved.`,
+    existingResults: (count: string) => `${count} accepted result records are retained.`,
     opening: "Opening the saved project…",
-    loading: "Reading the saved setup, validation state and accepted results…",
+    loading: "Reading the saved setup, validation state and retained result records…",
     unavailableTitle: "Project unavailable",
     unavailable:
       "This project is missing, deleted or unavailable in this local library. No other project has been substituted under this address.",
@@ -1179,6 +2534,7 @@ export const messages = {
       availability: "Availability records",
       coverageRequirement: "Coverage requirements",
       baseSchedule: "Base schedules",
+      externalStartingPlan: "Imported starting plans",
       scorePolicy: "Score policies",
     },
     required: "Required rules",
@@ -1204,49 +2560,237 @@ export const messages = {
     validationRevision: (revision: string) => `Validation input revision ${revision}`,
     staleValidation:
       "This validation refers to an older saved revision; it does not validate the current revision.",
-    noAccepted: "No accepted result. This does not establish whether a solve has been attempted.",
+    noAccepted:
+      "No accepted result record is retained. This does not establish whether a solve has been attempted.",
     acceptedBoundary:
-      "Only independently accepted saved results are listed. This overview does not run an optimizer or provide a result workspace.",
-    accepted: "Accepted result",
+      "These entries are retained result-record metadata, not fresh independent verification. Opening a schedule re-reads and re-verifies its source result in the native view before display; the trusted-read gate for that view is separate from this list.",
+    accepted: "Accepted result record",
     current: "Current revision",
     staleResult: "Older revision",
-    selected: "Selected",
-    unselected: "Not selected",
+    selected: "Selected for viewing",
+    unselected: "Not selected for viewing",
+    selectionHelp:
+      "Selecting a result changes only which accepted plan is marked for viewing. It does not make a base schedule, lock assignments, or edit the scenario.",
+    selectForViewing: "Select this result for viewing",
+    selectResultForViewing: (solutionId: string) => `Select result ${solutionId} for viewing`,
+    resultId: "Result ID",
+    selectingResult: "Checking and selecting the accepted result…",
+    selectionSucceeded: (solutionId: string) =>
+      `Result ${solutionId} is now selected for viewing. The saved scenario is unchanged.`,
+    selectionChanged:
+      "The accepted result changed. Review the saved results before selecting again.",
+    selectionRecovery: "Refresh the saved results before taking another action.",
+    refreshResults: "Refresh accepted results",
+    comparisonHeading: "Compare latest saved results",
+    comparisonHelp:
+      "Compare the latest two accepted records in saved-result order, regardless of which result is selected for viewing. The native explanation operation freshly verifies both original accepted results. This read-only comparison does not change the saved scenario or restore an earlier plan.",
+    compareResults: "Compare latest two results",
+    comparisonRefresh: "Refresh saved result list",
+    comparisonLoading:
+      "The native operation is verifying both accepted results and comparing their evidence…",
+    comparisonCancel: "Cancel comparison",
+    comparisonCancelling: "Cancellation requested; waiting for the native comparison operation…",
+    comparisonCancelled: "Comparison cancelled. No scenario changes were made.",
+    comparisonNoPair: "Two accepted result records are needed for a comparison.",
+    comparisonChanged:
+      "The returned comparison does not match these accepted result records. Refresh the saved results before comparing again.",
+    baseCapture: {
+      review: "Review as repair base",
+      reviewResult: (solutionId: string) => `Review accepted result ${solutionId} as repair base`,
+      heading: "Use accepted result as repair base",
+      description:
+        "This saves the independently verified result's assignments as the scenario's one base plan. It replaces a previous base plan, if present, and creates one undoable change. It does not lock assignments or select a result for viewing.",
+      source: "Source result",
+      revision: (revision: string) => `Current scenario revision ${revision}`,
+      olderSource:
+        "This result was accepted from an older revision. Its person and shift references must still be valid in the current scenario; prior feasibility is not a claim about current facts.",
+      saving: "Re-verifying the accepted result and saving the base plan…",
+      saved: "The accepted result is saved as the repair base. The change can be undone.",
+      confirm: "Save this result as repair base",
+      cancel: "Cancel base review",
+      redoWarning:
+        "Saving would discard the existing redo branch. Nothing was saved. Confirm only if you intend to replace that redo history.",
+      confirmRedo: "Discard redo branch and save this repair base",
+    },
     resultRevision: (revision: string) => `Result scenario revision ${revision}`,
     finished: "Finished",
     status: "Recorded status",
     optimize: {
       heading: "Optimize",
       description:
-        "Optimization requires current full validation and a supported desktop workflow. This overview does not start optimization.",
+        "Run a bounded Quick, Balanced or Deep optimization for the exact saved revision after validation. Solving is asynchronous and can continue if you leave this page.",
+      estimateHeading: "Model estimate",
+      estimateDescription:
+        "Compile the planning model without starting a solve. Counts come only from the native model compiler.",
+      estimateModel: "Estimate model",
+      estimateLoading: "Estimating model…",
+      estimateCancel: "Cancel model estimate",
+      estimateCancelling: "Cancellation requested. Waiting for the native estimate…",
+      estimateCancelled: "Model estimation was cancelled; no counts are shown.",
+      estimateUnavailable: "Native model estimation is unavailable in this desktop build.",
+      estimateUnreported:
+        "This build did not report native model estimation support. The estimate action is unavailable until support is confirmed.",
+      estimateCompiled: "Compiled, not solved; feasibility unknown.",
+      estimateStale:
+        "This model estimate is not for the current saved scenario revision; its counts do not describe the current scenario.",
+      estimateRevision: (revision: string) => `Estimate input revision ${revision}.`,
+      estimateResponseRevision: (revision: string) =>
+        `The native response reports current saved revision ${revision}.`,
+      candidateCount: "Candidates",
+      variableCount: "Variables",
+      constraintCount: "Constraints",
+      projectionCount: "Projection",
+      objectiveTermCount: "Objective terms",
+      countUnknown: "Unknown",
       validationRequired:
-        "Complete full validation for the current revision with no full or fast errors before reviewing optimization modes.",
+        "Complete full validation for the current revision with no full or fast errors before starting optimization.",
+      validationPassed:
+        "The current revision passed full and fast validation with no reported errors.",
       capabilityLoading: "Checking optimization availability…",
       capabilityError: "Optimization availability could not be checked. No support is assumed.",
       capabilityRetry: "Check availability again",
+      technicalCapabilities: "Technical capabilities",
       ready:
-        "The current revision passed full and fast validation with no reported errors. The information below is a read-only handoff.",
+        "The current revision passed full and fast validation with no reported errors. Choose a mode to start a native solve.",
       executionUnavailable:
-        "Optimization is unavailable in this desktop build. No optimization has been started, and no execution controls are offered here.",
+        "Optimization is unavailable in this desktop build. Use the CLI for this project; no desktop solve was started.",
       executionReported:
-        "The installed native services report support, but this desktop view cannot start optimization. No optimization has been started.",
+        "Native optimization controls are available after this revision passes validation.",
       executionUnreported:
-        "The installed native services do not report complete optimization support. No optimization action is available here.",
+        "This build did not report complete native optimization support. The desktop action is unavailable until support is confirmed.",
       solveStart: "Start optimization",
+      solveStarting: "Starting optimization…",
+      maximumTimeLabel: "Maximum time (seconds, optional)",
+      maximumTimeHelp:
+        "Leave blank for the selected mode’s limit; enter 1–30 whole seconds to override the end-to-end limit.",
+      maximumTimeInvalid: "Enter a whole number from 1 to 30 seconds, or leave this blank.",
       solveCancel: "Cancel optimization",
+      solveCancelling: "Cancellation requested. Waiting for the native solve to settle…",
+      cancelNotActive:
+        "This solve is no longer cancellable from this window. Refresh to read its saved status.",
       available: "Reported available",
       unavailable: "Reported unavailable",
       unreported: "Not reported",
-      modesHeading: "Optimization modes",
+      backendHeading: "Backend capability",
+      backendLoading: "Checking compatible solver backends…",
+      backendUnavailable: "No compatible solver backend is available for this revision.",
+      backendError: "The compatible solver backends could not be read.",
+      backendRetry: "Check backends again",
+      backendVersion: (version: string, adapter: string) =>
+        `Solver ${version}; adapter ${adapter}.`,
+      modesHeading: "Optimization mode",
       quick: "Quick",
-      quickDescription: "Seeks a first useful verified result within a short time limit.",
+      quickDescription: "Uses a short native deadline for a fast verified attempt.",
       balanced: "Balanced",
-      balancedDescription: "Balances search time and result quality.",
+      balancedDescription: "Balances native search time and result quality.",
       deep: "Deep",
-      deepDescription:
-        "Allows more search time to improve a verified result; it does not guarantee optimality.",
+      deepDescription: "Defaults to the longest native deadline; it does not guarantee optimality.",
+      currentRevision: (revision: string) => `Captured saved revision ${revision}.`,
+      running: "Optimization is running. Native phases are shown without inventing a percentage.",
+      phase: "Native phase",
+      inputRevision: "Solve input revision",
+      phases: {
+        queued: "Queued",
+        compiling: "Compiling the planning model",
+        solving: "Solving",
+        verifying: "Independently verifying the candidate",
+        explaining: "Preparing explanations",
+      },
+      status: "Solve status",
+      statuses: {
+        running: "Running",
+        optimal: "Optimal",
+        feasible: "Feasible",
+        infeasible: "Infeasible",
+        unbounded: "Unbounded",
+        noSolutionWithinLimit: "No solution within the mode limit",
+        cancelled: "Cancelled",
+        invalidModel: "Invalid model",
+        backendUnavailable: "Backend unavailable",
+        backendFailed: "Backend failed",
+        verificationAlarm: "Verification alarm",
+        interrupted: "Interrupted",
+      },
+      acceptedNotice:
+        "The native solve reported an accepted result. The results list reads its saved record; opening its schedule independently re-verifies the original plan.",
+      firstVerified:
+        "A workable schedule has been independently checked and saved. Search may continue; optimality has not been established.",
+      retainedVerified:
+        "Search ended without a final accepted result. The earlier independently checked schedule is still available.",
+      acceptedStale:
+        "This run has an independently accepted result for its recorded revision, not for the current saved plan.",
+      noResult:
+        "The solve finished without an accepted result. Review the terminal status above; no result is shown as accepted.",
+      stale:
+        "This solve belongs to an older saved revision. It remains durable, but it cannot establish a result for the current revision.",
+      conflict:
+        "The saved revision changed while this solve request was being handled. Refresh the project before trying again.",
+      durableUnavailable:
+        "The durable solve record is unavailable. Refresh to read the saved run history again.",
+      detachedRunning:
+        "This saved solve is still running. Leaving and returning did not stop it; this view will refresh its durable status.",
+      terminalRefresh: "Refreshing independently accepted results…",
+      noRun: "No durable optimization run is recorded for this project.",
+      runRevision: (revision: string) => `Solve input revision ${revision}.`,
+      diagnosticsHeading: "Saved run diagnostics",
+      diagnosticsLoading: "Reading saved run diagnostics…",
+      diagnosticsElapsed: "Total elapsed milliseconds",
+      diagnosticsIncumbent: "First backend candidate (unverified), milliseconds",
+      diagnosticsVerified: "First independently verified feasible plan, milliseconds",
+      diagnosticsPhases: "Recorded phase time (milliseconds)",
+      diagnosticsPhaseLabels: {
+        compileMilliseconds: "Build the planning model",
+        backendMilliseconds: "Backend work excluding simultaneous verification",
+        projectionMilliseconds: "Project the candidate schedule",
+        structuralValidationMilliseconds: "Check schedule structure",
+        scoreRecomputationMilliseconds: "Recalculate the score",
+        requiredRuleVerificationMilliseconds: "Check required rules",
+        evidencePersistenceMilliseconds: "Prepare evidence before saving",
+        optionalExplanationMilliseconds: "Prepare optional explanations",
+      },
+      diagnosticsNotRecorded: "Not recorded",
+      diagnosticsCode: "Verification diagnostic code",
+      terminalExplanationOpen: "Explain terminal status",
+      terminalExplanationLoading: "Reading recorded terminal-run evidence…",
+      terminalExplanationHeading: "Terminal run explanation",
+      terminalExplanationError: "The terminal run explanation could not be read.",
+      terminalExplanationRetry: "Retry terminal status explanation",
+      terminalExplanationSourceChanged:
+        "The saved scenario, source revision or terminal run changed before this explanation could be bound. Refresh and try again.",
+      terminalExplanationLimits:
+        "This evidence is bound to the recorded run and its original saved revision. Recorded backend status or proof is not independent verification; an accepted result is independently verified separately.",
+      terminalExplanationAccepted:
+        "An accepted result is bound to this run. Its feasibility was independently verified on the original saved revision; terminal status does not independently establish optimality or validate later edits.",
+      terminalExplanationNoResult:
+        "No accepted result is bound to this terminal status. The recorded terminal outcome is not a verified feasible candidate.",
+      terminalExplanationOlderSource:
+        "This explanation belongs to an older saved revision; it does not establish a result for the current revision.",
+      terminalExplanationRun: "Recorded solve run ID",
+      terminalExplanationDocument: "Original document hash",
+      terminalExplanationManifest: "Run manifest checksum",
+      terminalExplanationSourceRevision: "Original source revision",
+      terminalExplanationCertaintyLabel: "Evidence certainty",
+      terminalExplanationCertainty: {
+        deterministic: "Deterministic",
+        independentlyVerified: "Independently verified",
+        backendProof: "Recorded backend proof",
+        sufficientConflict: "Sufficient conflict",
+        provenMinimalConflict: "Proven minimal conflict",
+        inconclusive: "Inconclusive",
+        unavailable: "Unavailable",
+      },
+      terminalExplanationSummary: "Recorded terminal-run summary.",
+      terminalExplanationOtherEvidence: "Recorded terminal-run evidence.",
+      terminalExplanationEvidence: "Actual evidence messages returned by the native explanation.",
+      terminalExplanationRules: "Rule IDs",
+      terminalExplanationAssignments: "Assignment IDs",
+      terminalExplanationEvidenceIds: "Evidence IDs",
+      terminalExplanationEmpty: "No rendered evidence messages were returned for this run.",
+      terminalExplanationYes: "Yes",
+      terminalExplanationNo: "No",
+      reused: "This request reused the durable solve record for the same input.",
       modeBoundary:
-        "These modes are informational only. Mode selection, time limits, Advanced settings and repair are unavailable here. No mode guarantees optimality.",
+        "Modes select native search behavior and default deadlines. An optional maximum-time override may extend or shorten that default; an independently checked first schedule may appear while search continues, without claiming optimality.",
     },
   },
   eligibilityUi: {
@@ -1415,7 +2959,7 @@ export const messages = {
     undone: "Scenario undo committed.",
     redone: "Scenario redo committed.",
     unavailableActions:
-      "Optimization, assistant and assignment-locking actions are not available in this desktop stage.",
+      "Assistant and assignment-locking actions are not available here. Optimize is available from supported Workforce setup after validation.",
     notFoundTitle: "Page not found",
     notFoundDescription:
       "This address is not an available workspace route. Your saved projects have not changed.",
@@ -1518,7 +3062,10 @@ export const messages = {
     previousValues: "Previously loaded values remain visible; this refresh did not confirm them.",
     inventoryTitle: "Locked-workspace license inventory",
     inventoryBoundary:
-      "This bounded inventory describes locked workspace packages and their recorded license metadata. It is not linked-installer attribution, a list of licenses shipped in a particular installer, license approval, or release clearance. Missing or unresolved license metadata is not permission to redistribute.",
+      "This bounded inventory describes locked workspace packages, reviewed source assets and their recorded license metadata. It is not linked-installer attribution, a list of licenses shipped in a particular installer, license approval, or release clearance. Missing or unresolved license metadata is not permission to redistribute.",
+    assets: "Reviewed assets",
+    assetFiles: "Reviewed asset files",
+    assetNotices: "License and attribution notices",
     generatedBy: "Inventory generator",
     inputs: "Authoritative inventory inputs",
     search: "Search workspace packages",
@@ -1754,6 +3301,20 @@ export const messages = {
     nextPage: "Next findings",
     page: (first: string, last: string, total: string) => `Findings ${first}–${last} of ${total}`,
     selected: "Selected finding",
+    explain: "Check this full validation finding",
+    explanationHeading: "Native validation evidence",
+    explanationLoading: "Checking this finding against the current saved project…",
+    explanationChanged:
+      "The native evidence does not match this selected finding or saved revision. Refresh full validation.",
+    explanationBoundary:
+      "This finding was checked again against the saved inputs. It does not prove that a schedule is feasible or infeasible.",
+    explanationRevision: (revision: string) => `Checked saved revision ${revision}.`,
+    explanationProofBoundary:
+      "The saved inputs have a source-level staffing contradiction. No solver ran for this check. The listed rules, together with always-required source facts, are sufficient; this is not a proven minimal conflict.",
+    explanationProofHeading: "Mapped staffing contradiction",
+    explanationProofCount: (possible: string, required: string) =>
+      `At most ${possible} people satisfy the counted conditions; ${required} are required.`,
+    explanationProofRules: "Required rules used in this count",
     resolving: "Reading the affected record from this saved revision…",
     namesUnavailable:
       "Some affected names could not be read. Native identities remain visible; select a finding to retry.",

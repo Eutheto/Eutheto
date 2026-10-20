@@ -1,0 +1,1345 @@
+{
+  "apply": {
+    "currentRevision": 3,
+    "requestId": "01a10bd8-55fb-7b53-83c4-4f46e3ff10bd",
+    "result": {
+      "outcome": {
+        "commandId": "01a10bd8-55fb-7b53-83c4-4f3807f55a3c",
+        "kind": "applied",
+        "revision": 3
+      },
+      "report": {
+        "consumed": true,
+        "disposition": "reviewable",
+        "previewId": "01a10bd8-54a8-71f2-84c8-226daecbbe1f",
+        "rows": {
+          "excludedCells": [
+            {
+              "cell": {
+                "column": 1,
+                "record": 3
+              },
+              "issue": "duplicatePair",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 2,
+                "record": 3
+              },
+              "issue": "duplicatePair",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 3,
+                "record": 3
+              },
+              "issue": "duplicatePair",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 3,
+                "record": 4
+              },
+              "issue": "invalidMembership",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 1,
+                "record": 5
+              },
+              "issue": "unresolvedPerson",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 2,
+                "record": 5
+              },
+              "issue": "unresolvedPerson",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 3,
+                "record": 5
+              },
+              "issue": "unresolvedPerson",
+              "skipped": true
+            }
+          ],
+          "family": "eligibilityMatrix"
+        },
+        "schemaVersion": 1
+      },
+      "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-5449-7213-b035-c16ded29b34c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "detection": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-5449-7213-b035-c17bbcc1289b",
+    "result": {
+      "data": {
+        "cells": 12,
+        "columns": 4,
+        "samples": [
+          {
+            "cells": [
+              {
+                "text": "personId",
+                "truncated": false
+              },
+              {
+                "text": "shared",
+                "truncated": false
+              },
+              {
+                "text": "018f7b40-a000-7000-8000-000000000004",
+                "truncated": false
+              },
+              {
+                "text": "018f7b40-a000-7000-8000-000000000017",
+                "truncated": false
+              }
+            ],
+            "record": 1
+          },
+          {
+            "cells": [
+              {
+                "text": "shared",
+                "truncated": false
+              },
+              {
+                "text": "true",
+                "truncated": false
+              },
+              {
+                "text": "",
+                "truncated": false
+              },
+              {
+                "text": "true",
+                "truncated": false
+              }
+            ],
+            "record": 2
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+          "logicalRecords": 5,
+          "rawBytes": 221
+        }
+      },
+      "family": "eligibilityMatrix"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "inertSample": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-544b-73c3-8684-1015620ad1e4",
+    "result": {
+      "cells": [
+        {
+          "text": "<img src=x>",
+          "truncated": false
+        },
+        {
+          "text": "",
+          "truncated": false
+        },
+        {
+          "text": "",
+          "truncated": false
+        },
+        {
+          "text": "",
+          "truncated": false
+        }
+      ],
+      "readFormat": {
+        "family": "eligibilityMatrix"
+      },
+      "record": 5,
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-5449-7213-b035-c16ded29b34c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesApply": {
+    "currentRevision": 5,
+    "requestId": "01a10bd8-5797-73b1-8d97-30ef43d48b9b",
+    "result": {
+      "outcome": {
+        "kind": "noChanges",
+        "revision": 5
+      },
+      "report": {
+        "consumed": true,
+        "disposition": "noChanges",
+        "previewId": "01a10bd8-5797-73b1-8d97-30ccbe4efe6d",
+        "rows": {
+          "excludedCells": [
+            {
+              "cell": {
+                "column": 1,
+                "record": 3
+              },
+              "issue": "duplicatePair",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 2,
+                "record": 3
+              },
+              "issue": "duplicatePair",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 3,
+                "record": 3
+              },
+              "issue": "duplicatePair",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 3,
+                "record": 4
+              },
+              "issue": "invalidMembership",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 1,
+                "record": 5
+              },
+              "issue": "unresolvedPerson",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 2,
+                "record": 5
+              },
+              "issue": "unresolvedPerson",
+              "skipped": true
+            },
+            {
+              "cell": {
+                "column": 3,
+                "record": 5
+              },
+              "issue": "unresolvedPerson",
+              "skipped": true
+            }
+          ],
+          "family": "eligibilityMatrix"
+        },
+        "schemaVersion": 1
+      },
+      "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-577c-7ac0-91e6-c665b0f74851"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesDetection": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-577d-7821-a09a-8bf5db760037",
+    "result": {
+      "data": {
+        "cells": 12,
+        "columns": 4,
+        "samples": [
+          {
+            "cells": [
+              {
+                "text": "personId",
+                "truncated": false
+              },
+              {
+                "text": "shared",
+                "truncated": false
+              },
+              {
+                "text": "018f7b40-a000-7000-8000-000000000004",
+                "truncated": false
+              },
+              {
+                "text": "018f7b40-a000-7000-8000-000000000017",
+                "truncated": false
+              }
+            ],
+            "record": 1
+          },
+          {
+            "cells": [
+              {
+                "text": "shared",
+                "truncated": false
+              },
+              {
+                "text": "true",
+                "truncated": false
+              },
+              {
+                "text": "",
+                "truncated": false
+              },
+              {
+                "text": "true",
+                "truncated": false
+              }
+            ],
+            "record": 2
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+          "logicalRecords": 5,
+          "rawBytes": 221
+        }
+      },
+      "family": "eligibilityMatrix"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesPreview": {
+    "currentRevision": 5,
+    "requestId": "01a10bd8-577e-75f3-9b82-eff6717aa166",
+    "result": {
+      "preview": {
+        "approvalDigest": "ac9a452b00086e2ae5efdd08307a004e48c503588d9cfc97530e6c63f2624041",
+        "batch": null,
+        "cells": 12,
+        "columns": 4,
+        "disposition": "noChanges",
+        "excludedCells": [
+          {
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          }
+        ],
+        "review": {
+          "cells": 12,
+          "changesBlake3": "03f88b99c3d8073bba8948d6e762aac443b265f606cc05abd4d172f03a4def6a",
+          "columns": 4,
+          "excludedBlake3": "222290a5726640f785ddb253b212af95a5622b96747bd1b2909a6ee20d43f9d7",
+          "format": "eutheto/workforce-eligibility-matrix-review",
+          "limitsVersion": 1,
+          "mapping": {
+            "assignmentTypeMappings": {
+              "shared": "018f7b40-a000-7000-8000-000000000015"
+            },
+            "personMappings": {
+              "shared": "018f7b40-a000-7000-8000-000000000001"
+            }
+          },
+          "parserVersion": "csv-core-0.1.13/eligibility-matrix-1",
+          "revision": 5,
+          "rowsBlake3": "0811fc3d9f15e73e19a6df8978578228ebae36252f773722ba10747fd569b6e8",
+          "scenarioBlake3": "f50aa5251afd92132e611ee2c3da6d17c15715e81bf529cb9d497846d78d28a2",
+          "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+          "schemaVersion": 1,
+          "skippedCells": [
+            {
+              "column": 1,
+              "record": 3
+            },
+            {
+              "column": 2,
+              "record": 3
+            },
+            {
+              "column": 3,
+              "record": 3
+            },
+            {
+              "column": 3,
+              "record": 4
+            },
+            {
+              "column": 1,
+              "record": 5
+            },
+            {
+              "column": 2,
+              "record": 5
+            },
+            {
+              "column": 3,
+              "record": 5
+            }
+          ],
+          "source": {
+            "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+            "logicalRecords": 5,
+            "rawBytes": 221
+          },
+          "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+        },
+        "rows": [
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": true,
+            "cell": {
+              "column": 1,
+              "record": 2
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "unchanged"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 2
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "unchanged"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": true,
+            "cell": {
+              "column": 3,
+              "record": 2
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "unchanged"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": true,
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": true,
+            "cell": {
+              "column": 3,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "skipped"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": false,
+            "cell": {
+              "column": 1,
+              "record": 4
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "unchanged"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": false,
+            "cell": {
+              "column": 2,
+              "record": 4
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "unchanged"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": false,
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": null,
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": null,
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": null,
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "skipped"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+          "logicalRecords": 5,
+          "rawBytes": 221
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10bd8-5797-73b1-8d97-30ccbe4efe6d",
+      "revision": 5,
+      "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-577c-7ac0-91e6-c665b0f74851"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesSourceOpened": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-577c-7ac0-91e6-c65801cfe9bb",
+    "result": {
+      "byteCount": 221,
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-577c-7ac0-91e6-c665b0f74851"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesText": "personId\tshared\t018f7b40-a000-7000-8000-000000000004\t018f7b40-a000-7000-8000-000000000017\nshared\ttrue\t\ttrue\n018F7B40-A000-7000-8000-000000000001\ttrue\t\t\n018f7b40-a000-7000-8000-00000000000d\tfalse\tfalse\tTRUE\n<img src=x>\t\t\t\n",
+  "preview": {
+    "currentRevision": 2,
+    "requestId": "01a10bd8-546c-7521-84e5-0088f5e2c081",
+    "result": {
+      "preview": {
+        "approvalDigest": "8dceba181708aa06f3866f1dcc566f45b976a81b25e8c193a79b295d0d533e48",
+        "batch": {
+          "commands": [
+            {
+              "commandType": "official.workforce.update_entity",
+              "payload": {
+                "entity": {
+                  "activeRange": {
+                    "kind": "always"
+                  },
+                  "display": {
+                    "avatarInitials": "RV",
+                    "color": "#102030"
+                  },
+                  "eligibleAssignmentTypeIds": [
+                    "018F7B40-A000-7000-8000-000000000004",
+                    "018f7b40-a000-7000-8000-000000000015",
+                    "018f7b40-a000-7000-8000-000000000017"
+                  ],
+                  "externalId": "staff-01",
+                  "homeLocationId": "018f7b40a00070008000000000000005",
+                  "id": "018f7b40-a000-7000-8000-000000000001",
+                  "kind": "person",
+                  "name": "River",
+                  "qualificationGrants": [],
+                  "tags": ["night", "reviewed"],
+                  "teamIds": [],
+                  "workloadWeight": {
+                    "denominator": 2,
+                    "numerator": 3
+                  }
+                }
+              }
+            },
+            {
+              "commandType": "official.workforce.update_entity",
+              "payload": {
+                "entity": {
+                  "activeRange": {
+                    "kind": "always"
+                  },
+                  "display": {
+                    "avatarInitials": "RV",
+                    "color": "#102030"
+                  },
+                  "eligibleAssignmentTypeIds": [],
+                  "externalId": "staff-13",
+                  "homeLocationId": "018f7b40a00070008000000000000005",
+                  "id": "018f7b40-a000-7000-8000-00000000000d",
+                  "kind": "person",
+                  "name": "Alex",
+                  "qualificationGrants": [],
+                  "tags": ["night", "reviewed"],
+                  "teamIds": [],
+                  "workloadWeight": {
+                    "denominator": 2,
+                    "numerator": 3
+                  }
+                }
+              }
+            }
+          ],
+          "label": "Import configured eligibility from pasted matrix",
+          "packId": "official.workforce",
+          "scenarioSchemaVersion": 1,
+          "schemaVersion": 1
+        },
+        "cells": 12,
+        "columns": 4,
+        "disposition": "reviewable",
+        "excludedCells": [
+          {
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          }
+        ],
+        "review": {
+          "cells": 12,
+          "changesBlake3": "6e61339ed91d3278fc1bca0883dc2c7640d3ac84a477e98c0eca9757d6001cb5",
+          "columns": 4,
+          "excludedBlake3": "222290a5726640f785ddb253b212af95a5622b96747bd1b2909a6ee20d43f9d7",
+          "format": "eutheto/workforce-eligibility-matrix-review",
+          "limitsVersion": 1,
+          "mapping": {
+            "assignmentTypeMappings": {
+              "shared": "018f7b40-a000-7000-8000-000000000015"
+            },
+            "personMappings": {
+              "shared": "018f7b40-a000-7000-8000-000000000001"
+            }
+          },
+          "parserVersion": "csv-core-0.1.13/eligibility-matrix-1",
+          "revision": 2,
+          "rowsBlake3": "f72ac39eac4d7d8d767b0ead37eb88d14a80dc8250a592f847c0196b84b18707",
+          "scenarioBlake3": "65b6730bd80a9af44e9b3839e348b55f77607b470b9a7b0b5876f0bd711e5370",
+          "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+          "schemaVersion": 1,
+          "skippedCells": [
+            {
+              "column": 1,
+              "record": 3
+            },
+            {
+              "column": 2,
+              "record": 3
+            },
+            {
+              "column": 3,
+              "record": 3
+            },
+            {
+              "column": 3,
+              "record": 4
+            },
+            {
+              "column": 1,
+              "record": 5
+            },
+            {
+              "column": 2,
+              "record": 5
+            },
+            {
+              "column": 3,
+              "record": 5
+            }
+          ],
+          "source": {
+            "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+            "logicalRecords": 5,
+            "rawBytes": 221
+          },
+          "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+        },
+        "rows": [
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": false,
+            "cell": {
+              "column": 1,
+              "record": 2
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "changed"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 2
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "unchanged"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": false,
+            "cell": {
+              "column": 3,
+              "record": 2
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "changed"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": false,
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": false,
+            "cell": {
+              "column": 3,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "skipped"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": false,
+            "cell": {
+              "column": 1,
+              "record": 4
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "unchanged"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 4
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "changed"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": false,
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": null,
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": null,
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "skipped"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": null,
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "skipped"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+          "logicalRecords": 5,
+          "rawBytes": 221
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10bd8-54a8-71f2-84c8-226daecbbe1f",
+      "revision": 2,
+      "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-5449-7213-b035-c16ded29b34c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "report": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-56a6-7591-bc5c-63ce1c24bbe0",
+    "result": {
+      "consumed": true,
+      "disposition": "reviewable",
+      "previewId": "01a10bd8-54a8-71f2-84c8-226daecbbe1f",
+      "rows": {
+        "excludedCells": [
+          {
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 3
+            },
+            "issue": "duplicatePair",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": true
+          }
+        ],
+        "family": "eligibilityMatrix"
+      },
+      "schemaVersion": 1
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sample": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-544b-73c3-8684-0feb9ca6eccc",
+    "result": {
+      "cells": [
+        {
+          "text": "018f7b40-a000-7000-8000-00000000000d",
+          "truncated": false
+        },
+        {
+          "text": "false",
+          "truncated": false
+        },
+        {
+          "text": "false",
+          "truncated": false
+        },
+        {
+          "text": "TRUE",
+          "truncated": false
+        }
+      ],
+      "readFormat": {
+        "family": "eligibilityMatrix"
+      },
+      "record": 4,
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-5449-7213-b035-c16ded29b34c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sourceOpened": {
+    "currentRevision": null,
+    "requestId": "01a10bd8-5448-7292-ba91-fb5784aed956",
+    "result": {
+      "byteCount": 221,
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-5449-7213-b035-c16ded29b34c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "submittedText": "personId\tshared\t018f7b40-a000-7000-8000-000000000004\t018f7b40-a000-7000-8000-000000000017\nshared\ttrue\t\ttrue\n018F7B40-A000-7000-8000-000000000001\ttrue\t\t\n018f7b40-a000-7000-8000-00000000000d\tfalse\tfalse\tTRUE\n<img src=x>\t\t\t\n",
+  "unresolvedPreview": {
+    "currentRevision": 2,
+    "requestId": "01a10bd8-544c-7e73-a516-9d3067995a83",
+    "result": {
+      "preview": {
+        "approvalDigest": null,
+        "batch": null,
+        "cells": 12,
+        "columns": 4,
+        "disposition": "blocked",
+        "excludedCells": [
+          {
+            "cell": {
+              "column": 1,
+              "record": 2
+            },
+            "issue": "unresolvedPerson",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 2
+            },
+            "issue": "unresolvedPerson",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 2
+            },
+            "issue": "unresolvedPerson",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "unresolvedAssignmentType",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 1,
+              "record": 4
+            },
+            "issue": "unresolvedAssignmentType",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": false
+          },
+          {
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "skipped": false
+          }
+        ],
+        "review": null,
+        "rows": [
+          {
+            "after": true,
+            "assignmentTypeId": null,
+            "before": null,
+            "cell": {
+              "column": 1,
+              "record": 2
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "blocked"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": null,
+            "cell": {
+              "column": 2,
+              "record": 2
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "blocked"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": null,
+            "cell": {
+              "column": 3,
+              "record": 2
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "blocked"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": null,
+            "before": null,
+            "cell": {
+              "column": 1,
+              "record": 3
+            },
+            "issue": "unresolvedAssignmentType",
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "blocked"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 3
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "unchanged"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": false,
+            "cell": {
+              "column": 3,
+              "record": 3
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "status": "unchanged"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": null,
+            "before": null,
+            "cell": {
+              "column": 1,
+              "record": 4
+            },
+            "issue": "unresolvedAssignmentType",
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "blocked"
+          },
+          {
+            "after": false,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": true,
+            "cell": {
+              "column": 2,
+              "record": 4
+            },
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "changed"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": false,
+            "cell": {
+              "column": 3,
+              "record": 4
+            },
+            "issue": "invalidMembership",
+            "personId": "018f7b40-a000-7000-8000-00000000000d",
+            "status": "blocked"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": null,
+            "before": null,
+            "cell": {
+              "column": 1,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "blocked"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": null,
+            "cell": {
+              "column": 2,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "blocked"
+          },
+          {
+            "after": null,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000017",
+            "before": null,
+            "cell": {
+              "column": 3,
+              "record": 5
+            },
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "status": "blocked"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "d2b9e8825091ecd17fc7bef643ffea7368949040d55a6e776e8b072311f16745",
+          "logicalRecords": 5,
+          "rawBytes": 221
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10bd8-546b-78d2-bf0e-77f1bbb9138b",
+      "revision": 2,
+      "scenarioId": "01a10bd8-533d-7700-bb15-2acc738188ea",
+      "schemaVersion": 1,
+      "sourceId": "01a10bd8-5449-7213-b035-c16ded29b34c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

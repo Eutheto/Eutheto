@@ -153,6 +153,7 @@ type Joined = (
     Option<ResolvedShift>,
     Option<ShiftChangeKind>,
 );
+#[allow(clippy::too_many_lines)]
 pub(super) fn generation_review(
     original: &ScenarioDocument,
     prospective: &ScenarioDocument,
@@ -249,7 +250,33 @@ pub(super) fn generation_review(
             "continuation shift is absent from this filtered review",
         ));
     }
-    let reconciliation_required = preview.reconciliation.is_some();
+    let mut reconciliation_required = preview.reconciliation.is_some();
+    if !reconciliation_required {
+        for (id, entity) in &after_domain.entities {
+            budget.visit()?;
+            let WorkforceEntity::ShiftTemplate(after) = entity else {
+                continue;
+            };
+            let before = match before_domain.entities.get(id) {
+                Some(WorkforceEntity::ShiftTemplate(before)) => Some(&before.occurrence_identities),
+                _ => None,
+            };
+            if before.map_or(0, BTreeMap::len) != after.occurrence_identities.len() {
+                reconciliation_required = true;
+                break;
+            }
+            for (shift_id, identity) in &after.occurrence_identities {
+                budget.visit()?;
+                if before.and_then(|ledger| ledger.get(shift_id)) != Some(identity) {
+                    reconciliation_required = true;
+                    break;
+                }
+            }
+            if reconciliation_required {
+                break;
+            }
+        }
+    }
     let result = page.finish(prospective.scenario_id, context, |page| {
         WorkforceSetupViewDataV1::GenerationReview(GenerationReviewV1 {
             prospective_hash: preview.prospective_hash,

@@ -7,7 +7,7 @@ use crate::{
     ids::QualificationId,
     model::{
         ActiveRange, Availability, CategoryPair, Coverage, Person, PersonSelection,
-        QualificationExpression, Scope, ShiftScope,
+        QualificationExpression, QualificationMinimum, Scope, ShiftScope,
     },
     temporal::{ResolvedShift, weekday},
 };
@@ -18,7 +18,7 @@ pub(super) fn invalid() -> AssignmentRuleError {
     AssignmentRuleError::InvalidConstruction(AssignmentConstructionIssue::InvalidRecord)
 }
 
-pub(super) fn interval(shift: &ResolvedShift) -> InstantInterval {
+pub(in crate::assignment_rules) fn interval(shift: &ResolvedShift) -> InstantInterval {
     InstantInterval {
         start: shift.interval.starts_at.instant,
         end: shift.interval.ends_at.instant,
@@ -123,7 +123,7 @@ pub(super) fn requirement_scope(
     }
 }
 
-pub(super) fn availability_scope(
+pub(in crate::assignment_rules) fn availability_scope(
     record: &Availability,
     metadata: &ShiftMetadata<'_>,
     budget: &mut OperationBudget<'_>,
@@ -169,7 +169,7 @@ fn qualification(
     }
 }
 
-pub(super) fn qualification_match(
+pub(in crate::assignment_rules) fn qualification_match(
     person: &Person,
     all: &[QualificationId],
     any: &[QualificationId],
@@ -189,7 +189,7 @@ pub(super) fn qualification_match(
     Ok(all_match && any_match)
 }
 
-pub(super) fn expression(
+pub(in crate::assignment_rules) fn expression(
     person: &Person,
     expression: &QualificationExpression,
     query: InstantInterval,
@@ -208,7 +208,10 @@ pub(super) fn expression(
     }
 }
 
-pub(super) fn outside(query: InstantInterval, allowed: InstantInterval) -> Option<InstantInterval> {
+pub(in crate::assignment_rules) fn outside(
+    query: InstantInterval,
+    allowed: InstantInterval,
+) -> Option<InstantInterval> {
     if query.start < allowed.start {
         Some(InstantInterval {
             start: query.start,
@@ -224,7 +227,7 @@ pub(super) fn outside(query: InstantInterval, allowed: InstantInterval) -> Optio
     }
 }
 
-pub(super) fn uncovered(
+pub(in crate::assignment_rules) fn uncovered(
     query: InstantInterval,
     windows: &[InstantInterval],
     budget: &mut OperationBudget<'_>,
@@ -249,7 +252,7 @@ pub(super) fn uncovered(
     }))
 }
 
-pub(super) fn active_interval(
+pub(in crate::assignment_rules) fn active_interval(
     person: &Person,
     settings: &ScenarioSettings,
 ) -> Result<Option<InstantInterval>, AssignmentRuleError> {
@@ -320,6 +323,13 @@ pub(super) fn canonical_minima(
             ..
         } => qualification_minimums,
     };
+    canonical_minima_values(values, budget)
+}
+
+pub(in crate::assignment_rules) fn canonical_minima_values(
+    values: &[QualificationMinimum],
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<MinimumKey>, AssignmentRuleError> {
     let mut result = Vec::new();
     for value in values {
         budget.step()?;
@@ -390,6 +400,14 @@ pub(super) fn authored_source_rows(
             ..
         } => qualification_minimums,
     };
+    authored_source_rows_values(values, minima, budget)
+}
+
+pub(in crate::assignment_rules) fn authored_source_rows_values(
+    values: &[QualificationMinimum],
+    minima: &[MinimumKey],
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<usize>, AssignmentRuleError> {
     let retained = count(minima.len())?;
     budget.reserve(
         0,

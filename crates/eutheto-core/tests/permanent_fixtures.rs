@@ -12,7 +12,7 @@ use eutheto_domain_api::{
     DomainShareResult, DomainValidationReport, PortableImportContext, ShareResultOptions,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
+    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV2, EvidenceRenderResultV1,
     ExplanationCapability, NormalizedSolution, ScoreVector, VerificationContextV1,
     VerificationReport, VerificationScope,
 };
@@ -216,6 +216,7 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         _document: &ScenarioDocument,
         _solution: &NormalizedSolution,
+        _objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
         _context: &VerificationContextV1,
         _authoritative_score: &ScoreVector,
         control: &eutheto_types::OperationControl,
@@ -228,6 +229,7 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         _document: &ScenarioDocument,
         _solution: &NormalizedSolution,
+        _objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
         control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
         control.check()?;
@@ -272,6 +274,7 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         _document: &ScenarioDocument,
         _accepted: &AcceptedResult,
+        _objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
         _options: ShareResultOptions,
     ) -> Result<DomainShareResult, DomainPackError> {
         Self::unsupported()
@@ -289,7 +292,9 @@ impl DomainPack for HistoricalFixturePack {
     fn render_evidence(
         &self,
         _document: &ScenarioDocument,
-        request: &EvidenceRenderRequestV1,
+        request: &EvidenceRenderRequestV2,
+        _objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
+        _control: &eutheto_types::OperationControl,
     ) -> Result<EvidenceRenderResultV1, DomainPackError> {
         Err(DomainPackError::UnsupportedExplanationCapability(
             explanation_capability(request.kind),
@@ -304,6 +309,37 @@ impl DomainPack for HistoricalFixturePack {
     ) -> Result<PlanningProblem, DomainPackError> {
         Err(DomainPackError::UnsupportedExplanationCapability(
             ExplanationCapability::Counterfactual,
+        ))
+    }
+
+    fn compile_infeasibility(
+        &self,
+        _document: &ScenarioDocument,
+        _context: &eutheto_domain_api::InfeasibilityCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn diagnostic_verification_scope(
+        &self,
+        _document: &ScenarioDocument,
+        _scenario_revision: u64,
+        _control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DiagnosticVerificationScope, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn prepare_diagnostic_copy_changes(
+        &self,
+        _source: &ScenarioDocument,
+        _context: &eutheto_domain_api::DiagnosticCopyContext<'_>,
+    ) -> Result<DomainBatchCommand, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics,
         ))
     }
 }

@@ -5,13 +5,14 @@ use super::{
     setup_domain_error,
 };
 use eutheto_domain_api::bounded_json_size;
+use eutheto_domain_ir::validation_issue_identity;
 use eutheto_types::{
     AppError, CancellationToken, OperationControl, OperationId, Revision, ScenarioId,
     ValidationIssue, ValidationReport, ValidationSeverity,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -105,11 +106,12 @@ pub struct ScenarioSummaryV2 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FullValidationResultV2 {
+pub struct FullValidationResultV3 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
     pub revision: Revision,
     pub report: ValidationReport,
+    pub issue_ids: Vec<eutheto_domain_ir::VerificationIssueId>,
 }
 
 #[derive(Default)]
@@ -244,7 +246,7 @@ impl ValidationAttempt {
 
     fn finish(
         &mut self,
-        result: &Result<(FullValidationResultV2, IssueCountsV1), AppError>,
+        result: &Result<(FullValidationResultV3, IssueCountsV1), AppError>,
     ) -> Result<(), AppError> {
         let state = match result {
             Ok((_, counts)) => FullValidationStateV1::Completed {
@@ -290,7 +292,7 @@ impl EuthetoApp {
         expected_revision: Option<Revision>,
         cancellation: CancellationToken,
     ) -> Result<ScenarioSummaryV2, AppError> {
-        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+        let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
         let project = self
             .capture_setup_project(scenario_id, expected_revision, &cancellation)
             .await?;
@@ -338,8 +340,8 @@ impl EuthetoApp {
         expected_revision: Revision,
         operation_id: OperationId,
         cancellation: CancellationToken,
-    ) -> Result<FullValidationResultV2, AppError> {
-        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+    ) -> Result<FullValidationResultV3, AppError> {
+        let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
         check_cancelled(&cancellation)?;
         let mut attempt =
             self.validation_readiness
@@ -368,14 +370,30 @@ impl EuthetoApp {
                 };
                 bounded_json_size(&report, MAX_FULL_BYTES).map_err(|_| resource_limit_error())?;
                 let counts = issue_counts(&report.issues, &cancellation)?;
-                let result = FullValidationResultV2 {
-                    schema_version: 2,
+                let mut issue_ids = Vec::with_capacity(report.issues.len());
+                let mut seen_issue_ids = BTreeSet::new();
+                for issue in &report.issues {
+                    check_cancelled(&cancellation)?;
+                    let issue_id =
+                        validation_issue_identity(issue).map_err(|_| resource_limit_error())?;
+                    if !seen_issue_ids.insert(issue_id.clone()) {
+                        return Err(super::super::protocol_error(
+                            "scenario.full_validation_failed",
+                            "Full validation produced duplicate issue identities.",
+                            false,
+                        ));
+                    }
+                    issue_ids.push(issue_id);
+                }
+                let result = FullValidationResultV3 {
+                    schema_version: 3,
                     scenario_id,
                     revision: project.summary.revision,
                     report,
+                    issue_ids,
                 };
-                bounded_json_size(&result, MAX_FULL_BYTES + FRAME_BYTES)
-                    .map_err(|_| resource_limit_error())?;
+                // The IDs are part of the response bound; never trim them or the aligned report.
+                bounded_json_size(&result, MAX_FULL_BYTES).map_err(|_| resource_limit_error())?;
                 check_cancelled(&cancellation)?;
                 Ok((result, counts))
             })
@@ -529,11 +547,12 @@ mod tests {
         );
         first
             .finish(&Ok((
-                FullValidationResultV2 {
-                    schema_version: 2,
+                FullValidationResultV3 {
+                    schema_version: 3,
                     scenario_id,
                     revision: Revision::INITIAL,
                     report: ValidationReport::default(),
+                    issue_ids: Vec::new(),
                 },
                 IssueCountsV1::default(),
             )))

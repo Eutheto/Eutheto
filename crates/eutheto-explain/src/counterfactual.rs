@@ -2,8 +2,8 @@ use crate::{ComparisonContext, ComparisonRunManifests, compare_accepted_results}
 use eutheto_domain_ir::{
     AcceptedResult, AcceptedResultRefV1, CounterfactualCompilationBindingV1,
     CounterfactualConclusionV1, CounterfactualConditionV1, CounterfactualFailureKind,
-    CounterfactualJobErrorV1, CounterfactualJobRequestV1, CounterfactualResultV1,
-    DomainContractError, RunInputV1, RunManifestV1, RunTerminalOutcomeV1,
+    CounterfactualJobErrorV1, CounterfactualJobRequestV1, CounterfactualResult,
+    DomainContractError, RunInfeasibilityEvidenceV1, RunInput, RunManifest, RunTerminalOutcomeV1,
     counterfactual_condition_satisfied,
 };
 use eutheto_planning_ir::{
@@ -289,7 +289,7 @@ fn validate_constraint_additions(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CounterfactualInterpretation {
     /// A contract-valid proof or independently verified alternative is complete.
-    Completed(Box<CounterfactualResultV1>),
+    Completed(Box<CounterfactualResult>),
     /// Work was explicitly cancelled and therefore carries no proof result.
     Cancelled,
     /// Started work ended without a terminal proof result.
@@ -307,13 +307,14 @@ pub enum CounterfactualInterpretation {
 #[must_use]
 pub fn interpret_counterfactual(
     request: &CounterfactualJobRequestV1,
-    base_run_input: &RunInputV1,
-    base_run_manifest: &RunManifestV1,
+    base_run_input: &RunInput,
+    base_run_manifest: &RunManifest,
     base: &AcceptedResult,
     compilation: &CounterfactualCompilationBindingV1,
-    derived_run_input: &RunInputV1,
-    derived_run_manifest: &RunManifestV1,
+    derived_run_input: &RunInput,
+    derived_run_manifest: &RunManifest,
     alternative: Option<&AcceptedResult>,
+    infeasibility: Option<&RunInfeasibilityEvidenceV1>,
 ) -> CounterfactualInterpretation {
     if request.validate().is_err()
         || base_run_input.validate().is_err()
@@ -348,6 +349,14 @@ pub fn interpret_counterfactual(
     {
         return failed(CounterfactualFailureKind::InvalidBinding);
     }
+    if let Some(evidence) = infeasibility
+        && (evidence
+            .validate_binding(derived_run_input, derived_run_manifest)
+            .is_err()
+            || evidence.condition.as_ref() != Some(&request.condition))
+    {
+        return failed(CounterfactualFailureKind::InvalidBinding);
+    }
 
     match &derived_run_manifest.outcome {
         RunTerminalOutcomeV1::NoResult {
@@ -356,6 +365,12 @@ pub fn interpret_counterfactual(
             if alternative.is_some() {
                 return failed(CounterfactualFailureKind::InvalidCandidate);
             }
+            let conclusion = if infeasibility.is_some_and(|evidence| evidence.diagnostic.is_some())
+            {
+                CounterfactualConclusionV1::ProvenImpossible
+            } else {
+                CounterfactualConclusionV1::NotDistinguishedWithinBudget
+            };
             completed(
                 request,
                 base_run_input,
@@ -363,7 +378,7 @@ pub fn interpret_counterfactual(
                 compilation,
                 derived_run_input,
                 derived_run_manifest,
-                CounterfactualConclusionV1::NotDistinguishedWithinBudget,
+                conclusion,
             )
         }
         RunTerminalOutcomeV1::NoResult {
@@ -400,8 +415,8 @@ pub fn interpret_counterfactual(
 
 fn base_bindings_match(
     request: &CounterfactualJobRequestV1,
-    input: &RunInputV1,
-    manifest: &RunManifestV1,
+    input: &RunInput,
+    manifest: &RunManifest,
     accepted: &AcceptedResult,
 ) -> bool {
     let semantics = &request.semantics;
@@ -437,10 +452,10 @@ fn base_bindings_match(
 
 fn derived_bindings_match(
     request: &CounterfactualJobRequestV1,
-    base_input: &RunInputV1,
+    base_input: &RunInput,
     compilation: &CounterfactualCompilationBindingV1,
-    input: &RunInputV1,
-    manifest: &RunManifestV1,
+    input: &RunInput,
+    manifest: &RunManifest,
 ) -> bool {
     compilation.base_model_hash == request.semantics.base_model_hash
         && compilation.base_model_hash != compilation.derived_model_hash
@@ -454,6 +469,7 @@ fn derived_bindings_match(
         && input.snapshot_document_hash == request.semantics.snapshot_document_hash
         && input.pack_id == base_input.pack_id
         && input.pack_schema_version == base_input.pack_schema_version
+        && input.objective_context == base_input.objective_context
         && input.planning_ir_schema_version == base_input.planning_ir_schema_version
         && input.compiler_version == base_input.compiler_version
         && input.model_hash == compilation.derived_model_hash
@@ -464,12 +480,12 @@ fn derived_bindings_match(
 #[allow(clippy::too_many_arguments)]
 fn verified_alternative(
     request: &CounterfactualJobRequestV1,
-    base_input: &RunInputV1,
-    base_manifest: &RunManifestV1,
+    base_input: &RunInput,
+    base_manifest: &RunManifest,
     base: &AcceptedResult,
     compilation: &CounterfactualCompilationBindingV1,
-    derived_input: &RunInputV1,
-    derived_manifest: &RunManifestV1,
+    derived_input: &RunInput,
+    derived_manifest: &RunManifest,
     alternative: Option<&AcceptedResult>,
 ) -> CounterfactualInterpretation {
     let Some(alternative) = alternative else {
@@ -533,14 +549,14 @@ fn verified_alternative(
 
 fn completed(
     request: &CounterfactualJobRequestV1,
-    base_input: &RunInputV1,
-    base_manifest: &RunManifestV1,
+    base_input: &RunInput,
+    base_manifest: &RunManifest,
     compilation: &CounterfactualCompilationBindingV1,
-    input: &RunInputV1,
-    manifest: &RunManifestV1,
+    input: &RunInput,
+    manifest: &RunManifest,
     conclusion: CounterfactualConclusionV1,
 ) -> CounterfactualInterpretation {
-    match CounterfactualResultV1::new(
+    match CounterfactualResult::new(
         request.clone(),
         base_input.clone(),
         base_manifest.clone(),
@@ -840,7 +856,7 @@ mod tests {
         Ok(AcceptedResult::new(solution, report)?)
     }
     #[test]
-    fn condition_satisfaction_requires_target_and_exact_force_or_forbid_semantics()
+    fn condition_satisfaction_requires_target_and_exact_force_forbid_or_replace_semantics()
     -> Result<(), Box<dyn std::error::Error>> {
         let solution = accepted(0x11, 10, &hash("condition-model"))?.solution;
         let condition = |payload| CounterfactualConditionV1::new(payload);
@@ -880,6 +896,66 @@ mod tests {
             })?,
             &solution,
         ));
+
+        let target_id = DomainAssignmentId::new("tests.value")?;
+        let replaced_id = DomainAssignmentId::new("tests.incumbent")?;
+        let replace = || {
+            condition(CounterfactualConditionPayloadV1::ReplaceAssignment {
+                target_assignment_id: target_id.clone(),
+                replaced_assignment_id: replaced_id.clone(),
+            })
+        };
+        let solution_with_values =
+            |target_value: Option<bool>,
+             replaced_value: Option<bool>|
+             -> Result<NormalizedSolution, Box<dyn std::error::Error>> {
+                let mut solution = accepted_with_value(
+                    0x11,
+                    10,
+                    &hash("condition-model"),
+                    target_value.unwrap_or(false),
+                )?
+                .solution;
+                let entity = solution.assignments[0].entity.clone();
+                if target_value.is_none() {
+                    solution.assignments.clear();
+                }
+                if let Some(value) = replaced_value {
+                    solution.assignments.push(DomainAssignment {
+                        id: replaced_id.clone(),
+                        entity,
+                        value: AssignmentValue::Boolean(value),
+                        evidence: Vec::new(),
+                    });
+                }
+                solution.canonicalize()?;
+                Ok(solution)
+            };
+
+        assert!(!counterfactual_condition_satisfied(
+            &replace()?,
+            &solution_with_values(None, Some(false))?,
+        ));
+        assert!(!counterfactual_condition_satisfied(
+            &replace()?,
+            &solution_with_values(Some(true), None)?,
+        ));
+        assert!(!counterfactual_condition_satisfied(
+            &replace()?,
+            &solution_with_values(Some(false), Some(false))?,
+        ));
+        assert!(!counterfactual_condition_satisfied(
+            &replace()?,
+            &solution_with_values(Some(true), Some(true))?,
+        ));
+        assert!(!counterfactual_condition_satisfied(
+            &replace()?,
+            &solution_with_values(Some(false), Some(true))?,
+        ));
+        assert!(counterfactual_condition_satisfied(
+            &replace()?,
+            &solution_with_values(Some(true), Some(false))?,
+        ));
         Ok(())
     }
 
@@ -888,7 +964,7 @@ mod tests {
         model_hash: String,
         objective_hash: String,
         condition_hash: Option<String>,
-    ) -> Result<RunInputV1, Box<dyn std::error::Error>> {
+    ) -> Result<RunInput, Box<dyn std::error::Error>> {
         run_input_at_revision(suffix, 7, model_hash, objective_hash, condition_hash)
     }
 
@@ -898,8 +974,8 @@ mod tests {
         model_hash: String,
         objective_hash: String,
         condition_hash: Option<String>,
-    ) -> Result<RunInputV1, Box<dyn std::error::Error>> {
-        Ok(RunInputV1::new(
+    ) -> Result<RunInput, Box<dyn std::error::Error>> {
+        Ok(RunInput::new(
             format!("01890a5d-ac96-7b64-9f74-bbfcf30f9f{suffix:02x}").parse::<SolveRunId>()?,
             format!("01890a5d-ac96-7b64-9f74-bbfcf30f9e{suffix:02x}").parse::<RequestId>()?,
             "01890a5d-ac96-7b64-9f74-bbfcf30f9f80".parse::<ScenarioId>()?,
@@ -924,16 +1000,17 @@ mod tests {
             options()?,
             "UTC".parse::<IanaTimeZone>()?,
             condition_hash,
+            None,
         )?)
     }
 
     fn manifest(
-        input: &RunInputV1,
+        input: &RunInput,
         outcome: RunTerminalOutcomeV1,
-    ) -> Result<RunManifestV1, Box<dyn std::error::Error>> {
+    ) -> Result<RunManifest, Box<dyn std::error::Error>> {
         let accepted = matches!(&outcome, RunTerminalOutcomeV1::Accepted { .. });
         let interrupted = matches!(&outcome, RunTerminalOutcomeV1::Interrupted);
-        Ok(RunManifestV1::new(
+        Ok(RunManifest::new(
             input.run_id,
             input.checksum.clone(),
             outcome,
@@ -949,11 +1026,11 @@ mod tests {
 
     struct InterpretationFixture {
         request: CounterfactualJobRequestV1,
-        base_input: RunInputV1,
-        base_manifest: RunManifestV1,
+        base_input: RunInput,
+        base_manifest: RunManifest,
         base: AcceptedResult,
         compilation: CounterfactualCompilationBindingV1,
-        derived_input: RunInputV1,
+        derived_input: RunInput,
     }
 
     fn interpretation_fixture() -> Result<InterpretationFixture, Box<dyn std::error::Error>> {
@@ -1038,6 +1115,7 @@ mod tests {
             &fixture.derived_input,
             &manifest,
             None,
+            None,
         ))
     }
 
@@ -1104,6 +1182,7 @@ mod tests {
                 &fixture.derived_input,
                 &interrupted,
                 None,
+                None,
             ),
             CounterfactualInterpretation::Interrupted
         );
@@ -1138,6 +1217,7 @@ mod tests {
                 &fixture.derived_input,
                 &derived_manifest,
                 Some(&alternative),
+                None,
             );
             assert!(matches!(
                 interpreted,
@@ -1181,6 +1261,7 @@ mod tests {
                 &stale_input,
                 &stale_manifest,
                 None,
+                None,
             ),
             CounterfactualInterpretation::Failed(CounterfactualJobErrorV1 {
                 kind: CounterfactualFailureKind::StaleRevision,
@@ -1202,6 +1283,7 @@ mod tests {
                 &fixture.compilation,
                 &fixture.derived_input,
                 &derived_manifest,
+                None,
                 None,
             ),
             CounterfactualInterpretation::Failed(CounterfactualJobErrorV1 {
@@ -1230,6 +1312,7 @@ mod tests {
                 &fixture.derived_input,
                 &mismatch_manifest,
                 Some(&alternative),
+                None,
             ),
             CounterfactualInterpretation::Failed(CounterfactualJobErrorV1 {
                 kind: CounterfactualFailureKind::InvalidCandidate,

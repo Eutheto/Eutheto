@@ -11,15 +11,16 @@ pub use schema::{
 };
 
 use eutheto_domain_ir::{
-    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
-    ExplanationCapability, NormalizedSolution, ScoreVector, VerificationContextV1,
+    AcceptedResult, ComparisonEnrichmentV2, ConflictGroupV1, CounterfactualConditionV1,
+    EvidenceRenderRequestV2, EvidenceRenderResultV1, ExplanationCapability, NormalizedSolution,
+    PortableAcceptedResult, PreparedComparisonV2, ScoreVector, VerificationContextV1,
     VerificationReport, VerificationScope,
 };
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl,
-    OperationInterruption, PackId, PortableDomainDocument, ScenarioDocument, SemanticCapability,
-    SolutionId, SolveBudgetView, ValidationIssue,
+    CancellationToken, DomainCommandEnvelope, IdGenerator, MAX_SCENARIO_DOCUMENT_BYTES,
+    OperationControl, OperationInterruption, PackId, PortableDomainDocument, RuleId,
+    ScenarioDocument, SemanticCapability, SolutionId, SolveBudgetView, ValidationIssue,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Current generic domain-pack command-batch schema.
 pub const DOMAIN_BATCH_SCHEMA_VERSION: u32 = 1;
@@ -63,6 +65,8 @@ pub enum DomainCapability {
     Compilation,
     Projection,
     Verification,
+    /// Source-owned assumption compilation, diagnostic verification scope and reversible copies.
+    InfeasibilityDiagnostics,
     Scoring,
     PortableData,
     ShareResult,
@@ -457,6 +461,8 @@ impl DomainUiManifest {
 #[derive(Clone, Debug)]
 pub struct CompileContext {
     pub scenario_revision: u64,
+    /// Exact recorded semantics; None preserves historical authored dispatch only.
+    pub objective_context: Option<eutheto_domain_ir::RunObjectiveContext>,
     pub semantic_metadata: BTreeMap<String, String>,
     pub control: OperationControl,
     pub planning_limits: PlanningIrLimitsV1,
@@ -471,6 +477,87 @@ pub struct CounterfactualCompileContext<'a> {
     pub base_problem: &'a PlanningProblem,
     pub compile_context: &'a CompileContext,
     pub budget: SolveBudgetView,
+}
+
+/// Immutable source and inherited deadline for objective-free infeasibility diagnostics.
+///
+/// `base_problem` is the admitted source model, including an already admitted temporary
+/// condition when present. The diagnostic model may restore authored-rule-pruned choices,
+/// but never relax fixed facts or change the recorded question.
+#[derive(Clone)]
+pub struct InfeasibilityCompileContext<'a> {
+    pub base_problem: &'a PlanningProblem,
+    pub compile_context: &'a CompileContext,
+    pub condition: Option<&'a CounterfactualConditionV1>,
+    pub budget: SolveBudgetView,
+}
+
+/// Source-evaluator classification used only by unsaved diagnostic witness review.
+///
+/// This classification is obtained independently of compiler assumptions and provenance.
+/// The complete ordinary scope still includes every fixed fact, lock and authored obligation.
+#[derive(Clone, Debug)]
+pub struct DiagnosticVerificationScope {
+    verification_scope: VerificationScope,
+    relaxable_required_rules: Vec<RuleId>,
+}
+
+impl DiagnosticVerificationScope {
+    /// Binds a canonical genuine-authored subset to a validated complete source scope.
+    ///
+    /// # Errors
+    /// Rejects invalid scope, duplicate/noncanonical IDs or an ID outside the complete scope.
+    pub fn new(
+        verification_scope: VerificationScope,
+        relaxable_required_rules: Vec<RuleId>,
+    ) -> Result<Self, DomainPackError> {
+        verification_scope
+            .validate()
+            .map_err(|_| DomainPackError::Contract("invalid diagnostic source scope".to_owned()))?;
+        if relaxable_required_rules.len() > verification_scope.required_rules.len()
+            || !relaxable_required_rules
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            || relaxable_required_rules.iter().any(|rule_id| {
+                verification_scope
+                    .required_rules
+                    .binary_search_by_key(rule_id, |binding| binding.rule_id)
+                    .is_err()
+            })
+        {
+            return Err(DomainPackError::Contract(
+                "invalid diagnostic authored-rule classification".to_owned(),
+            ));
+        }
+        Ok(Self {
+            verification_scope,
+            relaxable_required_rules,
+        })
+    }
+
+    #[must_use]
+    pub const fn verification_scope(&self) -> &VerificationScope {
+        &self.verification_scope
+    }
+
+    #[must_use]
+    pub fn relaxable_required_rules(&self) -> &[RuleId] {
+        &self.relaxable_required_rules
+    }
+}
+
+/// Authenticated source-to-copy bindings for one ordinary reversible diagnostic command batch.
+///
+/// The host owns source custody, remapping and ID generation. The pack authors exact question
+/// rules in the destination and must not infer them from coarse population filters.
+pub struct DiagnosticCopyContext<'a> {
+    pub source_revision: u64,
+    pub destination: &'a ScenarioDocument,
+    pub id_remap: &'a BTreeMap<Uuid, Uuid>,
+    pub group: &'a ConflictGroupV1,
+    pub condition: Option<&'a CounterfactualConditionV1>,
+    pub ids: &'a dyn IdGenerator,
+    pub control: &'a OperationControl,
 }
 
 /// Pack validation output in deterministic issue order.
@@ -659,7 +746,10 @@ pub enum DomainViewInput<'a> {
     AcceptedSolution {
         document: &'a ScenarioDocument,
         solution: &'a NormalizedSolution,
+        objective_context: Option<&'a eutheto_domain_ir::RunObjectiveContext>,
         view_id: &'a str,
+        query: &'a DomainSetupQueryV1,
+        context: SetupViewContext,
     },
 }
 
@@ -795,6 +885,7 @@ pub trait DomainPack: Send + Sync {
 
     /// Verifies required rules against a normalized solution and embeds the separately
     /// recomputed authoritative score without deriving rule outcomes from it.
+    /// Uses the exact recorded objective context; absence retains historical run semantics.
     ///
     /// # Errors
     ///
@@ -804,12 +895,14 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
         control: &OperationControl,
     ) -> Result<VerificationReport, DomainPackError>;
 
     /// Computes the pack-defined score vector for a solution.
+    /// Uses the exact recorded objective context; absence retains historical run semantics.
     ///
     /// # Errors
     ///
@@ -819,8 +912,36 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
         control: &OperationControl,
     ) -> Result<ScoreVector, DomainPackError>;
+
+    /// Projects source-owned protections, affected parties and current scoring semantics.
+    ///
+    /// Both immutable sources have been independently reverified by the caller. Scoring contexts
+    /// may be emitted only for explicitly recognized current producer/profile meanings; they do
+    /// not authenticate historical compilation or solver origin. The caller separately checks each
+    /// source's recorded policy against current compilation before publishing score comparison.
+    /// Packs without a source projector supply no enrichment or aggregate-score compatibility.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid source evidence, interruption or finite-resource exhaustion. Unknown
+    /// historical scoring meaning is not an error: retain semantic evidence with no scoring context.
+    fn comparison_enrichment<'a>(
+        &self,
+        _base_document: &ScenarioDocument,
+        _base: &'a PortableAcceptedResult,
+        _candidate_document: &ScenarioDocument,
+        _candidate: &'a PortableAcceptedResult,
+        _prepared: &PreparedComparisonV2<'_>,
+        control: Option<&OperationControl>,
+    ) -> Result<ComparisonEnrichmentV2<'a>, DomainPackError> {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        Ok(ComparisonEnrichmentV2::default())
+    }
 
     /// Exports a scenario document as the pack's current portable representation.
     ///
@@ -856,6 +977,7 @@ pub trait DomainPack: Send + Sync {
     ) -> Result<ScenarioDocument, DomainPackError>;
 
     /// Builds the pack-owned contribution to an inert share result.
+    /// Accepted data is revalidated under the same recorded objective context.
     ///
     /// # Errors
     ///
@@ -864,6 +986,7 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         accepted: &AcceptedResult,
+        objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
         options: ShareResultOptions,
     ) -> Result<DomainShareResult, DomainPackError>;
 
@@ -884,6 +1007,8 @@ pub trait DomainPack: Send + Sync {
     /// The request kind must be declared in `descriptor().explanation_capabilities`. Implementors
     /// must validate the document and request and must return
     /// [`DomainPackError::UnsupportedExplanationCapability`] when the capability is absent.
+    /// Run-backed evidence uses its exact recorded context. Runless Validation remains current
+    /// source validation, not legacy-run objective dispatch.
     ///
     /// # Errors
     ///
@@ -892,8 +1017,38 @@ pub trait DomainPack: Send + Sync {
     fn render_evidence(
         &self,
         document: &ScenarioDocument,
-        request: &EvidenceRenderRequestV1,
+        request: &EvidenceRenderRequestV2,
+        objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
+        control: &OperationControl,
     ) -> Result<EvidenceRenderResultV1, DomainPackError>;
+
+    /// Derives Repair facts from both complete immutable accepted sources.
+    ///
+    /// Implementors bind the supplied comparison to these exact records and derive facts from
+    /// original domain meaning. A recorded editable baseline is not fresh native admission;
+    /// checksums alone never establish its private custody or unique repair causality.
+    /// The generic renderer cannot substitute comparison-only evidence for this route.
+    /// Native admission may conservatively withhold score comparability; rendering must not
+    /// upgrade that unavailable score authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns unsupported capability unless implemented, or a source-contract, interruption
+    /// or finite-resource error. Partial source-fact output must not be published on failure.
+    fn render_repair_evidence(
+        &self,
+        _base_document: &ScenarioDocument,
+        _base: &PortableAcceptedResult,
+        _candidate_document: &ScenarioDocument,
+        _candidate: &PortableAcceptedResult,
+        _request: &EvidenceRenderRequestV2,
+        control: &OperationControl,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        control.check()?;
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            ExplanationCapability::Repair,
+        ))
+    }
 
     /// Recompiles a validated temporary condition against an exact baseline model.
     ///
@@ -914,6 +1069,40 @@ pub trait DomainPack: Send + Sync {
         condition: &CounterfactualConditionV1,
         context: &CounterfactualCompileContext<'_>,
     ) -> Result<PlanningProblem, DomainPackError>;
+
+    /// Compiles the original Required semantics into an objective-free guarded diagnostic.
+    ///
+    /// # Errors
+    /// Returns a typed unsupported-domain-capability error unless source diagnostic authority
+    /// is advertised, or a validation, interruption or finite-resource failure.
+    fn compile_infeasibility(
+        &self,
+        document: &ScenarioDocument,
+        context: &InfeasibilityCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError>;
+
+    /// Classifies genuine authored Required obligations independently of emitted solver IR.
+    ///
+    /// # Errors
+    /// Rejects unsupported diagnostic authority, invalid source, role/identity collisions,
+    /// interruption or resource exhaustion.
+    fn diagnostic_verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+        control: &OperationControl,
+    ) -> Result<DiagnosticVerificationScope, DomainPackError>;
+
+    /// Authors one normal typed batch for selected-rule relaxation and exact copy question pins.
+    ///
+    /// # Errors
+    /// Rejects unsupported authority, forged source/group/remap/condition bindings, invalid
+    /// destination data, interruption or a batch outside normal mutation bounds.
+    fn prepare_diagnostic_copy_changes(
+        &self,
+        source: &ScenarioDocument,
+        context: &DiagnosticCopyContext<'_>,
+    ) -> Result<DomainBatchCommand, DomainPackError>;
 }
 
 /// A borrowed command whose catalog schemas were checked during registry construction.
@@ -1133,6 +1322,26 @@ impl DomainPackDescriptor {
                 self.id
             )));
         }
+        if self
+            .capabilities
+            .contains(&DomainCapability::InfeasibilityDiagnostics)
+            && (![
+                DomainCapability::Compilation,
+                DomainCapability::Projection,
+                DomainCapability::Verification,
+                DomainCapability::Scoring,
+            ]
+            .iter()
+            .all(|capability| self.capabilities.contains(capability))
+                || !self
+                    .explanation_capabilities
+                    .contains(&ExplanationCapability::Infeasibility))
+        {
+            return Err(DomainPackError::CatalogMismatch(format!(
+                "{} infeasibility diagnostic prerequisites",
+                self.id
+            )));
+        }
         Ok(())
     }
 }
@@ -1173,6 +1382,8 @@ pub enum DomainPackError {
     ResourceLimitExceeded,
     #[error("unsupported explanation capability {0:?}")]
     UnsupportedExplanationCapability(ExplanationCapability),
+    #[error("unsupported domain capability {0:?}")]
+    UnsupportedDomainCapability(DomainCapability),
     #[error("domain contract violation: {0}")]
     Contract(String),
 }

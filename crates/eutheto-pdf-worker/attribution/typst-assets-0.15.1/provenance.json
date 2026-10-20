@@ -1,0 +1,153 @@
+{
+  "source": "https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate",
+  "crateSha256": "bcee505dac6702dd1c5e65aa2e94a6179d19ee09e2e5637d7313db91765dc4e0",
+  "purpose": "Exact upstream dependency asset evidence for inventory validation; renderer continues to use locked typst-assets crate. License conclusions are scoped to these exact assets and software uses.",
+  "files": [
+    {
+      "upstreamPath": "files/fonts/FoxitDingbats.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitDingbats.pfb",
+      "sha256": "845c752392b6c914fb989c75a08b7792b88f542d2499042ef2889f8c814a16ed",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitFixed.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixed.pfb",
+      "sha256": "b6c8fe53f134b8b6d4578cd2d544df4cee9624c4efa8d51a560fb40ea296101b",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitFixedBold.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedBold.pfb",
+      "sha256": "f1b7159702973f54fc86254ea38bcf3712b2a736eb3a0995751e9f4bb45ad603",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitFixedBoldItalic.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedBoldItalic.pfb",
+      "sha256": "8a000945843bd31add06aee63bf9fd41b7578b4f3242a4b7cd46349ad9d24d4d",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitFixedItalic.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitFixedItalic.pfb",
+      "sha256": "5007faf8320fa1fcc08b8894b356ad976f60b992ba29ee5272578bbdebaf3876",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSans.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSans.pfb",
+      "sha256": "a02339e95d20db14cbdfc1c6baf359cd36a091d5434925c3a4040f60e1a1af9e",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSansBold.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansBold.pfb",
+      "sha256": "7bdfa36de1d5757dcfaf8b8a4be95c6e41c40fa70dbed9d78bf979a7b9959054",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSansBoldItalic.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansBoldItalic.pfb",
+      "sha256": "555ce45924338e2e4b32821910221ce85da691fd59a9723c4c971a7c5627fc8b",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSansItalic.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSansItalic.pfb",
+      "sha256": "7751cbefeda351708dae8c4a88db043411bc39ab2ae2097685da845d4d16f307",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSerif.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerif.pfb",
+      "sha256": "4f57d2b9d884af8f907bf22df6019b52d86cbf6214fdbd02b1ae05472a543f35",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSerifBold.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifBold.pfb",
+      "sha256": "0bdf4b04e964139818d51eda03d566ba999fc3ba2421b1c6c51f9dc969022e80",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSerifBoldItalic.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifBoldItalic.pfb",
+      "sha256": "a406cac82583bf98175cb62c87ed5e95c45fbb34eece63a10b0a13e793cb2e10",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSerifItalic.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSerifItalic.pfb",
+      "sha256": "610ae0687198045c4db5d1a6650fd5e92536631706382eb8b72e38df578d0ae9",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/fonts/FoxitSymbol.pfb",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/fonts/FoxitSymbol.pfb",
+      "sha256": "47967d055530e7357088a08403115425643ec2cdfd6201ba8af0fbd7116c1539",
+      "licenseConcluded": "BSD-3-Clause"
+    },
+    {
+      "upstreamPath": "files/icc/sGrey-v4.icc",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/sGrey-v4.icc",
+      "sha256": "00c0f94e09127520a17dc0e1d9264b5702081d96dbdb1549ee88e3631ce42a9d",
+      "licenseConcluded": "CC0-1.0"
+    },
+    {
+      "upstreamPath": "files/icc/sRGB-v4.icc",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/sRGB-v4.icc",
+      "sha256": "c56e1685d888f5edb92fe07f2750f387f8fe8e91b32ff8fb0b56bfbbb9458353",
+      "licenseConcluded": "CC0-1.0"
+    },
+    {
+      "upstreamPath": "files/icc/CMYK-to-XYZ.icc",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icc/CMYK-to-XYZ.icc",
+      "sha256": "73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0",
+      "licenseConcluded": "CC0-1.0"
+    },
+    {
+      "upstreamPath": "files/icu/icu_cj_segment.postcard",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/icu/icu_cj_segment.postcard",
+      "sha256": "734673dd556f10f4423c52fd2e7cf52111a38a1a1554f7fe0a7f3e56efc66842",
+      "licenseConcluded": "Unicode-3.0"
+    },
+    {
+      "upstreamPath": "files/html/data.rs",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/html/data.rs",
+      "sha256": "593214ab0d92d12c9ef603a983958a432f46be278d805152d38a65818fb266b8",
+      "licenseConcluded": "Apache-2.0 AND BSD-3-Clause AND LicenseRef-W3C-Document-2015"
+    },
+    {
+      "upstreamPath": "files/mathml/data.rs",
+      "path": "crates/eutheto-pdf-worker/attribution/typst-assets-0.15.1/files/mathml/data.rs",
+      "sha256": "39e0cb9c455f669e0202486ae9602f693569b8ea3ded42e87e8b7dfa926d99b4",
+      "licenseConcluded": "Apache-2.0 AND W3C-20150513"
+    }
+  ],
+  "additionalNotices": [
+    {
+      "path": "crates/eutheto-pdf-worker/fonts/COMPACT-ICC-LICENSE",
+      "sha256": "469d87b5fa48f8aaf69e25f4fcac3a309c97dbb7d561b917638abdb640e004d9"
+    },
+    {
+      "path": "crates/eutheto-pdf-worker/fonts/ICU4X-LICENSE",
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "path": "crates/eutheto-pdf-worker/fonts/ASSET-PROVENANCE-NOTICE",
+      "sha256": "98cc7df3c2af3303c9418eb749425bf85e51a1d43d03898e2abd494cea1b52d4"
+    },
+    {
+      "path": "crates/eutheto-pdf-worker/fonts/W3C-DOCUMENT-LICENSE-2015",
+      "sha256": "99e12eb0d2b8a0f1e1b075e8314ac2697e6cdc422ede17a3621a61ea82b5b487"
+    }
+  ],
+  "reviewEvidence": {
+    "cmykSourceCommit": "bdd84663061bc4ae95ca70decff54f581e27f702",
+    "mathmlSourceCommit": "3ce07269fe6b7e6888ecfea28b180e78774a4705",
+    "htmlDisposition": "Exact generated Rust implementation metadata fits W3C Document License (2015) software-derivative exception; retain full dated terms, source/status/original copyrights and instantiated 2015 derivation notices. No permission for modified technical specifications is inferred.",
+    "icuInspectedGeneratorCommit": "662e8320615aef5d07717456736e0d55b5011117",
+    "icuEvidenceLimit": "Upstream records cj-patch-update branch; this is the inspected revision, not proof of the exact historical generator commit. Blob was not regenerated.",
+    "w3cDocumentLicenseProvenance": "w3c-document-license-2015.provenance.json"
+  }
+}

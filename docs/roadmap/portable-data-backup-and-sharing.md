@@ -57,14 +57,14 @@ The portable migration system and internal database migration system are separat
 
 ## MVP artifact matrix
 
-| Artifact | Purpose | Source authority | Principal consumer | MVP format |
-|---|---|---|---|---|
-| Scenario export | Move or archive one editable scenario and only its required records | Current Portable Scenario Model | Another Eutheto installation or documented tooling | One proposed `.eutheto` ZIP-compatible bundle |
-| Full backup | Reconstruct the portable user library | Consistent portable snapshot | Fresh/current Eutheto installation | One proposed `.eutheto` bundle with `bundleKind: full-backup` |
-| Standalone result | Share a recipient-oriented accepted plan | Privacy-filtered Share Result Model | Modern desktop browser, no Eutheto/server | One self-contained `.html` file |
-| PDF result | Print/conventional record of the same share payload | Same Share Result Model and report renderer | PDF reader/printer | Direct `.pdf` export |
-| Domain tabular/calendar output | Interoperate with another application | Accepted result or valid scenario data under each output's gate | CSV/ICS/JSON consumers | Existing phase-owned formats |
-| Diagnostic/support output | Explain a failed or infeasible operation safely | Bounded redacted evidence | User/support | Separate previewed format; never disguised as a result |
+| Artifact                       | Purpose                                                             | Source authority                                                | Principal consumer                                 | MVP format                                                    |
+| ------------------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------- |
+| Scenario export                | Move or archive one editable scenario and only its required records | Current Portable Scenario Model                                 | Another Eutheto installation or documented tooling | One proposed `.eutheto` ZIP-compatible bundle                 |
+| Full backup                    | Reconstruct the portable user library                               | Consistent portable snapshot                                    | Fresh/current Eutheto installation                 | One proposed `.eutheto` bundle with `bundleKind: full-backup` |
+| Standalone result              | Share a recipient-oriented accepted plan                            | Privacy-filtered Share Result Model                             | Modern desktop browser, no Eutheto/server          | One self-contained `.html` file                               |
+| PDF result                     | Print/conventional record of the same share payload                 | Same Share Result Model and report renderer                     | PDF reader/printer                                 | Direct `.pdf` export                                          |
+| Domain tabular/calendar output | Interoperate with another application                               | Accepted result or valid scenario data under each output's gate | CSV/ICS/JSON consumers                             | Existing phase-owned formats                                  |
+| Diagnostic/support output      | Explain a failed or infeasible operation safely                     | Bounded redacted evidence                                       | User/support                                       | Separate previewed format; never disguised as a result        |
 
 Selected multi-scenario backup, encrypted bundles, automatic rotation, signatures, semantic merge, hosted sharing, annotations, offline map tiles, and organizational publishing are post-MVP.
 
@@ -222,8 +222,7 @@ For each scenario identity collision, MVP choices are:
 - **Create a copy:** mint new scenario/scenario-owned IDs and remap every internal reference consistently while retaining source provenance;
 - **Replace existing:** explicit reviewed replacement in the final atomic transaction; or
 - **Skip:** leave that scenario unchanged and exclude its selected dependent records.
-Every existing local supplemental `(section, key)` collision is also listed. Add/import requires an explicit **Replace** or **Skip** choice for each; no hidden upsert is allowed. Replace-library may overwrite all supplemental identities only after the preview discloses their exact removal scope. Skipping a scenario excludes supplemental JSON that declares a dependency on it, while Create a copy rewrites only declared identity/reference positions and preserves UUID-shaped prose and external values.
-
+  Every existing local supplemental `(section, key)` collision is also listed. Add/import requires an explicit **Replace** or **Skip** choice for each; no hidden upsert is allowed. Replace-library may overwrite all supplemental identities only after the preview discloses their exact removal scope. Skipping a scenario excludes supplemental JSON that declares a dependency on it, while Create a copy rewrites only declared identity/reference positions and preserves UUID-shaped prose and external values.
 
 No automatic semantic merge in the MVP. Similar names are not identities. Cancel, checksum failure, validation error, unresolved collision, stale preview, I/O failure, or commit failure leaves the local library unchanged. Successful imports retain source bundle ID, original scenario ID/schema/application, timestamp, migration warnings, and ID-remap state without cluttering normal editing.
 
@@ -235,7 +234,7 @@ A scenario export contains one editable scenario and only records required by it
 
 - every exact scenario revision required by a selected retained result, otherwise export fails rather than orphaning evidence;
 - referenced shared people, places, vehicles, activities, rules, reusable templates, and presets;
-- retained immutable accepted results and required verification/provenance records;
+- retained result records preserving recorded accepted/unaccepted status and required verification/provenance facts; archival flags never grant native acceptance;
 - user-created share/report presets;
 - portable application preferences; and
 - bounded PNG, JPEG, or UTF-8 plain-text assets with exact media type and retained affirmative redistribution permission.
@@ -323,7 +322,7 @@ Suggested filenames are `<scenario-title>-Plan-v<plan-number>.html`, the equival
 
 The standalone renderer includes reviewed `@media print` behavior: remove controls without paper meaning; preserve dates/plan version; expand or summarize appropriate details; avoid clipped timelines; control page breaks/repeated headers; support grayscale; retain accessible readable type; and add concise provenance.
 
-PDF is a secondary MVP output from the same validated Share Result Model and reviewed report/print renderer, using a controlled local headless/webview print pipeline or equivalent deterministic project-owned renderer. It cannot use a separate privacy model or silently contact remote resources. Phase 11 closes target packaging, reliability, and dependency/license evidence; failure leaves no partial PDF.
+PDF is a secondary MVP output from the same validated Share Result Model through a controlled local renderer. The [Phase-07 decision](07-workforce-solving-results-repair-and-export.md#privacy-preview-print-and-pdf) approved a fixed Typst document layout on 2026-10-17, replacing the earlier browser-print direction while preserving complete content and disclosure parity with HTML. It cannot use a separate privacy model or silently contact remote resources. Phase 11 closes target packaging, reliability, and dependency/license evidence; failure leaves no partial PDF.
 
 ## APIs and product state
 
@@ -395,20 +394,20 @@ Visual regression protects shared view components and print layout, but semantic
 
 ## Phase ownership
 
-| Phase | Required delivery |
-|---:|---|
-| 00 | Generation/drift commands, fixture directories, parser/fuzz dependencies only when implementation work reaches the owning phase; no placeholder format claims. |
-| 01 | Portable model envelope, version-1 bundle/manifest/checksum/limits, current-only export, inspect/migrate/validate/preview/collision/atomic import, full backup/restore, recovery, CLI/application/Tauri contracts, and permanent version-1 fixtures. |
-| 02 | Pack portable capability IDs, domain conversion/validation/migration hooks, explicit semantic extension handling, and domain-owned Share Result contribution contract. |
-| 05 | Workforce portable model/import round trips and view payload groundwork; no standalone report claim yet. |
-| 06 | Intent-led import/backup/share UI primitives, preview/accessibility/error states, safe file grants, and nonblocking operation shell. |
-| 07 | Generic Share Result builder/renderer/component boundary; workforce standalone HTML and direct PDF; privacy preview/options; CSV/ICS/JSON coexist under distinct gates. |
-| 09 | Seating Share Result payload/views, deterministic schematic/SVG integration, standalone HTML/PDF through the shared renderer, and privacy/accessibility evidence. |
-| 10 | No AI authority to export/restore; conversation/provider data stays excluded, minimal command provenance remains independent of chat retention, and imported integration metadata grants no authority. |
-| 11 | Final `.eutheto` identity/media-type/file-association ADR; exact target/browser/PDF packaging; public format/report documentation; compatibility/support matrix; release security review. |
-| 12 | Historical migration/security/fuzz/restore/report/browser/print/PDF/large-fixture release gates on exact candidates. |
-| 13 | Explicit post-MVP backup/encryption/signature/hosted-sharing branches; Branch-K experiment retention and promotion preserve exclusions, disclosure, and inert restore without adding an implicit export path. |
-| 14 | Transportation portable semantics/provider restrictions and Share Result itinerary/coordination payload with complete offline non-map meaning. |
+| Phase | Required delivery                                                                                                                                                                                                                                    |
+| ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    00 | Generation/drift commands, fixture directories, parser/fuzz dependencies only when implementation work reaches the owning phase; no placeholder format claims.                                                                                       |
+|    01 | Portable model envelope, version-1 bundle/manifest/checksum/limits, current-only export, inspect/migrate/validate/preview/collision/atomic import, full backup/restore, recovery, CLI/application/Tauri contracts, and permanent version-1 fixtures. |
+|    02 | Pack portable capability IDs, domain conversion/validation/migration hooks, explicit semantic extension handling, and domain-owned Share Result contribution contract.                                                                               |
+|    05 | Workforce portable model/import round trips and view payload groundwork; no standalone report claim yet.                                                                                                                                             |
+|    06 | Intent-led import/backup/share UI primitives, preview/accessibility/error states, safe file grants, and nonblocking operation shell.                                                                                                                 |
+|    07 | Generic Share Result builder/renderer/component boundary; workforce standalone HTML and direct PDF; privacy preview/options; CSV/ICS/JSON coexist under distinct gates.                                                                              |
+|    09 | Seating Share Result payload/views, deterministic schematic/SVG integration, standalone HTML/PDF through the shared renderer, and privacy/accessibility evidence.                                                                                    |
+|    10 | No AI authority to export/restore; conversation/provider data stays excluded, minimal command provenance remains independent of chat retention, and imported integration metadata grants no authority.                                               |
+|    11 | Final `.eutheto` identity/media-type/file-association ADR; exact target/browser/PDF packaging; public format/report documentation; compatibility/support matrix; release security review.                                                            |
+|    12 | Historical migration/security/fuzz/restore/report/browser/print/PDF/large-fixture release gates on exact candidates.                                                                                                                                 |
+|    13 | Explicit post-MVP backup/encryption/signature/hosted-sharing branches; Branch-K experiment retention and promotion preserve exclusions, disclosure, and inert restore without adding an implicit export path.                                        |
+|    14 | Transportation portable semantics/provider restrictions and Share Result itinerary/coordination payload with complete offline non-map meaning.                                                                                                       |
 
 ## MVP acceptance
 

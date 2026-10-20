@@ -3,7 +3,8 @@ use super::{
     context::Context,
 };
 use crate::model::{
-    PersonSelection, WorkforceEntity, WorkforceScorePolicy, WorkloadPolicy, WorkloadTargetMode,
+    PersonSelection, WorkforceEntity, WorkforcePreference, WorkforceScorePolicy, WorkloadPolicy,
+    WorkloadTargetMode,
 };
 use std::collections::BTreeSet;
 
@@ -25,12 +26,7 @@ impl Context<'_> {
                     self.person(target.person_id)?;
                 }
             }
-            if !matches!(
-                policy.target_mode,
-                WorkloadTargetMode::WeightedEqualShare {}
-            ) {
-                self.workload_targets(policy)?;
-            }
+            self.workload_targets(policy)?;
         }
         Ok(())
     }
@@ -108,8 +104,24 @@ impl Context<'_> {
                     "workloadPolicies.targetMode",
                     "every peer needs a matching person workload target",
                 )?,
-                WorkloadTargetMode::WeightedEqualShare {} => {}
+                WorkloadTargetMode::WeightedEqualShare {} | WorkloadTargetMode::EqualShare {} => {}
             }
+        }
+        if self.domain.preferences.values().any(|preference| {
+            matches!(
+                preference,
+                WorkforcePreference::WorkloadBalance {
+                    active: true,
+                    workload_policy_id,
+                    ..
+                } if *workload_policy_id == policy.id
+            )
+        }) {
+            require(
+                peers > 0,
+                "workloadPolicies.peerGroup",
+                "an active workload preference needs at least one matching person",
+            )?;
         }
         if let WorkloadTargetMode::Explicit { targets } = &policy.target_mode {
             require(

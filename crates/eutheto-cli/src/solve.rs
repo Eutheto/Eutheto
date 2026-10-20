@@ -5,25 +5,28 @@ use super::{
     app_error, bundled_solver, files, operation_request_id, scenario_files, unexpected_result,
 };
 use eutheto_core::{
-    AppQuery, AppQueryResult, EuthetoApp, HeadlessCompilationReport, HeadlessService,
-    SolvePreparationFailure, StoredSolveFailure, StoredSolveRequest,
+    AppQuery, AppQueryResult, EuthetoApp, HeadlessCompilationReport, HeadlessService, RepairSource,
+    SolvePreparationFailure, StoredBaselineSourceV1, StoredObjectiveSelectionV1,
+    StoredSolveFailure, StoredSolveRequest,
 };
 use eutheto_domain_ir::{
-    ConflictUnavailableReason, InfeasibilityEvidenceV1, RunInputV1, RunManifestV1,
-    RunTerminalOutcomeV1,
+    ConflictUnavailableReason, InfeasibilityEvidenceV1, ObjectiveProfileId, RunInput, RunManifest,
+    RunObjectiveOperation, RunTerminalOutcomeV1,
 };
 use eutheto_export::PORTABLE_LIMITS;
 use eutheto_planning_ir::PlanningIrLimitsV1;
 use eutheto_solver_api::ProgressSink;
 use eutheto_types::{
-    BackendSelection, CancellationToken, DurationMillis, ExplanationMode, OperationControl,
-    PreservationPolicy, ReproducibilityMode, ResourceLimits, ScenarioId, SolveMode, SolveOptions,
-    SolveStatus, SystemClock, SystemIdGenerator, SystemMonotonicClock, WorkerThreadPolicy,
+    BackendSelection, CancellationToken, Clock, DurationMillis, ExplanationMode,
+    KnownVerificationAlarmV1, KnownVerificationSecondaryCauseCode, OperationControl,
+    ParentSolveBudget, PreservationPolicy, ReproducibilityMode, ResourceLimits, ScenarioId,
+    SolveMode, SolveOptions, SolveStatus, SystemClock, SystemIdGenerator, SystemMonotonicClock,
+    VerificationAlarmTerminalization, VerificationFailure, WorkerThreadPolicy,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
+#[allow(clippy::large_futures)]
 pub(super) async fn execute(
     data_dir: Option<PathBuf>,
     mut args: SolveArgs,
@@ -31,12 +34,12 @@ pub(super) async fn execute(
     has_config: bool,
     progress: &mut dyn ProgressSink,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    if args.command.is_some() || args.repair_from.is_some() {
+    if args.command.is_some() {
         return Err((
             "solve",
             SafeCliError::unavailable(
                 "solve.operation_unavailable",
-                "Service-mode cancellation and repair are unavailable; use a finite local solve.",
+                "Service-mode cancellation is unavailable; use a finite local solve.",
             ),
         ));
     }
@@ -97,6 +100,10 @@ async fn file(
         .begin_solve(operation_request_id()?, options, cancellation.clone())
         .map_err(app_error)?;
     let control = operation.control();
+    let source = match args.repair_from.as_deref() {
+        Some(input) => Some(repair_source(input, &control).await?),
+        None => None,
+    };
     let prepared = {
         let bytes = files::read_controlled(
             input,
@@ -106,12 +113,26 @@ async fn file(
         )
         .await?;
         if bytes.starts_with(b"PK\x03\x04") {
-            operation.prepare_bundle(&bytes)
+            if let Some(entity_id) = args.repair_external {
+                operation.prepare_bundle_external_repair(&bytes, entity_id)
+            } else {
+                match source {
+                    Some(source) => operation.prepare_bundle_repair(&bytes, source),
+                    None => operation.prepare_bundle(&bytes),
+                }
+            }
         } else {
             let inspected = service
                 .decode_scenario(&bytes, &control)
                 .map_err(app_error)?;
-            operation.prepare(inspected.scenario)
+            if let Some(entity_id) = args.repair_external {
+                operation.prepare_external_repair(inspected.scenario, entity_id)
+            } else {
+                match source {
+                    Some(source) => operation.prepare_repair(inspected.scenario, source),
+                    None => operation.prepare(inspected.scenario),
+                }
+            }
         }
     }
     .map_err(|failure| preparation_error(*failure))?;
@@ -155,10 +176,41 @@ async fn stored(
         scenario_id,
         expected_revision: None,
         options,
+        objective_selection: match args.repair_external {
+            Some(entity_id) => Some(StoredObjectiveSelectionV1 {
+                schema_version: 1,
+                profile_id: ObjectiveProfileId::new("official.workforce.objective.minimal-changes")
+                    .map_err(|_| unexpected_result())?,
+                semantic_version: 1,
+                operation: RunObjectiveOperation::Repair,
+                baseline_source: StoredBaselineSourceV1::External { entity_id },
+                alternatives_capture_id: None,
+            }),
+            None => None,
+        },
     };
-    let mut solved = Box::pin(app.solve_stored(request, progress))
-        .await
-        .map_err(stored_failure)?;
+    let solved = if let Some(input) = args.repair_from.as_deref() {
+        let budget = ParentSolveBudget::new(
+            request.options.time_limit_milliseconds,
+            Arc::new(SystemMonotonicClock::new()),
+            cancellation.clone(),
+        )
+        .map_err(|_| {
+            SafeCliError::new(
+                CliExitCode::Application,
+                "solve.clock_invalid",
+                "The operation timing cannot be represented safely.",
+            )
+        })?;
+        let started_at = SystemClock.now();
+        let control = OperationControl::Solve(budget.phase_view());
+        let source = repair_source(input, &control).await?;
+        Box::pin(app.solve_stored_repair_with_budget(request, source, progress, budget, started_at))
+            .await
+    } else {
+        Box::pin(app.solve_stored(request, progress)).await
+    };
+    let mut solved = solved.map_err(stored_failure)?;
     let state = solved.state();
     let manifest = state.manifest.as_ref().ok_or_else(|| {
         SafeCliError::new(
@@ -198,6 +250,25 @@ async fn stored(
         diagnostics.as_ref(),
         cancellation,
     )
+}
+
+async fn repair_source(
+    input: &Path,
+    control: &OperationControl,
+) -> Result<RepairSource, SafeCliError> {
+    files::check_control(control)?;
+    if let Some(id) = files::solution_id_or_file(input)? {
+        Ok(RepairSource::ResultId(id))
+    } else {
+        files::read_controlled(
+            input,
+            PORTABLE_LIMITS.max_json_bytes,
+            "solution.input_invalid",
+            control,
+        )
+        .await
+        .map(RepairSource::Json)
+    }
 }
 
 async fn observe_current_revision(
@@ -304,7 +375,7 @@ fn duration(text: &str) -> Result<DurationMillis, SafeCliError> {
     DurationMillis::new(value).map_err(|_| invalid())
 }
 
-fn terminal(input: &RunInputV1, manifest: &RunManifestV1) -> Result<Outcome, SafeCliError> {
+fn terminal(input: &RunInput, manifest: &RunManifest) -> Result<Outcome, SafeCliError> {
     let (status, result_id) = match &manifest.outcome {
         RunTerminalOutcomeV1::Accepted {
             status,
@@ -343,13 +414,13 @@ fn terminal(input: &RunInputV1, manifest: &RunManifestV1) -> Result<Outcome, Saf
         "status": status, "resultId": result_id,
         "independentlyVerified": result_id.is_some(),
         "infeasibilityEvidence": (status == SolveStatus::Infeasible).then_some(
-            InfeasibilityEvidenceV1::Unavailable { reason: ConflictUnavailableReason::ConflictNotReturned }
+            InfeasibilityEvidenceV1::Unavailable { reason: ConflictUnavailableReason::NotRequested }
         ),
     }), human).with_exit(exit))
 }
 
 fn terminal_disposition(
-    input: &RunInputV1,
+    input: &RunInput,
     status: SolveStatus,
 ) -> Result<(&'static str, CliExitCode, &'static str), SafeCliError> {
     Ok(match status {
@@ -366,7 +437,7 @@ fn terminal_disposition(
         SolveStatus::Infeasible => (
             "infeasible",
             CliExitCode::Infeasible,
-            "The configured Required rules are infeasible. Conflict evidence is unavailable (conflictNotReturned).",
+            "The backend reports its compiled model infeasible; no original-rule conflict is established (assumptionsUnavailable).",
         ),
         SolveStatus::NoSolutionWithinLimit => (
             "noSolutionWithinLimit",
@@ -416,12 +487,7 @@ fn terminal_disposition(
     })
 }
 
-fn terminal_error(
-    input: &RunInputV1,
-    exit: CliExitCode,
-    code: &str,
-    message: &str,
-) -> SafeCliError {
+fn terminal_error(input: &RunInput, exit: CliExitCode, code: &str, message: &str) -> SafeCliError {
     let mut error = SafeCliError::new(exit, code, message);
     error.details = Some(
         json!({"runId": input.run_id, "scenarioId": input.scenario_id, "scenarioRevision": input.scenario_revision}),
@@ -446,6 +512,43 @@ fn preparation_error(failure: SolvePreparationFailure) -> SafeCliError {
     error
 }
 
+fn verification_diagnostic_id(error: &eutheto_types::AppError) -> Option<eutheto_types::RequestId> {
+    match error {
+        eutheto_types::AppError::Verification(failure) => failure.diagnostic_id,
+        _ => None,
+    }
+}
+
+fn safe_secondary_cause(
+    error: &eutheto_types::AppError,
+) -> Option<KnownVerificationSecondaryCauseCode> {
+    let code = match error {
+        eutheto_types::AppError::Storage(failure) => Some(failure.code.as_str()),
+        eutheto_types::AppError::Protocol(failure) => Some(failure.code.as_str()),
+        _ => None,
+    }?;
+    KnownVerificationSecondaryCauseCode::from_safe_code(code)
+}
+
+fn alarm_manifest_matches(alarm: &KnownVerificationAlarmV1, manifest: &RunManifest) -> bool {
+    manifest.run_id == alarm.run_id()
+        && manifest.run_input_checksum == alarm.input_checksum()
+        && matches!(
+            &manifest.outcome,
+            RunTerminalOutcomeV1::VerificationAlarm { diagnostic_code }
+                if diagnostic_code == alarm.diagnostic_code().as_str()
+        )
+}
+
+fn known_alarm_error(
+    error: &eutheto_types::AppError,
+    alarm: KnownVerificationAlarmV1,
+) -> SafeCliError {
+    app_error(eutheto_types::AppError::Verification(
+        VerificationFailure::from_known_alarm(alarm, verification_diagnostic_id(error)),
+    ))
+}
+
 fn stored_failure(failure: StoredSolveFailure) -> SafeCliError {
     match failure {
         StoredSolveFailure::BeforeStart(error) => app_error(error),
@@ -454,7 +557,31 @@ fn stored_failure(failure: StoredSolveFailure) -> SafeCliError {
             run_id,
             error,
             cleanup,
+            known_alarm,
         } => {
+            if let Some(alarm) = known_alarm {
+                let terminalization = if run_id == alarm.run_id()
+                    && cleanup
+                        .as_ref()
+                        .is_ok_and(|manifest| alarm_manifest_matches(&alarm, manifest))
+                {
+                    VerificationAlarmTerminalization::Confirmed
+                } else {
+                    VerificationAlarmTerminalization::Unconfirmed
+                };
+                let secondary = cleanup
+                    .as_ref()
+                    .err()
+                    .and_then(safe_secondary_cause)
+                    .or_else(|| safe_secondary_cause(&error))
+                    .or_else(|| alarm.secondary_cause_code());
+                return known_alarm_error(
+                    &error,
+                    alarm
+                        .with_terminalization(terminalization)
+                        .with_secondary_cause(secondary),
+                );
+            }
             let mut error = app_error(error);
             let cleanup_error = cleanup.err().map(app_error);
             if cleanup_error.is_some() {
@@ -469,7 +596,14 @@ fn stored_failure(failure: StoredSolveFailure) -> SafeCliError {
             run_id,
             result_id,
             error,
+            known_alarm,
         } => {
+            if let Some(alarm) = known_alarm {
+                return known_alarm_error(
+                    &error,
+                    alarm.with_terminalization(VerificationAlarmTerminalization::Unconfirmed),
+                );
+            }
             let cause = app_error(error);
             let mut error = SafeCliError::storage(
                 "solve.finalization_unconfirmed",
@@ -483,8 +617,8 @@ fn stored_failure(failure: StoredSolveFailure) -> SafeCliError {
 }
 
 fn diagnostics(
-    input: &RunInputV1,
-    manifest: &RunManifestV1,
+    input: &RunInput,
+    manifest: &RunManifest,
     compilation: Option<&HeadlessCompilationReport>,
     before_publication: bool,
 ) -> Value {
@@ -546,4 +680,287 @@ fn warning(code: &str, message: &str, cause: &SafeCliError) -> SafeCliWarning {
 
 fn usage(code: &str, message: &str) -> SafeCliError {
     SafeCliError::new(CliExitCode::Usage, code, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stored_failure;
+    use eutheto_core::StoredSolveFailure;
+    use eutheto_domain_ir::RunManifest;
+    use eutheto_types::{
+        AppError, KnownVerificationAlarmV1, StorageFailure, VerificationAlarmTerminalization,
+    };
+
+    #[tokio::test]
+    async fn repair_operand_enforces_bounds_and_parent_interruption()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let cancellation = super::CancellationToken::new();
+        let clock = std::sync::Arc::new(eutheto_types::FixedMonotonicClock::default());
+        let budget = super::ParentSolveBudget::new(
+            super::DurationMillis::new(1000)?,
+            clock.clone(),
+            cancellation.clone(),
+        )?;
+        let control = super::OperationControl::Solve(budget.phase_view());
+        let invalid = super::repair_source(std::path::Path::new("not-an-id"), &control)
+            .await
+            .err()
+            .ok_or("invalid ID was admitted")?;
+        assert_eq!(invalid.code, "solution.id_invalid");
+        let oversized = directory.path().join("oversized.json");
+        std::fs::File::create(&oversized)?.set_len(super::PORTABLE_LIMITS.max_json_bytes + 1)?;
+        let error = super::repair_source(&oversized, &control)
+            .await
+            .err()
+            .ok_or("oversized result was read")?;
+        assert_eq!(error.code, "solution.input_invalid");
+        let missing = directory.path().join("missing.json");
+        clock.advance(std::time::Duration::from_secs(1))?;
+        let error = super::repair_source(&missing, &control)
+            .await
+            .err()
+            .ok_or("deadline was ignored")?;
+        assert_eq!(error.exit, super::CliExitCode::NoVerifiedSolution);
+        assert_eq!(error.code, "operation.deadline_exceeded");
+        cancellation.cancel();
+        let error = super::repair_source(&missing, &control)
+            .await
+            .err()
+            .ok_or("cancellation was ignored")?;
+        assert_eq!(error.exit, super::CliExitCode::Cancelled);
+        assert_eq!(error.code, "operation.cancelled");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn file_repair_admission_refuses_missing_and_malformed_originals_without_publication()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use clap::Parser;
+
+        struct NoProgress;
+        impl eutheto_solver_api::ProgressSink for NoProgress {
+            fn emit(
+                &mut self,
+                _event: eutheto_solver_api::SolveProgressEvent,
+            ) -> Result<(), eutheto_solver_api::OutputError> {
+                Ok(())
+            }
+        }
+
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("scenario.json");
+        let output = directory.path().join("accepted.json");
+        let diagnostics = directory.path().join("diagnostics.json");
+        let original = directory.path().join("original.json");
+        std::fs::write(&original, b"{}")?;
+        let cancellation = super::CancellationToken::new();
+        let control = super::OperationControl::Cancellation(cancellation.clone());
+        let service = super::scenario_files::service()
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/migration/fixtures/portable_v1_scenario.json"
+        ))?;
+        let snapshot = service
+            .create_scenario(
+                "CLI repair admission".to_owned(),
+                String::new(),
+                eutheto_types::DomainPackRef {
+                    id: "official.workforce".parse()?,
+                    schema_version: 1,
+                },
+                serde_json::from_value(fixture["input"]["document"]["settings"].clone())?,
+                &control,
+            )
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let bytes = service
+            .encode_scenario(&snapshot, &control)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        std::fs::write(&input, &bytes)?;
+        let original_bytes = std::fs::read(&original)?;
+        for source in [
+            "018f47f2-e880-7000-8000-000000000105",
+            original.to_str().ok_or("non-UTF-8 path")?,
+        ] {
+            let cli = super::super::Cli::try_parse_from([
+                "optimizer",
+                "solve",
+                input.to_str().ok_or("non-UTF-8 path")?,
+                "--repair-from",
+                source,
+                "--output",
+                output.to_str().ok_or("non-UTF-8 path")?,
+                "--include-diagnostics",
+                diagnostics.to_str().ok_or("non-UTF-8 path")?,
+            ])?;
+            let super::super::Command::Solve(args) = cli.command else {
+                return Err("solve was not parsed".into());
+            };
+            for prior_output in [None, Some(b"keep previous output".as_slice())] {
+                if let Some(prior) = prior_output {
+                    std::fs::write(&output, prior)?;
+                }
+                let options = super::options(&args)
+                    .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                let failure = Box::pin(super::file(
+                    &service,
+                    &input,
+                    options,
+                    &args,
+                    &cancellation,
+                    &mut NoProgress,
+                ))
+                .await
+                .err()
+                .ok_or("invalid original was admitted")?;
+                assert_eq!(failure.code, "solve.repair_source_invalid");
+                assert_eq!(failure.exit, super::CliExitCode::Validation);
+                assert_eq!(std::fs::read(&input)?, bytes);
+                assert_eq!(std::fs::read(&original)?, original_bytes);
+                assert!(!diagnostics.exists());
+                match prior_output {
+                    None => assert!(!output.exists()),
+                    Some(prior) => {
+                        assert_eq!(std::fs::read(&output)?, prior);
+                        std::fs::remove_file(&output)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn known_alarm_dominates_secondary_storage_failure() -> Result<(), Box<dyn std::error::Error>> {
+        let run_id = "018f47f2-e880-7000-8000-000000000010".parse()?;
+        let alarm = KnownVerificationAlarmV1::new(
+            run_id,
+            &"ab".repeat(32),
+            "verification.projection_failed",
+            VerificationAlarmTerminalization::NotApplicable,
+            None,
+        )?;
+        let failure = StoredSolveFailure::AfterStart {
+            run_id,
+            known_alarm: Some(alarm),
+            error: AppError::Storage(StorageFailure {
+                code: "storage.operation_failed".to_owned(),
+                message: "original private storage failure must not be published.".to_owned(),
+                retryable: false,
+                diagnostic_id: None,
+            }),
+            cleanup: Err(AppError::Storage(StorageFailure {
+                code: "storage.operation_failed".to_owned(),
+                message: "raw storage details must not be published.".to_owned(),
+                retryable: false,
+                diagnostic_id: None,
+            })),
+        };
+        let mapped = stored_failure(failure);
+        assert_eq!(mapped.exit, super::CliExitCode::Verification);
+        assert_eq!(mapped.code, "verification.projection_failed");
+        assert_eq!(
+            mapped
+                .details
+                .as_ref()
+                .map(|value| &value["knownAlarm"]["terminalization"]),
+            Some(&serde_json::Value::String("unconfirmed".to_owned()))
+        );
+        assert_eq!(
+            mapped
+                .details
+                .as_ref()
+                .map(|value| &value["knownAlarm"]["secondaryCauseCode"]),
+            Some(&serde_json::Value::String(
+                "storage.operation_failed".to_owned()
+            ))
+        );
+        assert!(
+            mapped
+                .human_details
+                .iter()
+                .any(|line| line.contains("unconfirmed"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_marked_alarm_readback_confirms_only_matching_manifest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let run_id = "018f47f2-e880-7000-8000-000000000010".parse()?;
+        let checksum = "ab".repeat(32);
+        let diagnostic_code = "verification.projection_failed";
+        let marked_manifest = RunManifest::new_clock_failed_alarm(
+            run_id,
+            checksum.clone(),
+            diagnostic_code.to_owned(),
+            "2026-09-01T00:00:00Z".parse()?,
+            "2026-09-01T00:00:01Z".parse()?,
+        )?;
+        let confirmed = stored_failure(StoredSolveFailure::AfterStart {
+            run_id,
+            known_alarm: Some(KnownVerificationAlarmV1::new(
+                run_id,
+                &checksum,
+                diagnostic_code,
+                VerificationAlarmTerminalization::Unconfirmed,
+                None,
+            )?),
+            error: AppError::Storage(StorageFailure {
+                code: "storage.operation_failed".to_owned(),
+                message: "the original execution failure remains private.".to_owned(),
+                retryable: false,
+                diagnostic_id: None,
+            }),
+            cleanup: Ok(Box::new(marked_manifest)),
+        });
+        assert_eq!(
+            confirmed
+                .details
+                .as_ref()
+                .map(|value| &value["knownAlarm"]["terminalization"]),
+            Some(&serde_json::Value::String("confirmed".to_owned()))
+        );
+
+        let other_run = "018f47f2-e880-7000-8000-000000000011".parse()?;
+        for (manifest_run, manifest_checksum, manifest_code) in [
+            (other_run, checksum.clone(), diagnostic_code),
+            (run_id, "cd".repeat(32), diagnostic_code),
+            (run_id, checksum, "verification.score_failed"),
+        ] {
+            let manifest = RunManifest::new_clock_failed_alarm(
+                manifest_run,
+                manifest_checksum,
+                manifest_code.to_owned(),
+                "2026-09-01T00:00:00Z".parse()?,
+                "2026-09-01T00:00:01Z".parse()?,
+            )?;
+            let alarm = KnownVerificationAlarmV1::new(
+                run_id,
+                &"ab".repeat(32),
+                diagnostic_code,
+                VerificationAlarmTerminalization::Confirmed,
+                None,
+            )?;
+            let mapped = stored_failure(StoredSolveFailure::AfterStart {
+                run_id,
+                known_alarm: Some(alarm),
+                error: AppError::Storage(StorageFailure {
+                    code: "storage.operation_failed".to_owned(),
+                    message: "the original execution failure remains private.".to_owned(),
+                    retryable: false,
+                    diagnostic_id: None,
+                }),
+                cleanup: Ok(Box::new(manifest)),
+            });
+            assert_eq!(
+                mapped
+                    .details
+                    .as_ref()
+                    .map(|value| &value["knownAlarm"]["terminalization"]),
+                Some(&serde_json::Value::String("unconfirmed".to_owned()))
+            );
+        }
+        Ok(())
+    }
 }

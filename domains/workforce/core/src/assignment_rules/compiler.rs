@@ -1,12 +1,18 @@
 use super::{
     AssignmentAnalysis, AssignmentConstructionIssue, AssignmentRuleCompilation,
     AssignmentRuleError, AssignmentRuleLimit, AssignmentVariable,
-    analysis::{Plan, PlannedConstraint, Predicate, predicate_shape, prepare},
+    analysis::{Plan, PlannedConstraint, Predicate, consecutive, hours, predicate_shape, prepare},
+    authority::check_objective_context,
     budget::{OperationBudget, add, count, within},
+    compiler_weekend,
     identity::{IdentityKind, PlanningIdentities},
     input::AssignmentInput,
+    reporting::ReportingPeriod,
 };
-use crate::{ids::ShiftId, model::AssignmentPair};
+use crate::{
+    ids::{LocationId, ShiftId},
+    model::AssignmentPair,
+};
 use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::{DomainEntityId, DomainEntityKindId, DomainEntityRef};
 use eutheto_planning_ir::{
@@ -14,7 +20,7 @@ use eutheto_planning_ir::{
     PlanningIrLimitsV1, ProvenanceId, ProvenanceParameter, ProvenanceRecord, ProvenanceSourceKind,
     Variable,
 };
-use eutheto_types::{EntityId, PersonId, RuleId, ScenarioDocument};
+use eutheto_types::{AssignmentId, EntityId, PersonId, RuleId, ScenarioDocument};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 use std::collections::BTreeMap;
 
@@ -25,7 +31,7 @@ pub(super) const BOOL_ID: &str =
 pub(super) const CONSTRAINT_ID: &str = "official.workforce.constraint.0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const PROVENANCE_ID: &str = "official.workforce.provenance.0000000000000000000000000000000000000000000000000000000000000000";
 
-/// Compile only the unregistered five-family mathematical contribution.
+/// Compile only the unregistered supported mathematical contribution.
 ///
 /// # Errors
 /// Returns structural, temporal, cancellation, finite-work and bounded-output failures atomically.
@@ -35,19 +41,34 @@ pub fn compile_assignment_rules(
 ) -> Result<AssignmentRuleCompilation, AssignmentRuleError> {
     let limits = context.planning_limits;
     let mut budget = OperationBudget::analysis(Some(&context.control), limits);
-    let input = AssignmentInput::new(document, &mut budget)?;
+    check_objective_context(context.objective_context.as_ref(), document.scenario_id)
+        .map_err(AssignmentRuleError::InvalidDocument)?;
+    let input = AssignmentInput::new(document, &mut budget)?
+        .with_objective_context(
+            context.objective_context.as_ref(),
+            document.scenario_id,
+            &mut budget,
+        )
+        .map_err(AssignmentRuleError::InvalidDocument)?;
+    super::profile::snapshot_pairs(
+        &input,
+        document.scenario_id,
+        context.objective_context.as_ref(),
+        &mut budget,
+    )
+    .map_err(AssignmentRuleError::InvalidDocument)?;
     let (analysis, plan) = prepare(document, &input, &mut budget, limits)?;
     // Counts, per-record bounds, references and exact serialized contribution bytes are all
     // reserved before the first IR variable is allocated. The dry pass streams literal lists.
     preflight(&analysis.candidates, &plan, &mut budget, limits)?;
-    construct(analysis, &plan, &mut budget)
+    construct(analysis, &plan, &mut budget, limits)
 }
 
 /// Borrow either actual output representation without allocating an intermediate contribution.
 /// Complete construction interleaves each candidate Boolean and its rank integer until the
 /// finished model is canonicalized; source identity always comes from the typed pair.
 #[derive(Clone, Copy)]
-pub(super) enum DecisionVariables<'a> {
+pub(crate) enum DecisionVariables<'a> {
     Contribution(&'a [AssignmentVariable]),
     Complete {
         pairs: &'a [AssignmentPair],
@@ -56,7 +77,7 @@ pub(super) enum DecisionVariables<'a> {
 }
 
 impl<'a> DecisionVariables<'a> {
-    fn boolean(self, index: usize) -> Option<&'a BoolVariable> {
+    pub(crate) fn boolean(self, index: usize) -> Option<&'a BoolVariable> {
         match self {
             Self::Contribution(variables) => variables.get(index).map(|value| &value.variable),
             Self::Complete { variables, .. } => match variables.get(index.checked_mul(2)?)? {
@@ -66,7 +87,7 @@ impl<'a> DecisionVariables<'a> {
         }
     }
 
-    fn pair(self, index: usize) -> Option<AssignmentPair> {
+    pub(crate) fn pair(self, index: usize) -> Option<AssignmentPair> {
         match self {
             Self::Contribution(variables) => variables.get(index).map(|value| value.pair),
             Self::Complete { pairs, .. } => pairs.get(index).copied(),
@@ -74,16 +95,20 @@ impl<'a> DecisionVariables<'a> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn construct(
     analysis: AssignmentAnalysis,
     plan: &Plan,
     budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
 ) -> Result<AssignmentRuleCompilation, AssignmentRuleError> {
     let mut identities = PlanningIdentities::default();
     let mut variables = Vec::new();
+    let mut auxiliary_variables = Vec::new();
     let mut provenance = Vec::new();
     let mut constraints = Vec::new();
-    for pair in analysis.candidates {
+    let pairs = analysis.candidates;
+    for pair in &pairs {
         budget.step()?;
         let key = ("assignment", pair.person_id, pair.shift_id);
         let id = BoolVariableId::new(identities.derive(IdentityKind::Boolean, &key, budget)?)
@@ -91,43 +116,86 @@ fn construct(
         let fact_id =
             ProvenanceId::new(identities.derive(IdentityKind::Provenance, &key, budget)?)
                 .map_err(|_| invalid_id())?;
-        provenance.push(variable_fact(pair, fact_id.clone(), budget)?);
+        provenance.push(variable_fact(*pair, fact_id.clone(), budget)?);
         variables.push(AssignmentVariable {
-            pair,
+            pair: *pair,
             variable: BoolVariable {
                 id,
                 provenance: fact_id,
             },
         });
     }
-    let mut parents = BTreeMap::new();
-    for (rule, kind) in &plan.parents {
-        budget.step()?;
-        let id = ProvenanceId::new(identities.derive(
-            IdentityKind::Provenance,
-            &("rule", rule, kind),
-            budget,
-        )?)
-        .map_err(|_| invalid_id())?;
-        budget.reserve(1, 1, 128)?;
-        parents.insert(*rule, id.clone());
-        provenance.push(rule_fact(*rule, kind, id));
-    }
+    let parents = materialize_rule_parents(plan, &mut identities, &mut provenance, budget)?;
+    let hard_lock_parents =
+        materialize_hard_lock_parents(plan, &mut identities, &mut provenance, budget)?;
     for planned in &plan.constraints {
-        let parent = parents.get(&planned.rule).ok_or_else(invalid)?.clone();
-        let (record, fact) = compile_constraint(
-            planned,
-            plan,
-            DecisionVariables::Contribution(&variables),
-            parent,
-            &mut identities,
-            budget,
-        )?;
-        constraints.push(record);
-        provenance.push(fact);
+        let parent = match planned.predicate {
+            Predicate::HardLock { assignment, .. } => hard_lock_parents
+                .get(&assignment)
+                .ok_or_else(invalid)?
+                .clone(),
+            _ => parents.get(&planned.rule).ok_or_else(invalid)?.clone(),
+        };
+        if compiler_weekend::is(planned) {
+            compiler_weekend::emit(
+                planned,
+                plan,
+                DecisionVariables::Contribution(&variables),
+                parent,
+                &mut identities,
+                &mut auxiliary_variables,
+                &mut constraints,
+                &mut provenance,
+                budget,
+                limits,
+            )?;
+        } else if consecutive::is(planned) {
+            consecutive::emit(
+                planned,
+                plan,
+                DecisionVariables::Contribution(&variables),
+                parent,
+                &mut identities,
+                &mut auxiliary_variables,
+                &mut constraints,
+                &mut provenance,
+                budget,
+                limits,
+            )?;
+        } else {
+            let (record, fact) = compile_constraint(
+                planned,
+                plan,
+                DecisionVariables::Contribution(&variables),
+                parent,
+                &mut identities,
+                budget,
+            )?;
+            constraints.push(record);
+            provenance.push(fact);
+        }
     }
+    let hour_auxiliaries =
+        hours::prepare_contribution(plan, &pairs, &variables, &mut identities, budget)?;
+    auxiliary_variables.extend(hour_auxiliaries.variables);
+    constraints.extend(hour_auxiliaries.constraints);
+    provenance.extend(hour_auxiliaries.provenance);
+    hours::compile(
+        plan,
+        &hour_auxiliaries.pair_ints,
+        &parents,
+        &mut identities,
+        &mut auxiliary_variables,
+        &mut constraints,
+        &mut provenance,
+        budget,
+        limits,
+    )?;
     budget.sort_work(variables.len())?;
     variables.sort_unstable_by(|a, b| a.variable.id.cmp(&b.variable.id));
+    budget.sort_work(auxiliary_variables.len())?;
+    auxiliary_variables
+        .sort_unstable_by(|left, right| left.canonical_id().cmp(right.canonical_id()));
     budget.sort_work(constraints.len())?;
     constraints.sort_unstable_by(|a, b| a.id.cmp(&b.id));
     budget.sort_work(provenance.len())?;
@@ -136,8 +204,9 @@ fn construct(
     Ok(AssignmentRuleCompilation {
         source_document_hash: analysis.source_document_hash,
         variables,
-        constraints,
+        auxiliary_variables,
         provenance,
+        constraints,
         rejections: analysis.rejections,
         estimate: analysis.estimate,
         validation: analysis.validation,
@@ -199,14 +268,25 @@ fn constraint_body(
         for index in &planned.population {
             budget.step()?;
             let variable = variables.boolean(*index).ok_or_else(invalid)?;
-            literals.push(Literal::positive(variable.id.clone()));
+            let literal = match planned.predicate {
+                Predicate::FixedAssignment {
+                    assigned: false, ..
+                } => Literal::negative(variable.id.clone()),
+                _ => Literal::positive(variable.id.clone()),
+            };
+            literals.push(literal);
         }
     }
     // The Planning IR constructors canonically sort and deduplicate these lists.
     budget.sort_work(literals.len())?;
     budget.steps(count(literals.len())?)?;
     if planned.impossible {
-        return Ok(Constraint::bool_or(literals));
+        return Ok(match planned.predicate {
+            Predicate::FixedAssignment {
+                assigned: false, ..
+            } => Constraint::bool_and(literals),
+            _ => Constraint::bool_or(literals),
+        });
     }
     match planned.predicate {
         Predicate::Headcount { lower, upper, .. } => {
@@ -217,18 +297,58 @@ fn constraint_body(
             minimum,
             upper,
             ..
+        }
+        | Predicate::SkillMixQualification {
+            definition,
+            minimum,
+            upper,
+            ..
         } => Constraint::cardinality(
             literals,
             u64::from(plan.definitions[definition].minima[minimum].minimum),
             upper,
         )
         .map_err(|_| invalid()),
+        Predicate::MaximumAssignmentCount { maximum, .. } => Constraint::cardinality(
+            literals,
+            0,
+            u64::from(maximum).min(count(planned.population.len())?),
+        )
+        .map_err(|_| invalid()),
+        Predicate::WorkloadQuota {
+            minimum,
+            maximum,
+            measure: crate::model::WorkloadQuotaMeasure::AssignmentCount {},
+            ..
+        } => {
+            let upper = maximum
+                .map_or(count(literals.len())?, u64::from)
+                .min(count(literals.len())?);
+            Constraint::cardinality(literals, u64::from(minimum), upper).map_err(|_| invalid())
+        }
+        Predicate::WorkloadQuota {
+            measure: crate::model::WorkloadQuotaMeasure::BucketMinutes { .. },
+            ..
+        }
+        | Predicate::MaximumConsecutive { .. }
+        | Predicate::MaximumWorkedWeekends { .. } => Err(invalid()),
         Predicate::Overlap { .. }
         | Predicate::OverlapClique { .. }
-        | Predicate::MinimumRest { .. } => Ok(Constraint::at_most_one(literals)),
+        | Predicate::MutualSameShift { .. }
+        | Predicate::MutualOverlap { .. }
+        | Predicate::MinimumRest { .. }
+        | Predicate::TransitionTime { .. } => Ok(Constraint::at_most_one(literals)),
+        Predicate::FixedAssignment {
+            assigned: false, ..
+        } => Ok(Constraint::bool_and(literals)),
+        Predicate::FixedAssignment { assigned: true, .. } | Predicate::HardLock { .. } => {
+            Ok(Constraint::bool_or(literals))
+        }
     }
 }
 
+// Keep each predicate's canonical identity key adjacent to its variant.
+#[allow(clippy::too_many_lines)]
 fn derive_predicate(
     kind: IdentityKind,
     planned: &PlannedConstraint,
@@ -244,19 +364,24 @@ fn derive_predicate(
             lower,
             upper,
             ..
-        } => identities.derive(
-            kind,
-            &(
+        } => {
+            let key = (
                 "headcount",
                 planned.rule,
                 plan.definitions[definition].owner,
                 shift,
                 lower,
                 upper,
-            ),
-            budget,
-        ),
+            );
+            identities.derive(kind, &key, budget)
+        }
         Predicate::Qualification {
+            definition,
+            minimum,
+            shift,
+            ..
+        }
+        | Predicate::SkillMixQualification {
             definition,
             minimum,
             shift,
@@ -264,7 +389,11 @@ fn derive_predicate(
         } => identities.derive(
             kind,
             &(
-                "qualification_minimum",
+                if matches!(planned.predicate, Predicate::Qualification { .. }) {
+                    "qualification_minimum"
+                } else {
+                    "skill_mix_qualification_minimum"
+                },
                 planned.rule,
                 plan.definitions[definition].owner,
                 shift,
@@ -272,6 +401,63 @@ fn derive_predicate(
             ),
             budget,
         ),
+        Predicate::MaximumAssignmentCount {
+            person,
+            calendar_id,
+            period,
+            maximum,
+        } => identities.derive(
+            kind,
+            &(
+                "maximum_assignment_count",
+                planned.rule,
+                person,
+                calendar_id,
+                period,
+                maximum,
+            ),
+            budget,
+        ),
+        Predicate::WorkloadQuota {
+            person,
+            calendar_id,
+            period,
+            minimum,
+            maximum,
+            measure,
+        } => identities.derive(
+            kind,
+            &(
+                "workload_quota",
+                planned.rule,
+                person,
+                calendar_id,
+                period,
+                minimum,
+                maximum,
+                measure,
+            ),
+            budget,
+        ),
+        Predicate::MaximumConsecutive { person, definition } => {
+            let data = plan.definitions[definition]
+                .consecutive
+                .as_ref()
+                .ok_or_else(invalid)?;
+            identities.derive(
+                kind,
+                &(
+                    "maximum_consecutive",
+                    planned.rule,
+                    person,
+                    data.mode,
+                    data.maximum,
+                    data.break_minutes,
+                ),
+                budget,
+            )
+        }
+        Predicate::MaximumWorkedWeekends { .. } => Err(invalid()),
         Predicate::Overlap {
             person,
             first,
@@ -282,44 +468,117 @@ fn derive_predicate(
             budget,
         ),
         Predicate::OverlapClique { person } => {
-            // Measurement and encoding both visit this borrowed canonical member list.
-            budget.steps(
-                count(planned.population.len())?
-                    .checked_mul(2)
-                    .ok_or_else(invalid)?,
-            )?;
-            identities.derive(
-                kind,
-                &(
-                    "no_overlap_clique",
-                    planned.rule,
-                    person,
-                    CliqueShifts {
-                        population: &planned.population,
-                        variables,
-                    },
-                ),
-                budget,
-            )
+            derive_clique(kind, planned, person, variables, identities, budget)
         }
+        Predicate::MutualSameShift { shift } => {
+            identities.derive(kind, &("mutual_same_shift", planned.rule, shift), budget)
+        }
+        Predicate::MutualOverlap {
+            first_person,
+            first_shift,
+            second_person,
+            second_shift,
+        } => identities.derive(
+            kind,
+            &(
+                "mutual_overlapping_shifts",
+                planned.rule,
+                first_person,
+                first_shift,
+                second_person,
+                second_shift,
+            ),
+            budget,
+        ),
         Predicate::MinimumRest {
             person,
             source,
             target,
             minimum_minutes,
-        } => identities.derive(
-            kind,
-            &(
+        } => {
+            let key = (
                 "minimum_rest",
                 planned.rule,
                 person,
                 source,
                 target,
                 minimum_minutes,
+            );
+            identities.derive(kind, &key, budget)
+        }
+        Predicate::TransitionTime {
+            person,
+            source_location,
+            target_location,
+            source,
+            target,
+            required_minutes,
+        } => identities.derive(
+            kind,
+            &(
+                "transition_time",
+                planned.rule,
+                person,
+                source_location,
+                target_location,
+                source,
+                target,
+                required_minutes,
             ),
             budget,
         ),
+        Predicate::FixedAssignment {
+            person,
+            shift,
+            assigned,
+        } => identities.derive(
+            kind,
+            &(
+                if assigned {
+                    "fixed_assignment"
+                } else {
+                    "fixed_assignment_excluded"
+                },
+                planned.rule,
+                person,
+                shift,
+            ),
+            budget,
+        ),
+        Predicate::HardLock {
+            assignment,
+            person,
+            shift,
+        } => identities.derive(kind, &("hard_lock", assignment, person, shift), budget),
     }
+}
+fn derive_clique(
+    kind: IdentityKind,
+    planned: &PlannedConstraint,
+    person: PersonId,
+    variables: DecisionVariables<'_>,
+    identities: &mut PlanningIdentities,
+    budget: &mut OperationBudget<'_>,
+) -> Result<String, AssignmentRuleError> {
+    // Measurement and encoding both visit this borrowed canonical member list.
+    budget.steps(
+        count(planned.population.len())?
+            .checked_mul(2)
+            .ok_or_else(invalid)?,
+    )?;
+    identities.derive(
+        kind,
+        &(
+            "no_overlap_clique",
+            planned.rule,
+            person,
+            CliqueShifts {
+                population: &planned.population,
+                variables,
+            },
+        ),
+        budget,
+    )
 }
 
 // Population indices are in canonical candidate (person, ShiftId) order. Stream
@@ -385,6 +644,92 @@ pub(super) fn rule_fact(rule: RuleId, kind: &str, id: ProvenanceId) -> Provenanc
     }
 }
 
+pub(super) fn materialize_rule_parents(
+    plan: &Plan,
+    identities: &mut PlanningIdentities,
+    provenance: &mut Vec<ProvenanceRecord>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<BTreeMap<RuleId, ProvenanceId>, AssignmentRuleError> {
+    let mut parents = BTreeMap::new();
+    for (rule, kind) in &plan.parents {
+        budget.step()?;
+        let id = ProvenanceId::new(identities.derive(
+            IdentityKind::Provenance,
+            &("rule", rule, kind),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        budget.reserve(1, 1, 128)?;
+        parents.insert(*rule, id.clone());
+        provenance.push(rule_fact(*rule, kind, id));
+    }
+    Ok(parents)
+}
+
+pub(super) fn hard_lock_fact(
+    assignment: AssignmentId,
+    pair: AssignmentPair,
+    id: ProvenanceId,
+    budget: &mut OperationBudget<'_>,
+) -> Result<ProvenanceRecord, AssignmentRuleError> {
+    budget.reserve(0, 3, 192)?;
+    let mut entity_refs = vec![
+        entity("assignment_lock", EntityId::from_uuid(assignment.as_uuid()))?,
+        entity("person", EntityId::from_uuid(pair.person_id.as_uuid()))?,
+        entity("shift", pair.shift_id.as_entity_id())?,
+    ];
+    budget.sort_work(entity_refs.len())?;
+    entity_refs.sort_unstable();
+    Ok(ProvenanceRecord {
+        id,
+        source_kind: ProvenanceSourceKind::Fact,
+        source_id: assignment.to_string(),
+        entity_refs,
+        message_key: "official.workforce.hard_lock".to_owned(),
+        parameters: BTreeMap::new(),
+        parent: None,
+    })
+}
+
+pub(super) fn materialize_hard_lock_parents(
+    plan: &Plan,
+    identities: &mut PlanningIdentities,
+    provenance: &mut Vec<ProvenanceRecord>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<BTreeMap<AssignmentId, ProvenanceId>, AssignmentRuleError> {
+    let mut parents = BTreeMap::new();
+    for planned in &plan.constraints {
+        let Predicate::HardLock {
+            assignment,
+            person,
+            shift,
+        } = planned.predicate
+        else {
+            continue;
+        };
+        budget.step()?;
+        if parents.contains_key(&assignment) {
+            continue;
+        }
+        let pair = AssignmentPair {
+            person_id: person,
+            shift_id: shift,
+        };
+        let id = ProvenanceId::new(identities.derive(
+            IdentityKind::Provenance,
+            &("hard_lock_fact", assignment, person, shift),
+            budget,
+        )?)
+        .map_err(|_| invalid_id())?;
+        budget.reserve(1, 3, 256)?;
+        parents.insert(assignment, id.clone());
+        provenance.push(hard_lock_fact(assignment, pair, id, budget)?);
+    }
+    Ok(parents)
+}
+
+// Keep each predicate's source identities and parameters adjacent in one auditable match.
+#[allow(clippy::too_many_lines)]
 fn constraint_fact(
     planned: &PlannedConstraint,
     plan: &Plan,
@@ -450,6 +795,92 @@ fn constraint_fact(
                 "official.workforce.coverage_qualification_minimum",
             )
         }
+        Predicate::SkillMixQualification {
+            definition,
+            minimum,
+            shift,
+            ..
+        } => {
+            let definition = &plan.definitions[definition];
+            let key = &definition.minima[minimum];
+            parameters.insert(
+                "minimum".to_owned(),
+                ProvenanceParameter::Integer(i64::from(key.minimum)),
+            );
+            parameters.insert(
+                "source_row".to_owned(),
+                integer(count(definition.source_rows[minimum])?)?,
+            );
+            for (prefix, qualifications) in [("all", &key.all), ("any", &key.any)] {
+                for qualification in qualifications {
+                    parameters.insert(
+                        format!("{prefix}.{qualification}"),
+                        ProvenanceParameter::Entity(entity(
+                            "qualification",
+                            qualification.as_entity_id(),
+                        )?),
+                    );
+                }
+            }
+            (
+                vec![
+                    entity(definition.owner.kind, definition.owner.id)?,
+                    entity("shift", shift.as_entity_id())?,
+                ],
+                "official.workforce.required_skill_mix_qualification_minimum",
+            )
+        }
+        Predicate::MaximumAssignmentCount {
+            person,
+            period,
+            maximum,
+            ..
+        } => (
+            maximum_count_payload(person, period, maximum, &mut parameters, budget)?,
+            "official.workforce.maximum_assignment_count",
+        ),
+        Predicate::WorkloadQuota {
+            person,
+            period,
+            minimum,
+            maximum,
+            measure,
+            ..
+        } => (
+            workload_quota_payload(
+                person,
+                period,
+                minimum,
+                maximum,
+                measure,
+                &mut parameters,
+                budget,
+            )?,
+            "official.workforce.workload_quota",
+        ),
+        Predicate::MaximumConsecutive { person, definition } => {
+            let data = plan.definitions[definition]
+                .consecutive
+                .as_ref()
+                .ok_or_else(invalid)?;
+            parameters.insert(
+                "maximum".to_owned(),
+                ProvenanceParameter::Integer(i64::from(data.maximum)),
+            );
+            parameters.insert(
+                "mode".to_owned(),
+                ProvenanceParameter::Text(consecutive::mode_name(data.mode).to_owned()),
+            );
+            parameters.insert(
+                "break_minutes".to_owned(),
+                ProvenanceParameter::Integer(i64::from(data.break_minutes.unwrap_or(0))),
+            );
+            (
+                vec![entity("person", EntityId::from_uuid(person.as_uuid()))?],
+                "official.workforce.maximum_consecutive",
+            )
+        }
+        Predicate::MaximumWorkedWeekends { .. } => return Err(invalid()),
         Predicate::Overlap {
             person,
             first,
@@ -466,6 +897,24 @@ fn constraint_fact(
             vec![entity("person", EntityId::from_uuid(person.as_uuid()))?],
             "official.workforce.incompatible_overlap_clique",
         ),
+        Predicate::MutualSameShift { shift } => (
+            vec![entity("shift", shift.as_entity_id())?],
+            "official.workforce.mutual_assignment_restriction.same_shift",
+        ),
+        Predicate::MutualOverlap {
+            first_person,
+            first_shift,
+            second_person,
+            second_shift,
+        } => (
+            vec![
+                entity("person", EntityId::from_uuid(first_person.as_uuid()))?,
+                entity("shift", first_shift.as_entity_id())?,
+                entity("person", EntityId::from_uuid(second_person.as_uuid()))?,
+                entity("shift", second_shift.as_entity_id())?,
+            ],
+            "official.workforce.mutual_assignment_restriction.overlapping_shifts",
+        ),
         Predicate::MinimumRest {
             person,
             source,
@@ -475,18 +924,151 @@ fn constraint_fact(
             minimum_rest_payload(person, source, target, minimum_minutes, &mut parameters)?,
             "official.workforce.minimum_rest",
         ),
+        Predicate::TransitionTime {
+            person,
+            source_location,
+            target_location,
+            source,
+            target,
+            required_minutes,
+        } => (
+            transition_time_payload(
+                person,
+                source_location,
+                target_location,
+                source,
+                target,
+                required_minutes,
+                &mut parameters,
+            )?,
+            "official.workforce.transition_time",
+        ),
+        Predicate::FixedAssignment {
+            person,
+            shift,
+            assigned,
+        } => {
+            if !assigned {
+                parameters.insert("assigned".to_owned(), ProvenanceParameter::Boolean(false));
+            }
+            (
+                vec![
+                    entity("person", EntityId::from_uuid(person.as_uuid()))?,
+                    entity("shift", shift.as_entity_id())?,
+                ],
+                if assigned {
+                    "official.workforce.fixed_assignment"
+                } else {
+                    "official.workforce.fixed_assignment_excluded"
+                },
+            )
+        }
+        Predicate::HardLock { person, shift, .. } => (
+            vec![
+                entity("person", EntityId::from_uuid(person.as_uuid()))?,
+                entity("shift", shift.as_entity_id())?,
+            ],
+            "official.workforce.hard_lock",
+        ),
+    };
+    let source_id = match planned.predicate {
+        Predicate::HardLock { assignment, .. } => assignment.to_string(),
+        _ => planned.rule.to_string(),
     };
     budget.sort_work(entity_refs.len())?;
     entity_refs.sort_unstable();
+    if matches!(
+        planned.predicate,
+        Predicate::MutualOverlap {
+            first_shift,
+            second_shift,
+            ..
+        } if first_shift == second_shift
+    ) {
+        entity_refs.dedup();
+    }
     Ok(ProvenanceRecord {
         id,
         source_kind: ProvenanceSourceKind::Derived,
-        source_id: planned.rule.to_string(),
+        source_id,
         entity_refs,
         message_key: message_key.to_owned(),
         parameters,
         parent: Some(parent),
     })
+}
+
+fn maximum_count_payload(
+    person: PersonId,
+    period: ReportingPeriod,
+    maximum: u32,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    budget.reserve(0, 3, 192)?;
+    parameters.insert(
+        "maximum".to_owned(),
+        ProvenanceParameter::Integer(i64::from(maximum)),
+    );
+    parameters.insert(
+        "period_start".to_owned(),
+        ProvenanceParameter::Text(period.start.to_string()),
+    );
+    parameters.insert(
+        "period_end".to_owned(),
+        ProvenanceParameter::Text(period.end.to_string()),
+    );
+    Ok(vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        entity("calendar", period.calendar_id.as_entity_id())?,
+    ])
+}
+fn workload_quota_payload(
+    person: PersonId,
+    period: ReportingPeriod,
+    minimum: u32,
+    maximum: Option<u32>,
+    measure: crate::model::WorkloadQuotaMeasure,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    budget.reserve(0, 5, 256)?;
+    parameters.insert(
+        "minimum".to_owned(),
+        ProvenanceParameter::Integer(i64::from(minimum)),
+    );
+    if let Some(maximum) = maximum {
+        parameters.insert(
+            "maximum".to_owned(),
+            ProvenanceParameter::Integer(i64::from(maximum)),
+        );
+    }
+    parameters.insert(
+        "period_start".to_owned(),
+        ProvenanceParameter::Text(period.start.to_string()),
+    );
+    parameters.insert(
+        "period_end".to_owned(),
+        ProvenanceParameter::Text(period.end.to_string()),
+    );
+    parameters.insert(
+        "measure".to_owned(),
+        ProvenanceParameter::Text(
+            match measure {
+                crate::model::WorkloadQuotaMeasure::AssignmentCount {} => "assignmentCount",
+                crate::model::WorkloadQuotaMeasure::BucketMinutes { .. } => "bucketMinutes",
+            }
+            .to_owned(),
+        ),
+    );
+    let mut refs = vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        entity("calendar", period.calendar_id.as_entity_id())?,
+    ];
+    if let crate::model::WorkloadQuotaMeasure::BucketMinutes { bucket_id } = measure {
+        refs.push(entity("workload_bucket", bucket_id.as_entity_id())?);
+    }
+    Ok(refs)
 }
 
 fn minimum_rest_payload(
@@ -512,6 +1094,47 @@ fn minimum_rest_payload(
     );
     Ok(vec![
         entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        source,
+        target,
+    ])
+}
+fn transition_time_payload(
+    person: PersonId,
+    source_location: LocationId,
+    target_location: LocationId,
+    source: ShiftId,
+    target: ShiftId,
+    required_minutes: u32,
+    parameters: &mut BTreeMap<String, ProvenanceParameter>,
+) -> Result<Vec<DomainEntityRef>, AssignmentRuleError> {
+    let source_location = entity("location", source_location.as_entity_id())?;
+    let target_location = entity("location", target_location.as_entity_id())?;
+    let source = entity("shift", source.as_entity_id())?;
+    let target = entity("shift", target.as_entity_id())?;
+    parameters.insert(
+        "source_location".to_owned(),
+        ProvenanceParameter::Entity(source_location.clone()),
+    );
+    parameters.insert(
+        "target_location".to_owned(),
+        ProvenanceParameter::Entity(target_location.clone()),
+    );
+    parameters.insert(
+        "source_shift".to_owned(),
+        ProvenanceParameter::Entity(source.clone()),
+    );
+    parameters.insert(
+        "target_shift".to_owned(),
+        ProvenanceParameter::Entity(target.clone()),
+    );
+    parameters.insert(
+        "required_minutes".to_owned(),
+        ProvenanceParameter::Integer(i64::from(required_minutes)),
+    );
+    Ok(vec![
+        entity("person", EntityId::from_uuid(person.as_uuid()))?,
+        source_location,
+        target_location,
         source,
         target,
     ])
@@ -557,6 +1180,9 @@ enum MeasuredBody {
     BoolOr {
         literals: MeasuredLiterals,
     },
+    BoolAnd {
+        literals: MeasuredLiterals,
+    },
     AtMostOne {
         literals: MeasuredLiterals,
     },
@@ -576,6 +1202,7 @@ struct MeasuredConstraint {
     tags: [(); 0],
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn preflight(
     pairs: &[AssignmentPair],
     plan: &Plan,
@@ -592,34 +1219,35 @@ pub(super) fn preflight(
         )?;
     }
     let placeholder = ProvenanceId::new(PROVENANCE_ID).map_err(|_| invalid_id())?;
-    for pair in pairs {
-        budget.step()?;
-        let variable = MeasuredVariable {
-            id: BOOL_ID,
-            provenance: PROVENANCE_ID,
-        };
-        budget.reserve_ir(1, 1, budget.measure_ir(&variable)?)?;
-        // Temporary small provenance payloads are charged separately before materialization.
-        budget.reserve(1, 2, 1024)?;
-        let fact = variable_fact(*pair, placeholder.clone(), budget)?;
-        reserve_fact(&fact, budget, limits)?;
-    }
+    preflight_variable_facts(pairs, &placeholder, budget, limits)?;
+    hours::preflight_contribution(plan, budget, limits)?;
+    consecutive::preflight_contribution(plan, budget, limits)?;
+    compiler_weekend::preflight_contribution(plan, budget, limits)?;
     for (rule, kind) in &plan.parents {
         budget.step()?;
         budget.reserve(1, 0, 512)?;
         reserve_fact(&rule_fact(*rule, kind, placeholder.clone()), budget, limits)?;
     }
+    preflight_hard_lock_facts(plan, &placeholder, budget, limits)?;
     for planned in &plan.constraints {
+        if consecutive::is(planned) || compiler_weekend::is(planned) {
+            continue;
+        }
         budget.step()?;
         let literals = MeasuredLiterals(if planned.impossible {
             0
         } else {
             planned.population.len()
         });
-        budget.steps(count(literals.0)?)?;
         let literal_count = count(literals.0)?;
+        budget.steps(literal_count)?;
         let body = if planned.impossible {
-            MeasuredBody::BoolOr { literals }
+            match planned.predicate {
+                Predicate::FixedAssignment {
+                    assigned: false, ..
+                } => MeasuredBody::BoolAnd { literals },
+                _ => MeasuredBody::BoolOr { literals },
+            }
         } else {
             match planned.predicate {
                 Predicate::Headcount { lower, upper, .. } => MeasuredBody::CardinalityRange {
@@ -632,14 +1260,50 @@ pub(super) fn preflight(
                     minimum,
                     upper,
                     ..
+                }
+                | Predicate::SkillMixQualification {
+                    definition,
+                    minimum,
+                    upper,
+                    ..
                 } => MeasuredBody::CardinalityRange {
                     literals,
                     min: u64::from(plan.definitions[definition].minima[minimum].minimum),
                     max: upper,
                 },
+                Predicate::WorkloadQuota {
+                    minimum,
+                    maximum,
+                    measure: crate::model::WorkloadQuotaMeasure::AssignmentCount {},
+                    ..
+                } => MeasuredBody::CardinalityRange {
+                    literals,
+                    min: u64::from(minimum),
+                    max: maximum.map_or(literal_count, u64::from).min(literal_count),
+                },
+                Predicate::WorkloadQuota { .. } => MeasuredBody::BoolOr { literals },
+                Predicate::MaximumAssignmentCount { maximum, .. } => {
+                    MeasuredBody::CardinalityRange {
+                        literals,
+                        min: 0,
+                        max: u64::from(maximum).min(literal_count),
+                    }
+                }
+                Predicate::MaximumConsecutive { .. } | Predicate::MaximumWorkedWeekends { .. } => {
+                    return Err(invalid());
+                }
                 Predicate::Overlap { .. }
                 | Predicate::OverlapClique { .. }
-                | Predicate::MinimumRest { .. } => MeasuredBody::AtMostOne { literals },
+                | Predicate::MutualSameShift { .. }
+                | Predicate::MutualOverlap { .. }
+                | Predicate::MinimumRest { .. }
+                | Predicate::TransitionTime { .. } => MeasuredBody::AtMostOne { literals },
+                Predicate::FixedAssignment {
+                    assigned: false, ..
+                } => MeasuredBody::BoolAnd { literals },
+                Predicate::FixedAssignment { assigned: true, .. } | Predicate::HardLock { .. } => {
+                    MeasuredBody::BoolOr { literals }
+                }
             }
         };
         let record = MeasuredConstraint {
@@ -651,14 +1315,10 @@ pub(super) fn preflight(
         };
         budget.reserve_ir(1, add(literal_count, 1)?, budget.measure_ir(&record)?)?;
         let (entities, parameters) = predicate_shape(&planned.predicate, plan)?;
-        let temporary_bytes = add(
-            1024,
-            add(entities, parameters)?
-                .checked_mul(512)
-                .ok_or_else(invalid)?,
-        )?;
-        budget.reserve(1, add(entities, parameters)?, temporary_bytes)?;
-        budget.steps(add(entities, parameters)?)?;
+        let shape = add(entities, parameters)?;
+        let temporary_bytes = add(1024, shape.checked_mul(512).ok_or_else(invalid)?)?;
+        budget.reserve(1, shape, temporary_bytes)?;
+        budget.steps(shape)?;
         reserve_fact(
             &constraint_fact(
                 planned,
@@ -674,13 +1334,78 @@ pub(super) fn preflight(
     budget.check()
 }
 
-pub(super) fn reserve_fact(
+fn preflight_variable_facts(
+    pairs: &[AssignmentPair],
+    placeholder: &ProvenanceId,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<(), AssignmentRuleError> {
+    for pair in pairs {
+        budget.step()?;
+        let variable = MeasuredVariable {
+            id: BOOL_ID,
+            provenance: PROVENANCE_ID,
+        };
+        budget.reserve_ir(1, 1, budget.measure_ir(&variable)?)?;
+        // Temporary small provenance payloads are charged separately before materialization.
+        budget.reserve(1, 2, 1024)?;
+        let fact = variable_fact(*pair, placeholder.clone(), budget)?;
+        reserve_fact(&fact, budget, limits)?;
+    }
+    Ok(())
+}
+
+fn preflight_hard_lock_facts(
+    plan: &Plan,
+    placeholder: &ProvenanceId,
+    budget: &mut OperationBudget<'_>,
+    limits: PlanningIrLimitsV1,
+) -> Result<(), AssignmentRuleError> {
+    for planned in &plan.constraints {
+        let Predicate::HardLock {
+            assignment,
+            person,
+            shift,
+        } = planned.predicate
+        else {
+            continue;
+        };
+        budget.step()?;
+        budget.reserve(1, 3, 512)?;
+        let pair = AssignmentPair {
+            person_id: person,
+            shift_id: shift,
+        };
+        reserve_fact(
+            &hard_lock_fact(assignment, pair, placeholder.clone(), budget)?,
+            budget,
+            limits,
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn reserve_fact(
     record: &ProvenanceRecord,
     budget: &mut OperationBudget<'_>,
     limits: PlanningIrLimitsV1,
 ) -> Result<(), AssignmentRuleError> {
     budget.step()?;
     let defaults = PlanningIrLimitsV1::DEFAULT;
+    within(
+        count(record.entity_refs.len())?,
+        limits
+            .max_entity_refs_per_record
+            .min(defaults.max_entity_refs_per_record),
+        AssignmentRuleLimit::PerRecord,
+    )?;
+    within(
+        count(record.parameters.len())?,
+        limits
+            .max_parameters_per_record
+            .min(defaults.max_parameters_per_record),
+        AssignmentRuleLimit::PerRecord,
+    )?;
     for text in [&record.source_id, &record.message_key] {
         within(
             count(text.len())?,
@@ -708,18 +1433,21 @@ pub(super) fn reserve_fact(
                 AssignmentRuleLimit::PerRecord,
             )?;
         }
-        if let ProvenanceParameter::Integer(value) = parameter
-            && *value > limits.max_abs_value.min(defaults.max_abs_value)
-        {
-            return Err(AssignmentRuleError::LimitExceeded(
-                AssignmentRuleLimit::PerRecord,
-            ));
+        if let ProvenanceParameter::Integer(value) = parameter {
+            let maximum = limits.max_abs_value.min(defaults.max_abs_value);
+            if maximum < 0 || value.unsigned_abs() > maximum.cast_unsigned() {
+                return Err(AssignmentRuleError::LimitExceeded(
+                    AssignmentRuleLimit::PerRecord,
+                ));
+            }
         }
     }
-    let refs = add(
-        count(record.entity_refs.len() + record.parameters.len())?,
-        u64::from(record.parent.is_some()),
-    )?;
+    let field_refs = record
+        .entity_refs
+        .len()
+        .checked_add(record.parameters.len())
+        .ok_or_else(invalid)?;
+    let refs = add(count(field_refs)?, u64::from(record.parent.is_some()))?;
     budget.reserve_ir(1, refs, budget.measure_ir(record)?)
 }
 
@@ -770,7 +1498,7 @@ mod tests {
         // Genuine construction after completed resource preflight, not a pre-cancelled call.
         budget.cancel_after_steps(100)?;
         assert_eq!(
-            construct(analysis, &plan, &mut budget),
+            construct(analysis, &plan, &mut budget, limits),
             Err(AssignmentRuleError::Cancelled)
         );
         assert!(token.is_cancelled());
@@ -799,7 +1527,7 @@ mod tests {
         let (analysis, plan) = prepare(&document, &input, &mut budget, limits)?;
         preflight(&analysis.candidates, &plan, &mut budget, limits)?;
         let pairs = analysis.candidates.clone();
-        let complete = construct(analysis, &plan, &mut budget)?;
+        let complete = construct(analysis, &plan, &mut budget, limits)?;
         let variables = pairs
             .iter()
             .map(|pair| {

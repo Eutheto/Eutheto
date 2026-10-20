@@ -1,0 +1,533 @@
+{
+  "applied": {
+    "currentRevision": 2,
+    "requestId": "01a10aa6-4780-7871-8dc3-28c5e6fa7b3e",
+    "result": {
+      "outcome": {
+        "commandId": "01a10aa6-477f-7340-8a17-45cc969a0643",
+        "kind": "applied",
+        "revision": 2
+      },
+      "report": {
+        "consumed": true,
+        "disposition": "reviewable",
+        "previewId": "01a10aa6-4765-75d0-a743-d4e41157991b",
+        "rows": {
+          "excludedRows": [],
+          "family": "shifts"
+        },
+        "schemaVersion": 1
+      },
+      "scenarioId": "01a10aa6-466c-7022-ad63-62c128a76a40",
+      "schemaVersion": 1,
+      "sourceId": "01a10aa6-4707-7203-b3b1-f0a388814c08"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "detection": {
+    "currentRevision": null,
+    "requestId": "01a10aa6-4707-7203-b3b1-f0b8e44a0cdd",
+    "result": {
+      "data": {
+        "dialects": [
+          {
+            "consistentColumns": null,
+            "dialect": "comma",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "id\ttype\tlocation\tstart\tend\tcoverage\ttags\tattribution",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000008\t018f7b40-a000-7000-8000-000",
+                    "truncated": true
+                  },
+                  {
+                    "text": "count:1",
+                    "truncated": false
+                  },
+                  {
+                    "text": "qualificationMinimums:[]}\t[\"changed\"]\tstartLocalDate",
+                    "truncated": false
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "f2aad8460624e3c9bb116a0de174e5b3f5f296db5cf82eda438843c95ccff141",
+              "logicalRecords": 3,
+              "rawBytes": 548
+            },
+            "status": "candidate"
+          },
+          {
+            "consistentColumns": 1,
+            "dialect": "semicolon",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "id\ttype\tlocation\tstart\tend\tcoverage\ttags\tattribution",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000008\t018f7b40-a000-7000-8000-000",
+                    "truncated": true
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "f2aad8460624e3c9bb116a0de174e5b3f5f296db5cf82eda438843c95ccff141",
+              "logicalRecords": 3,
+              "rawBytes": 548
+            },
+            "status": "candidate"
+          },
+          {
+            "consistentColumns": 8,
+            "dialect": "tab",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "id",
+                    "truncated": false
+                  },
+                  {
+                    "text": "type",
+                    "truncated": false
+                  },
+                  {
+                    "text": "location",
+                    "truncated": false
+                  },
+                  {
+                    "text": "start",
+                    "truncated": false
+                  },
+                  {
+                    "text": "end",
+                    "truncated": false
+                  },
+                  {
+                    "text": "coverage",
+                    "truncated": false
+                  },
+                  {
+                    "text": "tags",
+                    "truncated": false
+                  },
+                  {
+                    "text": "attribution",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000008",
+                    "truncated": false
+                  },
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000004",
+                    "truncated": false
+                  },
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000005",
+                    "truncated": false
+                  },
+                  {
+                    "text": "2026-09-01T09:00:00",
+                    "truncated": false
+                  },
+                  {
+                    "text": "2026-09-01T10:00:00",
+                    "truncated": false
+                  },
+                  {
+                    "text": "{\"kind\":\"exact\",\"count\":1,\"qualificationMinimums\":[]}",
+                    "truncated": false
+                  },
+                  {
+                    "text": "[\"changed\"]",
+                    "truncated": false
+                  },
+                  {
+                    "text": "startLocalDate",
+                    "truncated": false
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "f2aad8460624e3c9bb116a0de174e5b3f5f296db5cf82eda438843c95ccff141",
+              "logicalRecords": 3,
+              "rawBytes": 548
+            },
+            "status": "candidate"
+          }
+        ],
+        "schemaVersion": 1
+      },
+      "family": "shifts"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "preview": {
+    "currentRevision": 1,
+    "requestId": "01a10aa6-4725-7293-ae69-e13fa1b682a9",
+    "result": {
+      "preview": {
+        "approvalDigest": "683ba3ac2599ec23f0ca812483944095dfebc1c02ab267b258e42405d0040f40",
+        "batch": {
+          "commands": [
+            {
+              "commandType": "official.workforce.update_entity",
+              "payload": {
+                "entity": {
+                  "assignmentTypeId": "018F7B40-A000-7000-8000-000000000004",
+                  "coverage": {
+                    "count": 1,
+                    "kind": "exact",
+                    "qualificationMinimums": []
+                  },
+                  "endsAt": {
+                    "instant": "2026-09-01T10:00:00-04:00",
+                    "local": "2026-09-01T10:00:00.000",
+                    "offsetSeconds": -14400
+                  },
+                  "id": "018f7b40-a000-7000-8000-000000000008",
+                  "kind": "shiftInstance",
+                  "locationId": "018f7b40a00070008000000000000005",
+                  "origin": {
+                    "kind": "manual"
+                  },
+                  "reportingAttribution": "startLocalDate",
+                  "startsAt": {
+                    "instant": "2026-09-01T09:00:00-04:00",
+                    "local": "2026-09-01T09:00:00.000",
+                    "offsetSeconds": -14400
+                  },
+                  "tags": ["changed"]
+                }
+              }
+            },
+            {
+              "commandType": "official.workforce.add_entity",
+              "payload": {
+                "entity": {
+                  "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+                  "coverage": {
+                    "kind": "atLeast",
+                    "maximumCount": 3,
+                    "minimum": 1,
+                    "preferredCount": 2,
+                    "qualificationMinimums": []
+                  },
+                  "endsAt": {
+                    "instant": "2026-09-01T16:00:00Z",
+                    "local": "2026-09-01T12:00:00",
+                    "offsetSeconds": -14400
+                  },
+                  "id": "018f7b40-a000-7000-8000-000000000009",
+                  "kind": "shiftInstance",
+                  "locationId": "018f7b40-a000-7000-8000-000000000005",
+                  "origin": {
+                    "kind": "manual"
+                  },
+                  "reportingAttribution": "startLocalDate",
+                  "startsAt": {
+                    "instant": "2026-09-01T15:00:00Z",
+                    "local": "2026-09-01T11:00:00",
+                    "offsetSeconds": -14400
+                  },
+                  "tags": []
+                }
+              }
+            }
+          ],
+          "label": "Import stored shifts from CSV",
+          "packId": "official.workforce",
+          "scenarioSchemaVersion": 1,
+          "schemaVersion": 1
+        },
+        "disposition": "reviewable",
+        "excludedRows": [],
+        "review": {
+          "changesBlake3": "8e48e6acc58023803c9d5358cbf57b2cff538aaec1e6a67c3df26bfbc801f75b",
+          "decisions": [
+            {
+              "decision": {
+                "kind": "add",
+                "shiftId": "018f7b40-a000-7000-8000-000000000009"
+              },
+              "record": 3
+            }
+          ],
+          "excludedBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab",
+          "format": "eutheto/workforce-shift-csv-review",
+          "limitsVersion": 1,
+          "mapping": {
+            "columns": [
+              {
+                "blank": "preserve",
+                "field": "assignmentTypeId",
+                "index": 1
+              },
+              {
+                "blank": "preserve",
+                "field": "locationId",
+                "index": 2
+              },
+              {
+                "blank": "preserve",
+                "field": "startsAt",
+                "index": 3
+              },
+              {
+                "blank": "preserve",
+                "field": "endsAt",
+                "index": 4
+              },
+              {
+                "blank": "preserve",
+                "field": "coverage",
+                "index": 5
+              },
+              {
+                "blank": "preserve",
+                "field": "tags",
+                "index": 6
+              },
+              {
+                "blank": "preserve",
+                "field": "reportingAttribution",
+                "index": 7
+              }
+            ],
+            "dialect": "tab",
+            "expectedColumns": 8,
+            "hasHeader": true,
+            "identityColumn": 0,
+            "referenceMappings": {}
+          },
+          "parserVersion": "csv-core-0.1.13",
+          "revision": 1,
+          "rowsBlake3": "0a8fdaf08eec1d1da99cbdeff2a253262b3c69576101dbc6fe12afa42149259c",
+          "scenarioBlake3": "59dd95312a7ea760364af245fb5ec511ec9a1d0cbfeb7a5bd401de8b433246ba",
+          "scenarioId": "01a10aa6-466c-7022-ad63-62c128a76a40",
+          "schemaVersion": 1,
+          "source": {
+            "blake3": "f2aad8460624e3c9bb116a0de174e5b3f5f296db5cf82eda438843c95ccff141",
+            "logicalRecords": 3,
+            "rawBytes": 548
+          },
+          "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+        },
+        "rows": [
+          {
+            "after": {
+              "assignmentTypeId": "018F7B40-A000-7000-8000-000000000004",
+              "coverage": {
+                "count": 1,
+                "kind": "exact",
+                "qualificationMinimums": []
+              },
+              "endsAt": {
+                "instant": "2026-09-01T10:00:00-04:00",
+                "local": "2026-09-01T10:00:00.000",
+                "offsetSeconds": -14400
+              },
+              "id": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "shiftInstance",
+              "locationId": "018f7b40a00070008000000000000005",
+              "origin": {
+                "kind": "manual"
+              },
+              "reportingAttribution": "startLocalDate",
+              "startsAt": {
+                "instant": "2026-09-01T09:00:00-04:00",
+                "local": "2026-09-01T09:00:00.000",
+                "offsetSeconds": -14400
+              },
+              "tags": ["changed"]
+            },
+            "before": {
+              "assignmentTypeId": "018F7B40-A000-7000-8000-000000000004",
+              "coverage": {
+                "count": 1,
+                "kind": "exact",
+                "qualificationMinimums": []
+              },
+              "endsAt": {
+                "instant": "2026-09-01T10:00:00-04:00",
+                "local": "2026-09-01T10:00:00.000",
+                "offsetSeconds": -14400
+              },
+              "id": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "shiftInstance",
+              "locationId": "018f7b40a00070008000000000000005",
+              "origin": {
+                "kind": "manual"
+              },
+              "reportingAttribution": "startLocalDate",
+              "startsAt": {
+                "instant": "2026-09-01T09:00:00-04:00",
+                "local": "2026-09-01T09:00:00.000",
+                "offsetSeconds": -14400
+              },
+              "tags": ["authored", "order"]
+            },
+            "identity": {
+              "kind": "supplied",
+              "shiftId": "018f7b40-a000-7000-8000-000000000008"
+            },
+            "issue": null,
+            "record": 2,
+            "shiftId": "018f7b40-a000-7000-8000-000000000008",
+            "status": "updated"
+          },
+          {
+            "after": {
+              "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+              "coverage": {
+                "kind": "atLeast",
+                "maximumCount": 3,
+                "minimum": 1,
+                "preferredCount": 2,
+                "qualificationMinimums": []
+              },
+              "endsAt": {
+                "instant": "2026-09-01T16:00:00Z",
+                "local": "2026-09-01T12:00:00",
+                "offsetSeconds": -14400
+              },
+              "id": "018f7b40-a000-7000-8000-000000000009",
+              "kind": "shiftInstance",
+              "locationId": "018f7b40-a000-7000-8000-000000000005",
+              "origin": {
+                "kind": "manual"
+              },
+              "reportingAttribution": "startLocalDate",
+              "startsAt": {
+                "instant": "2026-09-01T15:00:00Z",
+                "local": "2026-09-01T11:00:00",
+                "offsetSeconds": -14400
+              },
+              "tags": []
+            },
+            "before": null,
+            "identity": {
+              "kind": "supplied",
+              "shiftId": "018f7b40-a000-7000-8000-000000000009"
+            },
+            "issue": null,
+            "record": 3,
+            "shiftId": "018f7b40-a000-7000-8000-000000000009",
+            "status": "added"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "f2aad8460624e3c9bb116a0de174e5b3f5f296db5cf82eda438843c95ccff141",
+          "logicalRecords": 3,
+          "rawBytes": 548
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10aa6-4765-75d0-a743-d4e41157991b",
+      "revision": 1,
+      "scenarioId": "01a10aa6-466c-7022-ad63-62c128a76a40",
+      "schemaVersion": 1,
+      "sourceId": "01a10aa6-4707-7203-b3b1-f0a388814c08"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "report": {
+    "currentRevision": null,
+    "requestId": "01a10aa6-4822-7b43-ae2d-cb045f83b635",
+    "result": {
+      "consumed": true,
+      "disposition": "reviewable",
+      "previewId": "01a10aa6-4765-75d0-a743-d4e41157991b",
+      "rows": {
+        "excludedRows": [],
+        "family": "shifts"
+      },
+      "schemaVersion": 1
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sample": {
+    "currentRevision": null,
+    "requestId": "01a10aa6-4709-7131-908a-1753f66f974b",
+    "result": {
+      "cells": [
+        {
+          "text": "018f7b40-a000-7000-8000-000000000008",
+          "truncated": false
+        },
+        {
+          "text": "018f7b40-a000-7000-8000-000000000004",
+          "truncated": false
+        },
+        {
+          "text": "018f7b40-a000-7000-8000-000000000005",
+          "truncated": false
+        },
+        {
+          "text": "2026-09-01T09:00:00",
+          "truncated": false
+        },
+        {
+          "text": "2026-09-01T10:00:00",
+          "truncated": false
+        },
+        {
+          "text": "{\"kind\":\"exact\",\"count\":1,\"qualificationMinimums\":[]}",
+          "truncated": false
+        },
+        {
+          "text": "[\"changed\"]",
+          "truncated": false
+        },
+        {
+          "text": "startLocalDate",
+          "truncated": false
+        }
+      ],
+      "readFormat": {
+        "dialect": "tab",
+        "family": "shifts"
+      },
+      "record": 2,
+      "schemaVersion": 1,
+      "sourceId": "01a10aa6-4707-7203-b3b1-f0a388814c08"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sourceId": "01a10aa6-4707-7203-b3b1-f0a388814c08"
+}

@@ -8,6 +8,19 @@ use jiff::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Parses local intent without silently discarding an offset or zone annotation.
+pub(crate) fn parse_local_intent(value: &str) -> Option<LocalWallTime> {
+    let pieces = jiff::fmt::temporal::DateTimeParser::new()
+        .parse_pieces(value)
+        .ok()?;
+    if pieces.offset().is_some() || pieces.time_zone_annotation().is_some() {
+        return None;
+    }
+    Some(LocalWallTime::from_datetime(
+        pieces.date().to_datetime(pieces.time()?),
+    ))
+}
+
 /// Inclusive local shift-start dates derived from the host envelope, never stored twice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlanningDates {

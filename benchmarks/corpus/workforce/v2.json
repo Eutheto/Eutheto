@@ -1,0 +1,246 @@
+{
+  "format": "eutheto/workforce-corpus",
+  "schemaVersion": 1,
+  "corpusVersion": 2,
+  "generator": {
+    "method": "role-keyed-uuidv7-fixed-clock;source-sha256-framing-v1",
+    "sourceSha256": "2ad2968eb3d46b551cbb0e9bf5a15c5ffa565c24b46f3bd4c7b6a870d4c9d6a9",
+    "sources": [
+      {
+        "path": "benchmarks/workforce-runner/Cargo.toml",
+        "sha256": "931ebadf635d4c28dad15033fe3ce8e3efd84fe2976d4da7867665067f22a1a6",
+        "bytes": 1669
+      },
+      {
+        "path": "benchmarks/workforce-runner/build.rs",
+        "sha256": "fcd3314bae0f887c298cdf9757e62605977fa2420e7c84da2a40358d028dbfa7",
+        "bytes": 2488
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/cases.rs",
+        "sha256": "96edbe73aed9efaeb9e34f5787d617fd92284ec57f93d20e3eb3ef0d83073d40",
+        "bytes": 59984
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/cases/semantics.rs",
+        "sha256": "5cf41d71db2ef686e106745d1ab004cb2561ecb48bd41ed13db3e6a1d9c5340f",
+        "bytes": 67250
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/cli.rs",
+        "sha256": "cf3bb0e3e38318320209b45b5c39ba162b70aaad661e8e97b69add02518f18bb",
+        "bytes": 67128
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/contract.rs",
+        "sha256": "35d0d957dc9643274329fce3e255a05347f2386100918e67d8e36a1a0585a304",
+        "bytes": 14158
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/files.rs",
+        "sha256": "07ee9298a1c09cddd01aeb6ebc9db5d536e118dd2068a1ad1a499917a400efbf",
+        "bytes": 7350
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/generation.rs",
+        "sha256": "cbb1e2fd7f9b512b489f064372b3868a60e29b339ebae3053fbb539de51259d7",
+        "bytes": 15052
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/generation_tests.rs",
+        "sha256": "398a447cbf696bf0d0e514dc4d559a5e2ba9bde675b23ff8de47b7d8fbde4ac5",
+        "bytes": 8457
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/headless.rs",
+        "sha256": "7d1d7e6db1ab4ac0558d1951246ffbfc67b4c7c259871f5ec5316759417c45c1",
+        "bytes": 40102
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/main.rs",
+        "sha256": "1e34653cf4a16c1d179ea1ee22c9f874eaee5c82b33efeb8bea668ca9b5ad181",
+        "bytes": 4819
+      },
+      {
+        "path": "benchmarks/workforce-runner/src/schemas.rs",
+        "sha256": "69a75eca7e58d94c4aeeb7268891004c03642778bb81cd7dae0124600f1f1048",
+        "bytes": 16264
+      }
+    ],
+    "seed": 0,
+    "license": "Apache-2.0"
+  },
+  "fixtureClock": "2026-08-28T23:00:00Z",
+  "profile": {
+    "budgetMilliseconds": 60000,
+    "mode": "deep",
+    "randomSeed": 1,
+    "workerThreads": 1,
+    "stopAfterFirstFeasible": true,
+    "firstOperationSamples": 1,
+    "warmupRuns": 1,
+    "postWarmupSamples": 3
+  },
+  "cases": [
+    {
+      "id": "appendix-f",
+      "family": null,
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/appendix-f.json",
+        "sha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
+        "bytes": 16076
+      }
+    },
+    {
+      "id": "clinic-tiny",
+      "family": "clinic-small",
+      "workloadClass": "A",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/clinic-tiny.json",
+        "sha256": "0326ab03e1589efa7cb73b260b60234d90086ed9749b4bf42302c424075c1cb4",
+        "bytes": 6037
+      }
+    },
+    {
+      "id": "clinic-initial",
+      "family": "clinic-small",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/clinic-initial.json",
+        "sha256": "0408a81ccd2f25ca77490eb781cd51e524d07611d129d1784c3b5fb61a443789",
+        "bytes": 9777
+      }
+    },
+    {
+      "id": "clinic-full",
+      "family": "clinic-small",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/clinic-full.json",
+        "sha256": "80f3035b79e7b02294043d9eff1b62bfd5d76809e90e67dc13421273e13dde47",
+        "bytes": 10902
+      }
+    },
+    {
+      "id": "clinic-overnight",
+      "family": "clinic-overnight",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/clinic-overnight.json",
+        "sha256": "cafac7775abba59f5176b102b8bf7633f48afb6c0b6dfe98f3472617c70090a9",
+        "bytes": 17313
+      }
+    },
+    {
+      "id": "rolling-hours",
+      "family": "rolling-hours",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/rolling-hours.json",
+        "sha256": "1eaba8574541d3ac335ec30838d8c3651ca85705adfc750c2b5dfd4d1da5a452",
+        "bytes": 10569
+      }
+    },
+    {
+      "id": "specialist-coverage",
+      "family": "specialist-coverage",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/specialist-coverage.json",
+        "sha256": "1336f005281153d36396ec229d99d9c9a7f199567d35d78e87b58892d7a90b68",
+        "bytes": 7603
+      }
+    },
+    {
+      "id": "repair-before",
+      "family": "repair-callout",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/repair-before.json",
+        "sha256": "008e4a66850fc3cf5b97a668b26715e88c111a5fe38294460f95afcc4d53808f",
+        "bytes": 5998
+      }
+    },
+    {
+      "id": "infeasible-coverage",
+      "family": "infeasible-coverage",
+      "workloadClass": "A",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/infeasible-coverage.json",
+        "sha256": "3c83a3042c9854c681035595cda7ba24969318d7b311294608ceab3c3a4c9ed6",
+        "bytes": 5080
+      }
+    },
+    {
+      "id": "dst-spring",
+      "family": "dst",
+      "workloadClass": "A",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/dst-spring.json",
+        "sha256": "9067997adc9dafaf677f3f1f4787ce969f65c50cf9947ad1d8c5c90d35932bcd",
+        "bytes": 3928
+      }
+    },
+    {
+      "id": "dst-fall",
+      "family": "dst",
+      "workloadClass": "A",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/dst-fall.json",
+        "sha256": "9a30d8e7f5aa456b37243b6491a403fa81ff4b0b839a5b30c43fbd61a70f3087",
+        "bytes": 3921
+      }
+    },
+    {
+      "id": "large-supported",
+      "family": "large-synthetic",
+      "workloadClass": "C",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/large-supported.json",
+        "sha256": "ebee95aec00b746e08e50948d76bb773ec0d503ac3d3e4337bdf567f42e5a172",
+        "bytes": 37749
+      }
+    },
+    {
+      "id": "large-pressure",
+      "family": "large-synthetic",
+      "workloadClass": "D",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/large-pressure.json",
+        "sha256": "8e9f66ae66fda1a7f03c9e39f7fe37220a136324835a5ca426f71f7378339134",
+        "bytes": 43399
+      }
+    },
+    {
+      "id": "practitioner-workflow",
+      "family": "practitioner-workflow",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/practitioner-workflow.json",
+        "sha256": "9a43c8917164cc6033e155b74bbf14d0c6b284494637f5ab8edbe68e3264daa2",
+        "bytes": 24981
+      }
+    },
+    {
+      "id": "practitioner-infeasible",
+      "family": "practitioner-workflow",
+      "workloadClass": "B",
+      "input": {
+        "path": "domains/workforce/fixtures/v2/practitioner-infeasible.json",
+        "sha256": "46512dde06bb418b62dab22a60c786d882cf1cf23f3c10c937009011a6d0f521",
+        "bytes": 24579
+      }
+    }
+  ],
+  "expectations": {
+    "path": "benchmarks/expected/workforce/v2.json",
+    "sha256": "1b27f210625760643a62b0bb6d72dfa34483a8cfcb8a7fe1c36a630b03704d3c",
+    "bytes": 15915
+  },
+  "repair": {
+    "path": "domains/workforce/fixtures/v2/repair-callout.json",
+    "sha256": "5096cb019685aa756462256ff66b51eff87ed2c333655143878384415f6e1030",
+    "bytes": 984
+  }
+}

@@ -5,14 +5,41 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type * as Pack from "./generated-domain-pack-contracts";
 import {
   isWorkforceCsvPerson,
+  isWorkforceCsvUuid,
+  isWorkforceCsvExternalStartingPlan,
+  isWorkforceCsvShiftInstance,
+  isWorkforceCsvAvailability,
+  isWorkforceResolvedLocalTime,
+  isWorkforceResultScheduleViewData,
+  isWorkforceResultScheduleViewParameters,
   isWorkforceSetupQueryResult,
   isWorkforceSetupViewId,
+  WORKFORCE_RESULT_SCHEDULE_VIEW_ID,
 } from "./generated-domain-pack-contracts";
+import {
+  MAX_RECIPIENT_REPORT_BYTES,
+  isRecipientReportOptionsV1,
+  isRecipientReportV1,
+  isRecipientSourceV1,
+  type RecipientReportOptionsV1,
+  type RecipientReportV1,
+  type RecipientSourceV1,
+} from "./generated-recipient-report";
 
 export const API_SCHEMA_VERSION = 1 as const;
 export const SOLUTION_API_SCHEMA_VERSION = 1 as const;
 export const COUNTERFACTUAL_API_SCHEMA_VERSION = 1 as const;
 export const COUNTERFACTUAL_TOTAL_BUDGET_MAX_MILLISECONDS_V1 = 30_000 as const;
+export const SOLVE_API_SCHEMA_VERSION = 2 as const;
+export const SOLVE_START_REQUEST_SCHEMA_VERSION = 3 as const;
+export const SOLVE_RUN_LIST_LIMIT_MAX = 32 as const;
+export const SOLVE_REQUEST_MAX_BYTES = 64 * 1024;
+export const SOLVE_RESPONSE_MAX_BYTES = 512 * 1024;
+export const COUNTERFACTUAL_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+export const SOLVE_ESTIMATE_REQUEST_MAX_BYTES = 8 * 1024;
+export const SOLVE_ESTIMATE_RESPONSE_MAX_BYTES = 64 * 1024;
+export const EXPLANATION_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+export const MAX_CAPTURED_BASELINE_BYTES = 512 * 1024;
 export const PROVISIONAL_PORTABLE_EXTENSION = ".eutheto" as const;
 
 export type UuidV7 = string;
@@ -180,6 +207,7 @@ export type DomainCapability =
   | "compilation"
   | "projection"
   | "verification"
+  | "infeasibilityDiagnostics"
   | "scoring"
   | "portableData"
   | "shareResult"
@@ -702,7 +730,8 @@ export type SetupContinuationV1 =
   | Pack.WorkforceSetupPersonContinuation
   | Pack.WorkforceSetupShiftContinuation
   | Pack.WorkforceSetupTimedShiftContinuation
-  | Pack.WorkforceSetupOrdinalContinuation;
+  | Pack.WorkforceSetupOrdinalContinuation
+  | Pack.WorkforceResultScheduleContinuation;
 export type SetupSourceV2 =
   | { readonly kind: "stored" }
   | { readonly kind: "commandPreview"; readonly command: ScenarioCommand };
@@ -777,19 +806,33 @@ export type ScenarioSetupViewResultV2<K extends SetupViewId = SetupViewId> = {
     readonly view: { readonly viewId: P; readonly data: Pack.WorkforceSetupQueryResults[P] };
   };
 }[K];
-export interface FullValidationResultV2 {
-  readonly schemaVersion: 2;
+export interface FullValidationResultV3 {
+  readonly schemaVersion: 3;
   readonly scenarioId: UuidV7;
   readonly revision: Revision;
   readonly report: { readonly issues: readonly ValidationIssue[] };
+  readonly issueIds: readonly VerificationIssueId[];
 }
 export type OperationPurposeV1 =
+  | { readonly kind: "solveStart" }
+  | { readonly kind: "solveAlternatives" }
+  | { readonly kind: "solveEstimate" }
+  | { readonly kind: "solutionExplain" }
+  | { readonly kind: "solutionDiagnosticCopy" }
+  | { readonly kind: "solutionDiagnosticExport" }
+  | { readonly kind: "sharePreview" }
+  | { readonly kind: "shareCreate" }
+  | { readonly kind: "exportPreview" }
+  | { readonly kind: "exportCreate" }
   | { readonly kind: "scenarioSummary" }
   | { readonly kind: "setupStatus" }
   | { readonly kind: "setupView"; readonly viewId: SetupViewId }
   | { readonly kind: "commandPreview"; readonly viewId: SetupViewId }
   | { readonly kind: "fullValidation" }
   | { readonly kind: "applyReviewedGeneration" }
+  | { readonly kind: "manualRepairRead" }
+  | { readonly kind: "manualRepairReview" }
+  | { readonly kind: "manualRepairApply" }
   | { readonly kind: "csvSourceOpen" }
   | { readonly kind: "csvDetect" }
   | { readonly kind: "csvSample" }
@@ -830,6 +873,115 @@ export interface OperationCancelledV1 {
 export interface OperationReleasedV1 {
   readonly schemaVersion: 1;
   readonly acknowledgement: "released" | "cancellationRequested" | "notActive";
+}
+export type RecipientFileFormatV1 = "html" | "pdf";
+export interface RecipientPdfRendererV1 {
+  readonly version: 1;
+  readonly typstVersion: "0.15.1";
+  readonly templateSha256: string;
+  readonly fontsSha256: string;
+}
+export interface RecipientPreviewRequestV1 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: 1;
+  readonly operationId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly solutionId: SolutionId;
+  readonly format: RecipientFileFormatV1;
+  readonly options: RecipientReportOptionsV1;
+}
+export interface RecipientPreviewDtoV1 {
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly format: RecipientFileFormatV1;
+  readonly libraryRevision: Revision;
+  readonly modelSha256: string;
+  readonly htmlSha256: string;
+  readonly pdfSha256?: string;
+  readonly pdfRenderer?: RecipientPdfRendererV1;
+  readonly expiresAfterMilliseconds: 600000;
+  readonly report: RecipientReportV1;
+}
+export interface RecipientCreateRequestV1 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: 1;
+  readonly operationId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly previewId: UuidV7;
+  readonly format: RecipientFileFormatV1;
+  readonly allowStale: boolean;
+}
+export interface RecipientHtmlPublishedV1 {
+  readonly schemaVersion: 1;
+  readonly solutionId: SolutionId;
+  readonly sourceRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly modelSha256: string;
+  readonly htmlSha256: string;
+}
+export interface RecipientPdfPublishedV1 {
+  readonly schemaVersion: 1;
+  readonly solutionId: SolutionId;
+  readonly sourceRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly modelSha256: string;
+  readonly pdfSha256: string;
+}
+export interface RecipientCreatedDtoV1 {
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly format: RecipientFileFormatV1;
+  readonly filename: string;
+  readonly publication: RecipientHtmlPublishedV1 | RecipientPdfPublishedV1;
+}
+export type RecipientReleaseTargetV1 =
+  | { readonly kind: "preview"; readonly previewId: UuidV7 }
+  | { readonly kind: "operation"; readonly operationId: UuidV7 };
+export interface RecipientReleaseRequestV1 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly target: RecipientReleaseTargetV1;
+}
+export interface RecipientReleasedDtoV1 {
+  readonly schemaVersion: 1;
+  readonly acknowledgement: "released" | "closing" | "notActive";
+}
+export type ScheduleExportFormatV1 = "assignmentsCsv" | "summaryCsv" | "ics";
+export interface ScheduleExportPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly source: RecipientSourceV1;
+  readonly libraryRevision: Revision;
+  readonly format: ScheduleExportFormatV1;
+  readonly personId: UuidV7 | null;
+  readonly sha256: string;
+  readonly byteCount: number;
+  readonly sample: string;
+  readonly sampleTruncated: boolean;
+}
+export interface ScheduleExportPreviewDtoV1 {
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly expiresAfterMilliseconds: 600000;
+  readonly preview: ScheduleExportPreviewV1;
+}
+export interface ScheduleExportPublishedV1 {
+  readonly schemaVersion: 1;
+  readonly solutionId: SolutionId;
+  readonly sourceRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly format: ScheduleExportFormatV1;
+  readonly personId: UuidV7 | null;
+  readonly sha256: string;
+  readonly byteCount: number;
+}
+export interface ScheduleExportCreatedDtoV1 {
+  readonly schemaVersion: 1;
+  readonly previewId: UuidV7;
+  readonly filename: string;
+  readonly publication: ScheduleExportPublishedV1;
 }
 export type OperationPhaseV1 =
   | "waitingForAdmission"
@@ -957,6 +1109,18 @@ export interface LicenseInventoryPackageV2 {
   readonly source: string;
   readonly checksum?: { readonly algorithm: "SHA256" | "SHA512"; readonly value: string };
 }
+export interface LicenseInventoryAssetFileV2 {
+  readonly path: string;
+  readonly sha256: string;
+}
+export interface LicenseInventoryAssetV2 {
+  readonly name: string;
+  readonly version: string;
+  readonly source: string;
+  readonly licenseConcluded: string;
+  readonly files: readonly LicenseInventoryAssetFileV2[];
+  readonly notices: readonly LicenseInventoryAssetFileV2[];
+}
 /** Locked-workspace metadata, not linked-artifact attribution or license approval. */
 export interface LicenseInventoryV2 {
   readonly scope: "lockedWorkspace";
@@ -968,9 +1132,10 @@ export interface LicenseInventoryV2 {
     "xtask/supply-chain-inputs.json",
   ];
   readonly packages: readonly LicenseInventoryPackageV2[];
+  readonly assets?: readonly LicenseInventoryAssetV2[];
 }
 
-export type PeopleCsvDialect = "comma" | "semicolon" | "tab";
+export type CsvDialect = "comma" | "semicolon" | "tab";
 export type PeopleCsvField =
   | "name"
   | "externalId"
@@ -1005,7 +1170,7 @@ export interface PeopleCsvNewPersonDefaults {
   readonly display?: { readonly color?: string; readonly avatarInitials?: string };
 }
 export interface PeopleCsvMapping {
-  readonly dialect: PeopleCsvDialect;
+  readonly dialect: CsvDialect;
   readonly hasHeader: boolean;
   readonly expectedColumns: number;
   readonly columns: readonly PeopleCsvColumn[];
@@ -1017,12 +1182,12 @@ export interface PeopleCsvDecision {
   readonly decision:
     { readonly kind: "add" | "update"; readonly personId: UuidV7 } | { readonly kind: "skip" };
 }
-export interface PeopleCsvSource {
+export interface CsvSource {
   readonly rawBytes: number;
   readonly blake3: string;
   readonly logicalRecords: number;
 }
-export type PeopleCsvErrorCode =
+export type CsvErrorCode =
   | "io"
   | "cancelled"
   | "unsupportedEncoding"
@@ -1050,14 +1215,16 @@ export type PeopleCsvErrorCode =
   | "invalidCurrentDocument"
   | "invalidReview"
   | "staleReview"
-  | "invalidBatch";
+  | "invalidBatch"
+  | "matrixShape"
+  | "matrixCellLimit";
 export interface PeopleCsvDetectionV1 {
   readonly schemaVersion: 1;
   readonly dialects: readonly (
     | {
         readonly status: "candidate";
-        readonly dialect: PeopleCsvDialect;
-        readonly source: PeopleCsvSource;
+        readonly dialect: CsvDialect;
+        readonly source: CsvSource;
         readonly consistentColumns: number | null;
         readonly samples: readonly {
           readonly record: number;
@@ -1066,19 +1233,42 @@ export interface PeopleCsvDetectionV1 {
       }
     | {
         readonly status: "rejected";
-        readonly dialect: PeopleCsvDialect;
-        readonly error: { readonly code: PeopleCsvErrorCode; readonly record?: number };
+        readonly dialect: CsvDialect;
+        readonly error: { readonly code: CsvErrorCode; readonly record?: number };
       }
   )[];
 }
-export interface PeopleCsvSampleV1 {
+export type AssignmentCsvReadFormat =
+  { readonly format: "canonicalV1" } | { readonly format: "mapped"; readonly dialect: CsvDialect };
+export type CsvReadFormat =
+  | { readonly family: "people"; readonly dialect: CsvDialect }
+  | { readonly family: "assignments"; readonly format: AssignmentCsvReadFormat }
+  | { readonly family: "eligibility"; readonly dialect: CsvDialect }
+  | { readonly family: "eligibilityMatrix" }
+  | { readonly family: "shifts"; readonly dialect: CsvDialect }
+  | { readonly family: "availability"; readonly dialect: CsvDialect };
+export type AssignmentCsvDetectionV1 =
+  | { readonly format: "canonicalV1"; readonly schemaVersion: 1; readonly source: CsvSource }
+  | {
+      readonly format: "mapped";
+      readonly schemaVersion: 1;
+      readonly dialects: PeopleCsvDetectionV1["dialects"];
+    };
+export type CsvDetectionV1 =
+  | { readonly family: "people"; readonly data: PeopleCsvDetectionV1 }
+  | { readonly family: "assignments"; readonly data: AssignmentCsvDetectionV1 }
+  | { readonly family: "eligibility"; readonly data: PeopleCsvDetectionV1 }
+  | { readonly family: "eligibilityMatrix"; readonly data: EligibilityMatrixDetection }
+  | { readonly family: "shifts"; readonly data: PeopleCsvDetectionV1 }
+  | { readonly family: "availability"; readonly data: PeopleCsvDetectionV1 };
+export interface CsvSampleV1 {
   readonly schemaVersion: 1;
   readonly sourceId: UuidV7;
-  readonly dialect: PeopleCsvDialect;
+  readonly readFormat: CsvReadFormat;
   readonly record: number;
   readonly cells: readonly { readonly text: string; readonly truncated: boolean }[] | null;
 }
-export type PeopleCsvDisposition = "reviewable" | "blocked" | "noChanges";
+export type CsvDisposition = "reviewable" | "blocked" | "noChanges";
 export type PeopleCsvRejectionCode =
   "columnCount" | "invalidCell" | "invalidReference" | "missingName" | "invalidPerson";
 export interface PeopleCsvRejectedRow {
@@ -1091,7 +1281,7 @@ export interface PeopleCsvReview {
   readonly scenarioId: UuidV7;
   readonly revision: Revision;
   readonly scenarioBlake3: string;
-  readonly source: PeopleCsvSource;
+  readonly source: CsvSource;
   readonly parserVersion: "csv-core-0.1.13";
   readonly limitsVersion: 1;
   readonly mapping: PeopleCsvMapping;
@@ -1102,8 +1292,8 @@ export interface PeopleCsvReview {
 }
 export interface PeopleCsvPreview {
   readonly schemaVersion: 1;
-  readonly disposition: PeopleCsvDisposition;
-  readonly source: PeopleCsvSource;
+  readonly disposition: CsvDisposition;
+  readonly source: CsvSource;
   readonly columns: readonly PeopleCsvColumn[];
   readonly rows: readonly {
     readonly record: number;
@@ -1127,7 +1317,7 @@ export interface PeopleCsvPreview {
   readonly review: PeopleCsvReview | null;
   readonly approvalDigest: string | null;
 }
-export interface PeopleCsvSourceOpenedV1 {
+export interface CsvSourceOpenedV1 {
   readonly schemaVersion: 1;
   readonly sourceId: UuidV7;
   readonly byteCount: number;
@@ -1140,32 +1330,488 @@ export interface PeopleCsvPreviewV1 {
   readonly previewId: UuidV7;
   readonly preview: PeopleCsvPreview;
 }
-export interface PeopleCsvRejectedRowsV1 {
+export interface CsvReportV1 {
   readonly schemaVersion: 1;
   readonly previewId: UuidV7;
-  readonly disposition: PeopleCsvDisposition;
+  readonly disposition: CsvDisposition;
   readonly consumed: boolean;
-  readonly rejectedRows: readonly PeopleCsvRejectedRow[];
+  readonly rows:
+    | { readonly family: "people"; readonly rejectedRows: readonly PeopleCsvRejectedRow[] }
+    | { readonly family: "assignments"; readonly excludedRows: readonly AssignmentCsvExcludedRow[] }
+    | {
+        readonly family: "eligibility";
+        readonly excludedRows: readonly EligibilityCsvExcludedRow[];
+      }
+    | {
+        readonly family: "eligibilityMatrix";
+        readonly excludedCells: readonly EligibilityMatrixExcludedCell[];
+      }
+    | { readonly family: "shifts"; readonly excludedRows: readonly ShiftCsvExcludedRow[] }
+    | {
+        readonly family: "availability";
+        readonly excludedRows: readonly AvailabilityCsvExcludedRow[];
+      };
 }
-export interface PeopleCsvApplyV1 {
+export interface CsvApplyV1 {
   readonly schemaVersion: 1;
   readonly sourceId: UuidV7;
   readonly scenarioId: UuidV7;
   readonly outcome:
     | { readonly kind: "applied"; readonly commandId: UuidV7; readonly revision: Revision }
     | { readonly kind: "noChanges"; readonly revision: Revision };
-  readonly report: PeopleCsvRejectedRowsV1;
+  readonly report: CsvReportV1;
 }
-export interface PeopleCsvReportSavedV1 {
+export interface CsvReportSavedV1 {
   readonly schemaVersion: 1;
   readonly previewId: UuidV7;
 }
-export type PeopleCsvSourceTarget =
+export type CsvSourceTarget =
   | { readonly kind: "source"; readonly sourceId: UuidV7 }
   | { readonly kind: "creator"; readonly operationId: UuidV7; readonly requestId: UuidV7 };
-export type PeopleCsvPreviewTarget =
+export type CsvPreviewTarget =
   | { readonly kind: "preview"; readonly previewId: UuidV7 }
   | { readonly kind: "creator"; readonly operationId: UuidV7; readonly requestId: UuidV7 };
+
+export type AssignmentCsvMapping =
+  | { readonly format: "canonicalV1" }
+  | {
+      readonly format: "mapped";
+      readonly dialect: CsvDialect;
+      readonly hasHeader: boolean;
+      readonly expectedColumns: number;
+      readonly personColumn: number;
+      readonly shiftColumn: number;
+      readonly personMappings: Readonly<Record<string, UuidV7>>;
+      readonly shiftMappings: Readonly<Record<string, UuidV7>>;
+    };
+export interface AssignmentCsvTarget {
+  readonly kind: "create" | "replace";
+  readonly id: UuidV7;
+  readonly name: string;
+}
+export type AssignmentCsvRowIssue =
+  "columnCount" | "invalidToken" | "unresolvedPerson" | "unresolvedShift" | "duplicatePair";
+export interface AssignmentCsvExcludedRow {
+  readonly record: number;
+  readonly skipped: boolean;
+  readonly issue: AssignmentCsvRowIssue | null;
+}
+export interface AssignmentCsvReview {
+  readonly format: "eutheto/workforce-assignment-csv-review";
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly scenarioBlake3: string;
+  readonly source: CsvSource;
+  readonly parserVersion: "eutheto-assignments-csv-1" | "csv-core-0.1.13";
+  readonly limitsVersion: 1;
+  readonly mapping: AssignmentCsvMapping;
+  readonly target: AssignmentCsvTarget;
+  readonly skippedRecords: readonly number[];
+  readonly allowEmpty: boolean;
+  readonly rowsBlake3: string;
+  readonly changesBlake3: string;
+  readonly excludedBlake3: string;
+  readonly validationBlake3: string;
+}
+export interface AssignmentCsvPreview {
+  readonly schemaVersion: 1;
+  readonly disposition: CsvDisposition;
+  readonly source: CsvSource;
+  readonly rows: readonly {
+    readonly record: number;
+    readonly status: "included" | "skipped" | "blocked";
+    readonly personId: UuidV7 | null;
+    readonly shiftId: UuidV7 | null;
+    readonly issue: AssignmentCsvRowIssue | null;
+  }[];
+  readonly excludedRows: readonly AssignmentCsvExcludedRow[];
+  readonly changes: {
+    readonly previousName: string | null;
+    readonly beforePairCount: number;
+    readonly afterPairCount: number;
+    readonly addedPairs: readonly Pack.WorkforceAssignmentPair[];
+    readonly removedPairs: readonly Pack.WorkforceAssignmentPair[];
+    readonly provenanceChanged: boolean;
+  } | null;
+  readonly validationIssues: readonly ValidationIssue[];
+  readonly batch: {
+    readonly schemaVersion: 1;
+    readonly packId: "official.workforce";
+    readonly scenarioSchemaVersion: 1;
+    readonly label: string | null;
+    readonly commands: readonly {
+      readonly commandType: "official.workforce.add_entity" | "official.workforce.update_entity";
+      readonly payload: { readonly entity: Pack.WorkforceExternalStartingPlan };
+    }[];
+  } | null;
+  readonly review: AssignmentCsvReview | null;
+  readonly approvalDigest: string | null;
+}
+export interface AssignmentCsvPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly previewId: UuidV7;
+  readonly preview: AssignmentCsvPreview;
+}
+
+export interface EligibilityCsvMapping {
+  readonly dialect: CsvDialect;
+  readonly hasHeader: boolean;
+  readonly expectedColumns: number;
+  readonly personColumn: number;
+  readonly assignmentTypeColumn: number;
+  readonly eligibleColumn: number;
+  readonly personMappings: Readonly<Record<string, UuidV7>>;
+  readonly assignmentTypeMappings: Readonly<Record<string, UuidV7>>;
+}
+export type EligibilityCsvRowIssue =
+  | "columnCount"
+  | "invalidToken"
+  | "unresolvedPerson"
+  | "unresolvedAssignmentType"
+  | "invalidMembership"
+  | "duplicatePair";
+export interface EligibilityCsvExcludedRow {
+  readonly record: number;
+  readonly skipped: boolean;
+  readonly issue: EligibilityCsvRowIssue | null;
+}
+export interface EligibilityCsvReview {
+  readonly format: "eutheto/workforce-eligibility-csv-review";
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly scenarioBlake3: string;
+  readonly source: CsvSource;
+  readonly parserVersion: "csv-core-0.1.13";
+  readonly limitsVersion: 1;
+  readonly mapping: EligibilityCsvMapping;
+  readonly skippedRecords: readonly number[];
+  readonly rowsBlake3: string;
+  readonly changesBlake3: string;
+  readonly excludedBlake3: string;
+  readonly validationBlake3: string;
+}
+export interface EligibilityCsvPreview {
+  readonly schemaVersion: 1;
+  readonly disposition: CsvDisposition;
+  readonly source: CsvSource;
+  readonly rows: readonly {
+    readonly record: number;
+    readonly status: "changed" | "unchanged" | "skipped" | "blocked";
+    readonly personId: UuidV7 | null;
+    readonly assignmentTypeId: UuidV7 | null;
+    readonly before: boolean | null;
+    readonly after: boolean | null;
+    readonly issue: EligibilityCsvRowIssue | null;
+  }[];
+  readonly excludedRows: readonly EligibilityCsvExcludedRow[];
+  readonly validationIssues: readonly ValidationIssue[];
+  readonly batch: {
+    readonly schemaVersion: 1;
+    readonly packId: "official.workforce";
+    readonly scenarioSchemaVersion: 1;
+    readonly label: string | null;
+    readonly commands: readonly {
+      readonly commandType: "official.workforce.update_entity";
+      readonly payload: { readonly entity: Pack.WorkforcePerson };
+    }[];
+  } | null;
+  readonly review: EligibilityCsvReview | null;
+  readonly approvalDigest: string | null;
+}
+export interface EligibilityCsvPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly previewId: UuidV7;
+  readonly preview: EligibilityCsvPreview;
+}
+
+export const MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES = 1_048_576;
+export const MAX_ELIGIBILITY_MATRIX_CELLS = 10_000;
+export interface EligibilityMatrixMapping {
+  readonly personMappings: Readonly<Record<string, UuidV7>>;
+  readonly assignmentTypeMappings: Readonly<Record<string, UuidV7>>;
+}
+export interface EligibilityMatrixCellAddress {
+  readonly record: number;
+  readonly column: number;
+}
+export interface EligibilityMatrixDetection {
+  readonly schemaVersion: 1;
+  readonly source: CsvSource;
+  readonly columns: number;
+  readonly cells: number;
+  readonly samples: readonly {
+    readonly record: number;
+    readonly cells: readonly { readonly text: string; readonly truncated: boolean }[];
+  }[];
+}
+export interface EligibilityMatrixCell {
+  readonly cell: EligibilityMatrixCellAddress;
+  readonly status: "changed" | "unchanged" | "skipped" | "blocked";
+  readonly personId: UuidV7 | null;
+  readonly assignmentTypeId: UuidV7 | null;
+  readonly before: boolean | null;
+  readonly after: boolean | null;
+  readonly issue: EligibilityCsvRowIssue | null;
+}
+export interface EligibilityMatrixExcludedCell {
+  readonly cell: EligibilityMatrixCellAddress;
+  readonly skipped: boolean;
+  readonly issue: EligibilityCsvRowIssue | null;
+}
+export interface EligibilityMatrixReview {
+  readonly format: "eutheto/workforce-eligibility-matrix-review";
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly scenarioBlake3: string;
+  readonly source: CsvSource;
+  readonly parserVersion: "csv-core-0.1.13/eligibility-matrix-1";
+  readonly limitsVersion: 1;
+  readonly columns: number;
+  readonly cells: number;
+  readonly mapping: EligibilityMatrixMapping;
+  readonly skippedCells: readonly EligibilityMatrixCellAddress[];
+  readonly rowsBlake3: string;
+  readonly changesBlake3: string;
+  readonly excludedBlake3: string;
+  readonly validationBlake3: string;
+}
+export interface EligibilityMatrixPreview {
+  readonly schemaVersion: 1;
+  readonly disposition: CsvDisposition;
+  readonly source: CsvSource;
+  readonly columns: number;
+  readonly cells: number;
+  readonly rows: readonly EligibilityMatrixCell[];
+  readonly excludedCells: readonly EligibilityMatrixExcludedCell[];
+  readonly validationIssues: readonly ValidationIssue[];
+  readonly batch: EligibilityCsvPreview["batch"];
+  readonly review: EligibilityMatrixReview | null;
+  readonly approvalDigest: string | null;
+}
+export interface EligibilityMatrixPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly previewId: UuidV7;
+  readonly preview: EligibilityMatrixPreview;
+}
+
+export type ShiftCsvField =
+  | "assignmentTypeId"
+  | "locationId"
+  | "startsAt"
+  | "endsAt"
+  | "coverage"
+  | "tags"
+  | "reportingAttribution";
+export interface ShiftCsvMapping {
+  readonly dialect: CsvDialect;
+  readonly hasHeader: boolean;
+  readonly expectedColumns: number;
+  readonly identityColumn: number | null;
+  readonly columns: readonly {
+    readonly index: number;
+    readonly field: ShiftCsvField;
+    readonly blank: "preserve" | "clear";
+  }[];
+  readonly referenceMappings: Readonly<Record<string, UuidV7>>;
+}
+export interface ShiftCsvRowDecision {
+  readonly record: number;
+  readonly decision:
+    { readonly kind: "add" | "update"; readonly shiftId: UuidV7 } | { readonly kind: "skip" };
+}
+export type ShiftCsvIdentity =
+  { readonly kind: "absent" | "invalid" } | { readonly kind: "supplied"; readonly shiftId: UuidV7 };
+export type ShiftCsvRowIssue =
+  | "columnCount"
+  | "invalidIdentity"
+  | "reservedIdentity"
+  | "unresolvedIdentity"
+  | "duplicateTarget"
+  | "invalidCell"
+  | "invalidReference"
+  | "invalidLocalTime"
+  | "unresolvableLocalTime"
+  | "nonpositiveInterval"
+  | "missingRequiredField"
+  | "invalidShift";
+export interface ShiftCsvExcludedRow {
+  readonly record: number;
+  readonly skipped: boolean;
+  readonly issue: ShiftCsvRowIssue | null;
+}
+export interface ShiftCsvReview {
+  readonly format: "eutheto/workforce-shift-csv-review";
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly scenarioBlake3: string;
+  readonly source: CsvSource;
+  readonly parserVersion: "csv-core-0.1.13";
+  readonly limitsVersion: 1;
+  readonly mapping: ShiftCsvMapping;
+  readonly decisions: readonly ShiftCsvRowDecision[];
+  readonly rowsBlake3: string;
+  readonly changesBlake3: string;
+  readonly excludedBlake3: string;
+  readonly validationBlake3: string;
+}
+export interface ShiftCsvPreview {
+  readonly schemaVersion: 1;
+  readonly disposition: CsvDisposition;
+  readonly source: CsvSource;
+  readonly rows: readonly {
+    readonly record: number;
+    readonly status: "added" | "updated" | "unchanged" | "skipped" | "blocked" | "unresolved";
+    readonly identity: ShiftCsvIdentity;
+    readonly shiftId: UuidV7 | null;
+    readonly before: Pack.WorkforceShiftInstance | null;
+    readonly after: Pack.WorkforceShiftInstance | null;
+    readonly issue: ShiftCsvRowIssue | null;
+  }[];
+  readonly excludedRows: readonly ShiftCsvExcludedRow[];
+  readonly validationIssues: readonly ValidationIssue[];
+  readonly batch: {
+    readonly schemaVersion: 1;
+    readonly packId: "official.workforce";
+    readonly scenarioSchemaVersion: 1;
+    readonly label: string | null;
+    readonly commands: readonly {
+      readonly commandType: "official.workforce.add_entity" | "official.workforce.update_entity";
+      readonly payload: { readonly entity: Pack.WorkforceShiftInstance };
+    }[];
+  } | null;
+  readonly review: ShiftCsvReview | null;
+  readonly approvalDigest: string | null;
+}
+export interface ShiftCsvPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly previewId: UuidV7;
+  readonly preview: ShiftCsvPreview;
+}
+
+export type AvailabilityCsvField =
+  | "personId"
+  | "availabilityKind"
+  | "startsAt"
+  | "endsAt"
+  | "weeklyWindows"
+  | "effectiveStartDate"
+  | "effectiveEndDateExclusive"
+  | "assignmentTypeIds"
+  | "locationIds"
+  | "source"
+  | "note";
+export interface AvailabilityCsvMapping {
+  readonly dialect: CsvDialect;
+  readonly hasHeader: boolean;
+  readonly expectedColumns: number;
+  readonly identityColumn: number | null;
+  readonly columns: readonly {
+    readonly index: number;
+    readonly field: AvailabilityCsvField;
+    readonly blank: "preserve" | "clear";
+  }[];
+  readonly personMappings: Readonly<Record<string, UuidV7>>;
+  readonly assignmentTypeMappings: Readonly<Record<string, UuidV7>>;
+  readonly locationMappings: Readonly<Record<string, UuidV7>>;
+}
+export interface AvailabilityCsvRowDecision {
+  readonly record: number;
+  readonly decision:
+    | { readonly kind: "add" | "update"; readonly availabilityId: UuidV7 }
+    | { readonly kind: "skip" };
+}
+export type AvailabilityCsvIdentity =
+  | { readonly kind: "absent" | "invalid" }
+  | { readonly kind: "supplied"; readonly availabilityId: UuidV7 };
+export type AvailabilityCsvRowIssue =
+  | "columnCount"
+  | "invalidIdentity"
+  | "reservedIdentity"
+  | "unresolvedIdentity"
+  | "duplicateTarget"
+  | "invalidCell"
+  | "invalidReference"
+  | "invalidLocalTime"
+  | "unresolvableLocalTime"
+  | "nonpositiveInterval"
+  | "conflictingTimeWindow"
+  | "missingRequiredField"
+  | "invalidAvailability";
+export interface AvailabilityCsvExcludedRow {
+  readonly record: number;
+  readonly skipped: boolean;
+  readonly issue: AvailabilityCsvRowIssue | null;
+}
+export interface AvailabilityCsvReview {
+  readonly format: "eutheto/workforce-availability-csv-review";
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly scenarioBlake3: string;
+  readonly source: CsvSource;
+  readonly parserVersion: "csv-core-0.1.13";
+  readonly limitsVersion: 1;
+  readonly mapping: AvailabilityCsvMapping;
+  readonly decisions: readonly AvailabilityCsvRowDecision[];
+  readonly rowsBlake3: string;
+  readonly changesBlake3: string;
+  readonly excludedBlake3: string;
+  readonly validationBlake3: string;
+}
+export interface AvailabilityCsvPreview {
+  readonly schemaVersion: 1;
+  readonly disposition: CsvDisposition;
+  readonly source: CsvSource;
+  readonly rows: readonly {
+    readonly record: number;
+    readonly status: "added" | "updated" | "unchanged" | "skipped" | "blocked" | "unresolved";
+    readonly identity: AvailabilityCsvIdentity;
+    readonly availabilityId: UuidV7 | null;
+    readonly before: Pack.WorkforceAvailability | null;
+    readonly after: Pack.WorkforceAvailability | null;
+    readonly resolvedStartsAt: Pack.WorkforceResolvedLocalTime | null;
+    readonly resolvedEndsAt: Pack.WorkforceResolvedLocalTime | null;
+    readonly issue: AvailabilityCsvRowIssue | null;
+  }[];
+  readonly excludedRows: readonly AvailabilityCsvExcludedRow[];
+  readonly validationIssues: readonly ValidationIssue[];
+  readonly batch: {
+    readonly schemaVersion: 1;
+    readonly packId: "official.workforce";
+    readonly scenarioSchemaVersion: 1;
+    readonly label: string | null;
+    readonly commands: readonly {
+      readonly commandType: "official.workforce.add_entity" | "official.workforce.update_entity";
+      readonly payload: { readonly entity: Pack.WorkforceAvailability };
+    }[];
+  } | null;
+  readonly review: AvailabilityCsvReview | null;
+  readonly approvalDigest: string | null;
+}
+export interface AvailabilityCsvPreviewV1 {
+  readonly schemaVersion: 1;
+  readonly sourceId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly previewId: UuidV7;
+  readonly preview: AvailabilityCsvPreview;
+}
 
 export interface CommandResultDto {
   readonly newRevision: Revision;
@@ -1178,6 +1824,7 @@ export type SolutionId = UuidV7;
 export type SolveRunId = UuidV7;
 export type CounterfactualJobId = UuidV7;
 export type DomainAssignmentId = string;
+export type VerificationIssueId = string;
 export type Int64 = string;
 export type Uint64 = number | string;
 
@@ -1248,6 +1895,100 @@ export interface RuleEvaluation {
   readonly observed: Readonly<Record<string, VerificationValue>>;
   readonly evidence: readonly string[];
 }
+export type ManualProtectionV1 =
+  | { readonly kind: "unlocked" }
+  | { readonly kind: "hard" }
+  | { readonly kind: "soft"; readonly stabilityWeight: number };
+export interface ManualProtectionChangeV1 {
+  readonly personId: UuidV7;
+  readonly shiftId: UuidV7;
+  readonly protection: ManualProtectionV1;
+}
+export type ManualEditIntentV1 =
+  | {
+      readonly kind: "add" | "remove";
+      readonly personId: UuidV7;
+      readonly shiftId: UuidV7;
+      readonly protectionChanges: readonly ManualProtectionChangeV1[];
+    }
+  | {
+      readonly kind: "replace";
+      readonly incumbentPersonId: UuidV7;
+      readonly targetPersonId: UuidV7;
+      readonly shiftId: UuidV7;
+      readonly protectionChanges: readonly ManualProtectionChangeV1[];
+    }
+  | {
+      readonly kind: "protection";
+      readonly personId: UuidV7;
+      readonly shiftId: UuidV7;
+      readonly protection: ManualProtectionV1;
+    };
+export interface ManualEditSourceV1 {
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly documentHash: string;
+  readonly original: RunBaselineOriginal;
+  readonly currentManualId: UuidV7 | null;
+  readonly currentManualChecksum: string | null;
+  readonly selectedCount: number;
+  readonly protectionCount: number;
+  readonly authoredOptimizeUnavailableReason: string | null;
+}
+export interface ManualEditRowV1 {
+  readonly personId: UuidV7;
+  readonly shiftId: UuidV7;
+  readonly personAvailable: boolean;
+  readonly shiftAvailable: boolean;
+  readonly personLabel: string;
+  readonly shiftLabel: string;
+  readonly selected: boolean;
+  readonly lockId: UuidV7 | null;
+  readonly protection: ManualProtectionV1;
+}
+export interface ManualEditReadV1 {
+  readonly schemaVersion: 1;
+  readonly source: ManualEditSourceV1;
+  readonly offset: number;
+  readonly totalRows: number;
+  readonly nextOffset: number | null;
+  readonly rows: readonly ManualEditRowV1[];
+}
+export interface ManualEditReviewV1 {
+  readonly schemaVersion: 1;
+  readonly source: ManualEditSourceV1;
+  readonly intent: ManualEditIntentV1;
+  readonly changes: readonly {
+    readonly before: ManualEditRowV1;
+    readonly after: ManualEditRowV1;
+  }[];
+  readonly evaluations: readonly {
+    readonly evaluation: RuleEvaluation;
+    readonly ownerPaths: readonly string[];
+  }[];
+  readonly disposition: "valid" | "invalid";
+  readonly approvalDigest: string | null;
+}
+export interface ManualEditAppliedV1 {
+  readonly schemaVersion: 1;
+  readonly commandResult: CommandResultDto;
+  readonly sourceAdmissionFailure: ApiErrorDto | null;
+}
+export type ManualEditResultV1 =
+  | { readonly kind: "read"; readonly read: ManualEditReadV1 }
+  | { readonly kind: "review"; readonly review: ManualEditReviewV1 }
+  | { readonly kind: "applied"; readonly applied: ManualEditAppliedV1 };
+export type ManualEditInputV1 =
+  | { readonly mode: "read"; readonly offset: number; readonly limit: number }
+  | { readonly mode: "review"; readonly intent: ManualEditIntentV1 }
+  | {
+      readonly mode: "apply";
+      readonly intent: ManualEditIntentV1;
+      readonly approvalDigest: string;
+      readonly commandId: UuidV7;
+      readonly actor: ActorRef;
+      readonly truncateRedo: boolean;
+    };
 export interface VerificationWarning {
   readonly id: string;
   readonly messageKey: string;
@@ -1278,6 +2019,209 @@ export interface AcceptedResult {
 export type BackendSelection =
   { readonly kind: "auto" } | { readonly kind: "specific"; readonly backendId: string };
 export type SolveMode = "quick" | "balanced" | "deep" | "custom";
+export interface SolveBackendOptionsRequestV2 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+}
+export type SolveIntent = "optimize" | "repair";
+export type SolveBaselineSourceV1 =
+  { readonly kind: "accepted" } | { readonly kind: "external"; readonly entityId: UuidV7 };
+export interface SolveStartRequestV3 {
+  readonly requestId: UuidV7;
+  readonly operationId: UuidV7;
+  readonly schemaVersion: typeof SOLVE_START_REQUEST_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly mode: SolveMode;
+  readonly intent: SolveIntent;
+  readonly baselineSource?: SolveBaselineSourceV1;
+  readonly maximumTimeMilliseconds?: number;
+}
+export interface SolveEstimateModelRequestV2 {
+  readonly requestId: UuidV7;
+  readonly operationId: UuidV7;
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+}
+export interface SolveCancelRequestV2 {
+  readonly cancelRequestId: UuidV7;
+  readonly operationId: UuidV7;
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+}
+export interface SolveGetJobRequestV2 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly runId: SolveRunId;
+}
+export interface SolveListRunsRequestV2 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision | null;
+  readonly limit: number;
+}
+export interface SolveBackendOptionDtoV1 {
+  readonly backendId: PackId;
+  readonly backendVersion: string;
+  readonly adapterVersion: string;
+  readonly displayName: string;
+}
+export interface SolveBackendOptionsDtoV2 {
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly revision: Revision;
+  readonly options: readonly SolveBackendOptionDtoV1[];
+}
+export type SolveJobStatusV1 =
+  | "running"
+  | "optimal"
+  | "feasible"
+  | "infeasible"
+  | "unbounded"
+  | "noSolutionWithinLimit"
+  | "cancelled"
+  | "invalidModel"
+  | "backendUnavailable"
+  | "backendFailed"
+  | "verificationAlarm"
+  | "interrupted";
+export interface SolveVerifiedCheckpointDtoV2 {
+  readonly result: AcceptedResultRefV1;
+  readonly verifiedAfterMilliseconds: number;
+  readonly acceptedAt: string;
+  readonly checkpointChecksum: string;
+}
+
+export interface SolveJobDtoV2 {
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly requestId: UuidV7;
+  readonly runId: SolveRunId;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly status: SolveJobStatusV1;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+  readonly solutionId: SolutionId | null;
+  readonly verificationChecksum: string | null;
+  readonly checkpoint: SolveVerifiedCheckpointDtoV2 | null;
+  /** Present only while this window owns the live solve; null after terminalization. */
+  readonly cancelOperationId: UuidV7 | null;
+  readonly stale: boolean;
+}
+export interface SolveStartDtoV2 {
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly currentRevision: Revision;
+  readonly reused: boolean;
+  readonly job: SolveJobDtoV2;
+}
+export type WorkforceAlternativeProfileV1 =
+  "balanced" | "preferenceFocused" | "minimalChanges" | "fairnessFirst";
+/** Descriptive native alarm metadata, never acceptance authority. */
+export interface KnownVerificationAlarmV1 {
+  readonly runId: SolveRunId;
+  readonly inputChecksum: string;
+  readonly diagnosticCode: string;
+  readonly terminalization: "notApplicable" | "confirmed" | "unconfirmed";
+  readonly secondaryCauseCode?: string;
+}
+export type WorkforceAlternativeEquivalenceV1 =
+  | { readonly kind: "notSuppressed" }
+  | { readonly kind: "equivalent"; readonly profile: WorkforceAlternativeProfileV1 }
+  | { readonly kind: "unavailable" };
+export interface WorkforceAlternativeMemberV1 {
+  readonly profile: WorkforceAlternativeProfileV1;
+  readonly requestId: UuidV7 | null;
+  readonly runId: SolveRunId | null;
+  readonly status:
+    "queued" | "preparing" | "running" | "finished" | "failed" | "skipped" | "outcomeUnknown";
+  readonly phase: SolvePhase | null;
+  readonly outcome: RunTerminalOutcomeV1 | null;
+  readonly equivalence: WorkforceAlternativeEquivalenceV1 | null;
+  readonly warningCode: string | null;
+  readonly knownAlarm: KnownVerificationAlarmV1 | null;
+  readonly unconfirmedResultId: SolutionId | null;
+  readonly finalizationUnknown: boolean;
+}
+export interface WorkforceAlternativesSnapshotV1 {
+  readonly schemaVersion: 1;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly startedAt: string;
+  readonly captureId: UuidV7 | null;
+  readonly status: "preparing" | "running" | "completed" | "stopped";
+  readonly stopReason:
+    | "cancelled"
+    | "timeLimit"
+    | "sourceChanged"
+    | "failed"
+    | "verificationAlarm"
+    | "finalizationUnknown"
+    | "summaryUnavailable"
+    | "interrupted"
+    | null;
+  readonly diagnosticCode: string | null;
+  readonly knownAlarm: KnownVerificationAlarmV1 | null;
+  readonly members: readonly WorkforceAlternativeMemberV1[];
+}
+export interface AlternativesGroupDtoV1 {
+  readonly schemaVersion: 1;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly baselineSource: SolveBaselineSourceV1;
+  readonly cancelOperationId: UuidV7 | null;
+  readonly settled: boolean;
+  readonly snapshot: WorkforceAlternativesSnapshotV1 | null;
+}
+export interface AlternativesGroupStatusV1 {
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly group: AlternativesGroupDtoV1 | null;
+}
+export interface SolveEstimateModelResultV1 {
+  readonly schemaVersion: 1;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly stale: boolean;
+  readonly compiled: true;
+  readonly solved: false;
+  readonly candidateCount: Uint64 | null;
+  readonly variableCount: Uint64;
+  readonly constraintCount: Uint64;
+  readonly projectionCount: Uint64;
+  readonly objectiveTermCount: Uint64;
+}
+export interface SolveCancelDtoV2 {
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly cancelRequestId: UuidV7;
+  readonly acknowledgement: "cancellationRequested" | "notActive";
+}
+export interface SolveListRunsDtoV2 {
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly runs: readonly SolveJobDtoV2[];
+}
+export interface SolveDiagnosticsSummaryDtoV2 {
+  readonly schemaVersion: typeof SOLVE_API_SCHEMA_VERSION;
+  readonly job: SolveJobDtoV2;
+  readonly elapsedMilliseconds: number | null;
+  readonly firstIncumbentMilliseconds: number | null;
+  readonly firstVerifiedFeasibleMilliseconds: number | null;
+  readonly phaseTimings: RunPhaseTimingsV1 | null;
+  readonly diagnosticCode: string | null;
+  readonly manifestChecksum: string | null;
+}
 export type WorkerThreadPolicy =
   { readonly kind: "auto" } | { readonly kind: "exact"; readonly count: number };
 export type ExplanationMode = "none" | "standard" | "detailed";
@@ -1304,7 +2248,48 @@ export interface SolveOptions {
   readonly reproducibility: ReproducibilityMode;
   readonly resourceLimits: ResourceLimits;
 }
-export interface RunInputV1 {
+export interface RunBaselineOriginal {
+  readonly entity: DomainEntityRef;
+  readonly pairContentHash: string;
+  readonly acceptedResult: AcceptedResultRefV1;
+  readonly sourceScenarioId: UuidV7;
+  readonly sourceRevision: Revision;
+  readonly sourceDocumentHash: string;
+  readonly sourceRunId: SolveRunId;
+  readonly sourceRunInputChecksum: string;
+  readonly sourceRunManifestChecksum: string;
+}
+export type RunBaselineSelection =
+  | { readonly kind: "originalAccepted" }
+  | {
+      readonly kind: "manualSelection";
+      readonly entity: DomainEntityRef;
+      readonly recordChecksum: string;
+      readonly admissionSourceScenarioId: UuidV7;
+      readonly admissionSourceRevision: Revision;
+      readonly admissionSourceDocumentHash: string;
+    };
+export interface RunBaselineBinding {
+  readonly original: RunBaselineOriginal;
+  readonly selection: RunBaselineSelection;
+  readonly selectedPairContentHash: string;
+  /** Opaque pack-owned original record; native validation establishes content, not provenance. */
+  readonly capturedOriginal?: JsonValue;
+}
+export interface RunExternalBaselineBinding {
+  readonly entity: DomainEntityRef;
+  readonly selectedPairContentHash: string;
+}
+export interface RunObjectiveContext {
+  readonly schemaVersion: 1 | 2 | 3;
+  readonly packId: string;
+  readonly profileId: string;
+  readonly semanticVersion: 1;
+  readonly operation: "optimize" | "repair";
+  readonly baseline?: RunBaselineBinding;
+  readonly externalBaseline?: RunExternalBaselineBinding;
+}
+export interface RunInput {
   readonly schemaVersion: number;
   readonly runId: SolveRunId;
   readonly requestId: UuidV7;
@@ -1331,6 +2316,7 @@ export interface RunInputV1 {
   readonly solveOptions: SolveOptions;
   readonly scenarioTimezone: string;
   readonly temporaryConditionHash: string | null;
+  readonly objectiveContext?: RunObjectiveContext;
   readonly checksum: string;
 }
 export interface RunPhaseTimingsV1 {
@@ -1364,11 +2350,103 @@ export type RunTerminalOutcomeV1 =
     }
   | { readonly type: "verificationAlarm"; readonly diagnosticCode: string }
   | { readonly type: "interrupted" };
-export interface RunManifestV1 {
+export interface RunClockFailureV1 {
+  readonly kind: "unreliableObservation";
+}
+export type RunNativeTerminationReason =
+  | "optimalityClaimed"
+  | "candidateFound"
+  | "infeasibilityClaimed"
+  | "unboundedClaimed"
+  | "timeLimit"
+  | "solutionLimit"
+  | "cancelled"
+  | "invalidModel"
+  | "unavailable"
+  | "failed";
+export type RunNativeRouterReason =
+  | "invalidModel"
+  | "unsupportedOverride"
+  | "noCompatibleBackend"
+  | "preflightRejected"
+  | "backendTerminated"
+  | "backendFailure"
+  | "candidateAwaitingVerification"
+  | "candidateVerified"
+  | "verificationQuarantined"
+  | "sharedOutputLimitExhausted"
+  | "reviewResourceLimitExceeded"
+  | "parentDeadlineExceeded"
+  | "cancelled";
+export type RunNativeAttemptTermination =
+  | {
+      readonly termination: "preflightRejected" | "backendError" | "outcomeContractFailure";
+      readonly details: { readonly code: string };
+    }
+  | { readonly termination: "backendOutcome"; readonly details: RunNativeTerminationReason }
+  | {
+      readonly termination: "verificationQuarantined";
+      readonly details: { readonly diagnosticCode: string };
+    }
+  | {
+      readonly termination:
+        | "candidateAwaitingVerification"
+        | "candidateVerified"
+        | "reviewCancelled"
+        | "reviewDeadlineExceeded"
+        | "reviewResourceLimitExceeded"
+        | "parentCancelled"
+        | "parentDeadlineExceeded";
+    };
+export interface RunNativeObjective {
+  readonly levelId: string;
+  readonly direction: OptimizationDirection;
+  readonly lowerBound: Int64;
+  readonly upperBound: Int64;
+}
+export interface RunNativeRuntime {
+  readonly workerVersion: string;
+  readonly engineVersion: string;
+  readonly protocolMajor: number;
+  readonly protocolMinor: number;
+  readonly modelFingerprintSha256: string;
+  readonly appliedParametersSha256: string;
+}
+export interface RunNativeOutcome {
+  readonly reason: RunNativeTerminationReason;
+  readonly objectiveValues: readonly Int64[] | null;
+  readonly bestBoundValues: readonly Int64[] | null;
+  readonly runtime: RunNativeRuntime | null;
+}
+export interface RunNativeAttempt {
+  readonly backendId: PackId;
+  readonly backendVersion: string;
+  readonly adapterVersion: string;
+  readonly solveFingerprint: string;
+  readonly invocationIndex: number | null;
+  readonly remainingAtDispatchMilliseconds: number;
+  readonly backendLimitMilliseconds: number;
+  readonly termination: RunNativeAttemptTermination;
+  readonly backendFailureCode: string | null;
+  readonly approvedWorkerManifestSha256: string | null;
+  readonly outcome: RunNativeOutcome | null;
+}
+export interface RunNativeObservations {
+  readonly schemaVersion: 1;
+  readonly modelHash: string;
+  readonly objectivePolicyHash: string;
+  readonly solveOptionsHash: string;
+  readonly objectives: readonly RunNativeObjective[];
+  readonly terminalStatus: SolveStatus;
+  readonly terminalReason: RunNativeRouterReason;
+  readonly attempt: RunNativeAttempt | null;
+}
+export interface RunManifest {
   readonly schemaVersion: number;
   readonly runId: SolveRunId;
   readonly runInputChecksum: string;
   readonly outcome: RunTerminalOutcomeV1;
+  readonly clockFailure?: RunClockFailureV1;
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly elapsedMilliseconds: number | null;
@@ -1376,6 +2454,7 @@ export interface RunManifestV1 {
   readonly firstVerifiedFeasibleMilliseconds: number | null;
   readonly phaseTimings: RunPhaseTimingsV1;
   readonly verificationWarnings: readonly VerificationWarning[];
+  readonly nativeObservations?: RunNativeObservations;
   readonly checksum: string;
 }
 
@@ -1397,6 +2476,7 @@ export interface SolutionListDtoV1 {
   readonly schemaVersion: number;
   readonly scenarioId: UuidV7;
   readonly currentRevision: Revision;
+  readonly freshlyVerified: false;
   readonly solutions: readonly SolutionSummaryDtoV1[];
 }
 export interface SolutionDetailDtoV1 {
@@ -1486,6 +2566,15 @@ export interface RunComparisonV1 {
   readonly base: RunComparisonSideV1;
   readonly candidate: RunComparisonSideV1;
 }
+export interface RunComparisonSideV2 {
+  readonly runId: SolveRunId;
+  readonly runManifestChecksum: string;
+  readonly outcome: RunTerminalOutcomeV1;
+}
+export interface RunComparisonV2 {
+  readonly base: RunComparisonSideV2;
+  readonly candidate: RunComparisonSideV2;
+}
 export interface SolutionComparisonV1 {
   readonly schemaVersion: number;
   readonly base: ComparisonBindingV1;
@@ -1502,11 +2591,53 @@ export interface SolutionComparisonV1 {
   readonly ordering: ComparisonOrdering;
   readonly checksum: string;
 }
-export interface SolutionComparisonDtoV1 {
-  readonly schemaVersion: number;
+export type AssignmentProtectionStateV1 =
+  | { readonly type: "unlocked" }
+  | { readonly type: "hard" }
+  | { readonly type: "soft"; readonly weight: number };
+export interface AssignmentProtectionComparisonV1 {
+  readonly assignmentId: DomainAssignmentId;
+  readonly before: AssignmentProtectionStateV1 | null;
+  readonly after: AssignmentProtectionStateV1 | null;
+  readonly beforeSelected: boolean;
+  readonly afterSelected: boolean;
+  readonly statePreserved: boolean;
+  readonly assignmentPreserved: boolean;
+}
+export interface ComparisonEntityObservationV1 {
+  readonly entity: DomainEntityRef;
+  readonly beforeLabel: string | null;
+  readonly afterLabel: string | null;
+}
+export type ScoreComparisonUnavailableReasonV1 = "policyOrScopeMismatch" | "scoreShapeMismatch";
+export type ScoreComparisonV2 =
+  | {
+      readonly type: "comparable";
+      readonly baseScore: ScoreVector;
+      readonly candidateScore: ScoreVector;
+      readonly scoreLevels: readonly ScoreLevelComparisonV1[];
+      readonly ordering: ComparisonOrdering;
+    }
+  | { readonly type: "unavailable"; readonly reason: ScoreComparisonUnavailableReasonV1 };
+export interface SolutionComparisonV2 {
+  readonly schemaVersion: 2;
+  readonly base: ComparisonBindingV1;
+  readonly candidate: ComparisonBindingV1;
+  readonly assignments: readonly AssignmentComparisonV1[];
+  readonly rules: readonly RuleComparisonV1[];
+  readonly score: ScoreComparisonV2;
+  readonly metrics: readonly MetricComparisonV1[];
+  readonly protections: readonly AssignmentProtectionComparisonV1[];
+  readonly runs: RunComparisonV2;
+  readonly affectedEntities: readonly DomainEntityRef[];
+  readonly entityObservations: readonly ComparisonEntityObservationV1[];
+  readonly checksum: string;
+}
+export interface SolutionComparisonDtoV3 {
+  readonly schemaVersion: 3;
   readonly scenarioId: UuidV7;
   readonly currentRevision: Revision;
-  readonly comparison: SolutionComparisonV1;
+  readonly comparison: SolutionComparisonV2;
 }
 
 export type ExplanationRequestSubjectV1 =
@@ -1592,7 +2723,14 @@ export type ConflictUnavailableReason =
   | "assumptionsUnavailable"
   | "foundationalInfeasibility"
   | "conflictNotReturned"
-  | "invalidAssumptionCore";
+  | "invalidAssumptionCore"
+  | "notRequested"
+  | "notRecorded"
+  | "unsupportedDomainPack"
+  | "budgetExpired"
+  | "cancelled"
+  | "resourceLimitExceeded"
+  | "diagnosticFailed";
 export type InfeasibilityEvidenceV1 =
   | {
       readonly type: "conflict";
@@ -1617,28 +2755,33 @@ export interface AssignmentEvidenceV1 {
   readonly lockState: AssignmentLockStateV1 | null;
 }
 export type RepairCausalityV1 = "notEstablished";
-export interface RepairEvidenceV1 {
-  readonly comparison: SolutionComparisonV1;
+export interface RepairEvidenceV2 {
+  readonly comparison: SolutionComparisonV2;
   readonly causality: RepairCausalityV1;
 }
-export interface OptimalityStatusEvidenceV1 {
-  readonly runInput: RunInputV1;
-  readonly runManifest: RunManifestV1;
+export interface OptimalityStatusEvidence {
+  readonly schemaVersion?: 2;
+  readonly runInput: RunInput;
+  readonly runManifest: RunManifest;
   readonly result: AcceptedResultRefV1 | null;
 }
 
-export type ExplanationEvidencePayloadV1 =
+export type ExplanationEvidencePayloadV2 =
   | { readonly kind: "validation"; readonly issue: ValidationIssueEvidenceV1 }
-  | { readonly kind: "infeasibility"; readonly infeasibility: InfeasibilityEvidenceV1 }
+  | {
+      readonly kind: "infeasibility";
+      readonly infeasibility: InfeasibilityEvidenceV1;
+      readonly condition?: CounterfactualConditionV1;
+    }
   | { readonly kind: "assignment"; readonly assignment: AssignmentEvidenceV1 }
-  | { readonly kind: "counterfactual"; readonly result: CounterfactualResultV1 }
-  | { readonly kind: "solutionDifference"; readonly comparison: SolutionComparisonV1 }
-  | { readonly kind: "repair"; readonly repair: RepairEvidenceV1 }
-  | { readonly kind: "optimalityStatus"; readonly status: OptimalityStatusEvidenceV1 };
-export interface ExplanationEvidenceV1 {
-  readonly schemaVersion: number;
+  | { readonly kind: "counterfactual"; readonly result: CounterfactualResult }
+  | { readonly kind: "solutionDifference"; readonly comparison: SolutionComparisonV2 }
+  | { readonly kind: "repair"; readonly repair: RepairEvidenceV2 }
+  | { readonly kind: "optimalityStatus"; readonly status: OptimalityStatusEvidence };
+export interface ExplanationEvidenceV2 {
+  readonly schemaVersion: 2;
   readonly certainty: ExplanationCertainty;
-  readonly evidence: ExplanationEvidencePayloadV1;
+  readonly evidence: ExplanationEvidencePayloadV2;
   readonly checksum: string;
 }
 export interface EvidenceMessageV1 {
@@ -1655,18 +2798,48 @@ export interface EvidenceRenderResultV1 {
   readonly evidenceChecksum: string;
   readonly messages: readonly EvidenceMessageV1[];
 }
-export interface ExplanationResultV1 {
-  readonly schemaVersion: number;
-  readonly evidence: ExplanationEvidenceV1;
+export interface EvidenceRenderRequestV2 {
+  readonly schemaVersion: 2;
+  readonly kind: ExplanationKind;
+  readonly evidence: ExplanationEvidenceV2;
+}
+export interface ExplanationResultV2 {
+  readonly schemaVersion: 2;
+  readonly evidence: ExplanationEvidenceV2;
   readonly rendered: EvidenceRenderResultV1;
   readonly checksum: string;
 }
-export interface SolutionExplanationDtoV1 {
-  readonly schemaVersion: number;
+export interface SolutionExplanationDtoV2 {
+  readonly schemaVersion: 2;
   readonly scenarioId: UuidV7;
   readonly currentRevision: Revision;
   readonly scenarioRevisions: readonly Revision[];
-  readonly explanation: ExplanationResultV1;
+  readonly explanation: ExplanationResultV2;
+  readonly infeasibilityContext?: InfeasibilityExplanationContextV1;
+}
+export interface InfeasibilityExplanationContextV1 {
+  readonly runId: UuidV7;
+  readonly sourceRevision: Revision;
+  readonly runManifestChecksum: string;
+  readonly evidenceChecksum: string;
+  readonly conflictId: string;
+}
+export interface DiagnosticCopyResultV1 {
+  readonly schemaVersion: 1;
+  readonly project: ProjectListItemV1;
+  readonly commandId: UuidV7;
+  readonly libraryRevision: Revision;
+}
+export interface DiagnosticExportMetadataV1 {
+  readonly schemaVersion: 1;
+  readonly operationId: UuidV7;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly sourceRevision: Revision;
+  readonly observedCurrentRevision: Revision;
+  readonly runId: UuidV7;
+  readonly runManifestChecksum: string;
+  readonly evidenceChecksum: string;
 }
 
 export type CounterfactualConditionPayloadV1 =
@@ -1679,6 +2852,11 @@ export type CounterfactualConditionPayloadV1 =
       readonly type: "forbidAssignmentValue";
       readonly assignmentId: DomainAssignmentId;
       readonly value: AssignmentValue;
+    }
+  | {
+      readonly type: "replaceAssignment";
+      readonly targetAssignmentId: DomainAssignmentId;
+      readonly replacedAssignmentId: DomainAssignmentId;
     };
 export interface CounterfactualConditionV1 {
   readonly schemaVersion: number;
@@ -1736,17 +2914,30 @@ export type CounterfactualConclusionV1 =
       readonly ordering: ComparisonOrdering;
     }
   | { readonly type: "notDistinguishedWithinBudget" };
-export interface CounterfactualResultV1 {
+export interface CounterfactualResult {
   readonly schemaVersion: number;
   readonly request: CounterfactualJobRequestV1;
-  readonly baseRunInput: RunInputV1;
-  readonly baseRunManifest: RunManifestV1;
+  readonly baseRunInput: RunInput;
+  readonly baseRunManifest: RunManifest;
   readonly compilation: CounterfactualCompilationBindingV1;
-  readonly runInput: RunInputV1;
-  readonly runManifest: RunManifestV1;
+  readonly runInput: RunInput;
+  readonly runManifest: RunManifest;
   readonly conclusion: CounterfactualConclusionV1;
   readonly checksum: string;
 }
+export type CounterfactualTerminalAuthorityV1 =
+  | {
+      readonly kind: "timelyInfeasibility";
+      readonly runId: SolveRunId;
+      readonly runManifestChecksum: string;
+      readonly evidenceChecksum: string;
+    }
+  | {
+      readonly kind: "verificationAlarm";
+      readonly runId: SolveRunId;
+      readonly runManifestChecksum: string;
+      readonly clockFailure?: RunClockFailureV1;
+    };
 export interface CounterfactualJobRecordV1 {
   readonly schemaVersion: number;
   readonly request: CounterfactualJobRequestV1;
@@ -1755,8 +2946,9 @@ export interface CounterfactualJobRecordV1 {
   readonly finishedAt: string | null;
   readonly cancelRequestId: UuidV7 | null;
   readonly cancelRequestedAt: string | null;
-  readonly result: CounterfactualResultV1 | null;
+  readonly result: CounterfactualResult | null;
   readonly error: { readonly kind: CounterfactualFailureKind } | null;
+  readonly terminalAuthority?: CounterfactualTerminalAuthorityV1;
 }
 export interface SolutionStartCounterfactualDtoV1 {
   readonly schemaVersion: number;
@@ -1770,6 +2962,38 @@ export interface SolutionCancelCounterfactualDtoV1 {
   readonly currentRevision: Revision;
   readonly job: CounterfactualJobRecordV1;
 }
+export interface CounterfactualJobListItemV1 {
+  readonly jobId: CounterfactualJobId;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly baseSolutionId: SolutionId;
+  readonly condition: CounterfactualConditionV1;
+  readonly createdAt: string;
+  readonly state: CounterfactualJobState;
+  readonly finishedAt: string | null;
+  readonly error: { readonly kind: CounterfactualFailureKind } | null;
+}
+export interface CounterfactualJobListCursorV1 {
+  readonly createdAt: string;
+  readonly jobId: CounterfactualJobId;
+}
+export interface CounterfactualJobListPageV1 {
+  readonly jobs: readonly CounterfactualJobListItemV1[];
+  readonly nextCursor: CounterfactualJobListCursorV1 | null;
+}
+export interface SolutionGetCounterfactualDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly job: CounterfactualJobRecordV1;
+}
+export interface SolutionListCounterfactualsDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly page: CounterfactualJobListPageV1;
+}
 
 export interface SolutionListRequestV1 {
   readonly requestId: UuidV7;
@@ -1781,16 +3005,34 @@ export interface SolutionSummaryRequestV1 extends SolutionListRequestV1 {
 }
 export interface SolutionViewRequestV1 extends SolutionSummaryRequestV1 {
   readonly viewId: string;
+  readonly parameters?: Pack.WorkforceResultScheduleViewParameters;
+  readonly continuation?: SetupContinuationV1 | null;
 }
 export interface SolutionSelectRequestV1 extends SolutionSummaryRequestV1 {
   readonly expectedRevision: Revision;
 }
+export interface SolutionAdoptBaseRequestV1 {
+  readonly schemaVersion: 1;
+  readonly requestId: UuidV7;
+  readonly commandId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly result: AcceptedResultRefV1;
+  readonly actor: ActorRef;
+  readonly truncateRedo: boolean;
+}
 export type SolutionVerifyRequestV1 = SolutionSummaryRequestV1;
-export interface SolutionCompareRequestV1 extends SolutionListRequestV1 {
+export interface SolutionCompareRequestV3 extends SolutionListRequestV1 {
+  readonly schemaVersion: 3;
   readonly baseSolutionId: SolutionId;
   readonly candidateSolutionId: SolutionId;
 }
-export interface SolutionExplainRequestV1 extends SolutionListRequestV1 {
+export interface SolutionExplainOperationRequestV2 {
+  readonly schemaVersion: 2;
+  readonly requestId: UuidV7;
+  readonly operationId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly sourceRevision: Revision;
   readonly request: ExplanationRequestV1;
 }
 export interface SolutionStartCounterfactualRequestV1 {
@@ -1809,9 +3051,23 @@ export interface SolutionCancelCounterfactualRequestV1 {
   readonly expectedRevision: Revision;
   readonly jobId: CounterfactualJobId;
 }
+export interface SolutionGetCounterfactualRequestV1 {
+  readonly schemaVersion: number;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly jobId: CounterfactualJobId;
+}
+export interface SolutionListCounterfactualsRequestV1 {
+  readonly schemaVersion: number;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly before: CounterfactualJobListCursorV1 | null;
+  readonly limit: number;
+}
 
 export type EventTopic =
   | "solve://progress"
+  | "solve://verified"
   | "solve://completed"
   | "scenario://changed"
   | "scenario://validation-changed"
@@ -1862,6 +3118,18 @@ export type AppEventDto =
           readonly context: EventContextDto;
           readonly phase: SolvePhase;
           readonly percent: number | null;
+        };
+      };
+    }
+  | {
+      readonly topic: "solve://verified";
+      readonly payload: {
+        readonly type: "solveVerified";
+        readonly payload: {
+          readonly context: EventContextDto;
+          readonly solutionId: SolutionId;
+          readonly resultChecksum: string;
+          readonly checkpointChecksum: string;
         };
       };
     }
@@ -1920,6 +3188,10 @@ export type SolveProgressEvent = Extract<
   AppEventDto,
   { readonly topic: "solve://progress" }
 >["payload"];
+export type SolveVerifiedEvent = Extract<
+  AppEventDto,
+  { readonly topic: "solve://verified" }
+>["payload"];
 export type SolveCompletedEvent = Extract<
   AppEventDto,
   { readonly topic: "solve://completed" }
@@ -1948,6 +3220,12 @@ export function onSolveProgress(
   listener: (event: SolveProgressEvent) => void,
 ): Promise<UnlistenFn> {
   return listenParsed("solve://progress", isSolveProgress, listener);
+}
+
+export function onSolveVerified(
+  listener: (event: SolveVerifiedEvent) => void,
+): Promise<UnlistenFn> {
+  return listenParsed("solve://verified", isSolveVerified, listener);
 }
 
 export function onSolveCompleted(
@@ -2038,15 +3316,21 @@ export const COMMAND_CATALOG = [
   "operation_cancel",
   "operation_release",
   "workforce_apply_reviewed_generation",
-  "people_csv_source_open",
-  "people_csv_source_close",
-  "people_csv_detect",
-  "people_csv_record_sample",
+  "csv_source_open",
+  "eligibility_matrix_source_open",
+  "csv_source_close",
+  "csv_detect",
+  "csv_record_sample",
   "people_csv_preview",
-  "people_csv_apply",
-  "people_csv_preview_discard",
-  "people_csv_rejected_rows",
-  "people_csv_rejected_rows_save",
+  "assignment_csv_preview",
+  "eligibility_csv_preview",
+  "eligibility_matrix_preview",
+  "shift_csv_preview",
+  "availability_csv_preview",
+  "csv_apply",
+  "csv_preview_discard",
+  "csv_report",
+  "csv_report_save",
   "scenario_get_summary",
   "scenario_get_setup_status",
   "scenario_get_view",
@@ -2064,6 +3348,8 @@ export const COMMAND_CATALOG = [
   "solve_get_backend_options",
   "solve_estimate_model",
   "solve_start",
+  "alternatives_start",
+  "alternatives_get_group",
   "solve_cancel",
   "solve_get_job",
   "solve_list_runs",
@@ -2072,11 +3358,16 @@ export const COMMAND_CATALOG = [
   "solution_get_summary",
   "solution_get_view",
   "solution_select",
+  "solution_adopt_base",
   "solution_verify",
   "solution_compare",
   "solution_explain",
+  "solution_create_diagnostic_copy",
+  "solution_export_diagnostic",
   "solution_start_counterfactual",
   "solution_cancel_counterfactual",
+  "solution_get_counterfactual",
+  "solution_list_counterfactuals",
   "solution_lock_assignment",
   "solution_unlock_assignment",
   "solution_create_repair_request",
@@ -2084,7 +3375,9 @@ export const COMMAND_CATALOG = [
   "solution_export",
   "solution_share_preview",
   "solution_share_create",
+  "solution_share_release",
   "solution_export_cancel",
+  "solution_export_release",
   "ai_get_provider_catalog",
   "ai_get_configuration",
   "ai_store_credential",
@@ -2133,6 +3426,19 @@ const isPackId = (value: unknown): value is PackId =>
   value.split(".").every((part) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part));
 const isDigest = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+const isRunDiagnosticCode = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length <= 96 &&
+  value.split(".").length >= 2 &&
+  value.split(".").every((part) => /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(part));
+const isDomainId = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length <= 160 &&
+  value.split(".").length >= 2 &&
+  value.split(".").every((part) => /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(part));
+const isValidationIssueId = (value: unknown): value is string =>
+  isDomainId(value) ||
+  (typeof value === "string" && /^validation\.issue\.[0-9a-f]{64}$/.test(value));
 
 function literal<const T extends string | number | boolean>(expected: T): Guard<T> {
   return (value: unknown): value is T => value === expected;
@@ -2372,6 +3678,7 @@ function parseResponse<T>(
   guard: Guard<T>,
   maximum: number,
   revisionKey: ResponseRevision<T> | undefined,
+  enforceRequestEcho = true,
 ): ApiResponseDto<T> {
   const envelope = shape<ApiResponseDto<T>>({
     schemaVersion: literal(API_SCHEMA_VERSION),
@@ -2393,6 +3700,7 @@ function parseResponse<T>(
   }
   // These declared top-level fields are invocation echoes, not nested job/domain identities.
   if (
+    enforceRequestEcho &&
     isObject(value.result) &&
     ((Object.hasOwn(value.result, "requestId") && value.result.requestId !== requestId) ||
       (Object.hasOwn(value.result, "cancelRequestId") &&
@@ -2624,6 +3932,7 @@ const isDomainDescriptor = shape<DomainPackDescriptorDto>({
       "compilation",
       "projection",
       "verification",
+      "infeasibilityDiagnostics",
       "scoring",
       "portableData",
       "shareResult",
@@ -2987,12 +4296,114 @@ const isSolveStatus = choices<SolveStatus>(
   "backendUnavailable",
   "backendFailed",
 );
+const isSolveMode = choices<SolveMode>("quick", "balanced", "deep", "custom");
+const isSolveJobStatus = choices<SolveJobStatusV1>(
+  "running",
+  "optimal",
+  "feasible",
+  "infeasible",
+  "unbounded",
+  "noSolutionWithinLimit",
+  "cancelled",
+  "invalidModel",
+  "backendUnavailable",
+  "backendFailed",
+  "verificationAlarm",
+  "interrupted",
+);
+const isSolveBackendOption = shape<SolveBackendOptionDtoV1>({
+  backendId: isPackId,
+  backendVersion: isText,
+  adapterVersion: isText,
+  displayName: isText,
+});
+const isSolveBackendOptions = shape<SolveBackendOptionsDtoV2>({
+  schemaVersion: literal(SOLVE_API_SCHEMA_VERSION),
+  scenarioId: isUuid,
+  revision: isRevision,
+  options: arrayOf(isSolveBackendOption, SOLVE_RUN_LIST_LIMIT_MAX),
+});
+const isAcceptedRef = shape<AcceptedResultRefV1>({ solutionId: isUuid, resultChecksum: isDigest });
+const isVerifiedCheckpoint = shape<SolveVerifiedCheckpointDtoV2>({
+  result: isAcceptedRef,
+  verifiedAfterMilliseconds: isU32,
+  acceptedAt: isTimestamp,
+  checkpointChecksum: isDigest,
+});
+const isSolveJob = shape<SolveJobDtoV2>({
+  schemaVersion: literal(SOLVE_API_SCHEMA_VERSION),
+  requestId: isUuid,
+  runId: isUuid,
+  scenarioId: isUuid,
+  scenarioRevision: isRevision,
+  status: isSolveJobStatus,
+  startedAt: isTimestamp,
+  finishedAt: nullable(isTimestamp),
+  solutionId: nullable(isUuid),
+  verificationChecksum: nullable(isDigest),
+  checkpoint: nullable(isVerifiedCheckpoint),
+  cancelOperationId: nullable(isUuid),
+  stale: isBoolean,
+});
+const isSolveStart = shape<SolveStartDtoV2>({
+  schemaVersion: literal(SOLVE_API_SCHEMA_VERSION),
+  currentRevision: isRevision,
+  reused: isBoolean,
+  job: isSolveJob,
+});
+const UINT64_MAX = (1n << 64n) - 1n;
+const isInt64Value = (value: unknown): value is Int64 => {
+  if (typeof value !== "string" || value.length > 20 || !CANONICAL_DECIMAL_INTEGER.test(value))
+    return false;
+  const integer = BigInt(value);
+  return integer >= INT64_MIN && integer <= INT64_MAX;
+};
+const isUint64Value = (value: unknown): value is Uint64 =>
+  isRevision(value) ||
+  (typeof value === "string" &&
+    value.length <= 20 &&
+    /^(?:0|[1-9][0-9]*)$/.test(value) &&
+    BigInt(value) <= UINT64_MAX);
+const isSolveEstimateModel = shape<SolveEstimateModelResultV1>({
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  scenarioRevision: isRevision,
+  currentRevision: isRevision,
+  stale: isBoolean,
+  compiled: literal(true),
+  solved: literal(false),
+  candidateCount: nullable(isUint64Value),
+  variableCount: isUint64Value,
+  constraintCount: isUint64Value,
+  projectionCount: isUint64Value,
+  objectiveTermCount: isUint64Value,
+});
+const isSolveCancel = shape<SolveCancelDtoV2>({
+  schemaVersion: literal(SOLVE_API_SCHEMA_VERSION),
+  cancelRequestId: isUuid,
+  acknowledgement: choices("cancellationRequested", "notActive"),
+});
+const isSolveListRuns = shape<SolveListRunsDtoV2>({
+  schemaVersion: literal(SOLVE_API_SCHEMA_VERSION),
+  scenarioId: isUuid,
+  currentRevision: isRevision,
+  runs: arrayOf(isSolveJob, SOLVE_RUN_LIST_LIMIT_MAX),
+});
 const isSolveProgress = shape<SolveProgressEvent>({
   type: literal("solveProgress"),
   payload: shape({
     context: isEventContext,
     phase: choices("queued", "compiling", "solving", "verifying", "explaining"),
     percent: nullable((value: unknown): value is number => isU32(value) && value <= 100),
+  }),
+});
+const isSolveVerified = shape<SolveVerifiedEvent>({
+  type: literal("solveVerified"),
+  payload: shape({
+    context: isEventContext,
+    solutionId: isUuid,
+    resultChecksum: isDigest,
+    checkpointChecksum: isDigest,
   }),
 });
 const isSolveCompleted = shape<SolveCompletedEvent>({
@@ -3017,20 +4428,6 @@ const isCounterfactualProgress = shape<CounterfactualProgressEvent>({
     ),
   }),
 });
-const UINT64_MAX = (1n << 64n) - 1n;
-const isInt64Value = (value: unknown): value is Int64 => {
-  if (typeof value !== "string" || value.length > 20 || !CANONICAL_DECIMAL_INTEGER.test(value))
-    return false;
-  const integer = BigInt(value);
-  return integer >= INT64_MIN && integer <= INT64_MAX;
-};
-const isUint64Value = (value: unknown): value is Uint64 =>
-  isRevision(value) ||
-  (typeof value === "string" &&
-    value.length <= 20 &&
-    /^(?:0|[1-9][0-9]*)$/.test(value) &&
-    BigInt(value) <= UINT64_MAX);
-const isAcceptedRef = shape<AcceptedResultRefV1>({ solutionId: isUuid, resultChecksum: isDigest });
 const isDirection = choices<OptimizationDirection>("minimize", "maximize");
 const isScoreLevel = shape<ScoreLevelValue>({
   levelId: isText,
@@ -3178,8 +4575,171 @@ const isSolveOptions = shape<SolveOptions>({
     maxConstraints: isUint64Value,
   }),
 });
-const isRunInput = shape<RunInputV1>({
+const isRunBaselineOriginal = shape<RunBaselineOriginal>({
+  entity: isDomainEntity,
+  pairContentHash: isDigest,
+  acceptedResult: isAcceptedRef,
+  sourceScenarioId: isUuid,
+  sourceRevision: isRevision,
+  sourceDocumentHash: isDigest,
+  sourceRunId: isUuid,
+  sourceRunInputChecksum: isDigest,
+  sourceRunManifestChecksum: isDigest,
+});
+const isRunBaselineShape = shape<RunBaselineBinding>({
+  original: isRunBaselineOriginal,
+  selection: union<RunBaselineSelection>(
+    shape<Extract<RunBaselineSelection, { readonly kind: "originalAccepted" }>>({
+      kind: literal("originalAccepted"),
+    }),
+    shape<Extract<RunBaselineSelection, { readonly kind: "manualSelection" }>>({
+      kind: literal("manualSelection"),
+      entity: isDomainEntity,
+      recordChecksum: isDigest,
+      admissionSourceScenarioId: isUuid,
+      admissionSourceRevision: isRevision,
+      admissionSourceDocumentHash: isDigest,
+    }),
+  ),
+  selectedPairContentHash: isDigest,
+  capturedOriginal: optional(
+    (value): value is JsonValue =>
+      value !== null && boundedJson(value, MAX_CAPTURED_BASELINE_BYTES),
+  ),
+});
+function isRunBaseline(value: unknown): value is RunBaselineBinding {
+  return (
+    isRunBaselineShape(value) &&
+    (value.capturedOriginal === undefined || value.selection.kind === "originalAccepted")
+  );
+}
+const isManualProtection = union<ManualProtectionV1>(
+  shape<{ readonly kind: "unlocked" }>({ kind: literal("unlocked") }),
+  shape<{ readonly kind: "hard" }>({ kind: literal("hard") }),
+  shape<Extract<ManualProtectionV1, { readonly kind: "soft" }>>({
+    kind: literal("soft"),
+    stabilityWeight: (value): value is number => isU32(value) && value > 0 && value <= 1_000_000,
+  }),
+);
+const isManualProtectionChange = shape<ManualProtectionChangeV1>({
+  personId: isUuid,
+  shiftId: isUuid,
+  protection: isManualProtection,
+});
+const isManualIntent = union<ManualEditIntentV1>(
+  shape<Extract<ManualEditIntentV1, { readonly kind: "add" | "remove" }>>({
+    kind: choices("add", "remove"),
+    personId: isUuid,
+    shiftId: isUuid,
+    protectionChanges: arrayOf(isManualProtectionChange, 2),
+  }),
+  shape<Extract<ManualEditIntentV1, { readonly kind: "replace" }>>({
+    kind: literal("replace"),
+    incumbentPersonId: isUuid,
+    targetPersonId: isUuid,
+    shiftId: isUuid,
+    protectionChanges: arrayOf(isManualProtectionChange, 2),
+  }),
+  shape<Extract<ManualEditIntentV1, { readonly kind: "protection" }>>({
+    kind: literal("protection"),
+    personId: isUuid,
+    shiftId: isUuid,
+    protection: isManualProtection,
+  }),
+);
+const isManualSource = shape<ManualEditSourceV1>({
+  scenarioId: isUuid,
+  revision: isRevision,
+  documentHash: isDigest,
+  original: isRunBaselineOriginal,
+  currentManualId: nullable(isUuid),
+  currentManualChecksum: nullable(isDigest),
+  selectedCount: isU32,
+  protectionCount: isU32,
+  authoredOptimizeUnavailableReason: nullable(isText),
+});
+const isManualRow = shape<ManualEditRowV1>({
+  personId: isUuid,
+  shiftId: isUuid,
+  personLabel: isText,
+  shiftLabel: isText,
+  personAvailable: isBoolean,
+  shiftAvailable: isBoolean,
+  selected: isBoolean,
+  lockId: nullable(isUuid),
+  protection: isManualProtection,
+});
+const isManualRead = shape<ManualEditReadV1>({
   schemaVersion: literal(1),
+  source: isManualSource,
+  offset: isU32,
+  totalRows: isU32,
+  nextOffset: nullable(isU32),
+  rows: arrayOf(isManualRow, 100),
+});
+const isManualReview = shape<ManualEditReviewV1>({
+  schemaVersion: literal(1),
+  source: isManualSource,
+  intent: isManualIntent,
+  changes: arrayOf(shape({ before: isManualRow, after: isManualRow }), 2),
+  evaluations: arrayOf(
+    shape({ evaluation: isRuleEvaluation, ownerPaths: arrayOf(isText, 256) }),
+    100_000,
+  ),
+  disposition: choices("valid", "invalid"),
+  approvalDigest: nullable(isDigest),
+});
+const isManualResult = union<ManualEditResultV1>(
+  shape<Extract<ManualEditResultV1, { readonly kind: "read" }>>({
+    kind: literal("read"),
+    read: isManualRead,
+  }),
+  shape<Extract<ManualEditResultV1, { readonly kind: "review" }>>({
+    kind: literal("review"),
+    review: isManualReview,
+  }),
+  shape<Extract<ManualEditResultV1, { readonly kind: "applied" }>>({
+    kind: literal("applied"),
+    applied: shape<ManualEditAppliedV1>({
+      schemaVersion: literal(1),
+      commandResult: isCommandResult,
+      sourceAdmissionFailure: nullable(isApiError),
+    }),
+  }),
+);
+const isSolveBaselineSource = union<SolveBaselineSourceV1>(
+  shape<Extract<SolveBaselineSourceV1, { readonly kind: "accepted" }>>({
+    kind: literal("accepted"),
+  }),
+  shape<Extract<SolveBaselineSourceV1, { readonly kind: "external" }>>({
+    kind: literal("external"),
+    entityId: isUuid,
+  }),
+);
+const isRunObjectiveContextShape = shape<RunObjectiveContext>({
+  schemaVersion: union(literal(1), literal(2), literal(3)),
+  packId: isPackId,
+  profileId: isDomainId,
+  semanticVersion: literal(1),
+  operation: choices("optimize", "repair"),
+  baseline: optional(isRunBaseline),
+  externalBaseline: optional(
+    shape<RunExternalBaselineBinding>({
+      entity: isDomainEntity,
+      selectedPairContentHash: isDigest,
+    }),
+  ),
+});
+function isRunObjectiveContext(value: unknown): value is RunObjectiveContext {
+  if (!isRunObjectiveContextShape(value)) return false;
+  return (
+    (value.schemaVersion === 2) === (value.baseline?.capturedOriginal !== undefined) &&
+    (value.schemaVersion === 3) === (value.externalBaseline !== undefined) &&
+    !(value.baseline !== undefined && value.externalBaseline !== undefined)
+  );
+}
+const isRunInputShape = shape<RunInput>({
+  schemaVersion: union(literal(1), literal(2)),
   runId: isUuid,
   requestId: isUuid,
   requestHash: isDigest,
@@ -3205,8 +4765,15 @@ const isRunInput = shape<RunInputV1>({
   solveOptions: isSolveOptions,
   scenarioTimezone: isText,
   temporaryConditionHash: nullable(isDigest),
+  objectiveContext: optional(isRunObjectiveContext),
   checksum: isDigest,
 });
+function isRunInput(value: unknown): value is RunInput {
+  if (!isRunInputShape(value)) return false;
+  return value.schemaVersion === 1
+    ? value.objectiveContext === undefined
+    : value.objectiveContext !== undefined && value.objectiveContext.packId === value.packId;
+}
 const isRunOutcome = union<RunTerminalOutcomeV1>(
   shape<Extract<RunTerminalOutcomeV1, { readonly type: "accepted" }>>({
     type: literal("accepted"),
@@ -3235,6 +4802,122 @@ const isRunOutcome = union<RunTerminalOutcomeV1>(
     type: literal("interrupted"),
   }),
 );
+const alternativeProfiles = [
+  "balanced",
+  "preferenceFocused",
+  "minimalChanges",
+  "fairnessFirst",
+] as const;
+const isAlternativeProfile = choices(...alternativeProfiles);
+const isKnownAlarm = shape<KnownVerificationAlarmV1>({
+  runId: isUuid,
+  inputChecksum: isDigest,
+  diagnosticCode: isText,
+  terminalization: choices("notApplicable", "confirmed", "unconfirmed"),
+  secondaryCauseCode: optional(isText),
+});
+const isAlternativeEquivalence = union<WorkforceAlternativeEquivalenceV1>(
+  shape({ kind: literal("notSuppressed") }),
+  shape({ kind: literal("equivalent"), profile: isAlternativeProfile }),
+  shape({ kind: literal("unavailable") }),
+);
+const isAlternativeMember = shape<WorkforceAlternativeMemberV1>({
+  profile: isAlternativeProfile,
+  requestId: nullable(isUuid),
+  runId: nullable(isUuid),
+  status: choices(
+    "queued",
+    "preparing",
+    "running",
+    "finished",
+    "failed",
+    "skipped",
+    "outcomeUnknown",
+  ),
+  phase: nullable(choices("queued", "compiling", "solving", "verifying", "explaining")),
+  outcome: nullable(isRunOutcome),
+  equivalence: nullable(isAlternativeEquivalence),
+  warningCode: nullable(isText),
+  knownAlarm: nullable(isKnownAlarm),
+  unconfirmedResultId: nullable(isUuid),
+  finalizationUnknown: isBoolean,
+});
+const isAlternativesSnapshotShape = shape<WorkforceAlternativesSnapshotV1>({
+  schemaVersion: literal(1),
+  requestId: isUuid,
+  scenarioId: isUuid,
+  scenarioRevision: isRevision,
+  startedAt: isTimestamp,
+  captureId: nullable(isUuid),
+  status: choices("preparing", "running", "completed", "stopped"),
+  stopReason: nullable(
+    choices(
+      "cancelled",
+      "timeLimit",
+      "sourceChanged",
+      "failed",
+      "verificationAlarm",
+      "finalizationUnknown",
+      "summaryUnavailable",
+      "interrupted",
+    ),
+  ),
+  diagnosticCode: nullable(isText),
+  knownAlarm: nullable(isKnownAlarm),
+  members: arrayOf(isAlternativeMember, 4),
+});
+const isAlternativesSnapshot = (value: unknown): value is WorkforceAlternativesSnapshotV1 =>
+  isAlternativesSnapshotShape(value) &&
+  value.members.length === 4 &&
+  value.members.every(
+    (member, index) =>
+      member.profile === alternativeProfiles[index] &&
+      (member.equivalence?.kind !== "equivalent" ||
+        (member.outcome?.type === "accepted" &&
+          value.members
+            .slice(0, index)
+            .some(
+              (earlier) =>
+                earlier.profile ===
+                  (
+                    member.equivalence as Extract<
+                      WorkforceAlternativeEquivalenceV1,
+                      { kind: "equivalent" }
+                    >
+                  ).profile && earlier.equivalence?.kind === "notSuppressed",
+            ))),
+  );
+const isAlternativesGroupShape = shape<AlternativesGroupDtoV1>({
+  schemaVersion: literal(1),
+  requestId: isUuid,
+  scenarioId: isUuid,
+  scenarioRevision: isRevision,
+  baselineSource: isSolveBaselineSource,
+  cancelOperationId: nullable(isUuid),
+  settled: isBoolean,
+  snapshot: nullable(isAlternativesSnapshot),
+});
+const isAlternativesGroup = (value: unknown): value is AlternativesGroupDtoV1 =>
+  isAlternativesGroupShape(value) &&
+  (!value.settled || value.cancelOperationId === null) &&
+  (value.snapshot === null ||
+    (value.snapshot.requestId === value.requestId &&
+      value.snapshot.scenarioId === value.scenarioId &&
+      value.snapshot.scenarioRevision === value.scenarioRevision &&
+      (!value.settled || ["completed", "stopped"].includes(value.snapshot.status))));
+const isAlternativesGroupStatusShape = shape<AlternativesGroupStatusV1>({
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  scenarioRevision: isRevision,
+  currentRevision: isRevision,
+  group: nullable(isAlternativesGroup),
+});
+const isAlternativesGroupStatus = (value: unknown): value is AlternativesGroupStatusV1 =>
+  isAlternativesGroupStatusShape(value) &&
+  value.currentRevision >= value.scenarioRevision &&
+  (value.group === null ||
+    (value.group.scenarioId === value.scenarioId &&
+      value.group.scenarioRevision === value.scenarioRevision));
 const isPhaseTimings = shape<RunPhaseTimingsV1>({
   compileMilliseconds: nullable(isRevision),
   backendMilliseconds: nullable(isRevision),
@@ -3245,11 +4928,136 @@ const isPhaseTimings = shape<RunPhaseTimingsV1>({
   evidencePersistenceMilliseconds: nullable(isRevision),
   optionalExplanationMilliseconds: nullable(isRevision),
 });
-const isRunManifest = shape<RunManifestV1>({
+const isSolveDiagnosticsSummary = shape<SolveDiagnosticsSummaryDtoV2>({
+  schemaVersion: literal(SOLVE_API_SCHEMA_VERSION),
+  job: isSolveJob,
+  elapsedMilliseconds: nullable(isRevision),
+  firstIncumbentMilliseconds: nullable(isRevision),
+  firstVerifiedFeasibleMilliseconds: nullable(isRevision),
+  phaseTimings: nullable(isPhaseTimings),
+  diagnosticCode: nullable(isRunDiagnosticCode),
+  manifestChecksum: nullable(isDigest),
+});
+const isRunClockFailure = shape<RunClockFailureV1>({
+  kind: literal("unreliableObservation"),
+});
+const isNativeCode = (value: unknown): value is string =>
+  typeof value === "string" && /^[a-z0-9._-]{1,96}$/.test(value);
+const isNativeVersion = (value: unknown): value is string => isText(value) && value.length <= 128;
+const isNativeReason = choices<RunNativeTerminationReason>(
+  "optimalityClaimed",
+  "candidateFound",
+  "infeasibilityClaimed",
+  "unboundedClaimed",
+  "timeLimit",
+  "solutionLimit",
+  "cancelled",
+  "invalidModel",
+  "unavailable",
+  "failed",
+);
+const isNativeTermination = union<RunNativeAttemptTermination>(
+  shape<Extract<RunNativeAttemptTermination, { readonly details: { readonly code: string } }>>({
+    termination: choices("preflightRejected", "backendError", "outcomeContractFailure"),
+    details: shape({ code: isNativeCode }),
+  }),
+  shape<Extract<RunNativeAttemptTermination, { readonly termination: "backendOutcome" }>>({
+    termination: literal("backendOutcome"),
+    details: isNativeReason,
+  }),
+  shape<Extract<RunNativeAttemptTermination, { readonly termination: "verificationQuarantined" }>>({
+    termination: literal("verificationQuarantined"),
+    details: shape({ diagnosticCode: isNativeCode }),
+  }),
+  shape<
+    Extract<
+      RunNativeAttemptTermination,
+      {
+        readonly termination:
+          | "candidateAwaitingVerification"
+          | "candidateVerified"
+          | "reviewCancelled"
+          | "reviewDeadlineExceeded"
+          | "reviewResourceLimitExceeded"
+          | "parentCancelled"
+          | "parentDeadlineExceeded";
+      }
+    >
+  >({
+    termination: choices(
+      "candidateAwaitingVerification",
+      "candidateVerified",
+      "reviewCancelled",
+      "reviewDeadlineExceeded",
+      "reviewResourceLimitExceeded",
+      "parentCancelled",
+      "parentDeadlineExceeded",
+    ),
+  }),
+);
+const isNativeObjective = shape<RunNativeObjective>({
+  levelId: isDomainId,
+  direction: isDirection,
+  lowerBound: isInt64Value,
+  upperBound: isInt64Value,
+});
+const isNativeRuntime = shape<RunNativeRuntime>({
+  workerVersion: isNativeVersion,
+  engineVersion: isNativeVersion,
+  protocolMajor: (value: unknown): value is number => isU32(value) && value > 0,
+  protocolMinor: isU32,
+  modelFingerprintSha256: isDigest,
+  appliedParametersSha256: isDigest,
+});
+const isNativeOutcome = shape<RunNativeOutcome>({
+  reason: isNativeReason,
+  objectiveValues: nullable(arrayOf(isInt64Value, 16)),
+  bestBoundValues: nullable(arrayOf(isInt64Value, 16)),
+  runtime: nullable(isNativeRuntime),
+});
+const isNativeAttempt = shape<RunNativeAttempt>({
+  backendId: isPackId,
+  backendVersion: isNativeVersion,
+  adapterVersion: isNativeVersion,
+  solveFingerprint: isDigest,
+  invocationIndex: nullable(literal(1)),
+  remainingAtDispatchMilliseconds: isRevision,
+  backendLimitMilliseconds: isRevision,
+  termination: isNativeTermination,
+  backendFailureCode: nullable(isNativeCode),
+  approvedWorkerManifestSha256: nullable(isDigest),
+  outcome: nullable(isNativeOutcome),
+});
+const isNativeObservations = shape<RunNativeObservations>({
   schemaVersion: literal(1),
+  modelHash: isDigest,
+  objectivePolicyHash: isDigest,
+  solveOptionsHash: isDigest,
+  objectives: arrayOf(isNativeObjective, 16),
+  terminalStatus: isSolveStatus,
+  terminalReason: choices(
+    "invalidModel",
+    "unsupportedOverride",
+    "noCompatibleBackend",
+    "preflightRejected",
+    "backendTerminated",
+    "backendFailure",
+    "candidateAwaitingVerification",
+    "candidateVerified",
+    "verificationQuarantined",
+    "sharedOutputLimitExhausted",
+    "reviewResourceLimitExceeded",
+    "parentDeadlineExceeded",
+    "cancelled",
+  ),
+  attempt: nullable(isNativeAttempt),
+});
+const isRunManifestShape = shape<RunManifest>({
+  schemaVersion: union(literal(1), literal(2)),
   runId: isUuid,
   runInputChecksum: isDigest,
   outcome: isRunOutcome,
+  clockFailure: optional(isRunClockFailure),
   startedAt: isTimestamp,
   finishedAt: isTimestamp,
   elapsedMilliseconds: nullable(isRevision),
@@ -3257,8 +5065,39 @@ const isRunManifest = shape<RunManifestV1>({
   firstVerifiedFeasibleMilliseconds: nullable(isRevision),
   phaseTimings: isPhaseTimings,
   verificationWarnings: arrayOf(isVerificationWarning, 10_000),
+  nativeObservations: optional(isNativeObservations),
   checksum: isDigest,
 });
+function isRunManifest(value: unknown): value is RunManifest {
+  if (!isRunManifestShape(value)) return false;
+  if (value.schemaVersion === 1 && value.nativeObservations !== undefined) return false;
+  if (value.clockFailure === undefined) return true;
+  if (
+    value.outcome.type !== "verificationAlarm" ||
+    value.elapsedMilliseconds !== null ||
+    value.firstIncumbentMilliseconds !== null ||
+    value.firstVerifiedFeasibleMilliseconds !== null ||
+    value.verificationWarnings.length !== 0
+  )
+    return false;
+  for (const key in value.phaseTimings) {
+    if (value.phaseTimings[key as keyof RunPhaseTimingsV1] !== null) return false;
+  }
+  return true;
+}
+const isOptimalityStatusShape = shape<OptimalityStatusEvidence>({
+  schemaVersion: optional(literal(2)),
+  runInput: isRunInput,
+  runManifest: isRunManifest,
+  result: nullable(isAcceptedRef),
+});
+function isOptimalityStatus(value: unknown): value is OptimalityStatusEvidence {
+  if (!isOptimalityStatusShape(value)) return false;
+  return (
+    value.schemaVersion === 2 ||
+    (value.runInput.schemaVersion === 1 && value.runManifest.schemaVersion === 1)
+  );
+}
 const isSolutionSummary = shape<SolutionSummaryDtoV1>({
   schemaVersion: literal(1),
   result: isAcceptedRef,
@@ -3277,6 +5116,7 @@ const isSolutionList = shape<SolutionListDtoV1>({
   schemaVersion: literal(1),
   scenarioId: isUuid,
   currentRevision: isRevision,
+  freshlyVerified: literal(false),
   solutions: arrayOf(isSolutionSummary),
 });
 const isSolutionDetail = shape<SolutionDetailDtoV1>({
@@ -3288,7 +5128,7 @@ const isSolutionDetail = shape<SolutionDetailDtoV1>({
   result: isAcceptedResult,
 });
 const isDomainView = shape<DomainView>({ viewId: isText, data: isJson });
-const isSolutionView = shape<SolutionViewDtoV1>({
+const isSolutionViewEnvelope = shape<SolutionViewDtoV1>({
   schemaVersion: literal(1),
   scenarioId: isUuid,
   currentRevision: isRevision,
@@ -3296,6 +5136,13 @@ const isSolutionView = shape<SolutionViewDtoV1>({
   result: isAcceptedRef,
   view: isDomainView,
 });
+const isSolutionView = (value: unknown): value is SolutionViewDtoV1 => {
+  if (!isSolutionViewEnvelope(value)) return false;
+  return (
+    value.view.viewId !== WORKFORCE_RESULT_SCHEDULE_VIEW_ID ||
+    isWorkforceResultScheduleViewData(value.view.data)
+  );
+};
 const isSolutionVerification = shape<SolutionVerificationDtoV1>({
   schemaVersion: literal(1),
   scenarioId: isUuid,
@@ -3353,7 +5200,16 @@ const isRunComparisonSide = shape<RunComparisonSideV1>({
   outcome: isRunOutcome,
   certainty: isCertainty,
 });
-const isComparison = shape<SolutionComparisonV1>({
+const isRunComparisonSideV2 = shape<RunComparisonSideV2>({
+  runId: isUuid,
+  runManifestChecksum: isDigest,
+  outcome: isRunOutcome,
+});
+const isRunComparisonV2 = shape<RunComparisonV2>({
+  base: isRunComparisonSideV2,
+  candidate: isRunComparisonSideV2,
+});
+const isComparisonV1 = shape<SolutionComparisonV1>({
   schemaVersion: literal(1),
   base: isComparisonBinding,
   candidate: isComparisonBinding,
@@ -3411,12 +5267,169 @@ const isComparison = shape<SolutionComparisonV1>({
   ordering: isOrdering,
   checksum: isDigest,
 });
-const isSolutionComparison = shape<SolutionComparisonDtoV1>({
-  schemaVersion: literal(1),
+const isAssignmentProtectionState = union<AssignmentProtectionStateV1>(
+  shape<Extract<AssignmentProtectionStateV1, { readonly type: "unlocked" }>>({
+    type: literal("unlocked"),
+  }),
+  shape<Extract<AssignmentProtectionStateV1, { readonly type: "hard" }>>({
+    type: literal("hard"),
+  }),
+  shape<Extract<AssignmentProtectionStateV1, { readonly type: "soft" }>>({
+    type: literal("soft"),
+    weight: (value): value is number => isU32(value) && value > 0,
+  }),
+);
+const isAssignmentProtectionComparisonShape = shape<AssignmentProtectionComparisonV1>({
+  assignmentId: isDomainId,
+  before: nullable(isAssignmentProtectionState),
+  after: nullable(isAssignmentProtectionState),
+  beforeSelected: isBoolean,
+  afterSelected: isBoolean,
+  statePreserved: isBoolean,
+  assignmentPreserved: isBoolean,
+});
+function sameProtectionState(
+  left: AssignmentProtectionStateV1 | null,
+  right: AssignmentProtectionStateV1 | null,
+): boolean {
+  return left === null
+    ? right === null
+    : right !== null &&
+        left.type === right.type &&
+        (left.type !== "soft" || (right.type === "soft" && left.weight === right.weight));
+}
+function isAssignmentProtectionComparison(
+  value: unknown,
+): value is AssignmentProtectionComparisonV1 {
+  if (
+    !isAssignmentProtectionComparisonShape(value) ||
+    (value.before === null && value.after === null)
+  )
+    return false;
+  return (
+    !(value.before?.type === "hard" && !value.beforeSelected) &&
+    !(value.after?.type === "hard" && !value.afterSelected) &&
+    value.statePreserved === sameProtectionState(value.before, value.after) &&
+    value.assignmentPreserved === (value.beforeSelected === value.afterSelected)
+  );
+}
+const isComparisonEntityLabel = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  value.length <= 4_096 &&
+  new TextEncoder().encode(value).byteLength <= 4_096;
+const isComparisonEntityObservationShape = shape<ComparisonEntityObservationV1>({
+  entity: isDomainEntity,
+  beforeLabel: nullable(isComparisonEntityLabel),
+  afterLabel: nullable(isComparisonEntityLabel),
+});
+function isComparisonEntityObservation(value: unknown): value is ComparisonEntityObservationV1 {
+  return (
+    isComparisonEntityObservationShape(value) &&
+    (value.beforeLabel !== null || value.afterLabel !== null)
+  );
+}
+const isScoreComparison = union<ScoreComparisonV2>(
+  shape<Extract<ScoreComparisonV2, { readonly type: "comparable" }>>({
+    type: literal("comparable"),
+    baseScore: isScore,
+    candidateScore: isScore,
+    scoreLevels: arrayOf(
+      shape<ScoreLevelComparisonV1>({
+        levelId: isText,
+        direction: isDirection,
+        before: isInt64Value,
+        after: isInt64Value,
+        delta: isInt64Value,
+        categories: arrayOf(
+          shape<ScoreCategoryComparisonV1>({
+            categoryId: isText,
+            before: nullable(isInt64Value),
+            after: nullable(isInt64Value),
+            delta: nullable(isInt64Value),
+          }),
+          1_024,
+        ),
+      }),
+      16,
+    ),
+    ordering: isOrdering,
+  }),
+  shape<Extract<ScoreComparisonV2, { readonly type: "unavailable" }>>({
+    type: literal("unavailable"),
+    reason: choices<ScoreComparisonUnavailableReasonV1>(
+      "policyOrScopeMismatch",
+      "scoreShapeMismatch",
+    ),
+  }),
+);
+const isSolutionComparisonV2Shape = shape<SolutionComparisonV2>({
+  schemaVersion: literal(2),
+  base: isComparisonBinding,
+  candidate: isComparisonBinding,
+  assignments: arrayOf(isAssignmentComparison, 100_000),
+  rules: arrayOf(
+    shape<RuleComparisonV1>({
+      ruleId: isUuid,
+      before: nullable(isRuleEvaluation),
+      after: nullable(isRuleEvaluation),
+    }),
+    100_000,
+  ),
+  score: isScoreComparison,
+  metrics: arrayOf(
+    shape<MetricComparisonV1>({
+      metricId: isText,
+      before: nullable(isMetricValue),
+      after: nullable(isMetricValue),
+    }),
+    1_024,
+  ),
+  protections: arrayOf(isAssignmentProtectionComparison, 100_000),
+  runs: isRunComparisonV2,
+  affectedEntities: arrayOf(isDomainEntity, 100_000),
+  entityObservations: arrayOf(isComparisonEntityObservation, 100_000),
+  checksum: isDigest,
+});
+function comparisonRunMatchesBinding(
+  side: RunComparisonSideV2,
+  binding: ComparisonBindingV1,
+): boolean {
+  return (
+    side.outcome.type === "accepted" &&
+    side.outcome.solutionId === binding.acceptedResult.solutionId &&
+    side.outcome.acceptedResultChecksum === binding.acceptedResult.resultChecksum
+  );
+}
+function isSolutionComparisonV2(value: unknown): value is SolutionComparisonV2 {
+  if (!isSolutionComparisonV2Shape(value)) return false;
+  const { base, candidate } = value;
+  return (
+    base.packId === candidate.packId &&
+    base.scenarioId === candidate.scenarioId &&
+    base.projectionVersion === candidate.projectionVersion &&
+    (base.scenarioRevision !== candidate.scenarioRevision ||
+      base.verificationScopeChecksum === candidate.verificationScopeChecksum) &&
+    comparisonRunMatchesBinding(value.runs.base, base) &&
+    comparisonRunMatchesBinding(value.runs.candidate, candidate)
+  );
+}
+const isSolutionComparisonV3Shape = shape<SolutionComparisonDtoV3>({
+  schemaVersion: literal(3),
   scenarioId: isUuid,
   currentRevision: isRevision,
-  comparison: isComparison,
+  comparison: isSolutionComparisonV2,
 });
+function isSolutionComparisonV3(value: unknown): value is SolutionComparisonDtoV3 {
+  if (!isSolutionComparisonV3Shape(value)) return false;
+  const comparison = value.comparison;
+  return (
+    comparison.base.scenarioId === value.scenarioId &&
+    comparison.candidate.scenarioId === value.scenarioId &&
+    value.currentRevision >= comparison.base.scenarioRevision &&
+    value.currentRevision >= comparison.candidate.scenarioRevision
+  );
+}
 const isCounterfactualCondition = shape<CounterfactualConditionV1>({
   schemaVersion: literal(1),
   checksum: isDigest,
@@ -3430,6 +5443,11 @@ const isCounterfactualCondition = shape<CounterfactualConditionV1>({
       type: literal("forbidAssignmentValue"),
       assignmentId: isText,
       value: isAssignmentValue,
+    }),
+    shape<Extract<CounterfactualConditionPayloadV1, { readonly type: "replaceAssignment" }>>({
+      type: literal("replaceAssignment"),
+      targetAssignmentId: isDomainId,
+      replacedAssignmentId: isDomainId,
     }),
   ),
 });
@@ -3456,8 +5474,8 @@ const isCounterfactualRequest = shape<CounterfactualJobRequestV1>({
       isU32(value) && value > 0 && value <= COUNTERFACTUAL_TOTAL_BUDGET_MAX_MILLISECONDS_V1,
   }),
 });
-const isCounterfactualResult = shape<CounterfactualResultV1>({
-  schemaVersion: literal(1),
+const isCounterfactualResultShape = shape<CounterfactualResult>({
+  schemaVersion: union(literal(1), literal(2)),
   request: isCounterfactualRequest,
   baseRunInput: isRunInput,
   baseRunManifest: isRunManifest,
@@ -3482,12 +5500,36 @@ const isCounterfactualResult = shape<CounterfactualResultV1>({
     shape<Extract<CounterfactualConclusionV1, { readonly type: "verifiedAlternative" }>>({
       type: literal("verifiedAlternative"),
       alternative: isAcceptedRef,
-      comparison: isComparison,
+      comparison: isComparisonV1,
       ordering: isOrdering,
     }),
   ),
 });
-const isCounterfactualJob = shape<CounterfactualJobRecordV1>({
+function isCounterfactualResult(value: unknown): value is CounterfactualResult {
+  if (!isCounterfactualResultShape(value)) return false;
+  return (
+    value.schemaVersion === 2 ||
+    (value.baseRunInput.schemaVersion === 1 &&
+      value.runInput.schemaVersion === 1 &&
+      value.baseRunManifest.schemaVersion === 1 &&
+      value.runManifest.schemaVersion === 1)
+  );
+}
+const isCounterfactualTerminalAuthority = union<CounterfactualTerminalAuthorityV1>(
+  shape<Extract<CounterfactualTerminalAuthorityV1, { readonly kind: "timelyInfeasibility" }>>({
+    kind: literal("timelyInfeasibility"),
+    runId: isUuid,
+    runManifestChecksum: isDigest,
+    evidenceChecksum: isDigest,
+  }),
+  shape<Extract<CounterfactualTerminalAuthorityV1, { readonly kind: "verificationAlarm" }>>({
+    kind: literal("verificationAlarm"),
+    runId: isUuid,
+    runManifestChecksum: isDigest,
+    clockFailure: optional(isRunClockFailure),
+  }),
+);
+const isCounterfactualJobShape = shape<CounterfactualJobRecordV1>({
   schemaVersion: literal(1),
   request: isCounterfactualRequest,
   state: choices("queued", "running", "completed", "failed", "cancelled", "interrupted"),
@@ -3510,7 +5552,16 @@ const isCounterfactualJob = shape<CounterfactualJobRecordV1>({
       ),
     }),
   ),
+  terminalAuthority: optional(isCounterfactualTerminalAuthority),
 });
+function isCounterfactualJob(value: unknown): value is CounterfactualJobRecordV1 {
+  if (!isCounterfactualJobShape(value)) return false;
+  return (
+    value.terminalAuthority?.kind !== "verificationAlarm" ||
+    value.terminalAuthority.clockFailure === undefined ||
+    (value.state === "failed" && value.error?.kind === "invalidCandidate" && value.result === null)
+  );
+}
 const isCounterfactualStarted = shape<SolutionStartCounterfactualDtoV1>({
   schemaVersion: literal(1),
   requestId: isUuid,
@@ -3523,6 +5574,51 @@ const isCounterfactualCancelled = shape<SolutionCancelCounterfactualDtoV1>({
   currentRevision: isRevision,
   job: isCounterfactualJob,
 });
+const isCounterfactualCursor = shape<CounterfactualJobListCursorV1>({
+  createdAt: isTimestamp,
+  jobId: isUuid,
+});
+const isCounterfactualRead = shape<SolutionGetCounterfactualDtoV1>({
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  currentRevision: isRevision,
+  job: isCounterfactualJob,
+});
+const isCounterfactualListItem = shape<CounterfactualJobListItemV1>({
+  jobId: isUuid,
+  requestId: isUuid,
+  scenarioId: isUuid,
+  scenarioRevision: isRevision,
+  baseSolutionId: isUuid,
+  condition: isCounterfactualCondition,
+  createdAt: isTimestamp,
+  state: choices("queued", "running", "completed", "failed", "cancelled", "interrupted"),
+  finishedAt: nullable(isTimestamp),
+  error: nullable(
+    shape<NonNullable<CounterfactualJobListItemV1["error"]>>({
+      kind: choices(
+        "staleRevision",
+        "budgetExhausted",
+        "backendUnavailable",
+        "backendFailed",
+        "invalidModel",
+        "invalidCandidate",
+        "compilationFailed",
+        "invalidBinding",
+      ),
+    }),
+  ),
+});
+const isCounterfactualPage = shape<SolutionListCounterfactualsDtoV1>({
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  currentRevision: isRevision,
+  page: shape<CounterfactualJobListPageV1>({
+    jobs: arrayOf(isCounterfactualListItem, 32),
+    nextCursor: nullable(isCounterfactualCursor),
+  }),
+});
+
 const isExplanationKind = choices<ExplanationKind>(
   "validation",
   "infeasibility",
@@ -3571,6 +5667,13 @@ const isInfeasibilityEvidence = union<InfeasibilityEvidenceV1>(
       "foundationalInfeasibility",
       "conflictNotReturned",
       "invalidAssumptionCore",
+      "notRequested",
+      "notRecorded",
+      "unsupportedDomainPack",
+      "budgetExpired",
+      "cancelled",
+      "resourceLimitExceeded",
+      "diagnosticFailed",
     ),
   }),
 );
@@ -3589,55 +5692,78 @@ const isAssignmentEvidence = shape<AssignmentEvidenceV1>({
     100_000,
   ),
 });
-const isExplanationPayload = union<ExplanationEvidencePayloadV1>(
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "validation" }>>({
+const isExplanationPayloadV2 = union<ExplanationEvidencePayloadV2>(
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "validation" }>>({
     kind: literal("validation"),
     issue: isValidationEvidence,
   }),
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "infeasibility" }>>({
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "infeasibility" }>>({
     kind: literal("infeasibility"),
     infeasibility: isInfeasibilityEvidence,
+    condition: optional(isCounterfactualCondition),
   }),
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "assignment" }>>({
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "assignment" }>>({
     kind: literal("assignment"),
     assignment: isAssignmentEvidence,
   }),
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "counterfactual" }>>({
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "counterfactual" }>>({
     kind: literal("counterfactual"),
     result: isCounterfactualResult,
   }),
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "solutionDifference" }>>({
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "solutionDifference" }>>({
     kind: literal("solutionDifference"),
-    comparison: isComparison,
+    comparison: isSolutionComparisonV2,
   }),
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "repair" }>>({
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "repair" }>>({
     kind: literal("repair"),
-    repair: shape<RepairEvidenceV1>({
-      comparison: isComparison,
+    repair: shape<RepairEvidenceV2>({
+      comparison: isSolutionComparisonV2,
       causality: literal("notEstablished"),
     }),
   }),
-  shape<Extract<ExplanationEvidencePayloadV1, { readonly kind: "optimalityStatus" }>>({
+  shape<Extract<ExplanationEvidencePayloadV2, { readonly kind: "optimalityStatus" }>>({
     kind: literal("optimalityStatus"),
-    status: shape<OptimalityStatusEvidenceV1>({
-      runInput: isRunInput,
-      runManifest: isRunManifest,
-      result: nullable(isAcceptedRef),
-    }),
+    status: isOptimalityStatus,
   }),
 );
-const isExplanation = shape<SolutionExplanationDtoV1>({
+const isDiagnosticCopyResult = shape<DiagnosticCopyResultV1>({
   schemaVersion: literal(1),
+  project: isProjectListItem,
+  commandId: isUuid,
+  libraryRevision: isRevision,
+});
+const isDiagnosticExportMetadata = shape<DiagnosticExportMetadataV1>({
+  schemaVersion: literal(1),
+  operationId: isUuid,
+  requestId: isUuid,
+  scenarioId: isUuid,
+  sourceRevision: isRevision,
+  observedCurrentRevision: isRevision,
+  runId: isUuid,
+  runManifestChecksum: isDigest,
+  evidenceChecksum: isDigest,
+});
+const isExplanationShape = shape<SolutionExplanationDtoV2>({
+  schemaVersion: literal(2),
   scenarioId: isUuid,
   currentRevision: isRevision,
   scenarioRevisions: arrayOf(isRevision),
-  explanation: shape<ExplanationResultV1>({
-    schemaVersion: literal(1),
+  infeasibilityContext: optional(
+    shape<InfeasibilityExplanationContextV1>({
+      runId: isUuid,
+      sourceRevision: isRevision,
+      runManifestChecksum: isDigest,
+      evidenceChecksum: isDigest,
+      conflictId: isText,
+    }),
+  ),
+  explanation: shape<ExplanationResultV2>({
+    schemaVersion: literal(2),
     checksum: isDigest,
-    evidence: shape<ExplanationEvidenceV1>({
-      schemaVersion: literal(1),
+    evidence: shape<ExplanationEvidenceV2>({
+      schemaVersion: literal(2),
       certainty: isCertainty,
-      evidence: isExplanationPayload,
+      evidence: isExplanationPayloadV2,
       checksum: isDigest,
     }),
     rendered: shape<EvidenceRenderResultV1>({
@@ -3658,6 +5784,186 @@ const isExplanation = shape<SolutionExplanationDtoV1>({
     }),
   }),
 });
+const isEvidenceRenderRequestV2Shape = shape<EvidenceRenderRequestV2>({
+  schemaVersion: literal(2),
+  kind: isExplanationKind,
+  evidence: shape<ExplanationEvidenceV2>({
+    schemaVersion: literal(2),
+    certainty: isCertainty,
+    evidence: isExplanationPayloadV2,
+    checksum: isDigest,
+  }),
+});
+function isEvidenceRenderRequestV2(value: unknown): value is EvidenceRenderRequestV2 {
+  if (!isEvidenceRenderRequestV2Shape(value) || value.kind !== value.evidence.evidence.kind)
+    return false;
+  const payload = value.evidence.evidence;
+  return (
+    payload.kind !== "optimalityStatus" ||
+    payload.status.schemaVersion !== 2 ||
+    value.evidence.certainty ===
+      (payload.status.runManifest.outcome.type === "accepted"
+        ? "independentlyVerified"
+        : "deterministic")
+  );
+}
+function sameAcceptedResult(left: AcceptedResultRefV1, right: AcceptedResultRefV1): boolean {
+  return left.solutionId === right.solutionId && left.resultChecksum === right.resultChecksum;
+}
+function sameScenarioRevisions(
+  actual: readonly Revision[],
+  expected: readonly Revision[],
+): boolean {
+  return (
+    actual.length === expected.length &&
+    actual.every((revision, index) => revision === expected[index])
+  );
+}
+function isExplanation(
+  value: unknown,
+  subject: ExplanationRequestSubjectV1,
+  selectedScenarioId: UuidV7,
+  admittedRevision: Revision,
+): value is SolutionExplanationDtoV2 {
+  if (!isExplanationShape(value)) return false;
+  const result = value.explanation;
+  const payload = result.evidence.evidence;
+  if (
+    value.scenarioId !== selectedScenarioId ||
+    value.currentRevision < admittedRevision ||
+    payload.kind !== subject.kind ||
+    result.rendered.kind !== subject.kind ||
+    result.rendered.evidenceChecksum !== result.evidence.checksum ||
+    !isEvidenceRenderRequestV2({
+      schemaVersion: 2,
+      kind: result.rendered.kind,
+      evidence: result.evidence,
+    })
+  )
+    return false;
+
+  let scenarioRevisions: readonly Revision[] = [admittedRevision];
+  const context = value.infeasibilityContext;
+  if (subject.kind !== "infeasibility" && context !== undefined) return false;
+  switch (subject.kind) {
+    case "validation":
+      if (
+        payload.kind !== "validation" ||
+        (subject.issueId !== null && payload.issue.issueId !== subject.issueId)
+      )
+        return false;
+      break;
+    case "infeasibility":
+      if (payload.kind !== "infeasibility") return false;
+      if (context === undefined) {
+        if (payload.infeasibility.type !== "unavailable" || subject.conflictId !== null)
+          return false;
+      } else if (
+        context.sourceRevision !== admittedRevision ||
+        context.runId !== subject.solveRunId ||
+        context.runManifestChecksum !== subject.runManifestChecksum ||
+        context.conflictId !== `infeasibility.${context.evidenceChecksum}` ||
+        (subject.conflictId !== null && context.conflictId !== subject.conflictId)
+      )
+        return false;
+      break;
+    case "assignment":
+      if (
+        payload.kind !== "assignment" ||
+        payload.assignment.assignment.id !== subject.assignmentId
+      )
+        return false;
+      break;
+    case "counterfactual": {
+      if (payload.kind !== "counterfactual") return false;
+      const counterfactual = payload.result;
+      const semantics = counterfactual.request.semantics;
+      const baseOutcome = counterfactual.baseRunManifest.outcome;
+      if (
+        counterfactual.request.jobId !== subject.jobId ||
+        !sameAcceptedResult(semantics.base, subject.base) ||
+        semantics.scenarioId !== selectedScenarioId ||
+        semantics.scenarioRevision !== admittedRevision ||
+        counterfactual.baseRunInput.scenarioId !== selectedScenarioId ||
+        counterfactual.baseRunInput.runId !== semantics.baseRunId ||
+        counterfactual.baseRunInput.checksum !== semantics.baseRunInputChecksum ||
+        counterfactual.baseRunManifest.runId !== counterfactual.baseRunInput.runId ||
+        counterfactual.baseRunManifest.runInputChecksum !== counterfactual.baseRunInput.checksum ||
+        baseOutcome.type !== "accepted" ||
+        baseOutcome.solutionId !== subject.base.solutionId ||
+        baseOutcome.acceptedResultChecksum !== subject.base.resultChecksum ||
+        counterfactual.baseRunInput.scenarioRevision !== admittedRevision ||
+        counterfactual.runInput.scenarioId !== selectedScenarioId ||
+        counterfactual.runInput.scenarioRevision !== admittedRevision ||
+        counterfactual.runManifest.runId !== counterfactual.runInput.runId ||
+        counterfactual.runManifest.runInputChecksum !== counterfactual.runInput.checksum
+      )
+        return false;
+      scenarioRevisions = [counterfactual.baseRunInput.scenarioRevision];
+      break;
+    }
+    case "solutionDifference":
+    case "repair": {
+      const comparison =
+        subject.kind === "solutionDifference"
+          ? payload.kind === "solutionDifference"
+            ? payload.comparison
+            : null
+          : payload.kind === "repair"
+            ? payload.repair.comparison
+            : null;
+      if (
+        comparison === null ||
+        !sameAcceptedResult(
+          comparison.base.acceptedResult,
+          subject.kind === "solutionDifference" ? subject.left : subject.base,
+        ) ||
+        !sameAcceptedResult(
+          comparison.candidate.acceptedResult,
+          subject.kind === "solutionDifference" ? subject.right : subject.current,
+        ) ||
+        comparison.base.scenarioId !== selectedScenarioId ||
+        comparison.candidate.scenarioId !== selectedScenarioId ||
+        comparison.candidate.scenarioRevision !== admittedRevision
+      )
+        return false;
+      scenarioRevisions =
+        subject.kind === "solutionDifference"
+          ? [comparison.base.scenarioRevision, comparison.candidate.scenarioRevision]
+          : [comparison.candidate.scenarioRevision, comparison.base.scenarioRevision];
+      break;
+    }
+    case "optimalityStatus": {
+      if (payload.kind !== "optimalityStatus") return false;
+      const status = payload.status;
+      const runInput = status.runInput;
+      const runManifest = status.runManifest;
+      if (
+        status.schemaVersion !== 2 ||
+        runInput.runId !== subject.solveRunId ||
+        runInput.scenarioId !== selectedScenarioId ||
+        runInput.scenarioRevision !== admittedRevision ||
+        runManifest.runId !== subject.solveRunId ||
+        runManifest.runInputChecksum !== runInput.checksum ||
+        runManifest.checksum !== subject.runManifestChecksum ||
+        (subject.result === null
+          ? status.result !== null || runManifest.outcome.type === "accepted"
+          : status.result === null ||
+            !sameAcceptedResult(status.result, subject.result) ||
+            runManifest.outcome.type !== "accepted" ||
+            runManifest.outcome.solutionId !== subject.result.solutionId ||
+            runManifest.outcome.acceptedResultChecksum !== subject.result.resultChecksum)
+      )
+        return false;
+      break;
+    }
+  }
+  return (
+    sameScenarioRevisions(value.scenarioRevisions, scenarioRevisions) &&
+    scenarioRevisions.includes(admittedRevision) &&
+    scenarioRevisions.every((revision) => value.currentRevision >= revision)
+  );
+}
 
 const isStructure = shape<ScenarioStructureV1>({
   entities: isU32,
@@ -3710,12 +6016,15 @@ const setupStatusFields = {
 };
 const isSetupStatus = shape<ScenarioSetupStatusV2>(setupStatusFields);
 const isScenarioSummary = shape<ScenarioSummaryV2>({ ...setupStatusFields, title: isText });
-const isFullValidation = shape<FullValidationResultV2>({
-  schemaVersion: literal(2),
+const fullValidationShape = shape<FullValidationResultV3>({
+  schemaVersion: literal(3),
   scenarioId: isUuid,
   revision: isRevision,
   report: shape({ issues: arrayOf(isValidationIssue, 100_000) }),
+  issueIds: arrayOf(isValidationIssueId, 100_000),
 });
+const isFullValidation = (value: unknown): value is FullValidationResultV3 =>
+  fullValidationShape(value) && value.issueIds.length === value.report.issues.length;
 const isOperationContext = union<OperationContextV1>(
   shape<ScenarioOperationContextV1>({
     kind: literal("scenario"),
@@ -3746,6 +6055,139 @@ const isOperationReleased = shape<OperationReleasedV1>({
   schemaVersion: literal(1),
   acknowledgement: choices("released", "cancellationRequested", "notActive"),
 });
+const RECIPIENT_FRAME_BYTES = 64 * 1024;
+const RECIPIENT_PREVIEW_COMPACT_BYTES = MAX_RECIPIENT_REPORT_BYTES + RECIPIENT_FRAME_BYTES;
+const RECIPIENT_PREVIEW_WIRE_BYTES =
+  (RECIPIENT_PREVIEW_COMPACT_BYTES * 9) / 8 + RECIPIENT_FRAME_BYTES;
+const RECIPIENT_FRAME_WIRE_BYTES = (RECIPIENT_FRAME_BYTES * 9) / 8 + RECIPIENT_FRAME_BYTES;
+const recipientPreviewShape = shape<RecipientPreviewDtoV1>({
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  format: choices("html", "pdf"),
+  libraryRevision: isRevision,
+  modelSha256: isDigest,
+  htmlSha256: isDigest,
+  pdfSha256: optional(isDigest),
+  pdfRenderer: optional(
+    shape<RecipientPdfRendererV1>({
+      version: literal(1),
+      typstVersion: literal("0.15.1"),
+      templateSha256: isDigest,
+      fontsSha256: isDigest,
+    }),
+  ),
+  expiresAfterMilliseconds: literal(600000),
+  report: (value: unknown): value is RecipientReportV1 =>
+    boundedJson(value, MAX_RECIPIENT_REPORT_BYTES) && isRecipientReportV1(value),
+});
+// Structural checks and digests do not establish native source/publication custody.
+const isRecipientPreview = (value: unknown): value is RecipientPreviewDtoV1 =>
+  boundedJson(value, RECIPIENT_PREVIEW_COMPACT_BYTES) &&
+  recipientPreviewShape(value) &&
+  (value.format === "pdf"
+    ? value.pdfSha256 !== undefined && value.pdfRenderer !== undefined
+    : value.pdfSha256 === undefined && value.pdfRenderer === undefined);
+const recipientCreatedShape = shape<RecipientCreatedDtoV1>({
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  format: choices("html", "pdf"),
+  filename: (value: unknown): value is string =>
+    isText(value) && value.length > 0 && value !== "." && value !== ".." && !/[/\0]/.test(value),
+  publication: union<RecipientHtmlPublishedV1 | RecipientPdfPublishedV1>(
+    shape<RecipientHtmlPublishedV1>({
+      schemaVersion: literal(1),
+      solutionId: isUuid,
+      sourceRevision: isRevision,
+      currentRevision: isRevision,
+      modelSha256: isDigest,
+      htmlSha256: isDigest,
+    }),
+    shape<RecipientPdfPublishedV1>({
+      schemaVersion: literal(1),
+      solutionId: isUuid,
+      sourceRevision: isRevision,
+      currentRevision: isRevision,
+      modelSha256: isDigest,
+      pdfSha256: isDigest,
+    }),
+  ),
+});
+const isRecipientCreated = (value: unknown): value is RecipientCreatedDtoV1 =>
+  boundedJson(value, RECIPIENT_FRAME_BYTES) &&
+  recipientCreatedShape(value) &&
+  (value.format === "pdf" ? "pdfSha256" in value.publication : "htmlSha256" in value.publication);
+const isRecipientReleaseTarget = union<RecipientReleaseTargetV1>(
+  shape({ kind: literal("preview"), previewId: isUuid }),
+  shape({ kind: literal("operation"), operationId: isUuid }),
+);
+const recipientReleasedShape = shape<RecipientReleasedDtoV1>({
+  schemaVersion: literal(1),
+  acknowledgement: choices("released", "closing", "notActive"),
+});
+const isRecipientReleased = (value: unknown): value is RecipientReleasedDtoV1 =>
+  boundedJson(value, RECIPIENT_FRAME_BYTES) && recipientReleasedShape(value);
+const isScheduleExportFormat = choices<ScheduleExportFormatV1>(
+  "assignmentsCsv",
+  "summaryCsv",
+  "ics",
+);
+const isScheduleExportByteCount = (value: unknown): value is number =>
+  typeof value === "number" &&
+  Number.isSafeInteger(value) &&
+  value > 0 &&
+  value <= 16 * 1024 * 1024;
+const scheduleExportPreviewShape = shape<ScheduleExportPreviewDtoV1>({
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  expiresAfterMilliseconds: literal(600000),
+  preview: shape<ScheduleExportPreviewV1>({
+    schemaVersion: literal(1),
+    source: isRecipientSourceV1,
+    libraryRevision: isRevision,
+    format: isScheduleExportFormat,
+    personId: nullable(isUuid),
+    sha256: isDigest,
+    byteCount: isScheduleExportByteCount,
+    sample: isText,
+    sampleTruncated: isBoolean,
+  }),
+});
+const isScheduleExportPreview = (value: unknown): value is ScheduleExportPreviewDtoV1 => {
+  if (!boundedJson(value, RECIPIENT_FRAME_BYTES) || !scheduleExportPreviewShape(value))
+    return false;
+  const { source, format, personId, byteCount, sample, sampleTruncated } = value.preview;
+  if (
+    source.observedCurrentRevision === null ||
+    (source.origin !== "storedTerminal" && source.origin !== "storedCheckpoint") ||
+    (format !== "ics" && personId !== null) ||
+    sample.length > 8192
+  )
+    return false;
+  const sampleBytes = new TextEncoder().encode(sample).byteLength;
+  return (
+    sampleBytes <= 8192 && (sampleTruncated ? sampleBytes < byteCount : sampleBytes === byteCount)
+  );
+};
+const scheduleExportCreatedShape = shape<ScheduleExportCreatedDtoV1>({
+  schemaVersion: literal(1),
+  previewId: isUuid,
+  filename: (value: unknown): value is string =>
+    isText(value) && value.length > 0 && value !== "." && value !== ".." && !/[/\0]/.test(value),
+  publication: shape<ScheduleExportPublishedV1>({
+    schemaVersion: literal(1),
+    solutionId: isUuid,
+    sourceRevision: isRevision,
+    currentRevision: isRevision,
+    format: isScheduleExportFormat,
+    personId: nullable(isUuid),
+    sha256: isDigest,
+    byteCount: isScheduleExportByteCount,
+  }),
+});
+const isScheduleExportCreated = (value: unknown): value is ScheduleExportCreatedDtoV1 =>
+  boundedJson(value, RECIPIENT_FRAME_BYTES) &&
+  scheduleExportCreatedShape(value) &&
+  (value.publication.format === "ics" || value.publication.personId === null);
 const isOperationProgress = shape<OperationProgressV1>({
   eventVersion: literal(1),
   timestamp: isTimestamp,
@@ -3910,6 +6352,26 @@ const isInventoryPackage = shape<LicenseInventoryPackageV2>({
   source: inventoryText(1024),
   checksum: optional(isInventoryChecksum),
 });
+const isInventoryAssetFile = shape<LicenseInventoryAssetFileV2>({
+  path: (value: unknown): value is string =>
+    inventoryText(1024)(value) &&
+    !value.includes("\\") &&
+    value
+      .split("/")
+      .every((part) => part.length > 0 && part !== "." && part !== ".." && !part.includes(":")),
+  sha256: isDigest,
+});
+const isInventoryAssetFiles = (value: unknown): value is readonly LicenseInventoryAssetFileV2[] =>
+  arrayOf(isInventoryAssetFile, 4096)(value) && value.length > 0;
+const isInventoryAsset = shape<LicenseInventoryAssetV2>({
+  name: inventoryText(1024),
+  version: inventoryText(1024),
+  source: (value: unknown): value is string =>
+    inventoryText(1024)(value) && value.startsWith("https://"),
+  licenseConcluded: inventoryText(4096),
+  files: isInventoryAssetFiles,
+  notices: isInventoryAssetFiles,
+});
 const inventoryShape = shape<LicenseInventoryV2>({
   scope: literal("lockedWorkspace"),
   schemaVersion: literal(2),
@@ -3921,6 +6383,7 @@ const inventoryShape = shape<LicenseInventoryV2>({
     value[1] === "pnpm-lock.yaml" &&
     value[2] === "xtask/supply-chain-inputs.json",
   packages: arrayOf(isInventoryPackage, 4096),
+  assets: optional(arrayOf(isInventoryAsset, 4096)),
 });
 const isLicenseInventory = (value: unknown): value is LicenseInventoryV2 =>
   boundedJson(value, INVENTORY_COMPACT_BYTES) && inventoryShape(value);
@@ -3928,6 +6391,7 @@ const isLicenseInventory = (value: unknown): value is LicenseInventoryV2 =>
 const CSV_SOURCE_BYTES = 16 * 1_048_576;
 const CSV_PREVIEW_WIRE_BYTES = ((CSV_SOURCE_BYTES + 65_536) * 9) / 8 + 65_536;
 const CSV_SMALL_WIRE_BYTES = (131_072 * 9) / 8 + 65_536;
+const CSV_COMPLETE_REPORT_WIRE_BYTES = ((1_048_576 + 65_536) * 9) / 8 + 65_536;
 const isCsvRecord = (value: unknown): value is number =>
   isU32(value) && value >= 1 && value <= 10_001;
 const isCsvErrorRecord = (value: unknown): value is number =>
@@ -3936,8 +6400,16 @@ const isCsvColumnCount = (value: unknown): value is number =>
   isU32(value) && value >= 1 && value <= 64;
 const isCsvByteCount = (value: unknown): value is number =>
   isU32(value) && value <= CSV_SOURCE_BYTES;
-const isCsvDialect = choices<PeopleCsvDialect>("comma", "semicolon", "tab");
-const isCsvDisposition = choices<PeopleCsvDisposition>("reviewable", "blocked", "noChanges");
+const isCsvDialect = choices<CsvDialect>("comma", "semicolon", "tab");
+const isCsvFamily = choices<CsvDetectionV1["family"]>(
+  "people",
+  "assignments",
+  "eligibility",
+  "eligibilityMatrix",
+  "shifts",
+  "availability",
+);
+const isCsvDisposition = choices<CsvDisposition>("reviewable", "blocked", "noChanges");
 const isCsvRejection = choices<PeopleCsvRejectionCode>(
   "columnCount",
   "invalidCell",
@@ -3945,11 +6417,55 @@ const isCsvRejection = choices<PeopleCsvRejectionCode>(
   "missingName",
   "invalidPerson",
 );
-const isCsvSource = shape<PeopleCsvSource>({
+const isCsvSource = shape<CsvSource>({
   rawBytes: isCsvByteCount,
   blake3: isDigest,
   logicalRecords: (value: unknown): value is number => isU32(value) && value <= 10_001,
 });
+const isEligibilityMatrixSource = (value: unknown): value is CsvSource =>
+  isCsvSource(value) &&
+  value.rawBytes > 0 &&
+  value.rawBytes <= MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES &&
+  value.logicalRecords >= 1;
+const isEligibilityMatrixColumns = (value: unknown): value is number =>
+  isCsvColumnCount(value) && value >= 2;
+const isEligibilityMatrixCells = (value: unknown): value is number =>
+  isU32(value) && value <= MAX_ELIGIBILITY_MATRIX_CELLS;
+// Descriptive wire structure only; Rust retains all parsing and admission authority.
+function hasEligibilityMatrixCensus(value: {
+  readonly source: CsvSource;
+  readonly columns: number;
+  readonly cells: number;
+}): boolean {
+  return value.cells === (value.source.logicalRecords - 1) * (value.columns - 1);
+}
+const eligibilityMatrixDetectionShape = shape<EligibilityMatrixDetection>({
+  schemaVersion: literal(1),
+  source: isEligibilityMatrixSource,
+  columns: isEligibilityMatrixColumns,
+  cells: isEligibilityMatrixCells,
+  samples: arrayOf(
+    shape({
+      record: isCsvRecord,
+      cells: arrayOf(
+        shape({
+          text: (value: unknown): value is string => isCsvText(value, 64),
+          truncated: isBoolean,
+        }),
+        64,
+      ),
+    }),
+    2,
+  ),
+});
+const isEligibilityMatrixDetection = (value: unknown): value is EligibilityMatrixDetection =>
+  boundedJson(value, 65_536) &&
+  eligibilityMatrixDetectionShape(value) &&
+  hasEligibilityMatrixCensus(value) &&
+  value.samples.length === Math.min(2, value.source.logicalRecords) &&
+  value.samples.every(
+    (sample, index) => sample.record === index + 1 && sample.cells.length === value.columns,
+  );
 const isCsvColumn = shape<PeopleCsvColumn>({
   index: (value: unknown): value is number => isU32(value) && value < 64,
   field: choices<PeopleCsvField>(
@@ -4040,7 +6556,7 @@ const isCsvDecision = shape<PeopleCsvDecision>({
 });
 const isCsvDecisions = (value: unknown): value is readonly PeopleCsvDecision[] =>
   boundedJson(value, 1_048_576) && arrayOf(isCsvDecision, 10_000)(value);
-const isCsvErrorCode = choices<PeopleCsvErrorCode>(
+const isCsvErrorCode = choices<CsvErrorCode>(
   "io",
   "cancelled",
   "unsupportedEncoding",
@@ -4069,52 +6585,96 @@ const isCsvErrorCode = choices<PeopleCsvErrorCode>(
   "invalidReview",
   "staleReview",
   "invalidBatch",
+  "matrixShape",
+  "matrixCellLimit",
 );
+const csvDialectShapes = arrayOf(
+  union<PeopleCsvDetectionV1["dialects"][number]>(
+    shape({
+      status: literal("candidate"),
+      dialect: isCsvDialect,
+      source: isCsvSource,
+      consistentColumns: nullable(isCsvColumnCount),
+      samples: arrayOf(
+        shape({
+          record: isCsvRecord,
+          cells: arrayOf(
+            shape({
+              text: (value: unknown): value is string => isCsvText(value, 64),
+              truncated: isBoolean,
+            }),
+            64,
+          ),
+        }),
+        2,
+      ),
+    }),
+    shape({
+      status: literal("rejected"),
+      dialect: isCsvDialect,
+      error: shape<{ readonly code: CsvErrorCode; readonly record?: number }>({
+        code: isCsvErrorCode,
+        record: optional(isCsvErrorRecord),
+      }),
+    }),
+  ),
+  3,
+);
+const isCsvDialects = (value: unknown): value is PeopleCsvDetectionV1["dialects"] =>
+  csvDialectShapes(value) &&
+  value.length === 3 &&
+  new Set(value.map((item) => item.dialect)).size === 3;
 const csvDetectionShape = shape<PeopleCsvDetectionV1>({
   schemaVersion: literal(1),
-  dialects: arrayOf(
-    union<PeopleCsvDetectionV1["dialects"][number]>(
-      shape({
-        status: literal("candidate"),
-        dialect: isCsvDialect,
-        source: isCsvSource,
-        consistentColumns: nullable(isCsvColumnCount),
-        samples: arrayOf(
-          shape({
-            record: isCsvRecord,
-            cells: arrayOf(
-              shape({
-                text: (value: unknown): value is string => isCsvText(value, 64),
-                truncated: isBoolean,
-              }),
-              64,
-            ),
-          }),
-          2,
-        ),
-      }),
-      shape({
-        status: literal("rejected"),
-        dialect: isCsvDialect,
-        error: shape<{ readonly code: PeopleCsvErrorCode; readonly record?: number }>({
-          code: isCsvErrorCode,
-          record: optional(isCsvErrorRecord),
-        }),
-      }),
-    ),
-    3,
-  ),
+  dialects: isCsvDialects,
 });
-const isCsvDetection = (value: unknown): value is PeopleCsvDetectionV1 =>
-  boundedJson(value, 65_536) &&
-  csvDetectionShape(value) &&
-  value.dialects.length === 3 &&
-  new Set(value.dialects.map((item) => item.dialect)).size === 3;
-const csvSampleShape = shape<PeopleCsvSampleV1>({
+const isPeopleCsvDetection = (value: unknown): value is PeopleCsvDetectionV1 =>
+  boundedJson(value, 65_536) && csvDetectionShape(value);
+const isAssignmentCsvRecord = (value: unknown): value is number =>
+  isU32(value) && value >= 1 && value <= 10_002;
+const isCanonicalCsvSource = shape<CsvSource>({
+  rawBytes: isCsvByteCount,
+  blake3: isDigest,
+  logicalRecords: (value: unknown): value is number =>
+    isU32(value) && value >= 2 && value <= 10_002,
+});
+const isAssignmentCsvReadFormat = union<AssignmentCsvReadFormat>(
+  shape({ format: literal("canonicalV1") }),
+  shape({ format: literal("mapped"), dialect: isCsvDialect }),
+);
+const isCsvReadFormat = union<CsvReadFormat>(
+  shape({ family: literal("people"), dialect: isCsvDialect }),
+  shape({ family: literal("assignments"), format: isAssignmentCsvReadFormat }),
+  shape({ family: literal("eligibility"), dialect: isCsvDialect }),
+  shape({ family: literal("eligibilityMatrix") }),
+  shape({ family: literal("shifts"), dialect: isCsvDialect }),
+  shape({ family: literal("availability"), dialect: isCsvDialect }),
+);
+const assignmentDetectionShape = union<AssignmentCsvDetectionV1>(
+  shape({
+    format: literal("canonicalV1"),
+    schemaVersion: literal(1),
+    source: isCanonicalCsvSource,
+  }),
+  shape({ format: literal("mapped"), schemaVersion: literal(1), dialects: isCsvDialects }),
+);
+const isAssignmentCsvDetection = (value: unknown): value is AssignmentCsvDetectionV1 =>
+  boundedJson(value, 65_536) && assignmentDetectionShape(value);
+const csvDetectionResultShape = union<CsvDetectionV1>(
+  shape({ family: literal("people"), data: isPeopleCsvDetection }),
+  shape({ family: literal("assignments"), data: isAssignmentCsvDetection }),
+  shape({ family: literal("eligibility"), data: isPeopleCsvDetection }),
+  shape({ family: literal("eligibilityMatrix"), data: isEligibilityMatrixDetection }),
+  shape({ family: literal("shifts"), data: isPeopleCsvDetection }),
+  shape({ family: literal("availability"), data: isPeopleCsvDetection }),
+);
+const isCsvDetection = (value: unknown): value is CsvDetectionV1 =>
+  boundedJson(value, 131_072) && csvDetectionResultShape(value);
+const csvSampleShape = shape<CsvSampleV1>({
   schemaVersion: literal(1),
   sourceId: isUuid,
-  dialect: isCsvDialect,
-  record: isCsvRecord,
+  readFormat: isCsvReadFormat,
+  record: isAssignmentCsvRecord,
   cells: nullable(
     arrayOf(
       shape({
@@ -4125,10 +6685,17 @@ const csvSampleShape = shape<PeopleCsvSampleV1>({
     ),
   ),
 });
-const isCsvSample = (value: unknown): value is PeopleCsvSampleV1 =>
+const isCsvSample = (value: unknown): value is CsvSampleV1 =>
   boundedJson(value, 131_072) &&
   csvSampleShape(value) &&
-  (value.cells === null || value.cells.length >= 1);
+  (value.cells === null || value.cells.length >= 1) &&
+  (value.readFormat.family === "assignments" && value.readFormat.format.format === "canonicalV1"
+    ? value.cells === null ||
+      (value.cells.length <= 3 && value.cells.every((cell) => !cell.truncated))
+    : isCsvRecord(value.record) &&
+      (value.readFormat.family !== "eligibilityMatrix" ||
+        value.cells === null ||
+        value.cells.length >= 2));
 const isCsvRejectedRow = shape<PeopleCsvRejectedRow>({ record: isCsvRecord, code: isCsvRejection });
 const isCsvRejectedRows = (value: unknown): value is readonly PeopleCsvRejectedRow[] =>
   boundedJson(value, 65_536) && arrayOf(isCsvRejectedRow, 200)(value);
@@ -4200,7 +6767,7 @@ const isCsvPreview = (value: unknown): value is PeopleCsvPreview =>
     : value.review !== null &&
       value.approvalDigest !== null &&
       (value.disposition === "noChanges" ? value.batch === null : value.batch !== null));
-const isCsvOpened = shape<PeopleCsvSourceOpenedV1>({
+const isCsvOpened = shape<CsvSourceOpenedV1>({
   schemaVersion: literal(1),
   sourceId: isUuid,
   byteCount: isCsvByteCount,
@@ -4221,28 +6788,762 @@ const isCsvPreviewResult = (value: unknown): value is PeopleCsvPreviewV1 =>
       value.preview.review.source.blake3 === value.preview.source.blake3 &&
       value.preview.review.source.rawBytes === value.preview.source.rawBytes &&
       value.preview.review.source.logicalRecords === value.preview.source.logicalRecords));
-const isCsvReport = shape<PeopleCsvRejectedRowsV1>({
+const assignmentMappingShape = union<AssignmentCsvMapping>(
+  shape({ format: literal("canonicalV1") }),
+  shape({
+    format: literal("mapped"),
+    dialect: isCsvDialect,
+    hasHeader: isBoolean,
+    expectedColumns: isCsvColumnCount,
+    personColumn: (value: unknown): value is number => isU32(value) && value < 64,
+    shiftColumn: (value: unknown): value is number => isU32(value) && value < 64,
+    personMappings: recordOf(
+      isUuid,
+      (value: unknown): value is string => isCsvText(value, 256),
+      10_000,
+    ),
+    shiftMappings: recordOf(
+      isUuid,
+      (value: unknown): value is string => isCsvText(value, 256),
+      10_000,
+    ),
+  }),
+);
+const isAssignmentCsvMapping = (value: unknown): value is AssignmentCsvMapping =>
+  boundedJson(value, 1_048_576) && assignmentMappingShape(value);
+const isAssignmentCsvTarget = shape<AssignmentCsvTarget>({
+  kind: choices("create", "replace"),
+  id: isUuid,
+  name: (value: unknown): value is string => isCsvText(value, 256),
+});
+const isAssignmentCsvSkips = (value: unknown): value is readonly number[] =>
+  boundedJson(value, 1_048_576) && arrayOf(isAssignmentCsvRecord, 10_000)(value);
+const isAssignmentCsvIssue = choices<AssignmentCsvRowIssue>(
+  "columnCount",
+  "invalidToken",
+  "unresolvedPerson",
+  "unresolvedShift",
+  "duplicatePair",
+);
+const isAssignmentCsvExcludedRow = shape<AssignmentCsvExcludedRow>({
+  record: isAssignmentCsvRecord,
+  skipped: isBoolean,
+  issue: nullable(isAssignmentCsvIssue),
+});
+const isAssignmentCsvExcludedRows = (
+  value: unknown,
+): value is readonly AssignmentCsvExcludedRow[] =>
+  boundedJson(value, 1_048_576) && arrayOf(isAssignmentCsvExcludedRow, 10_000)(value);
+const assignmentReviewShape = shape<AssignmentCsvReview>({
+  format: literal("eutheto/workforce-assignment-csv-review"),
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  revision: isRevision,
+  scenarioBlake3: isDigest,
+  source: union<CsvSource>(isCsvSource, isCanonicalCsvSource),
+  parserVersion: choices("eutheto-assignments-csv-1", "csv-core-0.1.13"),
+  limitsVersion: literal(1),
+  mapping: isAssignmentCsvMapping,
+  target: isAssignmentCsvTarget,
+  skippedRecords: isAssignmentCsvSkips,
+  allowEmpty: isBoolean,
+  rowsBlake3: isDigest,
+  changesBlake3: isDigest,
+  excludedBlake3: isDigest,
+  validationBlake3: isDigest,
+});
+const isAssignmentCsvReview = (value: unknown): value is AssignmentCsvReview =>
+  boundedJson(value, 2 * 1_048_576) &&
+  assignmentReviewShape(value) &&
+  (value.mapping.format === "canonicalV1"
+    ? value.parserVersion === "eutheto-assignments-csv-1" && isCanonicalCsvSource(value.source)
+    : value.parserVersion === "csv-core-0.1.13" && isCsvSource(value.source));
+const isAssignmentPair = shape<Pack.WorkforceAssignmentPair>({ personId: isUuid, shiftId: isUuid });
+const isAssignmentPairCount = (value: unknown): value is number => isU32(value) && value <= 10_000;
+const assignmentPreviewShape = shape<AssignmentCsvPreview>({
+  schemaVersion: literal(1),
+  disposition: isCsvDisposition,
+  source: union<CsvSource>(isCsvSource, isCanonicalCsvSource),
+  rows: arrayOf(
+    shape({
+      record: isAssignmentCsvRecord,
+      status: choices("included", "skipped", "blocked"),
+      personId: nullable(isUuid),
+      shiftId: nullable(isUuid),
+      issue: nullable(isAssignmentCsvIssue),
+    }),
+    10_000,
+  ),
+  excludedRows: isAssignmentCsvExcludedRows,
+  changes: nullable(
+    shape({
+      previousName: nullable(isText),
+      beforePairCount: isAssignmentPairCount,
+      afterPairCount: isAssignmentPairCount,
+      addedPairs: arrayOf(isAssignmentPair, 10_000),
+      removedPairs: arrayOf(isAssignmentPair, 10_000),
+      provenanceChanged: isBoolean,
+    }),
+  ),
+  validationIssues: (value: unknown): value is readonly ValidationIssue[] =>
+    boundedJson(value, 65_536) && arrayOf(isValidationIssue, 201)(value),
+  batch: nullable(
+    shape({
+      schemaVersion: literal(1),
+      packId: literal("official.workforce"),
+      scenarioSchemaVersion: literal(1),
+      label: nullable(isText),
+      commands: arrayOf(
+        shape({
+          commandType: choices("official.workforce.add_entity", "official.workforce.update_entity"),
+          payload: shape({ entity: isWorkforceCsvExternalStartingPlan }),
+        }),
+        1,
+      ),
+    }),
+  ),
+  review: nullable(isAssignmentCsvReview),
+  approvalDigest: nullable(isDigest),
+});
+const isAssignmentCsvPreview = (value: unknown): value is AssignmentCsvPreview =>
+  boundedJson(value, CSV_SOURCE_BYTES) &&
+  assignmentPreviewShape(value) &&
+  (value.disposition === "blocked"
+    ? value.batch === null && value.review === null && value.approvalDigest === null
+    : value.review !== null &&
+      value.approvalDigest !== null &&
+      (value.disposition === "noChanges"
+        ? value.batch === null
+        : value.batch?.commands.length === 1));
+const assignmentPreviewResultShape = shape<AssignmentCsvPreviewV1>({
+  schemaVersion: literal(1),
+  sourceId: isUuid,
+  scenarioId: isUuid,
+  revision: isRevision,
+  previewId: isUuid,
+  preview: isAssignmentCsvPreview,
+});
+const isAssignmentCsvPreviewResult = (value: unknown): value is AssignmentCsvPreviewV1 =>
+  assignmentPreviewResultShape(value) &&
+  (value.preview.review === null ||
+    (value.preview.review.scenarioId === value.scenarioId &&
+      value.preview.review.revision === value.revision &&
+      value.preview.review.source.blake3 === value.preview.source.blake3 &&
+      value.preview.review.source.rawBytes === value.preview.source.rawBytes &&
+      value.preview.review.source.logicalRecords === value.preview.source.logicalRecords));
+const eligibilityMappingShape = shape<EligibilityCsvMapping>({
+  dialect: isCsvDialect,
+  hasHeader: isBoolean,
+  expectedColumns: isCsvColumnCount,
+  personColumn: (value: unknown): value is number => isU32(value) && value < 64,
+  assignmentTypeColumn: (value: unknown): value is number => isU32(value) && value < 64,
+  eligibleColumn: (value: unknown): value is number => isU32(value) && value < 64,
+  personMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+  assignmentTypeMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+});
+const isEligibilityCsvMapping = (value: unknown): value is EligibilityCsvMapping =>
+  boundedJson(value, 1_048_576) && eligibilityMappingShape(value);
+const isEligibilityCsvSkips = (value: unknown): value is readonly number[] =>
+  boundedJson(value, 1_048_576) && arrayOf(isCsvRecord, 10_000)(value);
+const isEligibilityCsvIssue = choices<EligibilityCsvRowIssue>(
+  "columnCount",
+  "invalidToken",
+  "unresolvedPerson",
+  "unresolvedAssignmentType",
+  "invalidMembership",
+  "duplicatePair",
+);
+const isEligibilityCsvExcludedRow = shape<EligibilityCsvExcludedRow>({
+  record: isCsvRecord,
+  skipped: isBoolean,
+  issue: nullable(isEligibilityCsvIssue),
+});
+const isEligibilityCsvExcludedRows = (
+  value: unknown,
+): value is readonly EligibilityCsvExcludedRow[] =>
+  boundedJson(value, 1_048_576) && arrayOf(isEligibilityCsvExcludedRow, 10_000)(value);
+const eligibilityReviewShape = shape<EligibilityCsvReview>({
+  format: literal("eutheto/workforce-eligibility-csv-review"),
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  revision: isRevision,
+  scenarioBlake3: isDigest,
+  source: isCsvSource,
+  parserVersion: literal("csv-core-0.1.13"),
+  limitsVersion: literal(1),
+  mapping: isEligibilityCsvMapping,
+  skippedRecords: isEligibilityCsvSkips,
+  rowsBlake3: isDigest,
+  changesBlake3: isDigest,
+  excludedBlake3: isDigest,
+  validationBlake3: isDigest,
+});
+const isEligibilityCsvReview = (value: unknown): value is EligibilityCsvReview =>
+  boundedJson(value, 2 * 1_048_576) && eligibilityReviewShape(value);
+const isEligibilityCsvBatch = shape<NonNullable<EligibilityCsvPreview["batch"]>>({
+  schemaVersion: literal(1),
+  packId: literal("official.workforce"),
+  scenarioSchemaVersion: literal(1),
+  label: nullable(isText),
+  commands: arrayOf(
+    shape({
+      commandType: literal("official.workforce.update_entity"),
+      payload: shape({ entity: isWorkforceCsvPerson }),
+    }),
+    1_000,
+  ),
+});
+const eligibilityPreviewShape = shape<EligibilityCsvPreview>({
+  schemaVersion: literal(1),
+  disposition: isCsvDisposition,
+  source: isCsvSource,
+  rows: arrayOf(
+    shape({
+      record: isCsvRecord,
+      status: choices("changed", "unchanged", "skipped", "blocked"),
+      personId: nullable(isUuid),
+      assignmentTypeId: nullable(isUuid),
+      before: nullable(isBoolean),
+      after: nullable(isBoolean),
+      issue: nullable(isEligibilityCsvIssue),
+    }),
+    10_000,
+  ),
+  excludedRows: isEligibilityCsvExcludedRows,
+  validationIssues: (value: unknown): value is readonly ValidationIssue[] =>
+    boundedJson(value, 65_536) && arrayOf(isValidationIssue, 201)(value),
+  batch: nullable(isEligibilityCsvBatch),
+  review: nullable(isEligibilityCsvReview),
+  approvalDigest: nullable(isDigest),
+});
+const isEligibilityCsvPreview = (value: unknown): value is EligibilityCsvPreview =>
+  boundedJson(value, CSV_SOURCE_BYTES) &&
+  eligibilityPreviewShape(value) &&
+  (value.disposition === "blocked"
+    ? value.batch === null && value.review === null && value.approvalDigest === null
+    : value.review !== null &&
+      value.approvalDigest !== null &&
+      (value.disposition === "noChanges"
+        ? value.batch === null
+        : value.batch !== null && value.batch.commands.length > 0));
+const eligibilityPreviewResultShape = shape<EligibilityCsvPreviewV1>({
+  schemaVersion: literal(1),
+  sourceId: isUuid,
+  scenarioId: isUuid,
+  revision: isRevision,
+  previewId: isUuid,
+  preview: isEligibilityCsvPreview,
+});
+const isEligibilityCsvPreviewResult = (value: unknown): value is EligibilityCsvPreviewV1 =>
+  eligibilityPreviewResultShape(value) &&
+  (value.preview.review === null ||
+    (value.preview.review.scenarioId === value.scenarioId &&
+      value.preview.review.revision === value.revision &&
+      value.preview.review.source.blake3 === value.preview.source.blake3 &&
+      value.preview.review.source.rawBytes === value.preview.source.rawBytes &&
+      value.preview.review.source.logicalRecords === value.preview.source.logicalRecords));
+const eligibilityMatrixMappingShape = shape<EligibilityMatrixMapping>({
+  personMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+  assignmentTypeMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+});
+const isEligibilityMatrixMapping = (value: unknown): value is EligibilityMatrixMapping =>
+  boundedJson(value, 1_048_576) && eligibilityMatrixMappingShape(value);
+const isEligibilityMatrixCellAddress = shape<EligibilityMatrixCellAddress>({
+  record: (value: unknown): value is number => isCsvRecord(value) && value >= 2,
+  column: (value: unknown): value is number => isU32(value) && value >= 1 && value < 64,
+});
+function eligibilityMatrixAddressesOrdered(
+  cells: readonly EligibilityMatrixCellAddress[],
+): boolean {
+  return cells.every((cell, index) => {
+    if (index === 0) return true;
+    const previous = cells[index - 1];
+    return (
+      previous !== undefined &&
+      (previous.record < cell.record ||
+        (previous.record === cell.record && previous.column < cell.column))
+    );
+  });
+}
+function eligibilityMatrixAddressWithin(
+  cell: EligibilityMatrixCellAddress,
+  source: CsvSource,
+  columns: number,
+): boolean {
+  return cell.record <= source.logicalRecords && cell.column < columns;
+}
+const isEligibilityMatrixSkips = (
+  value: unknown,
+): value is readonly EligibilityMatrixCellAddress[] =>
+  boundedJson(value, 1_048_576) &&
+  arrayOf(isEligibilityMatrixCellAddress, MAX_ELIGIBILITY_MATRIX_CELLS)(value) &&
+  eligibilityMatrixAddressesOrdered(value);
+const isEligibilityMatrixExcludedCell = shape<EligibilityMatrixExcludedCell>({
+  cell: isEligibilityMatrixCellAddress,
+  skipped: isBoolean,
+  issue: nullable(isEligibilityCsvIssue),
+});
+const isEligibilityMatrixExcludedCells = (
+  value: unknown,
+): value is readonly EligibilityMatrixExcludedCell[] =>
+  boundedJson(value, 1_048_576) &&
+  arrayOf(isEligibilityMatrixExcludedCell, MAX_ELIGIBILITY_MATRIX_CELLS)(value) &&
+  eligibilityMatrixAddressesOrdered(value.map((item) => item.cell));
+const eligibilityMatrixReviewShape = shape<EligibilityMatrixReview>({
+  format: literal("eutheto/workforce-eligibility-matrix-review"),
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  revision: isRevision,
+  scenarioBlake3: isDigest,
+  source: isEligibilityMatrixSource,
+  parserVersion: literal("csv-core-0.1.13/eligibility-matrix-1"),
+  limitsVersion: literal(1),
+  columns: isEligibilityMatrixColumns,
+  cells: isEligibilityMatrixCells,
+  mapping: isEligibilityMatrixMapping,
+  skippedCells: isEligibilityMatrixSkips,
+  rowsBlake3: isDigest,
+  changesBlake3: isDigest,
+  excludedBlake3: isDigest,
+  validationBlake3: isDigest,
+});
+const isEligibilityMatrixReview = (value: unknown): value is EligibilityMatrixReview =>
+  boundedJson(value, 2 * 1_048_576) &&
+  eligibilityMatrixReviewShape(value) &&
+  hasEligibilityMatrixCensus(value) &&
+  value.skippedCells.every((cell) =>
+    eligibilityMatrixAddressWithin(cell, value.source, value.columns),
+  );
+const eligibilityMatrixPreviewShape = shape<EligibilityMatrixPreview>({
+  schemaVersion: literal(1),
+  disposition: isCsvDisposition,
+  source: isEligibilityMatrixSource,
+  columns: isEligibilityMatrixColumns,
+  cells: isEligibilityMatrixCells,
+  rows: arrayOf(
+    shape({
+      cell: isEligibilityMatrixCellAddress,
+      status: choices("changed", "unchanged", "skipped", "blocked"),
+      personId: nullable(isUuid),
+      assignmentTypeId: nullable(isUuid),
+      before: nullable(isBoolean),
+      after: nullable(isBoolean),
+      issue: nullable(isEligibilityCsvIssue),
+    }),
+    MAX_ELIGIBILITY_MATRIX_CELLS,
+  ),
+  excludedCells: isEligibilityMatrixExcludedCells,
+  validationIssues: (value: unknown): value is readonly ValidationIssue[] =>
+    boundedJson(value, 65_536) && arrayOf(isValidationIssue, 201)(value),
+  batch: nullable(isEligibilityCsvBatch),
+  review: nullable(isEligibilityMatrixReview),
+  approvalDigest: nullable(isDigest),
+});
+const isEligibilityMatrixPreview = (value: unknown): value is EligibilityMatrixPreview =>
+  boundedJson(value, CSV_SOURCE_BYTES) &&
+  eligibilityMatrixPreviewShape(value) &&
+  hasEligibilityMatrixCensus(value) &&
+  value.rows.length === value.cells &&
+  value.rows.every(
+    (row, index) =>
+      row.cell.record === 2 + Math.floor(index / (value.columns - 1)) &&
+      row.cell.column === 1 + (index % (value.columns - 1)),
+  ) &&
+  value.excludedCells.every((item) =>
+    eligibilityMatrixAddressWithin(item.cell, value.source, value.columns),
+  ) &&
+  (value.disposition === "blocked"
+    ? value.batch === null && value.review === null && value.approvalDigest === null
+    : value.review !== null &&
+      value.approvalDigest !== null &&
+      value.review.columns === value.columns &&
+      value.review.cells === value.cells &&
+      value.review.source.blake3 === value.source.blake3 &&
+      value.review.source.rawBytes === value.source.rawBytes &&
+      value.review.source.logicalRecords === value.source.logicalRecords &&
+      (value.disposition === "noChanges"
+        ? value.batch === null
+        : value.batch !== null && value.batch.commands.length > 0));
+const eligibilityMatrixPreviewResultShape = shape<EligibilityMatrixPreviewV1>({
+  schemaVersion: literal(1),
+  sourceId: isUuid,
+  scenarioId: isUuid,
+  revision: isRevision,
+  previewId: isUuid,
+  preview: isEligibilityMatrixPreview,
+});
+const isEligibilityMatrixPreviewResult = (value: unknown): value is EligibilityMatrixPreviewV1 =>
+  eligibilityMatrixPreviewResultShape(value) &&
+  (value.preview.review === null ||
+    (value.preview.review.scenarioId === value.scenarioId &&
+      value.preview.review.revision === value.revision));
+const shiftMappingShape = shape<ShiftCsvMapping>({
+  dialect: isCsvDialect,
+  hasHeader: isBoolean,
+  expectedColumns: isCsvColumnCount,
+  identityColumn: nullable((value: unknown): value is number => isU32(value) && value < 64),
+  columns: arrayOf(
+    shape({
+      index: (value: unknown): value is number => isU32(value) && value < 64,
+      field: choices<ShiftCsvField>(
+        "assignmentTypeId",
+        "locationId",
+        "startsAt",
+        "endsAt",
+        "coverage",
+        "tags",
+        "reportingAttribution",
+      ),
+      blank: choices("preserve", "clear"),
+    }),
+    7,
+  ),
+  referenceMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+});
+const isShiftCsvMapping = (value: unknown): value is ShiftCsvMapping =>
+  boundedJson(value, 1_048_576) && shiftMappingShape(value);
+const isShiftCsvDecisions = (value: unknown): value is readonly ShiftCsvRowDecision[] =>
+  boundedJson(value, 1_048_576) &&
+  arrayOf(
+    shape<ShiftCsvRowDecision>({
+      record: isCsvRecord,
+      decision: union<ShiftCsvRowDecision["decision"]>(
+        shape({ kind: choices("add", "update"), shiftId: isWorkforceCsvUuid }),
+        shape({ kind: literal("skip") }),
+      ),
+    }),
+    10_000,
+  )(value);
+const isShiftCsvIssue = choices<ShiftCsvRowIssue>(
+  "columnCount",
+  "invalidIdentity",
+  "reservedIdentity",
+  "unresolvedIdentity",
+  "duplicateTarget",
+  "invalidCell",
+  "invalidReference",
+  "invalidLocalTime",
+  "unresolvableLocalTime",
+  "nonpositiveInterval",
+  "missingRequiredField",
+  "invalidShift",
+);
+const isShiftCsvExcludedRows = (value: unknown): value is readonly ShiftCsvExcludedRow[] =>
+  boundedJson(value, 1_048_576) &&
+  arrayOf(
+    shape<ShiftCsvExcludedRow>({
+      record: isCsvRecord,
+      skipped: isBoolean,
+      issue: nullable(isShiftCsvIssue),
+    }),
+    10_000,
+  )(value);
+const shiftReviewShape = shape<ShiftCsvReview>({
+  format: literal("eutheto/workforce-shift-csv-review"),
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  revision: isRevision,
+  scenarioBlake3: isDigest,
+  source: isCsvSource,
+  parserVersion: literal("csv-core-0.1.13"),
+  limitsVersion: literal(1),
+  mapping: isShiftCsvMapping,
+  decisions: isShiftCsvDecisions,
+  rowsBlake3: isDigest,
+  changesBlake3: isDigest,
+  excludedBlake3: isDigest,
+  validationBlake3: isDigest,
+});
+const isShiftCsvReview = (value: unknown): value is ShiftCsvReview =>
+  boundedJson(value, 2 * 1_048_576) && shiftReviewShape(value);
+const shiftPreviewShape = shape<ShiftCsvPreview>({
+  schemaVersion: literal(1),
+  disposition: isCsvDisposition,
+  source: isCsvSource,
+  rows: arrayOf(
+    shape({
+      record: isCsvRecord,
+      status: choices("added", "updated", "unchanged", "skipped", "blocked", "unresolved"),
+      identity: union<ShiftCsvIdentity>(
+        shape({ kind: choices("absent", "invalid") }),
+        shape({ kind: literal("supplied"), shiftId: isUuid }),
+      ),
+      shiftId: nullable(isUuid),
+      before: nullable(isWorkforceCsvShiftInstance),
+      after: nullable(isWorkforceCsvShiftInstance),
+      issue: nullable(isShiftCsvIssue),
+    }),
+    10_000,
+  ),
+  excludedRows: isShiftCsvExcludedRows,
+  validationIssues: (value: unknown): value is readonly ValidationIssue[] =>
+    boundedJson(value, 65_536) && arrayOf(isValidationIssue, 201)(value),
+  batch: nullable(
+    shape({
+      schemaVersion: literal(1),
+      packId: literal("official.workforce"),
+      scenarioSchemaVersion: literal(1),
+      label: nullable(isText),
+      commands: arrayOf(
+        shape({
+          commandType: choices("official.workforce.add_entity", "official.workforce.update_entity"),
+          payload: shape({ entity: isWorkforceCsvShiftInstance }),
+        }),
+        1_000,
+      ),
+    }),
+  ),
+  review: nullable(isShiftCsvReview),
+  approvalDigest: nullable(isDigest),
+});
+const isShiftCsvPreview = (value: unknown): value is ShiftCsvPreview =>
+  boundedJson(value, CSV_SOURCE_BYTES) &&
+  shiftPreviewShape(value) &&
+  (value.disposition === "blocked"
+    ? value.batch === null && value.review === null && value.approvalDigest === null
+    : value.review !== null &&
+      value.approvalDigest !== null &&
+      (value.disposition === "noChanges"
+        ? value.batch === null
+        : value.batch !== null && value.batch.commands.length > 0));
+const shiftPreviewResultShape = shape<ShiftCsvPreviewV1>({
+  schemaVersion: literal(1),
+  sourceId: isUuid,
+  scenarioId: isUuid,
+  revision: isRevision,
+  previewId: isUuid,
+  preview: isShiftCsvPreview,
+});
+const isShiftCsvPreviewResult = (value: unknown): value is ShiftCsvPreviewV1 =>
+  shiftPreviewResultShape(value) &&
+  (value.preview.review === null ||
+    (value.preview.review.scenarioId === value.scenarioId &&
+      value.preview.review.revision === value.revision &&
+      value.preview.review.source.blake3 === value.preview.source.blake3 &&
+      value.preview.review.source.rawBytes === value.preview.source.rawBytes &&
+      value.preview.review.source.logicalRecords === value.preview.source.logicalRecords));
+const availabilityMappingShape = shape<AvailabilityCsvMapping>({
+  dialect: isCsvDialect,
+  hasHeader: isBoolean,
+  expectedColumns: isCsvColumnCount,
+  identityColumn: nullable((value: unknown): value is number => isU32(value) && value < 64),
+  columns: arrayOf(
+    shape({
+      index: (value: unknown): value is number => isU32(value) && value < 64,
+      field: choices<AvailabilityCsvField>(
+        "personId",
+        "availabilityKind",
+        "startsAt",
+        "endsAt",
+        "weeklyWindows",
+        "effectiveStartDate",
+        "effectiveEndDateExclusive",
+        "assignmentTypeIds",
+        "locationIds",
+        "source",
+        "note",
+      ),
+      blank: choices("preserve", "clear"),
+    }),
+    11,
+  ),
+  personMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+  assignmentTypeMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+  locationMappings: recordOf(
+    isWorkforceCsvUuid,
+    (value: unknown): value is string => isCsvText(value, 256),
+    10_000,
+  ),
+});
+const isAvailabilityCsvMapping = (value: unknown): value is AvailabilityCsvMapping =>
+  boundedJson(value, 1_048_576) && availabilityMappingShape(value);
+const isAvailabilityCsvDecisions = (
+  value: unknown,
+): value is readonly AvailabilityCsvRowDecision[] =>
+  boundedJson(value, 1_048_576) &&
+  arrayOf(
+    shape<AvailabilityCsvRowDecision>({
+      record: isCsvRecord,
+      decision: union<AvailabilityCsvRowDecision["decision"]>(
+        shape({ kind: choices("add", "update"), availabilityId: isWorkforceCsvUuid }),
+        shape({ kind: literal("skip") }),
+      ),
+    }),
+    10_000,
+  )(value);
+const isAvailabilityCsvIssue = choices<AvailabilityCsvRowIssue>(
+  "columnCount",
+  "invalidIdentity",
+  "reservedIdentity",
+  "unresolvedIdentity",
+  "duplicateTarget",
+  "invalidCell",
+  "invalidReference",
+  "invalidLocalTime",
+  "unresolvableLocalTime",
+  "nonpositiveInterval",
+  "conflictingTimeWindow",
+  "missingRequiredField",
+  "invalidAvailability",
+);
+const isAvailabilityCsvExcludedRows = (
+  value: unknown,
+): value is readonly AvailabilityCsvExcludedRow[] =>
+  boundedJson(value, 1_048_576) &&
+  arrayOf(
+    shape<AvailabilityCsvExcludedRow>({
+      record: isCsvRecord,
+      skipped: isBoolean,
+      issue: nullable(isAvailabilityCsvIssue),
+    }),
+    10_000,
+  )(value);
+const availabilityReviewShape = shape<AvailabilityCsvReview>({
+  format: literal("eutheto/workforce-availability-csv-review"),
+  schemaVersion: literal(1),
+  scenarioId: isUuid,
+  revision: isRevision,
+  scenarioBlake3: isDigest,
+  source: isCsvSource,
+  parserVersion: literal("csv-core-0.1.13"),
+  limitsVersion: literal(1),
+  mapping: isAvailabilityCsvMapping,
+  decisions: isAvailabilityCsvDecisions,
+  rowsBlake3: isDigest,
+  changesBlake3: isDigest,
+  excludedBlake3: isDigest,
+  validationBlake3: isDigest,
+});
+const isAvailabilityCsvReview = (value: unknown): value is AvailabilityCsvReview =>
+  boundedJson(value, 2 * 1_048_576) && availabilityReviewShape(value);
+const availabilityPreviewShape = shape<AvailabilityCsvPreview>({
+  schemaVersion: literal(1),
+  disposition: isCsvDisposition,
+  source: isCsvSource,
+  rows: arrayOf(
+    shape({
+      record: isCsvRecord,
+      status: choices("added", "updated", "unchanged", "skipped", "blocked", "unresolved"),
+      identity: union<AvailabilityCsvIdentity>(
+        shape({ kind: choices("absent", "invalid") }),
+        shape({ kind: literal("supplied"), availabilityId: isUuid }),
+      ),
+      availabilityId: nullable(isUuid),
+      before: nullable(isWorkforceCsvAvailability),
+      after: nullable(isWorkforceCsvAvailability),
+      resolvedStartsAt: nullable(isWorkforceResolvedLocalTime),
+      resolvedEndsAt: nullable(isWorkforceResolvedLocalTime),
+      issue: nullable(isAvailabilityCsvIssue),
+    }),
+    10_000,
+  ),
+  excludedRows: isAvailabilityCsvExcludedRows,
+  validationIssues: (value: unknown): value is readonly ValidationIssue[] =>
+    boundedJson(value, 65_536) && arrayOf(isValidationIssue, 201)(value),
+  batch: nullable(
+    shape({
+      schemaVersion: literal(1),
+      packId: literal("official.workforce"),
+      scenarioSchemaVersion: literal(1),
+      label: nullable(isText),
+      commands: arrayOf(
+        shape({
+          commandType: choices("official.workforce.add_entity", "official.workforce.update_entity"),
+          payload: shape({ entity: isWorkforceCsvAvailability }),
+        }),
+        1_000,
+      ),
+    }),
+  ),
+  review: nullable(isAvailabilityCsvReview),
+  approvalDigest: nullable(isDigest),
+});
+const isAvailabilityCsvPreview = (value: unknown): value is AvailabilityCsvPreview =>
+  boundedJson(value, CSV_SOURCE_BYTES) &&
+  availabilityPreviewShape(value) &&
+  (value.disposition === "blocked"
+    ? value.batch === null && value.review === null && value.approvalDigest === null
+    : value.review !== null &&
+      value.approvalDigest !== null &&
+      (value.disposition === "noChanges"
+        ? value.batch === null
+        : value.batch !== null && value.batch.commands.length > 0));
+const availabilityPreviewResultShape = shape<AvailabilityCsvPreviewV1>({
+  schemaVersion: literal(1),
+  sourceId: isUuid,
+  scenarioId: isUuid,
+  revision: isRevision,
+  previewId: isUuid,
+  preview: isAvailabilityCsvPreview,
+});
+const isAvailabilityCsvPreviewResult = (value: unknown): value is AvailabilityCsvPreviewV1 =>
+  availabilityPreviewResultShape(value) &&
+  (value.preview.review === null ||
+    (value.preview.review.scenarioId === value.scenarioId &&
+      value.preview.review.revision === value.revision &&
+      value.preview.review.source.blake3 === value.preview.source.blake3 &&
+      value.preview.review.source.rawBytes === value.preview.source.rawBytes &&
+      value.preview.review.source.logicalRecords === value.preview.source.logicalRecords));
+const isCsvReport = shape<CsvReportV1>({
   schemaVersion: literal(1),
   previewId: isUuid,
   disposition: isCsvDisposition,
   consumed: isBoolean,
-  rejectedRows: isCsvRejectedRows,
+  rows: union<CsvReportV1["rows"]>(
+    shape({ family: literal("people"), rejectedRows: isCsvRejectedRows }),
+    shape({ family: literal("assignments"), excludedRows: isAssignmentCsvExcludedRows }),
+    shape({ family: literal("eligibility"), excludedRows: isEligibilityCsvExcludedRows }),
+    shape({
+      family: literal("eligibilityMatrix"),
+      excludedCells: isEligibilityMatrixExcludedCells,
+    }),
+    shape({ family: literal("shifts"), excludedRows: isShiftCsvExcludedRows }),
+    shape({ family: literal("availability"), excludedRows: isAvailabilityCsvExcludedRows }),
+  ),
 });
-const isCsvApply = shape<PeopleCsvApplyV1>({
+const isCsvApply = shape<CsvApplyV1>({
   schemaVersion: literal(1),
   sourceId: isUuid,
   scenarioId: isUuid,
-  outcome: union<PeopleCsvApplyV1["outcome"]>(
+  outcome: union<CsvApplyV1["outcome"]>(
     shape({ kind: literal("applied"), commandId: isUuid, revision: isRevision }),
     shape({ kind: literal("noChanges"), revision: isRevision }),
   ),
   report: isCsvReport,
 });
-const isCsvSaved = shape<PeopleCsvReportSavedV1>({ schemaVersion: literal(1), previewId: isUuid });
+const isCsvSaved = shape<CsvReportSavedV1>({ schemaVersion: literal(1), previewId: isUuid });
 const isCsvClosed = shape<{ readonly schemaVersion: 1 }>({ schemaVersion: literal(1) });
 
 export function newUuidV7(): UuidV7 {
-  const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
   const timestamp = BigInt(Date.now());
   bytes[0] = Number((timestamp >> 40n) & 0xffn);
   bytes[1] = Number((timestamp >> 32n) & 0xffn);
@@ -4275,6 +7576,13 @@ function assertInt64(value: unknown, field: string): asserts value is Int64 {
   }
 }
 
+function assertDomainAssignmentId(
+  value: unknown,
+  field: string,
+): asserts value is DomainAssignmentId {
+  if (!isDomainId(value))
+    throw new RangeError(`${field} must be a canonical domain assignment identity`);
+}
 function assertAssignmentValue(value: AssignmentValue): void {
   if (value.type === "integer") {
     assertInt64(value.value, "Assignment integer");
@@ -4297,6 +7605,7 @@ async function call<T>(
     readonly requestMaximumBytes?: number;
     readonly onProgress?: Channel;
     readonly revisionKey?: ResponseRevision<T>;
+    readonly enforceRequestEcho?: boolean;
   } = {},
 ): Promise<ApiResponseDto<T>> {
   const revision = "expectedRevision" in request ? request.expectedRevision : undefined;
@@ -4340,12 +7649,22 @@ async function call<T>(
     guard,
     options.maximumBytes ?? RESPONSE_MAX_BYTES,
     options.revisionKey,
+    options.enforceRequestEcho !== false,
   );
   if (
+    options.enforceRequestEcho !== false &&
     "scenarioId" in request &&
     isObject(response.result) &&
     Object.hasOwn(response.result, "scenarioId") &&
     response.result.scenarioId !== request.scenarioId
+  )
+    throw invalidResponse();
+  if (
+    options.enforceRequestEcho !== false &&
+    "operationId" in request &&
+    isObject(response.result) &&
+    Object.hasOwn(response.result, "operationId") &&
+    response.result.operationId !== request.operationId
   )
     throw invalidResponse();
   return response;
@@ -4361,6 +7680,22 @@ export interface SetupOperation<T> {
   /** A disposed presentation context must not receive this operation's data. */
   isCurrent(): boolean;
 }
+export interface SolveStartOperation {
+  readonly requestId: UuidV7;
+  readonly operationId: Promise<UuidV7>;
+  readonly result: Promise<ApiResponseDto<SolveStartDtoV2>>;
+  /** Releasing only detaches this presentation observer; it never requests solve cancellation. */
+  release(): Promise<ApiResponseDto<OperationReleasedV1>>;
+  isCurrent(): boolean;
+}
+export interface AlternativesStartOperation {
+  readonly requestId: UuidV7;
+  readonly operationId: Promise<UuidV7>;
+  readonly result: Promise<ApiResponseDto<AlternativesGroupStatusV1>>;
+  /** Detaches observation only; explicit solve cancellation owns cancellation. */
+  release(): Promise<ApiResponseDto<OperationReleasedV1>>;
+  isCurrent(): boolean;
+}
 type SetupOperationCommand =
   | "scenario_get_summary"
   | "scenario_get_setup_status"
@@ -4369,13 +7704,32 @@ type SetupOperationCommand =
   | "scenario_search_entities"
   | "scenario_get_rule_catalog"
   | "scenario_validate"
+  | "solve_start"
+  | "alternatives_start"
+  | "solve_estimate_model"
+  | "solution_explain"
+  | "solution_create_diagnostic_copy"
+  | "solution_export_diagnostic"
+  | "solution_share_preview"
+  | "solution_share_create"
+  | "solution_export_preview"
+  | "solution_export"
+  | "solution_lock_assignment"
+  | "solution_unlock_assignment"
+  | "solution_create_repair_request"
   | "workforce_apply_reviewed_generation"
-  | "people_csv_source_open"
-  | "people_csv_detect"
-  | "people_csv_record_sample"
+  | "csv_source_open"
+  | "eligibility_matrix_source_open"
+  | "csv_detect"
+  | "csv_record_sample"
   | "people_csv_preview"
-  | "people_csv_apply"
-  | "people_csv_rejected_rows_save";
+  | "assignment_csv_preview"
+  | "eligibility_csv_preview"
+  | "eligibility_matrix_preview"
+  | "shift_csv_preview"
+  | "availability_csv_preview"
+  | "csv_apply"
+  | "csv_report_save";
 const portableCommands = {
   projectImportPreview: "project_import_preview",
   projectImportApply: "project_import_apply",
@@ -4513,16 +7867,57 @@ class OperationScope<C extends OperationContextV1> {
     ) {
       throw new RangeError("The portable command requires its matching purpose");
     }
+    const recipientPurpose = purpose.kind === "sharePreview" || purpose.kind === "shareCreate";
+    const recipientCommand =
+      command === "solution_share_preview" || command === "solution_share_create";
+    if (
+      recipientPurpose !== recipientCommand ||
+      (recipientPurpose &&
+        (command !==
+          (purpose.kind === "sharePreview" ? "solution_share_preview" : "solution_share_create") ||
+          this.#context.kind !== "scenario" ||
+          this.#context.expectedRevision === null))
+    )
+      throw new RangeError(
+        "The recipient operation requires its matching command and exact scenario revision",
+      );
+    const exportPurpose = purpose.kind === "exportPreview" || purpose.kind === "exportCreate";
+    const exportCommand = command === "solution_export_preview" || command === "solution_export";
+    if (
+      exportPurpose !== exportCommand ||
+      (exportPurpose &&
+        (command !==
+          (purpose.kind === "exportPreview" ? "solution_export_preview" : "solution_export") ||
+          this.#context.kind !== "scenario" ||
+          this.#context.expectedRevision === null))
+    )
+      throw new RangeError(
+        "The schedule export requires its matching command and exact scenario revision",
+      );
     const setupRequestMaximumBytes =
       purpose.kind === "commandPreview" || purpose.kind === "applyReviewedGeneration"
         ? SETUP_PREVIEW_REQUEST_BYTES
         : purpose.kind === "setupView"
           ? SETUP_VIEW_REQUEST_BYTES
-          : purpose.kind === "scenarioSummary" ||
-              purpose.kind === "setupStatus" ||
-              purpose.kind === "fullValidation"
-            ? SETUP_FRAME_BYTES
-            : undefined;
+          : purpose.kind === "solveStart" ||
+              purpose.kind === "solveAlternatives" ||
+              purpose.kind === "solutionExplain"
+            ? SOLVE_REQUEST_MAX_BYTES
+            : purpose.kind === "solveEstimate"
+              ? SOLVE_ESTIMATE_REQUEST_MAX_BYTES
+              : purpose.kind === "solutionDiagnosticCopy" ||
+                  purpose.kind === "solutionDiagnosticExport" ||
+                  purpose.kind === "manualRepairRead" ||
+                  purpose.kind === "manualRepairReview" ||
+                  purpose.kind === "manualRepairApply"
+                ? 64 * 1024
+                : purpose.kind === "scenarioSummary" ||
+                    purpose.kind === "setupStatus" ||
+                    purpose.kind === "fullValidation" ||
+                    recipientPurpose ||
+                    exportPurpose
+                  ? SETUP_FRAME_BYTES
+                  : undefined;
     const nativeRequestMaximumBytes = portablePurpose
       ? PORTABLE_COMPACT_BYTES
       : setupRequestMaximumBytes;
@@ -4567,7 +7962,7 @@ class OperationScope<C extends OperationContextV1> {
       state.cancellationRequested = true;
       cancelAcknowledgement ??= prepared.then(({ result }) =>
         call(
-          "operation_cancel",
+          exportPurpose ? "solution_export_cancel" : "operation_cancel",
           {
             requestId: newUuidV7(),
             schemaVersion: 1,
@@ -4667,7 +8062,11 @@ class OperationScope<C extends OperationContextV1> {
                   requestId,
                   operationId,
                   scenarioId: context.scenarioId,
-                  expectedRevision: context.expectedRevision,
+                  ...(purpose.kind === "solutionExplain" ||
+                  purpose.kind === "solutionDiagnosticCopy" ||
+                  purpose.kind === "solutionDiagnosticExport"
+                    ? { sourceRevision: context.expectedRevision }
+                    : { expectedRevision: context.expectedRevision }),
                 }
               : purpose.kind === "settingsImportApply"
                 ? {
@@ -4723,6 +8122,215 @@ class OperationScope<C extends OperationContextV1> {
 export class SetupOperationScope extends OperationScope<ScenarioOperationContextV1> {
   constructor(scenarioId: UuidV7, expectedRevision: Revision | null) {
     super({ kind: "scenario", scenarioId, expectedRevision });
+  }
+
+  previewRecipientReport(
+    solutionId: SolutionId,
+    options: RecipientReportOptionsV1,
+    onProgress?: (event: OperationProgressV1) => void,
+    format: RecipientFileFormatV1 = "html",
+  ): SetupOperation<RecipientPreviewDtoV1> {
+    const revision = requireSetupRevision(this);
+    if (
+      !isUuid(solutionId) ||
+      !isRecipientReportOptionsV1(options) ||
+      !choices("html", "pdf")(format)
+    )
+      throw new RangeError(
+        "A canonical solution identity and explicit recipient disclosure options are required",
+      );
+    const operation = this.run(
+      "solution_share_preview",
+      { kind: "sharePreview" },
+      { schemaVersion: 1, solutionId, format, options },
+      (value: unknown): value is RecipientPreviewDtoV1 =>
+        isRecipientPreview(value) &&
+        value.format === format &&
+        value.report.source.scenarioId === this.context.scenarioId &&
+        value.report.source.observedCurrentRevision === revision &&
+        value.report.source.solutionId === solutionId &&
+        (value.report.source.origin === "storedTerminal" ||
+          value.report.source.origin === "storedCheckpoint"),
+      RECIPIENT_PREVIEW_WIRE_BYTES,
+      (value) => value.report.source.observedCurrentRevision,
+      onProgress,
+      () => {
+        void cleanup();
+      },
+    );
+    // The operation identity also cleans up a successful native preview whose response was lost.
+    const cleanup = async (): Promise<void> => {
+      try {
+        await this.releaseRecipientReport({
+          kind: "operation",
+          operationId: await operation.operationId,
+        });
+      } catch {
+        // Cleanup failure cannot replace the operation's terminal outcome.
+      }
+    };
+    void operation.result.catch(cleanup);
+    return operation;
+  }
+
+  createRecipientReport(
+    previewId: UuidV7,
+    allowStale: boolean,
+    onProgress?: (event: OperationProgressV1) => void,
+    format: RecipientFileFormatV1 = "html",
+  ): SetupOperation<RecipientCreatedDtoV1> {
+    const revision = requireSetupRevision(this);
+    if (!isUuid(previewId) || !isBoolean(allowStale) || !choices("html", "pdf")(format))
+      throw new RangeError(
+        "A canonical recipient preview identity and explicit stale consent are required",
+      );
+    return this.run(
+      "solution_share_create",
+      { kind: "shareCreate" },
+      { schemaVersion: 1, previewId, format, allowStale },
+      (value: unknown): value is RecipientCreatedDtoV1 =>
+        isRecipientCreated(value) &&
+        value.format === format &&
+        value.previewId === previewId &&
+        value.publication.currentRevision === revision,
+      RECIPIENT_FRAME_WIRE_BYTES,
+      (value) => value.publication.currentRevision,
+      onProgress,
+    );
+  }
+
+  /** Cleanup remains available after disposal; it never requests operation cancellation. */
+  releaseRecipientReport(
+    target: RecipientReleaseTargetV1,
+  ): Promise<ApiResponseDto<RecipientReleasedDtoV1>> {
+    if (!isRecipientReleaseTarget(target))
+      throw new RangeError("A canonical recipient preview or operation release target is required");
+    return call(
+      "solution_share_release",
+      {
+        requestId: newUuidV7(),
+        schemaVersion: 1,
+        scenarioId: this.context.scenarioId,
+        target,
+      } satisfies RecipientReleaseRequestV1,
+      isRecipientReleased,
+      {
+        maximumBytes: RECIPIENT_FRAME_WIRE_BYTES,
+        requestMaximumBytes: RECIPIENT_FRAME_BYTES,
+        revisionKey: null,
+      },
+    );
+  }
+
+  previewScheduleExport(
+    solutionId: SolutionId,
+    format: ScheduleExportFormatV1,
+    personId: UuidV7 | null,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<ScheduleExportPreviewDtoV1> {
+    const revision = requireSetupRevision(this);
+    if (
+      !isUuid(solutionId) ||
+      !isScheduleExportFormat(format) ||
+      (personId !== null && (!isUuid(personId) || format !== "ics"))
+    )
+      throw new RangeError("A canonical solution and explicit schedule export scope are required");
+    const operation = this.run(
+      "solution_export_preview",
+      { kind: "exportPreview" },
+      { schemaVersion: 1, solutionId, format, personId },
+      (value: unknown): value is ScheduleExportPreviewDtoV1 =>
+        isScheduleExportPreview(value) &&
+        value.preview.source.scenarioId === this.context.scenarioId &&
+        value.preview.source.observedCurrentRevision === revision &&
+        value.preview.source.solutionId === solutionId &&
+        value.preview.format === format &&
+        value.preview.personId === personId,
+      RECIPIENT_FRAME_WIRE_BYTES,
+      (value) => value.preview.source.observedCurrentRevision,
+      onProgress,
+      () => {
+        void cleanup();
+      },
+    );
+    const cleanup = async (): Promise<void> => {
+      try {
+        await this.releaseScheduleExport({
+          kind: "operation",
+          operationId: await operation.operationId,
+        });
+      } catch {
+        // Cleanup failure cannot replace the operation's terminal outcome.
+      }
+    };
+    void operation.result.catch(cleanup);
+    return operation;
+  }
+
+  createScheduleExport(
+    preview: ScheduleExportPreviewDtoV1,
+    allowStale: boolean,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<ScheduleExportCreatedDtoV1> {
+    const revision = requireSetupRevision(this);
+    if (
+      !isScheduleExportPreview(preview) ||
+      !isBoolean(allowStale) ||
+      preview.preview.source.scenarioId !== this.context.scenarioId ||
+      preview.preview.source.observedCurrentRevision !== revision
+    )
+      throw new RangeError(
+        "An exact retained schedule preview and explicit stale consent are required",
+      );
+    const { previewId } = preview;
+    const {
+      format,
+      personId,
+      sha256,
+      byteCount,
+      source: { solutionId, scenarioRevision },
+    } = preview.preview;
+    return this.run(
+      "solution_export",
+      { kind: "exportCreate" },
+      { schemaVersion: 1, previewId, format, allowStale },
+      (value: unknown): value is ScheduleExportCreatedDtoV1 =>
+        isScheduleExportCreated(value) &&
+        value.previewId === previewId &&
+        value.publication.solutionId === solutionId &&
+        value.publication.sourceRevision === scenarioRevision &&
+        value.publication.currentRevision === revision &&
+        value.publication.format === format &&
+        value.publication.personId === personId &&
+        value.publication.sha256 === sha256 &&
+        value.publication.byteCount === byteCount,
+      RECIPIENT_FRAME_WIRE_BYTES,
+      (value) => value.publication.currentRevision,
+      onProgress,
+    );
+  }
+
+  /** Retires review custody without cancelling a claimed publication. */
+  releaseScheduleExport(
+    target: RecipientReleaseTargetV1,
+  ): Promise<ApiResponseDto<RecipientReleasedDtoV1>> {
+    if (!isRecipientReleaseTarget(target))
+      throw new RangeError("A canonical schedule preview or operation release target is required");
+    return call(
+      "solution_export_release",
+      {
+        requestId: newUuidV7(),
+        schemaVersion: 1,
+        scenarioId: this.context.scenarioId,
+        target,
+      } satisfies RecipientReleaseRequestV1,
+      isRecipientReleased,
+      {
+        maximumBytes: RECIPIENT_FRAME_WIRE_BYTES,
+        requestMaximumBytes: RECIPIENT_FRAME_BYTES,
+        revisionKey: null,
+      },
+    );
   }
 }
 /** Preview/export discover a revision with null; apply owns an exact reviewed library revision. */
@@ -4932,15 +8540,18 @@ interface CsvOwnedResource {
 }
 
 /** Owns CSV grants/reports across revision scopes, but never authoritative scenario state. */
-export class PeopleCsvFlow {
+export class CsvImportFlow {
   readonly #scenarioId: UuidV7;
+  readonly #family: CsvDetectionV1["family"];
   readonly #operations = new Set<SetupOperation<unknown>>();
   readonly #resources = new Set<CsvOwnedResource>();
   #disposed = false;
 
-  constructor(scenarioId: UuidV7) {
+  constructor(scenarioId: UuidV7, family: CsvDetectionV1["family"]) {
     if (!isUuid(scenarioId)) throw new RangeError("A canonical scenario identity is required");
     this.#scenarioId = scenarioId;
+    if (!isCsvFamily(family)) throw new RangeError("Choose a supported CSV family");
+    this.#family = family;
   }
 
   #scope(scope: SetupOperationScope): Revision {
@@ -4969,7 +8580,7 @@ export class PeopleCsvFlow {
       return;
     }
     await call(
-      resource.kind === "source" ? "people_csv_source_close" : "people_csv_preview_discard",
+      resource.kind === "source" ? "csv_source_close" : "csv_preview_discard",
       {
         schemaVersion: 1,
         requestId: newUuidV7(),
@@ -5038,15 +8649,46 @@ export class PeopleCsvFlow {
   open(
     scope: SetupOperationScope,
     onProgress?: (event: OperationProgressV1) => void,
-  ): SetupOperation<PeopleCsvSourceOpenedV1> {
+  ): SetupOperation<CsvSourceOpenedV1> {
     this.#scope(scope);
+    if (this.#family === "eligibilityMatrix")
+      throw new RangeError("Use pasted text to open an eligibility matrix");
     this.#capacity("source");
     return this.#track(
       scope.run(
-        "people_csv_source_open",
+        "csv_source_open",
         { kind: "csvSourceOpen" },
         { schemaVersion: 1 },
         isCsvOpened,
+        CSV_SMALL_WIRE_BYTES,
+        null,
+        onProgress,
+      ),
+      { kind: "source", id: (value) => value.sourceId },
+    );
+  }
+
+  openEligibilityMatrix(
+    scope: SetupOperationScope,
+    text: string,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<CsvSourceOpenedV1> {
+    this.#scope(scope);
+    if (this.#family !== "eligibilityMatrix")
+      throw new RangeError("This CSV flow does not import eligibility matrices");
+    this.#capacity("source");
+    if (!isCsvText(text, MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES))
+      throw new RangeError(
+        "Eligibility matrix text exceeds its code-unit or UTF-8 byte limit, or contains an unpaired surrogate",
+      );
+    const guard = (value: unknown): value is CsvSourceOpenedV1 =>
+      isCsvOpened(value) && value.byteCount <= MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES;
+    return this.#track(
+      scope.run(
+        "eligibility_matrix_source_open",
+        { kind: "csvSourceOpen" },
+        { schemaVersion: 1, text },
+        guard,
         CSV_SMALL_WIRE_BYTES,
         null,
         onProgress,
@@ -5059,14 +8701,16 @@ export class PeopleCsvFlow {
     scope: SetupOperationScope,
     sourceId: UuidV7,
     onProgress?: (event: OperationProgressV1) => void,
-  ): SetupOperation<PeopleCsvDetectionV1> {
+  ): SetupOperation<CsvDetectionV1> {
     this.#scope(scope);
+    const guard = (value: unknown): value is CsvDetectionV1 =>
+      isCsvDetection(value) && value.family === this.#family;
     return this.#track(
       scope.run(
-        "people_csv_detect",
+        "csv_detect",
         { kind: "csvDetect" },
-        { schemaVersion: 1, sourceId },
-        isCsvDetection,
+        { schemaVersion: 1, sourceId, family: this.#family },
+        guard,
         CSV_SMALL_WIRE_BYTES,
         null,
         onProgress,
@@ -5077,23 +8721,49 @@ export class PeopleCsvFlow {
   sample(
     scope: SetupOperationScope,
     sourceId: UuidV7,
-    input: { readonly dialect: PeopleCsvDialect; readonly record: number },
+    input: { readonly readFormat: CsvReadFormat; readonly record: number },
     onProgress?: (event: OperationProgressV1) => void,
-  ): SetupOperation<PeopleCsvSampleV1> {
+  ): SetupOperation<CsvSampleV1> {
     this.#scope(scope);
-    const { dialect, record } = input;
-    if (!isUuid(sourceId) || !isCsvDialect(dialect) || !isCsvRecord(record))
-      throw new RangeError("CSV inspection requires a valid source, dialect, and logical record");
-    const guard = (value: unknown): value is PeopleCsvSampleV1 =>
-      isCsvSample(value) &&
-      value.sourceId === sourceId &&
-      value.dialect === dialect &&
-      value.record === record;
+    const { record } = input;
+    if (
+      !isUuid(sourceId) ||
+      !isCsvReadFormat(input.readFormat) ||
+      input.readFormat.family !== this.#family ||
+      !isAssignmentCsvRecord(record) ||
+      (!(
+        input.readFormat.family === "assignments" &&
+        input.readFormat.format.format === "canonicalV1"
+      ) &&
+        !isCsvRecord(record))
+    )
+      throw new RangeError("CSV inspection requires a valid source, format, and logical record");
+    const readFormat = structuredClone(input.readFormat);
+    const guard = (value: unknown): value is CsvSampleV1 => {
+      if (!isCsvSample(value) || value.sourceId !== sourceId || value.record !== record)
+        return false;
+      const actual = value.readFormat;
+      if (readFormat.family === "eligibilityMatrix") return actual.family === "eligibilityMatrix";
+      if (readFormat.family !== "assignments")
+        return (
+          actual.family !== "assignments" &&
+          actual.family !== "eligibilityMatrix" &&
+          actual.family === readFormat.family &&
+          actual.dialect === readFormat.dialect
+        );
+      return (
+        actual.family === "assignments" &&
+        actual.format.format === readFormat.format.format &&
+        (readFormat.format.format === "canonicalV1" ||
+          (actual.format.format === "mapped" &&
+            actual.format.dialect === readFormat.format.dialect))
+      );
+    };
     return this.#track(
       scope.run(
-        "people_csv_record_sample",
+        "csv_record_sample",
         { kind: "csvSample" },
-        { schemaVersion: 1, sourceId, dialect, record },
+        { schemaVersion: 1, sourceId, readFormat, record },
         guard,
         CSV_SMALL_WIRE_BYTES,
         null,
@@ -5102,13 +8772,14 @@ export class PeopleCsvFlow {
     );
   }
 
-  preview(
+  previewPeople(
     scope: SetupOperationScope,
     sourceId: UuidV7,
     input: { readonly mapping: PeopleCsvMapping; readonly decisions: readonly PeopleCsvDecision[] },
     onProgress?: (event: OperationProgressV1) => void,
   ): SetupOperation<PeopleCsvPreviewV1> {
     const revision = this.#scope(scope);
+    if (this.#family !== "people") throw new RangeError("This CSV flow does not import people");
     this.#capacity("preview");
     if (!isCsvMapping(input.mapping) || !isCsvDecisions(input.decisions))
       throw new RangeError("CSV mapping or decisions exceed their typed limits");
@@ -5131,6 +8802,196 @@ export class PeopleCsvFlow {
     );
   }
 
+  previewAssignments(
+    scope: SetupOperationScope,
+    sourceId: UuidV7,
+    input: Pick<AssignmentCsvReview, "mapping" | "target" | "skippedRecords" | "allowEmpty">,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<AssignmentCsvPreviewV1> {
+    const revision = this.#scope(scope);
+    if (this.#family !== "assignments")
+      throw new RangeError("This CSV flow does not import assignments");
+    this.#capacity("preview");
+    if (
+      !isUuid(sourceId) ||
+      !isAssignmentCsvMapping(input.mapping) ||
+      !isAssignmentCsvTarget(input.target) ||
+      !isAssignmentCsvSkips(input.skippedRecords) ||
+      !isBoolean(input.allowEmpty)
+    )
+      throw new RangeError("Assignment CSV mapping, target or decisions exceed their typed limits");
+    const guard = (value: unknown): value is AssignmentCsvPreviewV1 =>
+      isAssignmentCsvPreviewResult(value) &&
+      value.scenarioId === this.#scenarioId &&
+      value.sourceId === sourceId &&
+      value.revision === revision;
+    return this.#track(
+      scope.run(
+        "assignment_csv_preview",
+        { kind: "csvPreview" },
+        {
+          schemaVersion: 1,
+          sourceId,
+          mapping: input.mapping,
+          target: input.target,
+          skippedRecords: input.skippedRecords,
+          allowEmpty: input.allowEmpty,
+        },
+        guard,
+        CSV_PREVIEW_WIRE_BYTES,
+        "revision",
+        onProgress,
+      ),
+      { kind: "preview", id: (value) => value.previewId },
+    );
+  }
+
+  previewEligibility(
+    scope: SetupOperationScope,
+    sourceId: UuidV7,
+    input: Pick<EligibilityCsvReview, "mapping" | "skippedRecords">,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<EligibilityCsvPreviewV1> {
+    const revision = this.#scope(scope);
+    if (this.#family !== "eligibility")
+      throw new RangeError("This CSV flow does not import eligibility");
+    this.#capacity("preview");
+    if (
+      !isUuid(sourceId) ||
+      !isEligibilityCsvMapping(input.mapping) ||
+      !isEligibilityCsvSkips(input.skippedRecords)
+    )
+      throw new RangeError("Eligibility CSV mapping or decisions exceed their typed limits");
+    const guard = (value: unknown): value is EligibilityCsvPreviewV1 =>
+      isEligibilityCsvPreviewResult(value) &&
+      value.scenarioId === this.#scenarioId &&
+      value.sourceId === sourceId &&
+      value.revision === revision;
+    return this.#track(
+      scope.run(
+        "eligibility_csv_preview",
+        { kind: "csvPreview" },
+        {
+          schemaVersion: 1,
+          sourceId,
+          mapping: input.mapping,
+          skippedRecords: input.skippedRecords,
+        },
+        guard,
+        CSV_PREVIEW_WIRE_BYTES,
+        "revision",
+        onProgress,
+      ),
+      { kind: "preview", id: (value) => value.previewId },
+    );
+  }
+
+  previewEligibilityMatrix(
+    scope: SetupOperationScope,
+    sourceId: UuidV7,
+    input: Pick<EligibilityMatrixReview, "mapping" | "skippedCells">,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<EligibilityMatrixPreviewV1> {
+    const revision = this.#scope(scope);
+    if (this.#family !== "eligibilityMatrix")
+      throw new RangeError("This CSV flow does not import eligibility matrices");
+    this.#capacity("preview");
+    if (
+      !isUuid(sourceId) ||
+      !isEligibilityMatrixMapping(input.mapping) ||
+      !isEligibilityMatrixSkips(input.skippedCells)
+    )
+      throw new RangeError(
+        "Eligibility matrix mapping or cell decisions exceed their typed limits",
+      );
+    const guard = (value: unknown): value is EligibilityMatrixPreviewV1 =>
+      isEligibilityMatrixPreviewResult(value) &&
+      value.scenarioId === this.#scenarioId &&
+      value.sourceId === sourceId &&
+      value.revision === revision;
+    return this.#track(
+      scope.run(
+        "eligibility_matrix_preview",
+        { kind: "csvPreview" },
+        { schemaVersion: 1, sourceId, mapping: input.mapping, skippedCells: input.skippedCells },
+        guard,
+        CSV_PREVIEW_WIRE_BYTES,
+        "revision",
+        onProgress,
+      ),
+      { kind: "preview", id: (value) => value.previewId },
+    );
+  }
+
+  previewShifts(
+    scope: SetupOperationScope,
+    sourceId: UuidV7,
+    input: Pick<ShiftCsvReview, "mapping" | "decisions">,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<ShiftCsvPreviewV1> {
+    const revision = this.#scope(scope);
+    if (this.#family !== "shifts") throw new RangeError("This CSV flow does not import shifts");
+    this.#capacity("preview");
+    if (
+      !isUuid(sourceId) ||
+      !isShiftCsvMapping(input.mapping) ||
+      !isShiftCsvDecisions(input.decisions)
+    )
+      throw new RangeError("Shift CSV mapping or decisions exceed their typed limits");
+    const guard = (value: unknown): value is ShiftCsvPreviewV1 =>
+      isShiftCsvPreviewResult(value) &&
+      value.scenarioId === this.#scenarioId &&
+      value.sourceId === sourceId &&
+      value.revision === revision;
+    return this.#track(
+      scope.run(
+        "shift_csv_preview",
+        { kind: "csvPreview" },
+        { schemaVersion: 1, sourceId, mapping: input.mapping, decisions: input.decisions },
+        guard,
+        CSV_PREVIEW_WIRE_BYTES,
+        "revision",
+        onProgress,
+      ),
+      { kind: "preview", id: (value) => value.previewId },
+    );
+  }
+
+  previewAvailability(
+    scope: SetupOperationScope,
+    sourceId: UuidV7,
+    input: Pick<AvailabilityCsvReview, "mapping" | "decisions">,
+    onProgress?: (event: OperationProgressV1) => void,
+  ): SetupOperation<AvailabilityCsvPreviewV1> {
+    const revision = this.#scope(scope);
+    if (this.#family !== "availability")
+      throw new RangeError("This CSV flow does not import availability");
+    this.#capacity("preview");
+    if (
+      !isUuid(sourceId) ||
+      !isAvailabilityCsvMapping(input.mapping) ||
+      !isAvailabilityCsvDecisions(input.decisions)
+    )
+      throw new RangeError("Availability CSV mapping or decisions exceed their typed limits");
+    const guard = (value: unknown): value is AvailabilityCsvPreviewV1 =>
+      isAvailabilityCsvPreviewResult(value) &&
+      value.scenarioId === this.#scenarioId &&
+      value.sourceId === sourceId &&
+      value.revision === revision;
+    return this.#track(
+      scope.run(
+        "availability_csv_preview",
+        { kind: "csvPreview" },
+        { schemaVersion: 1, sourceId, mapping: input.mapping, decisions: input.decisions },
+        guard,
+        CSV_PREVIEW_WIRE_BYTES,
+        "revision",
+        onProgress,
+      ),
+      { kind: "preview", id: (value) => value.previewId },
+    );
+  }
+
   apply(
     scope: SetupOperationScope,
     input: {
@@ -5142,15 +9003,16 @@ export class PeopleCsvFlow {
       readonly truncateRedo: boolean;
     },
     onProgress?: (event: OperationProgressV1) => void,
-  ): SetupOperation<PeopleCsvApplyV1> {
+  ): SetupOperation<CsvApplyV1> {
     const revision = this.#scope(scope);
     const { sourceId, previewId, commandId } = input;
-    const guard = (value: unknown): value is PeopleCsvApplyV1 =>
+    const guard = (value: unknown): value is CsvApplyV1 =>
       isCsvApply(value) &&
       value.sourceId === sourceId &&
       value.scenarioId === this.#scenarioId &&
       value.report.previewId === previewId &&
       value.report.consumed &&
+      value.report.rows.family === this.#family &&
       value.report.disposition ===
         (value.outcome.kind === "applied" ? "reviewable" : "noChanges") &&
       (value.outcome.kind === "applied"
@@ -5158,11 +9020,11 @@ export class PeopleCsvFlow {
         : value.outcome.revision === revision);
     return this.#track(
       scope.run(
-        "people_csv_apply",
+        "csv_apply",
         { kind: "csvApply" },
         { schemaVersion: 1, ...input },
         guard,
-        CSV_SMALL_WIRE_BYTES,
+        this.#family === "people" ? CSV_SMALL_WIRE_BYTES : CSV_COMPLETE_REPORT_WIRE_BYTES,
         (value) => value.outcome.revision,
         onProgress,
       ),
@@ -5178,7 +9040,7 @@ export class PeopleCsvFlow {
 
   async closeSource(sourceId: UuidV7): Promise<void> {
     await call(
-      "people_csv_source_close",
+      "csv_source_close",
       {
         schemaVersion: 1,
         requestId: newUuidV7(),
@@ -5194,7 +9056,7 @@ export class PeopleCsvFlow {
 
   async discardPreview(previewId: UuidV7): Promise<void> {
     await call(
-      "people_csv_preview_discard",
+      "csv_preview_discard",
       {
         schemaVersion: 1,
         requestId: newUuidV7(),
@@ -5209,29 +9071,33 @@ export class PeopleCsvFlow {
         this.#resources.delete(resource);
   }
 
-  rejectedRows(previewId: UuidV7): Promise<ApiResponseDto<PeopleCsvRejectedRowsV1>> {
+  report(previewId: UuidV7): Promise<ApiResponseDto<CsvReportV1>> {
     if (this.#disposed) throw inactiveOperation();
     return call(
-      "people_csv_rejected_rows",
+      "csv_report",
       { schemaVersion: 1, requestId: newUuidV7(), scenarioId: this.#scenarioId, previewId },
-      (value: unknown): value is PeopleCsvRejectedRowsV1 =>
-        isCsvReport(value) && value.previewId === previewId,
-      { maximumBytes: CSV_SMALL_WIRE_BYTES, revisionKey: null },
+      (value: unknown): value is CsvReportV1 =>
+        isCsvReport(value) && value.previewId === previewId && value.rows.family === this.#family,
+      {
+        maximumBytes:
+          this.#family === "people" ? CSV_SMALL_WIRE_BYTES : CSV_COMPLETE_REPORT_WIRE_BYTES,
+        revisionKey: null,
+      },
     );
   }
 
-  saveRejectedRows(
+  saveReport(
     scope: SetupOperationScope,
     previewId: UuidV7,
     onProgress?: (event: OperationProgressV1) => void,
-  ): SetupOperation<PeopleCsvReportSavedV1> {
+  ): SetupOperation<CsvReportSavedV1> {
     this.#scope(scope);
     return this.#track(
       scope.run(
-        "people_csv_rejected_rows_save",
+        "csv_report_save",
         { kind: "csvReportSave" },
         { schemaVersion: 1, previewId },
-        (value: unknown): value is PeopleCsvReportSavedV1 =>
+        (value: unknown): value is CsvReportSavedV1 =>
           isCsvSaved(value) && value.previewId === previewId,
         CSV_SMALL_WIRE_BYTES,
         null,
@@ -5908,6 +9774,391 @@ function setupViewGuard<K extends SetupViewId>(
     isWorkforceSetupViewId(viewId) &&
     isWorkforceSetupQueryResult(viewId, value.view.data);
 }
+export function getSolveBackendOptions(
+  scenarioId: UuidV7,
+  expectedRevision: Revision,
+): Promise<ApiResponseDto<SolveBackendOptionsDtoV2>> {
+  if (!isUuid(scenarioId) || !isRevision(expectedRevision))
+    throw new RangeError("Solve backend discovery requires a canonical scenario and revision");
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: SOLVE_API_SCHEMA_VERSION,
+    scenarioId,
+    expectedRevision,
+  } satisfies SolveBackendOptionsRequestV2;
+  return call(
+    "solve_get_backend_options",
+    request,
+    (value): value is SolveBackendOptionsDtoV2 =>
+      isSolveBackendOptions(value) &&
+      value.scenarioId === scenarioId &&
+      value.revision === expectedRevision,
+    {
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+      revisionKey: "revision",
+    },
+  );
+}
+export function estimateSolveModel(
+  scope: SetupOperationScope,
+  onProgress?: (event: OperationProgressV1) => void,
+): SetupOperation<SolveEstimateModelResultV1> {
+  const revision = requireSetupRevision(scope);
+  return scope.run(
+    "solve_estimate_model",
+    { kind: "solveEstimate" },
+    { schemaVersion: SOLVE_API_SCHEMA_VERSION },
+    (value): value is SolveEstimateModelResultV1 =>
+      isSolveEstimateModel(value) &&
+      value.scenarioId === scope.context.scenarioId &&
+      value.scenarioRevision === revision &&
+      value.currentRevision >= revision &&
+      value.stale === (value.currentRevision !== revision),
+    SOLVE_ESTIMATE_RESPONSE_MAX_BYTES,
+    "currentRevision",
+    onProgress,
+  );
+}
+
+export function manualEdit(
+  scope: SetupOperationScope,
+  input: ManualEditInputV1,
+): SetupOperation<ManualEditResultV1> {
+  const revision = requireSetupRevision(scope);
+  if (!boundedJson(input, 64 * 1024))
+    throw new RangeError("The manual edit exceeds its request limit");
+  const snapshot = JSON.parse(JSON.stringify(input)) as ManualEditInputV1;
+  if (snapshot.mode === "read") {
+    if (
+      !isU32(snapshot.offset) ||
+      !isU32(snapshot.limit) ||
+      snapshot.limit < 1 ||
+      snapshot.limit > 100
+    )
+      throw new RangeError("The manual page limit must be between 1 and 100");
+  } else if (!isManualIntent(snapshot.intent)) {
+    throw new RangeError("The manual edit intent is invalid");
+  }
+  const command =
+    snapshot.mode !== "read" && snapshot.intent.kind === "protection"
+      ? snapshot.intent.protection.kind === "unlocked"
+        ? "solution_unlock_assignment"
+        : "solution_lock_assignment"
+      : "solution_create_repair_request";
+  const purpose =
+    snapshot.mode === "read"
+      ? "manualRepairRead"
+      : snapshot.mode === "review"
+        ? "manualRepairReview"
+        : "manualRepairApply";
+  return scope.run(
+    command,
+    { kind: purpose },
+    { schemaVersion: 1, ...snapshot },
+    (value): value is ManualEditResultV1 => {
+      if (!isManualResult(value)) return false;
+      if (snapshot.mode === "apply")
+        return value.kind === "applied" && value.applied.commandResult.newRevision === revision + 1;
+      if (snapshot.mode === "read") {
+        if (value.kind !== "read") return false;
+        const page = value.read;
+        return (
+          page.source.scenarioId === scope.context.scenarioId &&
+          page.source.revision === revision &&
+          page.offset === snapshot.offset &&
+          page.rows.length <= snapshot.limit &&
+          page.offset + page.rows.length <= page.totalRows &&
+          page.nextOffset ===
+            (page.offset + page.rows.length < page.totalRows
+              ? page.offset + page.rows.length
+              : null)
+        );
+      }
+      if (value.kind !== "review") return false;
+      const review = value.review;
+      return (
+        review.source.scenarioId === scope.context.scenarioId &&
+        review.source.revision === revision &&
+        (review.disposition === "valid"
+          ? review.approvalDigest !== null
+          : review.approvalDigest === null)
+      );
+    },
+    setupWireLimit(256 * 1024),
+    (value) =>
+      value.kind === "applied"
+        ? value.applied.commandResult.newRevision
+        : value.kind === "read"
+          ? value.read.source.revision
+          : value.review.source.revision,
+  );
+}
+
+export function startSolve(
+  scope: SetupOperationScope,
+  mode: SolveMode,
+  maximumTimeMilliseconds: number | null = null,
+  intent: SolveIntent = "optimize",
+  baselineSource: SolveBaselineSourceV1 = { kind: "accepted" },
+): SolveStartOperation {
+  const revision = requireSetupRevision(scope);
+  if (!isSolveMode(mode)) throw new RangeError("A supported solve mode is required");
+  if (!["optimize", "repair"].includes(intent))
+    throw new RangeError("A supported solve intent is required");
+  if (
+    !isSolveBaselineSource(baselineSource) ||
+    (intent === "optimize" && baselineSource.kind !== "accepted")
+  )
+    throw new RangeError("A supported baseline source is required for Repair plan");
+  if (
+    maximumTimeMilliseconds !== null &&
+    (!Number.isInteger(maximumTimeMilliseconds) ||
+      maximumTimeMilliseconds < 1 ||
+      maximumTimeMilliseconds > 30_000)
+  )
+    throw new RangeError("Maximum optimization time must be between 1 and 30000 milliseconds");
+  const operation = scope.run(
+    "solve_start",
+    { kind: "solveStart" },
+    {
+      schemaVersion: SOLVE_START_REQUEST_SCHEMA_VERSION,
+      mode,
+      intent,
+      baselineSource,
+      ...(maximumTimeMilliseconds === null ? {} : { maximumTimeMilliseconds }),
+    },
+    (value): value is SolveStartDtoV2 =>
+      isSolveStart(value) &&
+      value.currentRevision >= revision &&
+      value.job.scenarioId === scope.context.scenarioId &&
+      value.job.scenarioRevision === revision &&
+      value.job.stale === (value.currentRevision !== revision),
+    SOLVE_RESPONSE_MAX_BYTES,
+    "currentRevision",
+  );
+  const result = operation.result.then((response) => {
+    if (response.result.job.requestId !== operation.requestId) throw invalidResponse();
+    return response;
+  });
+  return {
+    requestId: operation.requestId,
+    get operationId() {
+      return operation.operationId;
+    },
+    result,
+    release: () => operation.release(),
+    isCurrent: () => operation.isCurrent(),
+  };
+}
+
+export function startAlternatives(
+  scope: SetupOperationScope,
+  mode: SolveMode,
+  maximumTimeMilliseconds: number | null = null,
+  baselineSource: SolveBaselineSourceV1 = { kind: "accepted" },
+): AlternativesStartOperation {
+  const revision = requireSetupRevision(scope);
+  if (!isSolveMode(mode) || mode === "custom")
+    throw new RangeError("Choose Quick, Balanced or Deep for Alternatives");
+  if (!isSolveBaselineSource(baselineSource))
+    throw new RangeError("A supported baseline source is required");
+  if (
+    maximumTimeMilliseconds !== null &&
+    (!Number.isInteger(maximumTimeMilliseconds) ||
+      maximumTimeMilliseconds < 1 ||
+      maximumTimeMilliseconds > 30_000)
+  )
+    throw new RangeError("Maximum Alternatives time must be between 1 and 30000 milliseconds");
+  const operation = scope.run(
+    "alternatives_start",
+    { kind: "solveAlternatives" },
+    {
+      schemaVersion: 1,
+      mode,
+      baselineSource,
+      ...(maximumTimeMilliseconds === null ? {} : { maximumTimeMilliseconds }),
+    },
+    (value): value is AlternativesGroupStatusV1 =>
+      isAlternativesGroupStatus(value) &&
+      value.scenarioId === scope.context.scenarioId &&
+      value.scenarioRevision === revision &&
+      value.group !== null,
+    SOLVE_RESPONSE_MAX_BYTES,
+    "currentRevision",
+  );
+  return {
+    requestId: operation.requestId,
+    get operationId() {
+      return operation.operationId;
+    },
+    result: operation.result.then((response) => {
+      if (response.result.group?.requestId !== operation.requestId) throw invalidResponse();
+      return response;
+    }),
+    release: () => operation.release(),
+    isCurrent: () => operation.isCurrent(),
+  };
+}
+
+export function getAlternativesGroup(
+  scenarioId: UuidV7,
+  expectedRevision: Revision,
+  groupRequestId: UuidV7 | null = null,
+): Promise<ApiResponseDto<AlternativesGroupStatusV1>> {
+  if (
+    !isUuid(scenarioId) ||
+    !isRevision(expectedRevision) ||
+    (groupRequestId !== null && !isUuid(groupRequestId))
+  )
+    throw new RangeError(
+      "Alternatives lookup requires exact scenario, revision and optional group identity",
+    );
+  return call(
+    "alternatives_get_group",
+    {
+      requestId: newUuidV7(),
+      schemaVersion: 1,
+      scenarioId,
+      expectedRevision,
+      ...(groupRequestId === null ? {} : { groupRequestId }),
+    },
+    (value): value is AlternativesGroupStatusV1 =>
+      isAlternativesGroupStatus(value) &&
+      value.scenarioId === scenarioId &&
+      value.scenarioRevision === expectedRevision &&
+      (groupRequestId === null || value.group === null || value.group.requestId === groupRequestId),
+    {
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+      revisionKey: "currentRevision",
+    },
+  );
+}
+
+export function cancelSolve(input: {
+  readonly operationId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+}): Promise<ApiResponseDto<SolveCancelDtoV2>> {
+  if (
+    !isUuid(input.operationId) ||
+    !isUuid(input.scenarioId) ||
+    !isRevision(input.expectedRevision)
+  )
+    throw new RangeError("Solve cancellation requires canonical operation and scenario ownership");
+  const request = {
+    cancelRequestId: newUuidV7(),
+    operationId: input.operationId,
+    schemaVersion: SOLVE_API_SCHEMA_VERSION,
+    scenarioId: input.scenarioId,
+    expectedRevision: input.expectedRevision,
+  } satisfies SolveCancelRequestV2;
+  return call(
+    "solve_cancel",
+    request,
+    (value): value is SolveCancelDtoV2 =>
+      isSolveCancel(value) && value.cancelRequestId === request.cancelRequestId,
+    {
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+    },
+  );
+}
+
+export function getSolveJob(
+  scenarioId: UuidV7,
+  runId: SolveRunId,
+): Promise<ApiResponseDto<SolveJobDtoV2>> {
+  if (!isUuid(scenarioId) || !isUuid(runId))
+    throw new RangeError("Solve job lookup requires canonical scenario and run identities");
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: SOLVE_API_SCHEMA_VERSION,
+    scenarioId,
+    runId,
+  } satisfies SolveGetJobRequestV2;
+  return call(
+    "solve_get_job",
+    request,
+    (value): value is SolveJobDtoV2 =>
+      isSolveJob(value) && value.scenarioId === scenarioId && value.runId === runId,
+    {
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+      enforceRequestEcho: false,
+    },
+  );
+}
+export function getSolveDiagnosticsSummary(
+  scenarioId: UuidV7,
+  runId: SolveRunId,
+): Promise<ApiResponseDto<SolveDiagnosticsSummaryDtoV2>> {
+  if (!isUuid(scenarioId) || !isUuid(runId))
+    throw new RangeError("Solve diagnostics require canonical scenario and run identities");
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: SOLVE_API_SCHEMA_VERSION,
+    scenarioId,
+    runId,
+  } satisfies SolveGetJobRequestV2;
+  return call(
+    "solve_get_diagnostics_summary",
+    request,
+    (value): value is SolveDiagnosticsSummaryDtoV2 =>
+      isSolveDiagnosticsSummary(value) &&
+      value.job.scenarioId === scenarioId &&
+      value.job.runId === runId &&
+      (value.job.status === "verificationAlarm") === (value.diagnosticCode !== null) &&
+      (value.job.status === "running") === (value.manifestChecksum === null) &&
+      (value.job.status === "running") === (value.phaseTimings === null),
+    {
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+      enforceRequestEcho: false,
+    },
+  );
+}
+
+export function listSolveRuns(
+  scenarioId: UuidV7,
+  revision: Revision | null = null,
+  limit: number = SOLVE_RUN_LIST_LIMIT_MAX,
+): Promise<ApiResponseDto<SolveListRunsDtoV2>> {
+  if (
+    !isUuid(scenarioId) ||
+    (revision !== null && !isRevision(revision)) ||
+    !isU32(limit) ||
+    limit < 1 ||
+    limit > SOLVE_RUN_LIST_LIMIT_MAX
+  )
+    throw new RangeError("Solve history requires a bounded scenario, revision and limit");
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: SOLVE_API_SCHEMA_VERSION,
+    scenarioId,
+    revision,
+    limit,
+  } satisfies SolveListRunsRequestV2;
+  return call(
+    "solve_list_runs",
+    request,
+    (value): value is SolveListRunsDtoV2 =>
+      isSolveListRuns(value) &&
+      value.scenarioId === scenarioId &&
+      value.runs.length <= limit &&
+      value.runs.every(
+        (run) =>
+          run.scenarioId === scenarioId && (revision === null || run.scenarioRevision === revision),
+      ),
+    {
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+      revisionKey: "currentRevision",
+    },
+  );
+}
+
 export function getScenarioSummary(
   scope: SetupOperationScope,
   onProgress?: (event: OperationProgressV1) => void,
@@ -6012,13 +10263,13 @@ export function getScenarioRuleCatalog(
 export function validateScenario(
   scope: SetupOperationScope,
   onProgress?: (event: OperationProgressV1) => void,
-): SetupOperation<FullValidationResultV2> {
+): SetupOperation<FullValidationResultV3> {
   requireSetupRevision(scope);
   return scope.run(
     "scenario_validate",
     { kind: "fullValidation" },
-    { schemaVersion: 2 },
-    (value: unknown): value is FullValidationResultV2 =>
+    { schemaVersion: 3 },
+    (value: unknown): value is FullValidationResultV3 =>
       isFullValidation(value) && sameSetupContext(value, scope.context),
     setupWireLimit(16 * 1_048_576),
     "revision",
@@ -6146,7 +10397,16 @@ export function getSolutionView(input: {
   readonly scenarioId: UuidV7;
   readonly solutionId: SolutionId;
   readonly viewId: string;
+  readonly parameters?: Pack.WorkforceResultScheduleViewParameters;
+  readonly continuation?: SetupContinuationV1 | null;
 }): Promise<ApiResponseDto<SolutionViewDtoV1>> {
+  if (
+    input.viewId === WORKFORCE_RESULT_SCHEDULE_VIEW_ID &&
+    input.parameters !== undefined &&
+    !isWorkforceResultScheduleViewParameters(input.parameters)
+  ) {
+    throw new RangeError("Invalid Workforce result-view parameters");
+  }
   const request = {
     requestId: newUuidV7(),
     schemaVersion: SOLUTION_API_SCHEMA_VERSION,
@@ -6168,6 +10428,28 @@ export function selectSolution(input: {
   return call("solution_select", request, isSolutionSummary, { revisionKey: "currentRevision" });
 }
 
+/** Explicitly captures a reverified accepted schedule as the revisioned repair base. */
+export function adoptBaseSolution(input: {
+  readonly commandId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly result: AcceptedResultRefV1;
+  readonly actor: ActorRef;
+  readonly truncateRedo: boolean;
+}): Promise<ApiResponseDto<CommandResultDto>> {
+  if (!isAcceptedRef(input.result))
+    throw new RangeError("A checksummed accepted result is required");
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: 1,
+    ...input,
+  } satisfies SolutionAdoptBaseRequestV1;
+  return call("solution_adopt_base", request, isCommandResult, {
+    revisionKey: "newRevision",
+    requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+  });
+}
+
 export function verifySolution(
   scenarioId: UuidV7,
   solutionId: SolutionId,
@@ -6187,27 +10469,120 @@ export function compareSolutions(input: {
   readonly scenarioId: UuidV7;
   readonly baseSolutionId: SolutionId;
   readonly candidateSolutionId: SolutionId;
-}): Promise<ApiResponseDto<SolutionComparisonDtoV1>> {
+}): Promise<ApiResponseDto<SolutionComparisonDtoV3>> {
   const request = {
     requestId: newUuidV7(),
-    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    schemaVersion: 3,
     ...input,
-  } satisfies SolutionCompareRequestV1;
-  return call("solution_compare", request, isSolutionComparison, {
-    revisionKey: "currentRevision",
-  });
+  } satisfies SolutionCompareRequestV3;
+  return call(
+    "solution_compare",
+    request,
+    (value): value is SolutionComparisonDtoV3 =>
+      isSolutionComparisonV3(value) &&
+      value.scenarioId === input.scenarioId &&
+      value.comparison.base.scenarioId === input.scenarioId &&
+      value.comparison.candidate.scenarioId === input.scenarioId &&
+      value.comparison.base.acceptedResult.solutionId === input.baseSolutionId &&
+      value.comparison.candidate.acceptedResult.solutionId === input.candidateSolutionId,
+    {
+      revisionKey: "currentRevision",
+      maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
+      requestMaximumBytes: SOLVE_REQUEST_MAX_BYTES,
+    },
+  );
 }
 
-export function explainSolution(input: {
-  readonly scenarioId: UuidV7;
-  readonly request: ExplanationRequestV1;
-}): Promise<ApiResponseDto<SolutionExplanationDtoV1>> {
-  const request = {
-    requestId: newUuidV7(),
-    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
-    ...input,
-  } satisfies SolutionExplainRequestV1;
-  return call("solution_explain", request, isExplanation, { revisionKey: "currentRevision" });
+export function explainSolution(
+  scope: SetupOperationScope,
+  request: ExplanationRequestV1,
+  onProgress?: (event: OperationProgressV1) => void,
+): SetupOperation<SolutionExplanationDtoV2> {
+  const revision = requireSetupRevision(scope);
+  if (!boundedJson({ schemaVersion: 2, request }, SOLVE_REQUEST_MAX_BYTES))
+    throw new RangeError("The operation request exceeds its JSON limits");
+  const snapshot = JSON.parse(JSON.stringify(request)) as ExplanationRequestV1;
+  return scope.run(
+    "solution_explain",
+    { kind: "solutionExplain" },
+    { schemaVersion: 2, request: snapshot },
+    (value): value is SolutionExplanationDtoV2 =>
+      isExplanation(value, snapshot.subject, scope.context.scenarioId, revision),
+    EXPLANATION_RESPONSE_MAX_BYTES,
+    "currentRevision",
+    onProgress,
+  );
+}
+
+/** Relax one native mapped group in a new, transactionally journalled diagnostic copy. */
+export function createDiagnosticCopy(
+  scope: SetupOperationScope,
+  input: Pick<
+    InfeasibilityExplanationContextV1,
+    "runId" | "runManifestChecksum" | "evidenceChecksum"
+  > & {
+    readonly groupId: string;
+    readonly expectedLibraryRevision: Revision;
+  },
+  onProgress?: (event: OperationProgressV1) => void,
+): SetupOperation<DiagnosticCopyResultV1> {
+  requireSetupRevision(scope);
+  if (!isRevision(input.expectedLibraryRevision))
+    throw new RangeError("The copy requires the reviewed library revision");
+  const snapshot = {
+    schemaVersion: 1,
+    runId: input.runId,
+    runManifestChecksum: input.runManifestChecksum,
+    evidenceChecksum: input.evidenceChecksum,
+    groupId: input.groupId,
+    expectedLibraryRevision: input.expectedLibraryRevision,
+  };
+  return scope.run(
+    "solution_create_diagnostic_copy",
+    { kind: "solutionDiagnosticCopy" },
+    snapshot,
+    (value): value is DiagnosticCopyResultV1 =>
+      isDiagnosticCopyResult(value) &&
+      value.project.scenarioId !== scope.context.scenarioId &&
+      value.libraryRevision === snapshot.expectedLibraryRevision + 1,
+    136 * 1024,
+    null,
+    onProgress,
+  );
+}
+
+/** The native picker and source custody own report bytes and the destination. */
+export function exportDiagnostic(
+  scope: SetupOperationScope,
+  input: Pick<
+    InfeasibilityExplanationContextV1,
+    "runId" | "runManifestChecksum" | "evidenceChecksum"
+  >,
+  onProgress?: (event: OperationProgressV1) => void,
+): SetupOperation<DiagnosticExportMetadataV1> {
+  const sourceRevision = requireSetupRevision(scope);
+  const snapshot = {
+    schemaVersion: 1,
+    runId: input.runId,
+    runManifestChecksum: input.runManifestChecksum,
+    evidenceChecksum: input.evidenceChecksum,
+  };
+  return scope.run(
+    "solution_export_diagnostic",
+    { kind: "solutionDiagnosticExport" },
+    snapshot,
+    (value): value is DiagnosticExportMetadataV1 =>
+      isDiagnosticExportMetadata(value) &&
+      value.scenarioId === scope.context.scenarioId &&
+      value.sourceRevision === sourceRevision &&
+      value.observedCurrentRevision >= sourceRevision &&
+      value.runId === snapshot.runId &&
+      value.runManifestChecksum === snapshot.runManifestChecksum &&
+      value.evidenceChecksum === snapshot.evidenceChecksum,
+    136 * 1024,
+    (value) => value.observedCurrentRevision,
+    onProgress,
+  );
 }
 
 export function startCounterfactual(input: {
@@ -6217,7 +10592,27 @@ export function startCounterfactual(input: {
   readonly condition: CounterfactualConditionPayloadV1;
   readonly totalBudgetMilliseconds: number;
 }): Promise<ApiResponseDto<SolutionStartCounterfactualDtoV1>> {
-  assertAssignmentValue(input.condition.value);
+  switch (input.condition.type) {
+    case "forceAssignmentValue":
+    case "forbidAssignmentValue":
+      assertAssignmentValue(input.condition.value);
+      break;
+    case "replaceAssignment":
+      assertDomainAssignmentId(
+        input.condition.targetAssignmentId,
+        "Counterfactual target assignment",
+      );
+      assertDomainAssignmentId(
+        input.condition.replacedAssignmentId,
+        "Counterfactual replaced assignment",
+      );
+      if (input.condition.targetAssignmentId === input.condition.replacedAssignmentId) {
+        throw new RangeError("Counterfactual replacement assignments must be distinct");
+      }
+      break;
+    default:
+      throw new RangeError("Unsupported counterfactual condition");
+  }
   const request = {
     requestId: newUuidV7(),
     schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
@@ -6225,6 +10620,46 @@ export function startCounterfactual(input: {
   } satisfies SolutionStartCounterfactualRequestV1;
   return call("solution_start_counterfactual", request, isCounterfactualStarted, {
     revisionKey: "currentRevision",
+    maximumBytes: COUNTERFACTUAL_RESPONSE_MAX_BYTES,
+  });
+}
+
+/** Reads the exact persisted diagnostic job, including a verified terminal binding. */
+export function getCounterfactual(input: {
+  readonly scenarioId: UuidV7;
+  readonly jobId: CounterfactualJobId;
+}): Promise<ApiResponseDto<SolutionGetCounterfactualDtoV1>> {
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionGetCounterfactualRequestV1;
+  return call("solution_get_counterfactual", request, isCounterfactualRead, {
+    revisionKey: "currentRevision",
+    maximumBytes: COUNTERFACTUAL_RESPONSE_MAX_BYTES,
+  });
+}
+
+/** Discovers durable jobs after lost progress events or an app restart. */
+export function listCounterfactuals(input: {
+  readonly scenarioId: UuidV7;
+  readonly before?: CounterfactualJobListCursorV1 | null;
+  readonly limit: number;
+}): Promise<ApiResponseDto<SolutionListCounterfactualsDtoV1>> {
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 32)
+    throw new RangeError("Counterfactual job page must contain 1–32 records");
+  if (input.before !== null && input.before !== undefined && !isCounterfactualCursor(input.before))
+    throw new RangeError("A valid counterfactual job continuation is required");
+  const request = {
+    requestId: newUuidV7(),
+    schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
+    scenarioId: input.scenarioId,
+    before: input.before ?? null,
+    limit: input.limit,
+  } satisfies SolutionListCounterfactualsRequestV1;
+  return call("solution_list_counterfactuals", request, isCounterfactualPage, {
+    revisionKey: "currentRevision",
+    maximumBytes: SOLVE_RESPONSE_MAX_BYTES,
   });
 }
 
@@ -6240,6 +10675,7 @@ export function cancelCounterfactual(input: {
   } satisfies SolutionCancelCounterfactualRequestV1;
   return call("solution_cancel_counterfactual", request, isCounterfactualCancelled, {
     revisionKey: "currentRevision",
+    maximumBytes: COUNTERFACTUAL_RESPONSE_MAX_BYTES,
   });
 }
 

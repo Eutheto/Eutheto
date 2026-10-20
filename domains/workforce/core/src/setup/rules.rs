@@ -43,94 +43,109 @@ const REQUIRED: &[(&str, &str, RuleSupportV1)] = &[
     (
         "maximumHours",
         "official.workforce.rule.maximum-hours",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "maximumConsecutive",
         "official.workforce.rule.maximum-consecutive",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "maximumAssignmentCount",
         "official.workforce.rule.maximum-assignment-count",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
+    ),
+    (
+        "workloadQuota",
+        "official.workforce.rule.workload-quota",
+        RuleSupportV1::Implemented,
+    ),
+    (
+        "maximumWorkedWeekends",
+        "official.workforce.rule.maximum-worked-weekends",
+        RuleSupportV1::Implemented,
     ),
     (
         "requiredSkillMix",
         "official.workforce.rule.required-skill-mix",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "fixedAssignment",
         "official.workforce.rule.fixed-assignment",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "mutualAssignmentRestriction",
         "official.workforce.rule.mutual-assignment-restriction",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "transitionTime",
         "official.workforce.rule.transition-time",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
 ];
 const PREFERENCES: &[(&str, &str, RuleSupportV1)] = &[
     (
         "time",
         "official.workforce.preference.time",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "assignmentType",
         "official.workforce.preference.assignment-type",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "location",
         "official.workforce.preference.location",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "requestedTimeOff",
         "official.workforce.preference.requested-time-off",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "assignmentTarget",
         "official.workforce.preference.assignment-target",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
+    ),
+    (
+        "weekendTarget",
+        "official.workforce.preference.weekend-target",
+        RuleSupportV1::Implemented,
     ),
     (
         "workloadBalance",
         "official.workforce.preference.workload-balance",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "consecutiveWork",
         "official.workforce.preference.consecutive-work",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "adjacency",
         "official.workforce.preference.adjacency",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "baseStability",
         "official.workforce.preference.base-stability",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "togetherSeparate",
         "official.workforce.preference.together-separate",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
     (
         "preferredCoverage",
         "official.workforce.preference.preferred-coverage",
-        RuleSupportV1::NotImplemented,
+        RuleSupportV1::Implemented,
     ),
 ];
 
@@ -509,6 +524,94 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
+    }
+    #[test]
+    fn saved_assignment_target_is_catalogued_and_projected()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut document = fixture()?;
+        let preference_id = id(31).parse()?;
+        document.domain.preferences.insert(
+            preference_id,
+            json!({
+                "kind": "assignmentTarget",
+                "id": id(31),
+                "active": true,
+                "scope": { "people": { "kind": "all" } },
+                "priority": "high",
+                "weight": 17,
+                "calendarId": id(2),
+                "targetCount": 0
+            }),
+        );
+        let domain_catalog = crate::WorkforcePack.catalog()?;
+        let control = OperationControl::Cancellation(CancellationToken::new());
+        let WorkforceSetupViewDataV1::RuleCatalog(catalog_view) =
+            catalog(&domain_catalog, None, &mut ProjectionBudget::new(&control))?
+        else {
+            return Err("expected rule catalog".into());
+        };
+        assert!(
+            catalog_view
+                .preferences
+                .iter()
+                .any(|entry| entry.descriptor.id
+                    == "official.workforce.preference.assignment-target")
+        );
+
+        let parameters = RulePageParametersV1 {
+            class: RuleClassV1::Preference,
+            kind_id: Some("official.workforce.preference.assignment-target".to_owned()),
+            limit: 10,
+        };
+        let WorkforceSetupViewDataV1::RulePage(page_view) = page(
+            &domain_catalog,
+            &document,
+            &parameters,
+            None,
+            SetupViewContext {
+                revision: Revision::INITIAL,
+                query_fingerprint: [7; 32],
+            },
+            &mut ProjectionBudget::new(&control),
+        )?
+        else {
+            return Err("expected rule page".into());
+        };
+        assert_eq!(page_view.total_items, 1);
+        let summary = page_view.items.first().ok_or("assignment target summary")?;
+        assert_eq!(summary.rule.rule_id, preference_id);
+        assert_eq!(summary.priority, Some(PreferencePriority::High));
+        assert_eq!(summary.weight, Some(17));
+        assert_eq!(
+            summary.kind_id,
+            "official.workforce.preference.assignment-target"
+        );
+
+        let WorkforceSetupViewDataV1::RuleDetail(detail_view) = detail(
+            &document,
+            &RuleDetailParametersV1 {
+                rule: RuleReferenceV1 {
+                    class: RuleClassV1::Preference,
+                    rule_id: preference_id,
+                },
+            },
+            None,
+            &mut ProjectionBudget::new(&control),
+        )?
+        else {
+            return Err("expected rule detail".into());
+        };
+        let RuleRecordV1::Preference(WorkforcePreference::AssignmentTarget {
+            calendar_id,
+            target_count,
+            ..
+        }) = *detail_view
+        else {
+            return Err("expected assignment target detail".into());
+        };
+        assert_eq!(calendar_id.to_string(), id(2));
+        assert_eq!(target_count, 0);
         Ok(())
     }
 }

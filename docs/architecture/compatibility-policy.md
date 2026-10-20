@@ -53,14 +53,14 @@ Renaming while reusing the same identifier for changed semantics is a breaking c
 The Phase-05 prerequisite separates the current portable wire document from the frozen internal
 snapshot. It advances only the global portable schema and the synthetic pack's portable payload:
 
-| Surface | Current writer | Supported reader |
-|---|---:|---|
-| Outer ZIP bundle format | V1 | V1 |
-| Global portable scenario schema | V2 | V1 through the explicit V1→V2 migration; V2 directly |
-| Internal `ScenarioDocument.formatVersion` | V1 | V1, unchanged |
-| Internal `ScenarioSnapshotV1.schemaVersion` | V1 | V1, with unchanged retained SQLite representation |
-| Synthetic `official.test` internal schema | V1 | V1 |
-| Synthetic `official.test` portable payload | V2 | V0→V1→V2 and V1→V2 sequential migration; V2 directly |
+| Surface                                     | Current writer | Supported reader                                     |
+| ------------------------------------------- | -------------: | ---------------------------------------------------- |
+| Outer ZIP bundle format                     |             V1 | V1                                                   |
+| Global portable scenario schema             |             V2 | V1 through the explicit V1→V2 migration; V2 directly |
+| Internal `ScenarioDocument.formatVersion`   |             V1 | V1, unchanged                                        |
+| Internal `ScenarioSnapshotV1.schemaVersion` |             V1 | V1, with unchanged retained SQLite representation    |
+| Synthetic `official.test` internal schema   |             V1 | V1                                                   |
+| Synthetic `official.test` portable payload  |             V2 | V0→V1→V2 and V1→V2 sequential migration; V2 directly |
 
 Workforce has no implemented schema in this prerequisite; its approved initial internal and portable
 versions remain V1, without fabricated historical support. The prerequisite introduces no database
@@ -72,11 +72,12 @@ scenario-document nonsemantic extensions. Current and retained-revision exports 
 pack encoder; imports decode and structurally validate every revision before collision remapping,
 preview retention or transaction staging. Solver feasibility is not a persistence requirement.
 
-Every source entry must declare the same global schema version as its manifest. Source manifest
-requirements equal the exact union of host and domain declarations. Host capabilities cannot be
-authorized by a pack descriptor; domain capabilities are checked against the owning pack. Trusted
-migration may introduce recorded requirements, after which the effective manifest is rebuilt from
-the converted output. Missing source declarations are not repaired implicitly.
+Every source scenario entry must declare the same global schema version as its manifest. Source
+manifest requirements equal the exact union of host/domain scenario declarations and content-derived
+host result requirements. Host capabilities cannot be authorized by a pack descriptor; domain
+capabilities are checked against the owning pack. Trusted migration may introduce recorded
+requirements, after which the effective manifest is rebuilt from the converted output. Missing
+source declarations are not repaired implicitly.
 
 The global V1→V2 step is recorded once per bundle. Pack migration records include optional
 `versionSpace` and a `subject` identifying pack, scenario and revision. Existing persisted `registry`
@@ -95,15 +96,31 @@ Historical `tests/migration/fixtures/portable_v1_scenario.json` remains unchange
 Archive limits bound actual decompressor output, and transformed JSON, decoded snapshots and retained
 preview copies share aggregate byte, depth, collection and memory limits.
 
+### Native archival results
+
+Noncanonical native solution rows export as closed `eutheto/archival-result` V1 wrappers requiring
+`eutheto.portable.archival-result` version1. This is a separate host result format, not a change to
+the bundle/global scenario versions, Workforce portable schema, accepted-result versions or released
+database migrations. The source and effective manifest unions both include this capability exactly
+when selected records require it. Missing declarations and unsupported wrapper/capability versions
+refuse; older readers must not apply generic deep-copy remapping to the new payload.
+
+Only outer result/scenario identities and exact revision are live bindings. The archive preserves
+original row identities, status/flag, timestamp and JSON values, including optional-column absence
+versus JSON null. Copy preserves those originals; all recursive content and asset checks still apply.
+Imported records remain opaque supplemental data, regardless of recorded or forged accepted flags.
+Current exact native sources are retained before edits; already-unavailable native-only sources
+refuse result-bearing export without preventing results-excluded backup or unrelated operations.
+
 ## Phase 04 result-contract compatibility
 
-| Surface | Current writer | Current reader | Retained legacy reader |
-|---|---:|---:|---|
-| `NormalizedSolution` | V1 | V1 only | None; the V1 shape remains current |
-| `VerificationScope` | V1 | V1 only | None |
-| `VerificationContextV1` | V1 | V1 only | None |
-| `VerificationReport` | V2 | V2 only | Exact V1 decoding through `LegacyVerificationReportV1`; inert and never accepted |
-| `AcceptedResult` | V2 | V2 only | Exact V1 decoding through `LegacyAcceptedResultV1`; inert and never upgraded in place |
+| Surface                 | Current writer | Current reader | Retained legacy reader                                                                |
+| ----------------------- | -------------: | -------------: | ------------------------------------------------------------------------------------- |
+| `NormalizedSolution`    |             V1 |        V1 only | None; the V1 shape remains current                                                    |
+| `VerificationScope`     |             V1 |        V1 only | None                                                                                  |
+| `VerificationContextV1` |             V1 |        V1 only | None                                                                                  |
+| `VerificationReport`    |             V2 |        V2 only | Exact V1 decoding through `LegacyVerificationReportV1`; inert and never accepted      |
+| `AcceptedResult`        |             V2 |        V2 only | Exact V1 decoding through `LegacyAcceptedResultV1`; inert and never upgraded in place |
 
 All current result contracts are closed to unknown fields, reject unknown versions, use canonical
 ordering where checksums depend on serialized bytes, and reject scenario revisions above
@@ -113,13 +130,13 @@ result nor grant acceptance authority.
 
 ## Phase 06 settings and library-operation compatibility
 
-| Surface | Current writer | Supported reader |
-|---|---:|---|
-| Standalone `eutheto/application-settings` document | V1 | V1 only; no legacy reader or extensions |
-| Settings import/export requests and results | V1 | The matching co-bundled desktop client |
-| Operation prepare/progress | V1 | The matching co-bundled desktop client |
-| API response envelope | V1, unchanged | The matching co-bundled desktop client |
-| Build-owned locked-workspace license inventory | V2 | V2 only, with explicit `lockedWorkspace` scope |
+| Surface                                            | Current writer | Supported reader                               |
+| -------------------------------------------------- | -------------: | ---------------------------------------------- |
+| Standalone `eutheto/application-settings` document |             V1 | V1 only; no legacy reader or extensions        |
+| Settings import/export requests and results        |             V1 | The matching co-bundled desktop client         |
+| Operation prepare/progress                         |             V1 | The matching co-bundled desktop client         |
+| API response envelope                              |  V1, unchanged | The matching co-bundled desktop client         |
+| Build-owned locked-workspace license inventory     |             V2 | V2 only, with explicit `lockedWorkspace` scope |
 
 The desktop Rust adapter and generated TypeScript client are one co-generated, co-bundled
 reader/writer pair. Independently deployed or mixed-version desktop clients are not supported.

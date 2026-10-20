@@ -22,13 +22,9 @@ use eutheto_planning_ir::{
 };
 use std::mem::size_of;
 
-// Planning IDs and domain IDs have private, constructor-validated string storage. Their
-// bounds therefore hold even for malformed public model structures, unlike metadata text.
-const ID_BYTES: u64 = 160;
-const ENCODED_ID_BYTES: u64 = ID_BYTES + 9; // longest prefix: "interval:"
 const WORD: u64 = size_of::<usize>() as u64;
 const STRING: u64 = size_of::<String>() as u64;
-const NODE: u64 = STRING + WORD; // typed VariableNode discriminant plus string handle
+const NODE: u64 = 2 * WORD; // typed VariableNode reference plus discriminant
 // A logical tree entry includes its payload, child/index links, and occupancy bookkeeping.
 // This is deliberately not a promise about std's allocator or node capacity.
 const TREE_LINKS: u64 = 4 * WORD;
@@ -106,11 +102,21 @@ fn domain_clone(
     budget.steps(mul(4, n)?) // reversed scan, merge, equality, numeric bounds
 }
 
-fn expression_clone(
+fn expression_normalization(
     expression: &LinearExpression,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
     let n = count(expression.terms.len())?;
+    // Our scan plus canonical::canonicalize_expression's identical no-op check.
+    budget.steps(mul(4, n)?)?;
+    if expression.terms.iter().all(|term| term.coefficient != 0)
+        && expression
+            .terms
+            .windows(2)
+            .all(|pair| pair[0].variable < pair[1].variable)
+    {
+        return Ok(());
+    }
     // Cloned terms, combining tree, then collected output. The ID string is cloned
     // only once and subsequently moved through these containers.
     slots(budget, mul(2, n)?, STRING + 8)?;
@@ -218,7 +224,7 @@ pub(super) fn precharge_canonicalization(
             }
             Constraint::LinearComparison(comparison)
             | Constraint::ReifiedLinearComparison { comparison, .. } => {
-                expression_clone(&comparison.expression, budget)?;
+                expression_normalization(&comparison.expression, budget)?;
             }
             Constraint::Implication { .. }
             | Constraint::Equivalence { .. }
@@ -232,7 +238,7 @@ pub(super) fn precharge_canonicalization(
         budget.step()?;
         for term in &level.terms {
             budget.step()?;
-            expression_clone(&term.expression, budget)?;
+            expression_normalization(&term.expression, budget)?;
         }
         sorted(budget, &level.terms, 1)?;
     }
@@ -245,7 +251,9 @@ pub(super) fn precharge_canonicalization(
     for projection in &problem.projections {
         budget.step()?;
         match &projection.expression {
-            ProjectionExpression::Linear(expression) => expression_clone(expression, budget)?,
+            ProjectionExpression::Linear(expression) => {
+                expression_normalization(expression, budget)?;
+            }
             ProjectionExpression::Boolean(_)
             | ProjectionExpression::Integer(_)
             | ProjectionExpression::Interval(_)
@@ -261,33 +269,85 @@ pub(super) fn precharge_canonicalization(
     budget.check()
 }
 
-// Count the node vectors produced by constraint_nodes without producing a vector.
-fn constraint_references(body: &Constraint) -> Result<u64, AssignmentRuleError> {
+// Precharge component analysis's node clones without constructing its node vector.
+fn precharge_constraint_nodes(
+    body: &Constraint,
+    budget: &mut OperationBudget<'_>,
+) -> Result<u64, AssignmentRuleError> {
+    let mut references = 0;
+    let mut visit = |_id: &str| -> Result<(), AssignmentRuleError> {
+        slots(budget, 1, 2 * NODE)?;
+        budget.steps(2)?; // sizing visit and subsequent borrowed-node construction
+        references = add(references, 1)?;
+        Ok(())
+    };
     match body {
         Constraint::BoolOr { literals }
         | Constraint::BoolAnd { literals }
         | Constraint::AtMostOne { literals }
         | Constraint::ExactlyOne { literals }
-        | Constraint::CardinalityRange { literals, .. } => count(literals.len()),
-        Constraint::Implication { .. }
-        | Constraint::Equivalence { .. }
-        | Constraint::Element { .. }
-        | Constraint::Equality { .. } => Ok(2),
-        Constraint::AbsDifference { .. } => Ok(3),
-        Constraint::LinearComparison(comparison) => count(comparison.expression.terms.len()),
-        Constraint::ReifiedLinearComparison { comparison, .. } => {
-            add(count(comparison.expression.terms.len())?, 1)
+        | Constraint::CardinalityRange { literals, .. } => {
+            for literal in literals {
+                visit(literal.variable.as_str())?;
+            }
+        }
+        Constraint::Implication {
+            antecedent,
+            consequent,
+        } => {
+            visit(antecedent.variable.as_str())?;
+            visit(consequent.variable.as_str())?;
+        }
+        Constraint::Equivalence { left, right } => {
+            visit(left.variable.as_str())?;
+            visit(right.variable.as_str())?;
+        }
+        Constraint::LinearComparison(comparison)
+        | Constraint::ReifiedLinearComparison { comparison, .. } => {
+            for term in &comparison.expression.terms {
+                visit(term.variable.as_str())?;
+            }
+            if let Constraint::ReifiedLinearComparison { literal, .. } = body {
+                visit(literal.variable.as_str())?;
+            }
         }
         Constraint::AllDifferent { variables }
         | Constraint::AllowedTable { variables, .. }
-        | Constraint::ForbiddenTable { variables, .. } => count(variables.len()),
-        Constraint::Min { inputs, .. } | Constraint::Max { inputs, .. } => {
-            add(count(inputs.len())?, 1)
+        | Constraint::ForbiddenTable { variables, .. } => {
+            for variable in variables {
+                visit(variable.as_str())?;
+            }
+        }
+        Constraint::Min { target, inputs } | Constraint::Max { target, inputs } => {
+            visit(target.as_str())?;
+            for input in inputs {
+                visit(input.as_str())?;
+            }
+        }
+        Constraint::Element { index, target, .. } => {
+            visit(index.as_str())?;
+            visit(target.as_str())?;
+        }
+        Constraint::Equality { left, right } => {
+            visit(left.as_str())?;
+            visit(right.as_str())?;
+        }
+        Constraint::AbsDifference {
+            target,
+            left,
+            right,
+        } => {
+            visit(target.as_str())?;
+            visit(left.as_str())?;
+            visit(right.as_str())?;
         }
         Constraint::NoOverlap { intervals } | Constraint::Cumulative { intervals, .. } => {
-            count(intervals.len())
+            for interval in intervals {
+                visit(interval.as_str())?;
+            }
         }
     }
+    Ok(references)
 }
 
 fn projection_references(expression: &ProjectionExpression) -> Result<u64, AssignmentRuleError> {
@@ -308,11 +368,10 @@ fn projection_references(expression: &ProjectionExpression) -> Result<u64, Assig
     }
 }
 
-fn cloned_nodes(budget: &mut OperationBudget<'_>, n: u64) -> Result<(), AssignmentRuleError> {
-    // Vec growth and extension can replace the slot buffer; reserve two slot arrays.
-    // The typed ID string payload itself is cloned once.
-    slots(budget, n, 2 * NODE + ID_BYTES)?;
-    budget.steps(mul(n, ID_BYTES + 1)?)
+fn borrowed_nodes(budget: &mut OperationBudget<'_>, n: u64) -> Result<(), AssignmentRuleError> {
+    // Vec growth and extension can replace the slot buffer; IDs remain borrowed.
+    slots(budget, n, 2 * NODE)?;
+    budget.steps(n)
 }
 
 fn edge(
@@ -395,9 +454,14 @@ pub(super) fn precharge_validation(
 
     let mut max_ranges = 0;
     let mut interval_count = 0;
-    for variable in &problem.variables {
+    for (index, variable) in problem.variables.iter().enumerate() {
         budget.step()?;
-        path_allocations(budget, 2)?; // variable domain and provenance paths
+        let path_bytes = add(
+            count("variables[].domain".len())?,
+            u64::from(index.max(1).ilog10() + 1),
+        )?;
+        slots(budget, 2, path_bytes)?; // variable domain and provenance paths
+        budget.steps(mul(2, path_bytes)?)?;
         match variable {
             Variable::Integer(integer) => {
                 max_ranges = max_ranges.max(count(integer.domain.inclusive_ranges.len())?);
@@ -445,18 +509,31 @@ fn precharge_constraints(
     budget: &mut OperationBudget<'_>,
 ) -> Result<u64, AssignmentRuleError> {
     let mut finds = 0;
-    for record in &problem.constraints {
+    for (index, record) in problem.constraints.iter().enumerate() {
         budget.step()?;
-        let refs = constraint_references(&record.body)?;
+        let refs = precharge_constraint_nodes(&record.body, budget)?;
         let enforcement = count(record.enforcement.len())?;
-        path_allocations(budget, add(8, enforcement)?)?;
+        // validate_constraints allocates one bare path, two each for enforcement,
+        // tags and body, plus one enforcement path per literal. Error copies have
+        // their separate reservation; an early error constructs fewer paths.
+        let path_bytes = add(
+            count("constraints[]".len())?,
+            u64::from(index.max(1).ilog10() + 1),
+        )?;
+        let paths = add(7, enforcement)?;
+        let suffix_bytes = add(
+            mul(add(2, enforcement)?, count(".enforcement".len())?)?,
+            mul(2, count(".tags".len() + ".body".len())?)?,
+        )?;
+        let bytes = add(mul(paths, path_bytes)?, suffix_bytes)?;
+        budget.reserve(0, paths, bytes)?;
+        budget.steps(bytes)?;
         tree_work(budget, 1, provenance, 1)?;
         budget.steps(mul(
             add(add(refs, enforcement)?, count(record.tags.len())?)?,
             2,
         )?)?;
         tree_work(budget, add(refs, enforcement)?, variables, 1)?;
-        cloned_nodes(budget, refs)?; // validation counts by allocating constraint_nodes
         match &record.body {
             Constraint::LinearComparison(comparison)
             | Constraint::ReifiedLinearComparison { comparison, .. } => {
@@ -489,9 +566,10 @@ fn precharge_constraints(
             | Constraint::AbsDifference { .. }
             | Constraint::NoOverlap { .. } => {}
         }
-        // A second node vector plus enforcement extension belongs to component analysis.
+        // Node vectors and enforcement extension belong only to component analysis;
+        // generic validation counts references without allocating them.
         let edge_refs = add(refs, enforcement)?;
-        cloned_nodes(budget, edge_refs)?;
+        borrowed_nodes(budget, enforcement)?;
         finds = add(finds, edge(budget, edge_refs, variables)?)?;
     }
     Ok(finds)
@@ -519,9 +597,9 @@ fn precharge_relations(
             expression_validation(&term.expression, variables, budget)?;
             let refs = count(term.expression.terms.len())?;
             edge_refs = add(edge_refs, refs)?;
-            cloned_nodes(budget, refs)?; // each flat_map expression_nodes temporary
+            borrowed_nodes(budget, refs)?; // each flat_map expression_nodes temporary
         }
-        // flat_map then collects a second slot array, moving rather than cloning IDs.
+        // flat_map then collects a second slot array of borrowed nodes.
         slots(budget, edge_refs, 2 * NODE)?;
         finds = add(finds, edge(budget, edge_refs, variables)?)?;
     }
@@ -541,7 +619,7 @@ fn precharge_relations(
         tree_work(budget, 2, provenance, 1)?;
         tree_work(budget, 1, variables, 1)?;
         budget.steps(n)?;
-        cloned_nodes(budget, 1)?;
+        borrowed_nodes(budget, 1)?;
         finds = add(finds, edge(budget, 1, variables)?)?;
     }
     tree_slots(budget, rules, WORD)?;
@@ -560,8 +638,8 @@ fn precharge_relations(
             | ProjectionExpression::Interval(_) => tree_work(budget, 1, variables, 1)?,
             ProjectionExpression::Constant(_) => budget.step()?,
         }
-        // One projection_nodes vector in validation and a separate one in components.
-        cloned_nodes(budget, mul(2, refs)?)?;
+        // Only component analysis allocates projection nodes; validation counts them.
+        borrowed_nodes(budget, refs)?;
         finds = add(finds, edge(budget, refs, variables)?)?;
     }
     Ok((finds, term_count))
@@ -573,32 +651,18 @@ fn precharge_provenance(
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
     let provenance = count(problem.provenance.len())?;
-    // Provenance lookup map, independently rebuilt visited sets for EVERY chain,
-    // then coverage's used set/pending stack. Follow borrowed parent references to
-    // charge actual chain lengths rather than charging every leaf the maximum depth.
-    // Binary lookup is sufficient here: generic validation checks strict root ordering
-    // before reaching these allocations. An unsorted/duplicate root can stop this
-    // accounting walk early, but also stops the generic phase before any parent walk.
-    tree_slots(budget, provenance, 2 * WORD)?;
-    tree_work(budget, provenance, provenance, 1)?;
-    let depth = add(provenance, 1)?.min(add(PlanningIrLimitsV1::DEFAULT.max_provenance_depth, 1)?);
-    for record in &problem.provenance {
-        let mut current = Some(&record.id);
-        for _ in 0..depth {
-            let Some(id) = current else { break };
-            budget.step()?;
-            tree_slots(budget, 1, WORD)?; // one more seen-set insertion
-            tree_work(budget, 1, depth, 1)?;
-            tree_work(budget, 2, provenance, 1)?; // generic get + this borrowed lookup
-            current = problem
-                .provenance
-                .binary_search_by(|candidate| candidate.id.cmp(id))
-                .ok()
-                .and_then(|index| problem.provenance[index].parent.as_ref());
-        }
-    }
-    // Cycles may repeat until the existing depth bound; the generic seen set returns
-    // earlier. Missing IDs and the depth-limit-plus-one insertion are charged as well.
+    // Ancestry and coverage borrow the canonical roots through binary lookup.
+    let depth = provenance.min(PlanningIrLimitsV1::DEFAULT.max_provenance_depth);
+    slots(budget, provenance, count(size_of::<Option<u64>>())?)?;
+    slots(budget, depth, WORD)?;
+    // Each uncached record enters a path once; each outer record can encounter
+    // one cached tail, and an invalid graph adds at most one failing terminal.
+    // Path comparisons precede depth/missing-reference checks, including on failure.
+    let iterations = add(mul(2, provenance)?, 1)?;
+    let per_iteration = add(depth, add(levels(provenance), 9)?)?;
+    // Initialization and successful unwind/cache writes are linear. The remaining
+    // bound covers binary comparisons, path scans and checked traversal bookkeeping.
+    budget.steps(add(mul(4, provenance)?, mul(iterations, per_iteration)?)?)?;
     for record in &problem.provenance {
         budget.step()?;
         budget.steps(mul(count(record.entity_refs.len())?, 2)?)?;
@@ -615,7 +679,7 @@ fn precharge_provenance(
     tree_slots(budget, used, WORD)?;
     slots(budget, used, 2 * WORD)?; // pending growth
     tree_work(budget, used, used, 1)?;
-    tree_work(budget, used, provenance, 1)?;
+    budget.steps(mul(used, add(levels(provenance), 1)?)?)?;
     budget.steps(used)?;
 
     budget.steps(count(problem.metadata.compiler_version.len())?)?;
@@ -642,41 +706,45 @@ fn precharge_components(
     mut finds: u64,
     budget: &mut OperationBudget<'_>,
 ) -> Result<(), AssignmentRuleError> {
-    // declared_nodes: cloned tree nodes -> ordered Vec; indexes clones IDs again.
-    tree_slots(budget, variables, NODE + ID_BYTES)?;
+    // Conservative container/order bounds for declared-node sorting and its index.
+    tree_slots(budget, variables, NODE)?;
     slots(budget, variables, NODE)?;
-    tree_slots(budget, variables, NODE + ID_BYTES + WORD)?;
+    tree_slots(budget, variables, NODE + WORD)?;
     tree_work(budget, mul(2, variables)?, variables, 1)?;
-    budget.steps(mul(mul(2, variables)?, ID_BYTES)?)?;
-    slots(budget, variables, WORD)?; // union-find parent
+    slots(budget, variables, 2 * WORD)?; // union-find parent and component size
+    budget.steps(mul(2, variables)?)?; // initialize both arrays
+    let mut encoded_bytes = 0;
     for variable in &problem.variables {
         budget.step()?;
+        let id = match variable {
+            Variable::Boolean(value) => value.id.as_str(),
+            Variable::Integer(value) => value.id.as_str(),
+            Variable::Interval(value) => value.id.as_str(),
+        };
+        let bytes = count(id.len())?;
+        budget.steps(2)?; // declaration and index node copies, without ID payload copies
+        encoded_bytes = add(encoded_bytes, add(bytes, 9)?)?; // longest prefix: interval:
         match variable {
             Variable::Interval(interval) => {
                 let refs = add(4, u64::from(interval.presence.is_some()))?;
-                cloned_nodes(budget, refs)?;
+                borrowed_nodes(budget, refs)?;
                 finds = add(finds, edge(budget, refs, variables)?)?;
             }
             Variable::Boolean(_) | Variable::Integer(_) => {}
         }
     }
-    // Tarjan–van Leeuwen, Worst-Case Analysis of Set Union Algorithms (1984),
-    // Lemma 7: naive linking with HALVING visits at most
-    // (8m + 2n) ceil(log_floor(1+m/n) n) nodes when m >= n. Final grouping supplies
-    // n finds, so that premise holds. Replacing the logarithm base by 2 and using
-    // the original (possibly duplicate) declaration count only increases the bound.
-    // The extra m covers terminal root checks, including n=0/1. This is an aggregate
-    // phase bound, NOT a false logarithmic bound on any individual find.
-    // The lemma is also quoted, with its original paper reference, at:
-    // https://cs.stackexchange.com/questions/48649/
-    let path_nodes = mul(
-        add(mul(8, finds)?, mul(2, variables)?)?,
-        levels(variables).max(1),
-    )?;
-    budget.steps(add(finds, path_nodes)?)?;
+    // Union by size at least doubles a component whenever a node gains depth.
+    // Thus depth <= floor(log2(V)); path halving visits at most ceil(depth / 2)
+    // nodes per find. Raw declarations/references overcount deduplicated nodes
+    // and actual finds, so this also covers duplicates, unknowns and V=0/1.
+    let halving_visits = u64::from(variables.max(1).ilog2()).div_ceil(2);
+    // One terminal check per find, plus six comparison/add/update steps per
+    // union (two finds). Grouping's extra finds conservatively pay those too.
+    budget.steps(mul(finds, add(halving_visits, 4)?)?)?;
     tree_slots(budget, variables, WORD + 3 * WORD)?; // grouped map, worst case singleton groups
     tree_work(budget, variables, variables, 1)?;
-    slots(budget, variables, 2 * STRING + ENCODED_ID_BYTES)?; // group Vec growth + encoded IDs
+    slots(budget, variables, 2 * STRING)?; // group Vec growth
+    budget.reserve(0, 0, encoded_bytes)?;
     slots(budget, variables, 3 * WORD)?; // raw_groups Vec
     slots(budget, variables, 3 * WORD)?; // group Vec sort scratch
     slots(budget, variables, STRING)?; // inner group string sort scratch
@@ -687,6 +755,6 @@ fn precharge_components(
     budget.sort_work(problem.variables.len())?;
     slots(budget, variables, STRING + 3 * WORD + 32)?; // components + component.c<usize>
     budget.reserve(0, 0, 64)?; // component hash hex String
-    budget.steps(add(mul(variables, ENCODED_ID_BYTES + 32)?, 64)?)?; // encoding, ID checks, hash
+    budget.steps(add(add(encoded_bytes, mul(variables, 32)?)?, 64)?)?; // encoding, ID checks, hash
     budget.check()
 }

@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::fs;
-use std::io;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const CARGO_LOCK: &str = "Cargo.lock";
 const PNPM_LOCK: &str = "pnpm-lock.yaml";
@@ -15,6 +16,7 @@ const LICENSE_INVENTORY: &str = "xtask/generated/license-inventory.json";
 const NOTICE: &str = "THIRD_PARTY_NOTICES.md";
 const SBOM: &str = "xtask/generated/sbom.spdx.json";
 const NOASSERTION: &str = "NOASSERTION";
+const MAX_EXTRACTED_LICENSE_BYTES: usize = 128 * 1024;
 
 pub type SupplyChainResult<T> = Result<T, SupplyChainError>;
 
@@ -116,7 +118,22 @@ struct ReviewedInputs {
     document_namespace: String,
     created: String,
     workspace_packages: Vec<ReviewedWorkspacePackage>,
+    #[serde(default)]
+    reviewed_vendored_packages: Vec<ReviewedVendoredPackage>,
     license_conclusions: Vec<ReviewedLicense>,
+    #[serde(default)]
+    reviewed_assets: Vec<ReviewedAsset>,
+    #[serde(default)]
+    extracted_licenses: Vec<ReviewedExtractedLicense>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewedExtractedLicense {
+    license_id: String,
+    name: String,
+    source: String,
+    file: ReviewedAssetFile,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -131,11 +148,40 @@ struct ReviewedWorkspacePackage {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewedVendoredPackage {
+    ecosystem: String,
+    name: String,
+    version: String,
+    path: String,
+    license: String,
+    source: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReviewedLicense {
     ecosystem: String,
     name: String,
     version: String,
     license: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewedAsset {
+    name: String,
+    version: String,
+    source: String,
+    license_concluded: String,
+    files: Vec<ReviewedAssetFile>,
+    notices: Vec<ReviewedAssetFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewedAssetFile {
+    path: String,
+    sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -193,12 +239,15 @@ struct LicenseInventory<'a> {
     generated_by: &'static str,
     authoritative_inputs: [&'static str; 3],
     packages: &'a [InventoryPackage],
+    #[serde(skip_serializing_if = "<[ReviewedAsset]>::is_empty")]
+    assets: &'a [ReviewedAsset],
 }
 
 #[derive(Debug)]
 struct Inventory {
     reviewed: ReviewedInputs,
     packages: Vec<InventoryPackage>,
+    extracted_licensing_infos: Vec<SpdxExtractedLicense>,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,6 +262,22 @@ struct SpdxDocument<'a> {
     creation_info: SpdxCreationInfo<'a>,
     packages: Vec<SpdxPackage>,
     relationships: Vec<SpdxRelationship>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    files: Vec<SpdxFile>,
+    #[serde(
+        rename = "hasExtractedLicensingInfos",
+        skip_serializing_if = "<[SpdxExtractedLicense]>::is_empty"
+    )]
+    extracted_licensing_infos: &'a [SpdxExtractedLicense],
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpdxExtractedLicense {
+    license_id: String,
+    name: String,
+    extracted_text: String,
+    see_alsos: [String; 1],
 }
 
 #[derive(Debug, Serialize)]
@@ -259,6 +324,19 @@ struct SpdxChecksum {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SpdxFile {
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    file_name: String,
+    checksums: Vec<SpdxChecksum>,
+    license_concluded: String,
+    license_info_in_files: Vec<String>,
+    copyright_text: &'static str,
+    comment: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxRelationship {
     spdx_element_id: &'static str,
     relationship_type: &'static str,
@@ -267,8 +345,9 @@ struct SpdxRelationship {
 
 pub fn generate_licenses(repo_root: &Path) -> SupplyChainResult<()> {
     let inventory = load_inventory(repo_root)?;
-    let notice = render_notice(&inventory.packages)?;
-    let inventory_json = render_inventory(&inventory.packages)?;
+    let notice = render_notice(&inventory.packages, &inventory.reviewed.reviewed_assets)?;
+    let inventory_json =
+        render_inventory(&inventory.packages, &inventory.reviewed.reviewed_assets)?;
     write_if_changed(repo_root, NOTICE, &notice)?;
     write_if_changed(repo_root, LICENSE_INVENTORY, &inventory_json)?;
     println!(
@@ -300,8 +379,9 @@ pub fn generate_sbom(repo_root: &Path) -> SupplyChainResult<()> {
 
 pub fn check_licenses(repo_root: &Path) -> SupplyChainResult<()> {
     let inventory = load_inventory(repo_root)?;
-    let expected_notice = render_notice(&inventory.packages)?;
-    let expected_inventory = render_inventory(&inventory.packages)?;
+    let expected_notice = render_notice(&inventory.packages, &inventory.reviewed.reviewed_assets)?;
+    let expected_inventory =
+        render_inventory(&inventory.packages, &inventory.reviewed.reviewed_assets)?;
     check_outputs(
         repo_root,
         &[
@@ -323,6 +403,8 @@ pub fn check_sbom(repo_root: &Path) -> SupplyChainResult<()> {
 )]
 fn load_inventory(repo_root: &Path) -> SupplyChainResult<Inventory> {
     let reviewed = read_reviewed_inputs(repo_root)?;
+    let extracted_licensing_infos = load_extracted_licenses(repo_root, &reviewed)?;
+    validate_assets(repo_root, &reviewed.reviewed_assets)?;
     let cargo_packages = parse_cargo_lock(repo_root)?;
     let (pnpm_packages, pnpm_importers) = parse_pnpm_lock(repo_root)?;
 
@@ -341,6 +423,19 @@ fn load_inventory(repo_root: &Path) -> SupplyChainResult<Inventory> {
                     package.ecosystem, package.name, package.version
                 ),
             });
+        }
+    }
+
+    let mut vendored = BTreeMap::new();
+    for package in &reviewed.reviewed_vendored_packages {
+        validate_reviewed_vendored(package, repo_root, &reviewed.reviewed_assets)?;
+        let key = PackageKey {
+            ecosystem: package.ecosystem.clone(),
+            name: package.name.clone(),
+            version: package.version.clone(),
+        };
+        if workspace.contains_key(&key) || vendored.insert(key, package).is_some() {
+            return Err(asset_error("duplicate reviewed local package identity"));
         }
     }
 
@@ -370,8 +465,18 @@ fn load_inventory(repo_root: &Path) -> SupplyChainResult<Inventory> {
 
     let mut packages = BTreeMap::<PackageKey, InventoryPackage>::new();
     let mut seen_workspace = BTreeSet::new();
+    let mut seen_vendored = BTreeSet::new();
     for package in cargo_packages {
         let (kind, license, source) = match &package.source {
+            None if vendored.contains_key(&package.key) => {
+                let reviewed_package = vendored[&package.key];
+                seen_vendored.insert(package.key.clone());
+                (
+                    "dependency".to_owned(),
+                    reviewed_package.license.clone(),
+                    reviewed_package.source.clone(),
+                )
+            }
             None => {
                 let reviewed_package = workspace.get(&package.key).ok_or_else(|| {
                     SupplyChainError::StaleReviewedInput {
@@ -489,6 +594,13 @@ fn load_inventory(repo_root: &Path) -> SupplyChainResult<Inventory> {
             });
         }
     }
+    for key in vendored.keys() {
+        if !seen_vendored.contains(key) {
+            return Err(asset_error(
+                "reviewed vendored package is absent from source-less Cargo lock entries",
+            ));
+        }
+    }
     for key in conclusions.keys() {
         let is_dependency = packages
             .get(key)
@@ -506,7 +618,177 @@ fn load_inventory(repo_root: &Path) -> SupplyChainResult<Inventory> {
     Ok(Inventory {
         reviewed,
         packages: packages.into_values().collect(),
+        extracted_licensing_infos,
     })
+}
+
+fn valid_license_ref(value: &str) -> bool {
+    value.strip_prefix("LicenseRef-").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    })
+}
+
+fn load_extracted_licenses(
+    repo_root: &Path,
+    reviewed: &ReviewedInputs,
+) -> SupplyChainResult<Vec<SpdxExtractedLicense>> {
+    let expressions = reviewed
+        .workspace_packages
+        .iter()
+        .map(|package| package.license.as_str())
+        .chain(
+            reviewed
+                .license_conclusions
+                .iter()
+                .map(|license| license.license.as_str()),
+        )
+        .chain(
+            reviewed
+                .reviewed_assets
+                .iter()
+                .map(|asset| asset.license_concluded.as_str()),
+        );
+    let mut referenced = BTreeSet::new();
+    for expression in expressions {
+        for token in expression.split(|character: char| {
+            character.is_ascii_whitespace() || matches!(character, '(' | ')')
+        }) {
+            if token.contains("LicenseRef-") {
+                if !valid_license_ref(token) {
+                    return Err(asset_error("invalid referenced LicenseRef identifier"));
+                }
+                referenced.insert(token);
+            }
+        }
+    }
+    let mut loaded = BTreeMap::new();
+    for license in &reviewed.extracted_licenses {
+        if !valid_license_ref(&license.license_id)
+            || !license.source.starts_with("https://")
+            || loaded.contains_key(&license.license_id)
+        {
+            return Err(asset_error("invalid or duplicate extracted license"));
+        }
+        require_nonempty(&license.name, "extracted license name")?;
+        if !referenced.contains(license.license_id.as_str()) {
+            return Err(asset_error("extracted license is not referenced"));
+        }
+        let bytes = read_asset_file(repo_root, &license.file, Some(MAX_EXTRACTED_LICENSE_BYTES))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| asset_error("extracted license text must be UTF-8"))?;
+        require_nonempty(&text, "extracted license text")?;
+        loaded.insert(
+            license.license_id.clone(),
+            SpdxExtractedLicense {
+                license_id: license.license_id.clone(),
+                name: license.name.clone(),
+                extracted_text: text,
+                see_alsos: [license.source.clone()],
+            },
+        );
+    }
+    if referenced.iter().any(|id| !loaded.contains_key(*id)) {
+        return Err(asset_error(
+            "referenced LicenseRef has no extracted license text",
+        ));
+    }
+    Ok(loaded.into_values().collect())
+}
+
+fn validate_assets(repo_root: &Path, assets: &[ReviewedAsset]) -> SupplyChainResult<()> {
+    let mut identities = BTreeSet::new();
+    let mut files = BTreeSet::new();
+    for asset in assets {
+        for value in [&asset.name, &asset.version, &asset.license_concluded] {
+            require_nonempty(value, "reviewed asset metadata")?;
+        }
+        if !asset.source.starts_with("https://")
+            || asset.files.is_empty()
+            || asset.notices.is_empty()
+            || !identities.insert((&asset.name, &asset.version))
+        {
+            return Err(asset_error("invalid or duplicate reviewed asset"));
+        }
+        for file in asset.files.iter().chain(&asset.notices) {
+            if asset.files.iter().any(|font| font.path == file.path) && !files.insert(&file.path) {
+                return Err(asset_error("duplicate reviewed asset file"));
+            }
+            validate_asset_file(repo_root, file)?;
+        }
+    }
+    Ok(())
+}
+
+fn asset_error(detail: &str) -> SupplyChainError {
+    SupplyChainError::MalformedReviewedInput {
+        path: PathBuf::from(REVIEWED_INPUTS),
+        detail: detail.to_owned(),
+    }
+}
+
+fn validate_asset_file(repo_root: &Path, file: &ReviewedAssetFile) -> SupplyChainResult<()> {
+    read_asset_file(repo_root, file, None).map(|_| ())
+}
+
+fn read_asset_file(
+    repo_root: &Path,
+    file: &ReviewedAssetFile,
+    max_bytes: Option<usize>,
+) -> SupplyChainResult<Vec<u8>> {
+    if file.path.is_empty()
+        || file.path.contains('\\')
+        || file
+            .path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == ".." || part.contains(':'))
+        || file.sha256.len() != 64
+        || !file
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(asset_error(
+            "asset requires a clean relative path and lowercase SHA256",
+        ));
+    }
+    let mut path = repo_root.to_path_buf();
+    for part in file.path.split('/') {
+        path.push(part);
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|source| SupplyChainError::ReadInput {
+                path: path.clone(),
+                source,
+            })?;
+        if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+            return Err(asset_error(
+                "reviewed asset paths must not traverse symlinks",
+            ));
+        }
+    }
+    if !path.is_file() {
+        return Err(asset_error("reviewed asset must be a regular file"));
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .and_then(|input| {
+            input
+                .take(max_bytes.map_or(u64::MAX, |limit| limit.saturating_add(1) as u64))
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|source| SupplyChainError::ReadInput { path, source })?;
+    if max_bytes.is_some_and(|limit| bytes.len() > limit) {
+        return Err(asset_error("extracted license text exceeds its byte limit"));
+    }
+    if format!("{:x}", Sha256::digest(&bytes)) != file.sha256 {
+        return Err(asset_error(&format!(
+            "reviewed asset digest changed: {}",
+            file.path
+        )));
+    }
+    Ok(bytes)
 }
 
 fn read_reviewed_inputs(repo_root: &Path) -> SupplyChainResult<ReviewedInputs> {
@@ -543,6 +825,137 @@ fn read_reviewed_inputs(repo_root: &Path) -> SupplyChainResult<ReviewedInputs> {
         });
     }
     Ok(inputs)
+}
+
+fn validate_reviewed_vendored(
+    package: &ReviewedVendoredPackage,
+    repo_root: &Path,
+    assets: &[ReviewedAsset],
+) -> SupplyChainResult<()> {
+    if package.ecosystem != "cargo" {
+        return Err(asset_error(
+            "vendored packages must use the cargo ecosystem",
+        ));
+    }
+    require_nonempty(&package.license, "vendored package SPDX license")?;
+    let revision = package.source.rsplit('/').next().unwrap_or_default();
+    if !package.source.starts_with("https://")
+        || revision.len() != 40
+        || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(asset_error(
+            "vendored source must identify an exact upstream commit",
+        ));
+    }
+    let manifest_path = format!("{}/Cargo.toml", package.path);
+    if !assets
+        .iter()
+        .flat_map(|asset| &asset.files)
+        .any(|file| file.path == manifest_path)
+    {
+        return Err(asset_error(
+            "vendored manifest must be a hash-checked reviewed asset",
+        ));
+    }
+    validate_vendored_file_census(repo_root, &package.path, assets)?;
+    let manifest = read_required(&repo_root.join(&manifest_path))?;
+    let mut package_section = false;
+    let mut identity = BTreeMap::new();
+    for (index, line) in manifest.lines().enumerate() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            package_section = line == "[package]";
+        } else if package_section {
+            for field in ["name", "version", "license"] {
+                if line
+                    .split_once('=')
+                    .is_some_and(|(key, _)| key.trim() == field)
+                {
+                    identity.insert(
+                        field,
+                        parse_toml_string(
+                            assignment_value(line, field, Path::new(&manifest_path), index + 1)?,
+                            Path::new(&manifest_path),
+                            index + 1,
+                        )?,
+                    );
+                }
+            }
+        }
+    }
+    for (field, expected) in [
+        ("name", &package.name),
+        ("version", &package.version),
+        ("license", &package.license),
+    ] {
+        if identity.get(field) != Some(expected) {
+            return Err(asset_error(
+                "vendored package identity/license does not match its manifest",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_vendored_file_census(
+    repo_root: &Path,
+    package_path: &str,
+    assets: &[ReviewedAsset],
+) -> SupplyChainResult<()> {
+    let prefix = format!("{package_path}/");
+    let expected: BTreeSet<String> = assets
+        .iter()
+        .flat_map(|asset| asset.files.iter().chain(&asset.notices))
+        .filter(|file| file.path.starts_with(&prefix))
+        .map(|file| file.path.clone())
+        .collect();
+    let mut pending = vec![repo_root.join(package_path)];
+    let mut actual = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).map_err(|source| SupplyChainError::ReadInput {
+            path: directory.clone(),
+            source,
+        })? {
+            let path = entry
+                .map_err(|source| SupplyChainError::ReadInput {
+                    path: directory.clone(),
+                    source,
+                })?
+                .path();
+            let metadata =
+                fs::symlink_metadata(&path).map_err(|source| SupplyChainError::ReadInput {
+                    path: path.clone(),
+                    source,
+                })?;
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(repo_root)
+                    .ok()
+                    .and_then(|relative| {
+                        relative
+                            .iter()
+                            .map(|part| part.to_str())
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .ok_or_else(|| {
+                        asset_error("vendored source path must be UTF-8 and relative")
+                    })?;
+                actual.insert(relative.join("/"));
+            } else {
+                return Err(asset_error(
+                    "vendored source tree must contain only regular files and directories",
+                ));
+            }
+        }
+    }
+    if actual != expected {
+        return Err(asset_error(
+            "vendored source tree differs from the reviewed file census",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reviewed_workspace(
@@ -1225,17 +1638,24 @@ fn insert_package(
     Ok(())
 }
 
-fn render_inventory(packages: &[InventoryPackage]) -> SupplyChainResult<String> {
+fn render_inventory(
+    packages: &[InventoryPackage],
+    assets: &[ReviewedAsset],
+) -> SupplyChainResult<String> {
     let inventory = LicenseInventory {
         schema_version: 2,
         generated_by: "cargo xtask licenses generate",
         authoritative_inputs: [CARGO_LOCK, PNPM_LOCK, REVIEWED_INPUTS],
         packages,
+        assets,
     };
     render_json(&inventory, "license inventory")
 }
 
-fn render_notice(packages: &[InventoryPackage]) -> SupplyChainResult<String> {
+fn render_notice(
+    packages: &[InventoryPackage],
+    assets: &[ReviewedAsset],
+) -> SupplyChainResult<String> {
     let dependencies: Vec<_> = packages
         .iter()
         .filter(|package| package.kind == "dependency")
@@ -1278,7 +1698,39 @@ fn render_notice(packages: &[InventoryPackage]) -> SupplyChainResult<String> {
         .map_err(notice_render_error)?;
     }
     writeln!(output).map_err(notice_render_error)?;
+    if !assets.is_empty() {
+        writeln!(output, "## Reviewed bundled assets\n").map_err(notice_render_error)?;
+        for asset in assets {
+            writeln!(
+                output,
+                "### {} {}\n\nSource: {}\n\nLicense: `{}`\n",
+                markdown_cell(&asset.name),
+                markdown_cell(&asset.version),
+                markdown_cell(&asset.source),
+                markdown_cell(&asset.license_concluded)
+            )
+            .map_err(notice_render_error)?;
+            for file in asset.files.iter().chain(&asset.notices) {
+                writeln!(
+                    output,
+                    "- [{}]({}) — SHA256 `{}`",
+                    markdown_cell(&file.path),
+                    markdown_cell(&file.path),
+                    file.sha256
+                )
+                .map_err(notice_render_error)?;
+            }
+            writeln!(output).map_err(notice_render_error)?;
+        }
+    }
     writeln!(output, "## Review state\n").map_err(notice_render_error)?;
+    let unresolved_assets = assets
+        .iter()
+        .filter(|asset| asset.license_concluded == NOASSERTION)
+        .count();
+    writeln!(output, "{unresolved_assets} reviewed asset group(s) have `NOASSERTION`: exact source bytes and attribution are recorded, but their license conclusion remains unresolved.\n")
+        .map_err(notice_render_error)?;
+
     writeln!(
         output,
         "{unresolved} locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text."
@@ -1327,7 +1779,9 @@ fn render_sbom(inventory: &Inventory) -> SupplyChainResult<String> {
             spdx_id,
             name: package.name.clone(),
             version_info: package.version.clone(),
-            download_location: if package.ecosystem == "npm" && package.kind == "dependency" {
+            download_location: if package.kind == "dependency"
+                && (package.ecosystem == "npm" || package.source.starts_with("https://"))
+            {
                 package.source.clone()
             } else {
                 NOASSERTION.to_owned()
@@ -1345,6 +1799,8 @@ fn render_sbom(inventory: &Inventory) -> SupplyChainResult<String> {
         });
     }
 
+    let files = render_asset_files(&inventory.reviewed.reviewed_assets, &mut relationships);
+
     render_json(
         &SpdxDocument {
             spdx_version: "SPDX-2.3",
@@ -1357,10 +1813,54 @@ fn render_sbom(inventory: &Inventory) -> SupplyChainResult<String> {
                 creators: ["Tool: eutheto xtask"],
             },
             packages: spdx_packages,
+            files,
             relationships,
+            extracted_licensing_infos: &inventory.extracted_licensing_infos,
         },
         "SPDX-JSON SBOM",
     )
+}
+
+fn render_asset_files(
+    assets: &[ReviewedAsset],
+    relationships: &mut Vec<SpdxRelationship>,
+) -> Vec<SpdxFile> {
+    let mut files = Vec::new();
+    let mut seen_asset_paths = BTreeSet::new();
+    for asset in assets {
+        for file in asset.files.iter().chain(&asset.notices) {
+            if !seen_asset_paths.insert(&file.path) {
+                continue;
+            }
+            let spdx_id = format!("SPDXRef-AssetFile-{}", files.len() + 1);
+            relationships.push(SpdxRelationship {
+                spdx_element_id: "SPDXRef-DOCUMENT",
+                relationship_type: "DESCRIBES",
+                related_spdx_element: spdx_id.clone(),
+            });
+            files.push(SpdxFile {
+                spdx_id,
+                file_name: format!("./{}", file.path),
+                checksums: vec![SpdxChecksum {
+                    algorithm: "SHA256",
+                    checksum_value: file.sha256.clone(),
+                }],
+                license_concluded: if asset.files.iter().any(|font| font.path == file.path) {
+                    asset.license_concluded.clone()
+                } else {
+                    NOASSERTION.to_owned()
+                },
+                license_info_in_files: vec![NOASSERTION.to_owned()],
+                copyright_text: NOASSERTION,
+                comment: format!(
+                    "Reviewed asset {} {}; source {}",
+                    asset.name, asset.version, asset.source
+                ),
+            });
+        }
+    }
+
+    files
 }
 
 fn render_json(value: &impl Serialize, artifact: &'static str) -> SupplyChainResult<String> {
@@ -1695,8 +2195,12 @@ mod tests {
                 document_namespace: "https://example.test/sbom".to_owned(),
                 created: "2026-01-01T00:00:00Z".to_owned(),
                 workspace_packages: Vec::new(),
+                reviewed_vendored_packages: Vec::new(),
                 license_conclusions: Vec::new(),
+                reviewed_assets: Vec::new(),
+                extracted_licenses: Vec::new(),
             },
+            extracted_licensing_infos: Vec::new(),
             packages: vec![
                 InventoryPackage {
                     ecosystem: "cargo".to_owned(),
@@ -1725,7 +2229,8 @@ mod tests {
             ],
         };
 
-        let rendered_inventory = render_inventory(&inventory.packages)?;
+        let rendered_inventory =
+            render_inventory(&inventory.packages, &inventory.reviewed.reviewed_assets)?;
         let rendered_inventory: serde_json::Value = serde_json::from_str(&rendered_inventory)
             .map_err(|error| SupplyChainError::Render {
                 artifact: "test inventory",
@@ -1756,6 +2261,345 @@ mod tests {
             json!([{"algorithm": "SHA512", "checksumValue": "22".repeat(64)}])
         );
         assert_eq!(rendered["packages"][1]["downloadLocation"], npm_source);
+        assert!(rendered.get("hasExtractedLicensingInfos").is_none());
+        Ok(())
+    }
+    #[test]
+    fn assets_require_matching_direct_files_and_render_as_spdx_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use sha2::{Digest, Sha256};
+        let directory = tempfile::tempdir()?;
+        std::fs::write(directory.path().join("font.otf"), b"font fixture")?;
+        std::fs::write(directory.path().join("LICENSE"), b"license fixture")?;
+        let file = super::ReviewedAssetFile {
+            path: "font.otf".to_owned(),
+            sha256: format!("{:x}", Sha256::digest(b"font fixture")),
+        };
+        let asset = super::ReviewedAsset {
+            name: "Fixture font".to_owned(),
+            version: "1".to_owned(),
+            source: "https://example.test/font".to_owned(),
+            license_concluded: "OFL-1.1".to_owned(),
+            files: vec![file.clone()],
+            notices: vec![super::ReviewedAssetFile {
+                path: "LICENSE".to_owned(),
+                sha256: format!("{:x}", Sha256::digest(b"license fixture")),
+            }],
+        };
+        super::validate_assets(directory.path(), std::slice::from_ref(&asset))?;
+        let inventory = Inventory {
+            reviewed: ReviewedInputs {
+                schema_version: 1,
+                document_name: "fixture".to_owned(),
+                document_namespace: "urn:fixture".to_owned(),
+                created: "2026-01-01T00:00:00Z".to_owned(),
+                workspace_packages: vec![],
+                reviewed_vendored_packages: vec![],
+                license_conclusions: vec![],
+                reviewed_assets: vec![asset],
+                extracted_licenses: vec![],
+            },
+            packages: vec![],
+            extracted_licensing_infos: vec![],
+        };
+        let sbom: serde_json::Value = serde_json::from_str(&render_sbom(&inventory)?)?;
+        assert_eq!(sbom["packages"], json!([]));
+        assert_eq!(sbom["files"][0]["licenseConcluded"], "OFL-1.1");
+        assert_eq!(
+            sbom["files"][0]["checksums"][0]["checksumValue"],
+            file.sha256
+        );
+        assert_eq!(sbom["files"][1]["licenseConcluded"], "NOASSERTION");
+        std::fs::write(directory.path().join("font.otf"), b"changed")?;
+        assert!(
+            super::validate_assets(directory.path(), &inventory.reviewed.reviewed_assets).is_err()
+        );
+        let mut unsafe_file = file;
+        unsafe_file.path = "../font.otf".to_owned();
+        assert!(super::validate_asset_file(directory.path(), &unsafe_file).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("LICENSE", directory.path().join("alias"))?;
+            unsafe_file.path = "alias".to_owned();
+            assert!(super::validate_asset_file(directory.path(), &unsafe_file).is_err());
+        }
+        Ok(())
+    }
+
+    fn extracted_license_fixture(
+        root: &Path,
+        text: &[u8],
+    ) -> Result<ReviewedInputs, Box<dyn std::error::Error>> {
+        use sha2::{Digest, Sha256};
+        std::fs::write(root.join("LICENSE"), text)?;
+        Ok(serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "documentName": "fixture",
+            "documentNamespace": "urn:fixture",
+            "created": "2026-01-01T00:00:00Z",
+            "workspacePackages": [],
+            "licenseConclusions": [{
+                "ecosystem": "cargo", "name": "fixture", "version": "1",
+                "license": "MIT AND (LicenseRef-Fixture-1.0 OR Apache-2.0)"
+            }],
+            "extractedLicenses": [{
+                "licenseId": "LicenseRef-Fixture-1.0",
+                "name": "Fixture license",
+                "source": "https://example.test/license",
+                "file": {"path": "LICENSE", "sha256": format!("{:x}", Sha256::digest(text))}
+            }]
+        }))?)
+    }
+
+    #[test]
+    fn extracted_license_preserves_reviewed_text_only_in_spdx()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let text = "Fixture grant ©\r\n\nExact whitespace.  \n";
+        let reviewed = extracted_license_fixture(directory.path(), text.as_bytes())?;
+        let extracted_licensing_infos =
+            super::load_extracted_licenses(directory.path(), &reviewed)?;
+        let inventory = Inventory {
+            reviewed,
+            packages: vec![],
+            extracted_licensing_infos,
+        };
+        let sbom: serde_json::Value = serde_json::from_str(&render_sbom(&inventory)?)?;
+        assert_eq!(
+            sbom["hasExtractedLicensingInfos"],
+            json!([{
+                "licenseId": "LicenseRef-Fixture-1.0",
+                "name": "Fixture license",
+                "extractedText": text,
+                "seeAlsos": ["https://example.test/license"]
+            }])
+        );
+        assert!(sbom.get("extractedLicensingInfos").is_none());
+        let frontend: serde_json::Value = serde_json::from_str(&render_inventory(
+            &inventory.packages,
+            &inventory.reviewed.reviewed_assets,
+        )?)?;
+        assert!(frontend.get("extractedLicensingInfos").is_none());
+        assert!(frontend.get("hasExtractedLicensingInfos").is_none());
+        assert!(frontend.get("extractedLicenses").is_none());
+        std::fs::write(directory.path().join("LICENSE"), b"changed grant")?;
+        let error = super::load_extracted_licenses(directory.path(), &inventory.reviewed)
+            .err()
+            .ok_or("changed text was accepted")?;
+        assert!(error.to_string().contains("digest changed"));
+        Ok(())
+    }
+
+    #[test]
+    fn extracted_license_requires_exact_unique_referenced_ids()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let reviewed = extracted_license_fixture(directory.path(), b"grant")?;
+        let mut missing = reviewed.clone();
+        missing.extracted_licenses.clear();
+        assert!(super::load_extracted_licenses(directory.path(), &missing).is_err());
+        let mut duplicate = reviewed.clone();
+        duplicate
+            .extracted_licenses
+            .push(duplicate.extracted_licenses[0].clone());
+        assert!(super::load_extracted_licenses(directory.path(), &duplicate).is_err());
+        for id in ["LicenseRef-", "LicenseRef-bad/id", "MIT"] {
+            let mut invalid = reviewed.clone();
+            invalid.extracted_licenses[0].license_id = id.to_owned();
+            assert!(super::load_extracted_licenses(directory.path(), &invalid).is_err());
+        }
+        let mut unused = reviewed.clone();
+        unused.license_conclusions[0].license = "MIT".to_owned();
+        assert!(super::load_extracted_licenses(directory.path(), &unused).is_err());
+        for expression in [
+            "LicenseRef-bad/id",
+            "DocumentRef-other:LicenseRef-Fixture-1.0",
+        ] {
+            let mut invalid_reference = reviewed.clone();
+            invalid_reference.license_conclusions[0].license = expression.to_owned();
+            assert!(super::load_extracted_licenses(directory.path(), &invalid_reference).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inventory_bounds_extracted_text_before_validating_shared_notice()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use sha2::Digest as _;
+        let directory = tempfile::tempdir()?;
+        std::fs::create_dir(directory.path().join("xtask"))?;
+        std::fs::write(directory.path().join("asset.bin"), b"asset")?;
+        std::fs::write(
+            directory.path().join("LICENSE"),
+            vec![b'a'; super::MAX_EXTRACTED_LICENSE_BYTES + 1],
+        )?;
+        let stale_license = json!({"path": "LICENSE", "sha256": "00".repeat(32)});
+        let inputs = json!({
+            "schemaVersion": 1, "documentName": "fixture",
+            "documentNamespace": "urn:fixture", "created": "2026-01-01T00:00:00Z",
+            "workspacePackages": [], "licenseConclusions": [],
+            "reviewedAssets": [{
+                "name": "fixture", "version": "1", "source": "https://example.test/asset",
+                "licenseConcluded": "LicenseRef-Fixture-1.0",
+                "files": [{"path": "asset.bin", "sha256": format!("{:x}", sha2::Sha256::digest(b"asset"))}],
+                "notices": [stale_license.clone()]
+            }],
+            "extractedLicenses": [{
+                "licenseId": "LicenseRef-Fixture-1.0", "name": "Fixture license",
+                "source": "https://example.test/license", "file": stale_license
+            }]
+        });
+        std::fs::write(
+            directory.path().join(super::REVIEWED_INPUTS),
+            serde_json::to_vec(&inputs)?,
+        )?;
+        let error = super::load_inventory(directory.path())
+            .err()
+            .ok_or("oversized shared notice was accepted")?;
+        assert!(
+            error
+                .to_string()
+                .contains("extracted license text exceeds its byte limit")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extracted_license_text_is_bounded_utf8_and_uses_asset_path_rules()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let reviewed = extracted_license_fixture(directory.path(), &[0xff])?;
+        assert!(super::load_extracted_licenses(directory.path(), &reviewed).is_err());
+        let mut reviewed = extracted_license_fixture(
+            directory.path(),
+            &vec![b'a'; super::MAX_EXTRACTED_LICENSE_BYTES],
+        )?;
+        assert!(super::load_extracted_licenses(directory.path(), &reviewed).is_ok());
+        std::fs::write(
+            directory.path().join("LICENSE"),
+            vec![b'a'; super::MAX_EXTRACTED_LICENSE_BYTES + 1],
+        )?;
+        let error = super::load_extracted_licenses(directory.path(), &reviewed)
+            .err()
+            .ok_or("oversized text was accepted")?;
+        assert!(error.to_string().contains("byte limit"));
+        reviewed.extracted_licenses[0].file.path = "../LICENSE".to_owned();
+        assert!(super::load_extracted_licenses(directory.path(), &reviewed).is_err());
+        Ok(())
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one inventory fixture checks identity, byte integrity and the exact source census"
+    )]
+    fn vendored_inventory_preserves_dependency_identity_and_checks_source_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use sha2::Digest as _;
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        std::fs::create_dir(root.join("xtask"))?;
+        std::fs::create_dir_all(root.join("vendor/fixture"))?;
+        let manifest = b"[package]\nname = \"fixture\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\n";
+        std::fs::write(root.join("vendor/fixture/Cargo.toml"), manifest)?;
+        std::fs::write(root.join("vendor/fixture/lib.rs"), b"source")?;
+        std::fs::create_dir(root.join("vendor/fixture/nested"))?;
+        std::fs::write(
+            root.join("vendor/fixture/nested/source.rs"),
+            b"nested source",
+        )?;
+        std::fs::write(root.join("vendor/fixture/LICENSE"), b"license")?;
+        let lock = "version = 4\n[[package]]\nname = \"fixture\"\nversion = \"1.0.0\"\n";
+        std::fs::write(root.join("Cargo.lock"), lock)?;
+        std::fs::write(
+            root.join("pnpm-lock.yaml"),
+            format!(
+                "lockfileVersion: '9.0'\nimporters:\n  .: {{}}\npackages:\n  npm-fixture@1.0.0:\n    resolution: {{integrity: sha512-{}}}\nsnapshots:\n",
+                base64::engine::general_purpose::STANDARD.encode([0_u8; 64])
+            ),
+        )?;
+        let source = format!("https://example.test/repository/tree/{}", "a".repeat(40));
+        let mut inputs = json!({
+            "schemaVersion": 1, "documentName": "fixture",
+            "documentNamespace": "urn:fixture", "created": "2026-01-01T00:00:00Z",
+            "workspacePackages": [{"ecosystem":"npm", "name":"workspace", "version":"1", "license":"MIT", "path":"."}],
+            "licenseConclusions": [],
+            "reviewedVendoredPackages": [{"ecosystem":"cargo", "name":"fixture", "version":"1.0.0", "license":"MIT", "path":"vendor/fixture", "source":source}],
+            "reviewedAssets": [{"name":"fixture source", "version":"1.0.0", "source":source, "licenseConcluded":"MIT",
+                "files":[
+                    {"path":"vendor/fixture/Cargo.toml", "sha256":format!("{:x}", sha2::Sha256::digest(manifest))},
+                    {"path":"vendor/fixture/nested/source.rs", "sha256":format!("{:x}", sha2::Sha256::digest(b"nested source"))},
+                    {"path":"vendor/fixture/lib.rs", "sha256":format!("{:x}", sha2::Sha256::digest(b"source"))}
+                ], "notices":[{"path":"vendor/fixture/LICENSE", "sha256":format!("{:x}", sha2::Sha256::digest(b"license"))}]}]
+        });
+        let save = |inputs: &serde_json::Value| -> Result<(), Box<dyn std::error::Error>> {
+            std::fs::write(
+                root.join(super::REVIEWED_INPUTS),
+                serde_json::to_vec(inputs)?,
+            )?;
+            Ok(())
+        };
+        save(&inputs)?;
+        let inventory = super::load_inventory(root)?;
+        let package = &inventory.packages[0];
+        assert_eq!(package.kind, "dependency");
+        assert_eq!(package.source, source);
+        assert_eq!(package.license_concluded, "MIT");
+        assert!(package.checksum.is_none());
+        let sbom: serde_json::Value = serde_json::from_str(&render_sbom(&inventory)?)?;
+        assert_eq!(sbom["packages"][0]["downloadLocation"], source);
+        std::fs::write(root.join("vendor/fixture/build.rs"), b"fn main() {}")?;
+        assert!(super::load_inventory(root).is_err());
+        std::fs::remove_file(root.join("vendor/fixture/build.rs"))?;
+        assert!(super::load_inventory(root).is_ok());
+        #[cfg(unix)]
+        {
+            std::fs::write(
+                root.join("vendor/fixture/nested\\source.rs"),
+                b"unreviewed source",
+            )?;
+            assert!(super::load_inventory(root).is_err());
+            std::fs::remove_file(root.join("vendor/fixture/nested\\source.rs"))?;
+            std::os::unix::fs::symlink("lib.rs", root.join("vendor/fixture/unlisted.rs"))?;
+            assert!(super::load_inventory(root).is_err());
+            std::fs::remove_file(root.join("vendor/fixture/unlisted.rs"))?;
+        }
+        std::fs::write(root.join("vendor/fixture/lib.rs"), b"changed")?;
+        assert!(super::load_inventory(root).is_err());
+        std::fs::remove_file(root.join("vendor/fixture/lib.rs"))?;
+        assert!(super::load_inventory(root).is_err());
+        std::fs::write(root.join("vendor/fixture/lib.rs"), b"source")?;
+        let original = inputs.clone();
+        inputs["reviewedVendoredPackages"][0]["name"] = json!("wrong");
+        save(&inputs)?;
+        assert!(super::load_inventory(root).is_err());
+        inputs = original.clone();
+        let duplicate = inputs["reviewedVendoredPackages"][0].clone();
+        inputs["reviewedVendoredPackages"]
+            .as_array_mut()
+            .ok_or("missing array")?
+            .push(duplicate);
+        save(&inputs)?;
+        assert!(super::load_inventory(root).is_err());
+        inputs = original.clone();
+        inputs["workspacePackages"].as_array_mut().ok_or("missing array")?.push(json!({"ecosystem":"cargo", "name":"fixture", "version":"1.0.0", "license":"MIT", "path":"vendor/fixture"}));
+        save(&inputs)?;
+        assert!(super::load_inventory(root).is_err());
+        save(&original)?;
+        std::fs::write(root.join("Cargo.lock"), lock.replace("fixture", "other"))?;
+        assert!(super::load_inventory(root).is_err());
+        std::fs::write(
+            root.join("Cargo.lock"),
+            format!(
+                "{lock}source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n",
+                "b".repeat(64)
+            ),
+        )?;
+        assert!(super::load_inventory(root).is_err());
+        inputs = original;
+        inputs["reviewedVendoredPackages"] = json!([]);
+        save(&inputs)?;
+        std::fs::write(root.join("Cargo.lock"), lock)?;
+        assert!(super::load_inventory(root).is_err());
         Ok(())
     }
 }

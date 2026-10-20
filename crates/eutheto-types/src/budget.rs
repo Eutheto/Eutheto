@@ -312,20 +312,28 @@ struct SolveBudgetState {
 }
 
 impl SolveBudgetState {
-    fn remaining_duration(&self) -> (Duration, bool) {
+    fn remaining_duration_until(&self, deadline: Duration) -> (Duration, bool) {
         let now = self.clock.now();
-        if now >= self.deadline {
+        if now >= deadline {
             (Duration::ZERO, true)
         } else {
-            match self.deadline.checked_sub(now) {
+            match deadline.checked_sub(now) {
                 Some(remaining) => (remaining, false),
                 None => (Duration::ZERO, true),
             }
         }
     }
 
+    fn remaining_duration(&self) -> (Duration, bool) {
+        self.remaining_duration_until(self.deadline)
+    }
+
     fn snapshot(&self) -> RemainingSolveBudget {
-        let (remaining, expired) = self.remaining_duration();
+        self.snapshot_until(self.deadline)
+    }
+
+    fn snapshot_until(&self, deadline: Duration) -> RemainingSolveBudget {
+        let (remaining, expired) = self.remaining_duration_until(deadline);
         RemainingSolveBudget {
             remaining_milliseconds: DurationMillis::from_duration_floor_saturating(remaining),
             expired,
@@ -371,6 +379,7 @@ impl ParentSolveBudget {
     pub fn phase_view(&self) -> SolveBudgetView {
         SolveBudgetView {
             state: Arc::clone(&self.state),
+            deadline: self.state.deadline,
         }
     }
 
@@ -412,19 +421,35 @@ impl ParentSolveBudget {
 #[derive(Clone)]
 pub struct SolveBudgetView {
     state: Arc<SolveBudgetState>,
+    deadline: Duration,
 }
 
 impl SolveBudgetView {
-    /// Creates a nested phase view bound to the same original deadline.
+    /// Creates a nested phase view bound to this view's absolute deadline.
     #[must_use]
     pub fn phase_view(&self) -> Self {
         self.clone()
     }
 
+    /// Creates a nested view with a shorter absolute deadline when `cap` expires first.
+    ///
+    /// The cap is anchored to one observation of the shared clock. If adding it to that
+    /// observation would overflow [`Duration`], the cap is mathematically treated as larger
+    /// than every representable deadline and the inherited deadline is retained.
+    #[must_use]
+    pub fn capped_phase_view(&self, cap: Duration) -> Self {
+        let now = self.state.clock.now();
+        let cap_deadline = now.checked_add(cap).unwrap_or(Duration::MAX);
+        Self {
+            state: Arc::clone(&self.state),
+            deadline: self.deadline.min(cap_deadline),
+        }
+    }
+
     /// Observes remaining time, expiry, and cancellation at one instant.
     #[must_use]
     pub fn snapshot(&self) -> RemainingSolveBudget {
-        self.state.snapshot()
+        self.state.snapshot_until(self.deadline)
     }
 
     /// Observes elapsed time from the original parent start without clipping at the deadline.
@@ -436,16 +461,16 @@ impl SolveBudgetView {
         self.state.clock.now().checked_sub(self.state.started_at)
     }
 
-    /// Returns remaining duration, saturated to zero at the deadline.
+    /// Returns remaining duration, saturated to zero at this view's deadline.
     #[must_use]
     pub fn remaining_duration(&self) -> Duration {
-        self.state.remaining_duration().0
+        self.state.remaining_duration_until(self.deadline).0
     }
 
-    /// Returns whether the absolute deadline has been reached.
+    /// Returns whether this view's absolute deadline has been reached.
     #[must_use]
     pub fn is_expired(&self) -> bool {
-        self.state.remaining_duration().1
+        self.state.remaining_duration_until(self.deadline).1
     }
 
     /// Returns whether explicit cancellation has been requested.
@@ -470,6 +495,15 @@ pub enum OperationInterruption {
 }
 
 impl OperationControl {
+    /// Borrows the inherited cancellation signal without creating a disconnected operation.
+    #[must_use]
+    pub fn cancellation(&self) -> &CancellationToken {
+        match self {
+            Self::Cancellation(token) => token,
+            Self::Solve(budget) => &budget.state.cancellation,
+        }
+    }
+
     /// Checks cancellation first, then the original solve deadline when present.
     ///
     /// # Errors
@@ -599,6 +633,45 @@ mod tests {
             duration_millis(300)?
         );
         assert_eq!(nested.checked_elapsed(), Some(Duration::from_millis(700)));
+        Ok(())
+    }
+    #[test]
+    fn capped_view_anchors_after_delay_and_nested_caps_only_shorten()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let clock = Arc::new(FixedMonotonicClock::default());
+        let cancellation = CancellationToken::new();
+        let parent = budget(1_000, &clock, cancellation.clone())?;
+        clock.advance(Duration::from_millis(400))?;
+        let capped = parent
+            .phase_view()
+            .capped_phase_view(Duration::from_millis(500));
+        assert_eq!(
+            capped.snapshot().remaining_milliseconds,
+            duration_millis(500)?
+        );
+        clock.advance(Duration::from_millis(100))?;
+        let nested = capped
+            .phase_view()
+            .capped_phase_view(Duration::from_millis(900));
+        assert_eq!(
+            nested.snapshot().remaining_milliseconds,
+            duration_millis(400)?
+        );
+        assert_eq!(nested.checked_elapsed(), Some(Duration::from_millis(500)));
+        cancellation.cancel();
+        assert!(nested.snapshot().cancelled);
+        Ok(())
+    }
+
+    #[test]
+    fn an_overflowing_cap_retains_the_finite_inherited_deadline()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let clock = Arc::new(FixedMonotonicClock::default());
+        let parent = budget(250, &clock, CancellationToken::new())?;
+        let capped = parent.phase_view().capped_phase_view(Duration::MAX);
+        assert_eq!(capped.remaining_duration(), Duration::from_millis(250));
+        clock.advance(Duration::from_millis(250))?;
+        assert!(capped.is_expired());
         Ok(())
     }
 

@@ -1,0 +1,1111 @@
+{
+  "format": "eutheto/share-result",
+  "schemaVersion": 1,
+  "profile": "participant-friendly",
+  "generatedAt": "2024-03-10T08:00:00Z",
+  "applicationVersion": "test-disposable-fixture",
+  "renderer": {
+    "version": 1,
+    "javascriptSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "cssSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "title": {
+    "kind": "authored",
+    "text": "Representative report – José → #include \"secret.typ\""
+  },
+  "planVersion": "Immutable accepted fixture",
+  "locale": "en-US",
+  "timeZone": "UTC",
+  "horizon": {
+    "start": "2024-03-10T00:00:00Z",
+    "end": "2024-03-11T00:00:00Z"
+  },
+  "source": {
+    "scenarioId": "018f0f04-0000-7000-8000-000000000001",
+    "scenarioRevision": 1,
+    "solutionId": "018f0f04-0000-7000-8000-000000000002",
+    "resultSchemaVersion": 1,
+    "acceptedResultChecksum": "2222222222222222222222222222222222222222222222222222222222222222",
+    "verificationReportChecksum": "3333333333333333333333333333333333333333333333333333333333333333",
+    "sourceDocumentHash": "4444444444444444444444444444444444444444444444444444444444444444",
+    "origin": "storedTerminal",
+    "observedCurrentRevision": 2,
+    "verification": "verifiedFeasible",
+    "solver": {
+      "backendId": "test-backend",
+      "recordedVersion": "fixture"
+    }
+  },
+  "privacy": {
+    "includePersonNames": true,
+    "includeAuthoredLabels": true,
+    "includeStaffing": true,
+    "includeChanges": true,
+    "includeFairnessActuals": true
+  },
+  "content": {
+    "kind": "workforce",
+    "schedule": {
+      "people": [
+        {
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "label": {
+            "kind": "authored",
+            "text": "Zoë Ελληνικά Кириллица #read(\"/etc/passwd\") <script>alert(1)</script>"
+          }
+        },
+        {
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "label": {
+            "kind": "authored",
+            "text": "LongLabelabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
+          }
+        },
+        {
+          "personId": "018f0f04-0000-7000-8000-00000000000c",
+          "label": {
+            "kind": "authored",
+            "text": "Zero workload person"
+          }
+        }
+      ],
+      "assignmentTypes": [
+        {
+          "entityId": "018f0f04-0000-7000-8000-000000000014",
+          "label": {
+            "kind": "authored",
+            "text": "Work #eval(\"malicious\")"
+          }
+        }
+      ],
+      "locations": [
+        {
+          "entityId": "018f0f04-0000-7000-8000-00000000001e",
+          "label": {
+            "kind": "authored",
+            "text": "Location A"
+          }
+        }
+      ],
+      "shifts": [
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000064",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000065",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000066",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000067",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000068",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000069",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006a",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006b",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006c",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006d",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006e",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006f",
+          "assignmentTypeId": "018f0f04-0000-7000-8000-000000000014",
+          "locationId": "018f0f04-0000-7000-8000-00000000001e",
+          "interval": {
+            "startsAt": {
+              "resolved": {
+                "instant": "2024-03-10T08:00:00Z",
+                "local": "2024-03-10T08:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T08:00:00"
+            },
+            "endsAt": {
+              "resolved": {
+                "instant": "2024-03-10T16:00:00Z",
+                "local": "2024-03-10T16:00:00",
+                "offsetSeconds": 0
+              },
+              "actual": "2024-03-10T16:00:00"
+            }
+          },
+          "reportingDate": "2024-03-10"
+        }
+      ],
+      "assignments": [
+        {
+          "assignmentId": "assignment-census-000-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-000000000064"
+        },
+        {
+          "assignmentId": "assignment-census-000-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-000000000064"
+        },
+        {
+          "assignmentId": "assignment-census-001-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-000000000065"
+        },
+        {
+          "assignmentId": "assignment-census-001-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-000000000065"
+        },
+        {
+          "assignmentId": "assignment-census-002-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-000000000066"
+        },
+        {
+          "assignmentId": "assignment-census-002-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-000000000066"
+        },
+        {
+          "assignmentId": "assignment-census-003-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-000000000067"
+        },
+        {
+          "assignmentId": "assignment-census-003-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-000000000067"
+        },
+        {
+          "assignmentId": "assignment-census-004-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-000000000068"
+        },
+        {
+          "assignmentId": "assignment-census-004-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-000000000068"
+        },
+        {
+          "assignmentId": "assignment-census-005-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-000000000069"
+        },
+        {
+          "assignmentId": "assignment-census-005-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-000000000069"
+        },
+        {
+          "assignmentId": "assignment-census-006-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006a"
+        },
+        {
+          "assignmentId": "assignment-census-006-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006a"
+        },
+        {
+          "assignmentId": "assignment-census-007-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006b"
+        },
+        {
+          "assignmentId": "assignment-census-007-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006b"
+        },
+        {
+          "assignmentId": "assignment-census-008-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006c"
+        },
+        {
+          "assignmentId": "assignment-census-008-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006c"
+        },
+        {
+          "assignmentId": "assignment-census-009-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006d"
+        },
+        {
+          "assignmentId": "assignment-census-009-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006d"
+        },
+        {
+          "assignmentId": "assignment-census-010-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006e"
+        },
+        {
+          "assignmentId": "assignment-census-010-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006e"
+        },
+        {
+          "assignmentId": "assignment-census-011-0",
+          "personId": "018f0f04-0000-7000-8000-00000000000a",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006f"
+        },
+        {
+          "assignmentId": "assignment-census-011-1",
+          "personId": "018f0f04-0000-7000-8000-00000000000b",
+          "shiftId": "018f0f04-0000-7000-8000-00000000006f"
+        }
+      ],
+      "staffing": [
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000064",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000065",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000066",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000067",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000068",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-000000000069",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006a",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006b",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006c",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006d",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006e",
+          "assignedCount": 2
+        },
+        {
+          "shiftId": "018f0f04-0000-7000-8000-00000000006f",
+          "assignedCount": 2
+        }
+      ],
+      "changes": [
+        {
+          "basis": "recordedOriginal",
+          "original": {
+            "scenarioId": "018f0f04-0000-7000-8000-000000000001",
+            "scenarioRevision": 0,
+            "solutionId": "018f0f04-0000-7000-8000-000000000003",
+            "acceptedResultChecksum": "5555555555555555555555555555555555555555555555555555555555555555",
+            "admission": "notEstablished"
+          },
+          "rows": [
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000064",
+              "membership": "retained",
+              "previous": {
+                "availability": "available",
+                "facts": {
+                  "personLabel": {
+                    "kind": "authored",
+                    "text": "Historical name"
+                  },
+                  "assignmentType": {
+                    "entityId": "018f0f04-0000-7000-8000-000000000015",
+                    "label": {
+                      "kind": "authored",
+                      "text": "Historical work"
+                    }
+                  },
+                  "location": null,
+                  "interval": {
+                    "startsAt": {
+                      "resolved": {
+                        "instant": "2024-03-10T08:00:00Z",
+                        "local": "2024-03-10T08:00:00",
+                        "offsetSeconds": 0
+                      },
+                      "actual": "2024-03-10T08:00:00"
+                    },
+                    "endsAt": {
+                      "resolved": {
+                        "instant": "2024-03-10T16:00:00Z",
+                        "local": "2024-03-10T16:00:00",
+                        "offsetSeconds": 0
+                      },
+                      "actual": "2024-03-10T16:00:00"
+                    }
+                  },
+                  "reportingDate": "2024-03-09"
+                }
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000064",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000065",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000065",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000066",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000066",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000067",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000067",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000068",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000068",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000069",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000069",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006a",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006a",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006b",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006b",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006c",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006c",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006d",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006d",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006e",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006e",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006f",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006f",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-000000000063",
+              "shiftId": "018f0f04-0000-7000-8000-0000000003e7",
+              "membership": "removed",
+              "previous": {
+                "availability": "unavailable"
+              }
+            }
+          ]
+        },
+        {
+          "basis": "recordedManual",
+          "original": null,
+          "rows": [
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000064",
+              "membership": "retained",
+              "previous": {
+                "availability": "available",
+                "facts": {
+                  "personLabel": {
+                    "kind": "authored",
+                    "text": "Historical name"
+                  },
+                  "assignmentType": {
+                    "entityId": "018f0f04-0000-7000-8000-000000000015",
+                    "label": {
+                      "kind": "authored",
+                      "text": "Historical work"
+                    }
+                  },
+                  "location": null,
+                  "interval": {
+                    "startsAt": {
+                      "resolved": {
+                        "instant": "2024-03-10T08:00:00Z",
+                        "local": "2024-03-10T08:00:00",
+                        "offsetSeconds": 0
+                      },
+                      "actual": "2024-03-10T08:00:00"
+                    },
+                    "endsAt": {
+                      "resolved": {
+                        "instant": "2024-03-10T16:00:00Z",
+                        "local": "2024-03-10T16:00:00",
+                        "offsetSeconds": 0
+                      },
+                      "actual": "2024-03-10T16:00:00"
+                    }
+                  },
+                  "reportingDate": "2024-03-09"
+                }
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000064",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000065",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000065",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000066",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000066",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000067",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000067",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000068",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000068",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-000000000069",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-000000000069",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006a",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006a",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006b",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006b",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006c",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006c",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006d",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006d",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006e",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006e",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000a",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006f",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-00000000000b",
+              "shiftId": "018f0f04-0000-7000-8000-00000000006f",
+              "membership": "retained",
+              "previous": {
+                "availability": "unavailable"
+              }
+            },
+            {
+              "personId": "018f0f04-0000-7000-8000-000000000063",
+              "shiftId": "018f0f04-0000-7000-8000-0000000003e7",
+              "membership": "removed",
+              "previous": {
+                "availability": "unavailable"
+              }
+            }
+          ]
+        }
+      ],
+      "fairnessActuals": [
+        {
+          "measure": "scheduledMinutes",
+          "membership": "reportingDate",
+          "overlap": "sum",
+          "people": [
+            "018f0f04-0000-7000-8000-00000000000a",
+            "018f0f04-0000-7000-8000-00000000000b",
+            "018f0f04-0000-7000-8000-00000000000c"
+          ],
+          "qualifyingShifts": [
+            "018f0f04-0000-7000-8000-000000000064",
+            "018f0f04-0000-7000-8000-000000000065",
+            "018f0f04-0000-7000-8000-000000000066",
+            "018f0f04-0000-7000-8000-000000000067",
+            "018f0f04-0000-7000-8000-000000000068",
+            "018f0f04-0000-7000-8000-000000000069",
+            "018f0f04-0000-7000-8000-00000000006a",
+            "018f0f04-0000-7000-8000-00000000006b",
+            "018f0f04-0000-7000-8000-00000000006c",
+            "018f0f04-0000-7000-8000-00000000006d",
+            "018f0f04-0000-7000-8000-00000000006e",
+            "018f0f04-0000-7000-8000-00000000006f"
+          ],
+          "periods": [
+            {
+              "interval": {
+                "startsAt": {
+                  "resolved": {
+                    "instant": "2024-03-10T08:00:00Z",
+                    "local": "2024-03-10T08:00:00",
+                    "offsetSeconds": 0
+                  },
+                  "actual": "2024-03-10T08:00:00"
+                },
+                "endsAt": {
+                  "resolved": {
+                    "instant": "2024-03-10T16:00:00Z",
+                    "local": "2024-03-10T16:00:00",
+                    "offsetSeconds": 0
+                  },
+                  "actual": "2024-03-10T16:00:00"
+                }
+              },
+              "actuals": [
+                {
+                  "personId": "018f0f04-0000-7000-8000-00000000000a",
+                  "actual": {
+                    "numerator": "-7",
+                    "denominator": "3"
+                  }
+                },
+                {
+                  "personId": "018f0f04-0000-7000-8000-00000000000b",
+                  "actual": {
+                    "numerator": "480",
+                    "denominator": "1"
+                  }
+                },
+                {
+                  "personId": "018f0f04-0000-7000-8000-00000000000c",
+                  "actual": {
+                    "numerator": "0",
+                    "denominator": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

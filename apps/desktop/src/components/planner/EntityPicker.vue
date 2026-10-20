@@ -17,6 +17,9 @@ const localQuery = ref(props.query);
 const pendingQuery = ref<string | null>(null);
 const invalidatedRequestKey = ref<string | null>(null);
 const locked = computed(() => props.disabled || props.readOnly);
+const inputLabel = computed(() =>
+  plannerMessage(props.searchDisabled ? "entity.choose" : "entity.search", { label: props.label }),
+);
 const inputAttrs = computed(() =>
   Object.fromEntries(
     Object.entries(attrs).filter(([key]) => !["class", "style", "aria-describedby"].includes(key)),
@@ -83,7 +86,7 @@ const selectedLabel = computed(() =>
 const stateMessage = computed(() => {
   if (oversized.value) return plannerMessage("entity.pageLimit");
   if (props.page.status === "idle" && localQuery.value === props.query)
-    return plannerMessage("entity.idle");
+    return plannerMessage(props.searchDisabled ? "entity.browse" : "entity.idle");
   if (!pageMatches.value) return plannerMessage("entity.stale");
   if (props.page.status === "loading") return plannerMessage("entity.loading");
   if (props.page.status === "error") return props.page.message;
@@ -94,13 +97,13 @@ const stateMessage = computed(() => {
 // Capture even intermediate IME text to invalidate old options immediately.
 // Reka alone decides when composition has completed and emits a search value.
 function captureInput(event: Event) {
-  if (locked.value || !(event.target instanceof HTMLInputElement)) return;
+  if (locked.value || props.searchDisabled || !(event.target instanceof HTMLInputElement)) return;
   invalidatedRequestKey.value = props.requestKey;
   localQuery.value = event.target.value;
   pendingQuery.value = event.target.value;
 }
 function search(query: string) {
-  if (locked.value) return;
+  if (locked.value || props.searchDisabled) return;
   invalidatedRequestKey.value = props.requestKey;
   localQuery.value = query;
   pendingQuery.value = query === props.query ? null : query;
@@ -148,9 +151,7 @@ watchPostEffect(() => {
 
 <template>
   <div ref="host" class="field-stack" :class="attrs.class" :style="attrs.style as StyleValue">
-    <label :id="`${fieldId}-label`" :for="fieldId">{{
-      plannerMessage("entity.search", { label })
-    }}</label>
+    <label :id="`${fieldId}-label`" :for="fieldId">{{ inputLabel }}</label>
     <p v-if="description" :id="`${fieldId}-description`" class="field-help">{{ description }}</p>
     <ComboboxRoot
       :model-value="modelValue ? entityKey(modelValue) : null"
@@ -169,7 +170,8 @@ watchPostEffect(() => {
         v-bind="inputAttrs"
         :id="fieldId"
         :model-value="localQuery"
-        :readonly="readOnly"
+        :readonly="readOnly || searchDisabled"
+        :aria-autocomplete="searchDisabled ? 'none' : 'list'"
         :disabled="disabled"
         :aria-required="
           required ||
@@ -181,7 +183,7 @@ watchPostEffect(() => {
           !!error || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true' || undefined
         "
         :aria-describedby="describedBy"
-        :aria-label="plannerMessage('entity.search', { label })"
+        :aria-label="inputLabel"
         @input.capture="captureInput"
         @compositionend.capture="captureInput"
         @update:model-value="search"

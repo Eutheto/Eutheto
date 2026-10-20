@@ -4,21 +4,30 @@
 mod workforce_fixture;
 
 use eutheto_core::{
-    AppCommand, AppDependencies, AppPaths, EuthetoApp, StoredSolveFailure, StoredSolveRequest,
+    AppCommand, AppCommandResult, AppDependencies, AppPaths, EuthetoApp,
+    SolveEstimateModelRequestV1, StoredBaselineSourceV1, StoredObjectiveSelectionV1,
+    StoredSolveFailure, StoredSolveRequest,
 };
 use eutheto_domain_api::{CompileContext, DomainPackRegistry};
-use eutheto_domain_ir::{RunManifestV1, RunPhaseTimingsV1, RunTerminalOutcomeV1};
+use eutheto_domain_ir::{
+    AUTHORED_OBJECTIVE_PROFILE_ID, ObjectiveProfileId, RunManifest, RunObjectiveOperation,
+    RunPhaseTimingsV1, RunTerminalOutcomeV1,
+};
 use eutheto_planning_ir::{
     PlanningIrLimitsV1, PlanningProblemSummary, canonical_ir_hash, canonical_objective_policy_hash,
 };
 use eutheto_solver_api::*;
-use eutheto_store::{InitializationOutcome, NewProject, NewSolveRunV1, SqliteScenarioStore};
+use eutheto_store::{
+    InitializationOutcome, NewProject, NewSolveRunV1, SolveRunListRequestV1, SqliteScenarioStore,
+    StartedSolveRunV1,
+};
 use eutheto_types::{
     ActorRef, AppError, BackendId, BackendSelection, CancellationToken, Clock, CommandEnvelope,
     CommandSource, DomainCommandEnvelope, DurationMillis, ExplanationMode, FixedClock,
-    FixedIdGenerator, FixedMonotonicClock, MonotonicClock, OperationControl, PreservationPolicy,
-    ReproducibilityMode, ResourceLimits, Revision, Rfc3339Timestamp, ScenarioCommand,
-    ScenarioDocument, SolveMode, SolveOptions, SolveStatus, WorkerThreadPolicy,
+    FixedIdGenerator, FixedMonotonicClock, MonotonicClock, OperationControl, ParentSolveBudget,
+    PreservationPolicy, ReproducibilityMode, ResourceLimits, Revision, Rfc3339Timestamp,
+    ScenarioCommand, ScenarioDocument, SolveMode, SolveOptions, SolveStatus, SystemClock,
+    WorkerThreadPolicy,
 };
 use eutheto_workforce::{WorkforcePack, commands};
 use serde_json::json;
@@ -53,6 +62,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> TestResult<Self> {
+        Self::new_with_external_plan(false).await
+    }
+
+    async fn new_with_external_plan(include_external: bool) -> TestResult<Self> {
         let directory = tempfile::Builder::new()
             .prefix("eutheto-headless-stored-")
             .tempdir_in(dirs::home_dir().ok_or("platform home directory is unavailable")?)?;
@@ -68,6 +81,24 @@ impl Fixture {
                 "scope": {"people": {"kind": "all"}}
             }),
         );
+        if include_external {
+            let mut person = document.domain.entities[&id(1).parse()?].clone();
+            person["id"] = json!(id(12));
+            person["name"] = json!("Sky");
+            person["externalId"] = json!("staff-02");
+            document.domain.entities.insert(id(12).parse()?, person);
+            document.domain.entities.insert(
+                id(50).parse()?,
+                json!({
+                    "kind": "externalStartingPlan", "schemaVersion": 1,
+                    "id": id(50), "name": "Unverified starting plan",
+                    "assignments": [{"personId": id(1), "shiftId": id(8)}],
+                    "originalImport": {
+                        "sourceBlake3": "a".repeat(64), "pairContentHash": "b".repeat(64)
+                    }
+                }),
+            );
+        }
         store
             .create_project(NewProject {
                 document: document.clone(),
@@ -115,6 +146,7 @@ impl Fixture {
             scenario_id: self.document.scenario_id,
             expected_revision: Some(Revision::INITIAL),
             options: options()?,
+            objective_selection: None,
         })
     }
 
@@ -123,6 +155,7 @@ impl Fixture {
             .expected_revision
             .ok_or("seed requires an explicit revision")?;
         let context = CompileContext {
+            objective_context: None,
             scenario_revision: expected_revision.value(),
             semantic_metadata: BTreeMap::new(),
             control: OperationControl::Cancellation(CancellationToken::default()),
@@ -135,6 +168,7 @@ impl Fixture {
         let mut bound_options = request.options.clone();
         bound_options.backend = BackendSelection::Specific(BackendId::new(BACKEND)?);
         Ok(NewSolveRunV1 {
+            objective_context: None,
             run_id: id(400).parse()?,
             request_id: request.request_id,
             scenario_id: request.scenario_id,
@@ -158,6 +192,32 @@ impl Fixture {
             temporary_condition_hash: None,
             started_at: NOW.parse()?,
         })
+    }
+    async fn start_seeded(&self, mut seeded: NewSolveRunV1) -> TestResult<StartedSolveRunV1> {
+        let project = self.store.get_project(seeded.scenario_id).await?;
+        let (capture, _) = self
+            .store
+            .capture_solve_snapshot(
+                seeded.scenario_id,
+                seeded.expected_revision,
+                project.document,
+                SystemClock.now(),
+                None,
+                OperationControl::Cancellation(CancellationToken::new()),
+                None,
+            )
+            .await?;
+        // Recovery uses real wall time; admission must follow the captured snapshot.
+        seeded.started_at = SystemClock.now();
+        self.store
+            .start_solve_run(
+                seeded,
+                capture.stamp,
+                Some(capture.snapshot_id),
+                OperationControl::Cancellation(CancellationToken::new()),
+            )
+            .await
+            .map_err(Into::into)
     }
 
     async fn advance_revision(&self) -> TestResult {
@@ -194,6 +254,114 @@ impl Fixture {
         );
         Ok(())
     }
+
+    async fn change_external_plan(
+        &self,
+        app: &EuthetoApp,
+        revision: Revision,
+        remove: bool,
+    ) -> TestResult<Revision> {
+        let entity_id: eutheto_types::EntityId = id(50).parse()?;
+        let (command_type, payload) = if remove {
+            (commands::REMOVE_ENTITY, json!({"entityId": entity_id}))
+        } else {
+            let mut entity = self
+                .store
+                .get_project(self.document.scenario_id)
+                .await?
+                .document
+                .domain
+                .entities[&entity_id]
+                .clone();
+            entity["assignments"] = json!([{"personId": id(12), "shiftId": id(8)}]);
+            (commands::UPDATE_ENTITY, json!({"entity": entity}))
+        };
+        let AppCommandResult::ScenarioCommand(result) = app
+            .execute(AppCommand::ApplyScenario {
+                request_id: id(310 + u32::try_from(revision.value())?).parse()?,
+                envelope: CommandEnvelope {
+                    command_id: id(210 + u32::try_from(revision.value())?).parse()?,
+                    scenario_id: self.document.scenario_id,
+                    expected_revision: revision,
+                    actor: ActorRef {
+                        actor_id: None,
+                        display_name: "External source capture regression".to_owned(),
+                    },
+                    source: CommandSource::System,
+                    command: ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+                        command_type: command_type.to_owned(),
+                        payload,
+                    }),
+                },
+                truncate_redo: false,
+            })
+            .await
+            .map_err(boxed)?
+        else {
+            return Err("external edit omitted receipt".into());
+        };
+        Ok(result.new_revision)
+    }
+}
+
+#[tokio::test]
+async fn stored_workforce_model_estimate_compiles_without_backend_or_durable_run() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let app = fixture.app(SolverRegistry::production()?, fixture.dependencies()?);
+    let request = SolveEstimateModelRequestV1 {
+        scenario_id: fixture.document.scenario_id,
+        expected_revision: Revision::INITIAL,
+    };
+    let budget = || -> TestResult<ParentSolveBudget> {
+        Ok(ParentSolveBudget::new(
+            DurationMillis::new(30_000)?,
+            Arc::new(FixedMonotonicClock::default()),
+            CancellationToken::new(),
+        )?)
+    };
+    let result = app
+        .estimate_stored_model(request, budget()?)
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(result.scenario_id, fixture.document.scenario_id);
+    assert_eq!(result.scenario_revision, Revision::INITIAL);
+    assert_eq!(result.current_revision, Revision::INITIAL);
+    assert!(!result.stale);
+    assert!(result.compiled);
+    assert!(!result.solved);
+    assert_eq!(result.candidate_count, Some(1));
+    assert!(
+        fixture
+            .store
+            .list_solve_runs(SolveRunListRequestV1 {
+                scenario_id: fixture.document.scenario_id,
+                scenario_revision: None,
+                limit: 10,
+            })
+            .await?
+            .is_empty()
+    );
+
+    fixture.advance_revision().await?;
+    assert!(matches!(
+        app.estimate_stored_model(request, budget()?).await,
+        Err(AppError::Conflict {
+            expected_revision: Revision::INITIAL,
+            actual_revision,
+        }) if actual_revision == Revision::new(1)
+    ));
+    assert!(
+        fixture
+            .store
+            .list_solve_runs(SolveRunListRequestV1 {
+                scenario_id: fixture.document.scenario_id,
+                scenario_revision: None,
+                limit: 10,
+            })
+            .await?
+            .is_empty()
+    );
+    Ok(())
 }
 
 fn options() -> TestResult<SolveOptions> {
@@ -248,10 +416,8 @@ async fn running_and_terminal_retries_preserve_original_authority_before_current
 -> TestResult {
     let fixture = Fixture::new().await?;
     let request = fixture.request()?;
-    let started = fixture
-        .store
-        .start_solve_run(fixture.seed_run(&request)?)
-        .await?;
+    let seeded = fixture.seed_run(&request)?;
+    let started = fixture.start_seeded(seeded).await?;
     fixture.advance_revision().await?;
     let mut dependencies = fixture.dependencies()?;
     let clock = Arc::new(ForbiddenClock {
@@ -297,7 +463,7 @@ async fn running_and_terminal_retries_preserve_original_authority_before_current
         running.state()
     );
 
-    let manifest = RunManifestV1::new(
+    let manifest = RunManifest::new(
         started.input.run_id,
         started.input.checksum.clone(),
         RunTerminalOutcomeV1::NoResult {
@@ -313,7 +479,7 @@ async fn running_and_terminal_retries_preserve_original_authority_before_current
     )?;
     fixture
         .store
-        .finalize_terminal_run(manifest.clone())
+        .finalize_terminal_run(manifest.clone(), None)
         .await?;
     let terminal = Box::pin(app.solve_stored(request.clone(), &mut Progress))
         .await
@@ -351,6 +517,93 @@ async fn running_and_terminal_retries_preserve_original_authority_before_current
     Ok(())
 }
 
+#[tokio::test]
+async fn native_retries_inherit_only_the_recorded_implicit_explanation_policy() -> TestResult {
+    for terminal in [false, true] {
+        let fixture = Fixture::new().await?;
+        let legacy = fixture.request()?;
+        let seeded = fixture.seed_run(&legacy)?;
+        let started = fixture.start_seeded(seeded).await?;
+        if terminal {
+            fixture
+                .store
+                .finalize_terminal_run(
+                    RunManifest::new(
+                        started.input.run_id,
+                        started.input.checksum.clone(),
+                        RunTerminalOutcomeV1::NoResult {
+                            status: SolveStatus::BackendFailed,
+                        },
+                        started.started_at,
+                        started.started_at,
+                        Some(DurationMillis::ZERO),
+                        None,
+                        None,
+                        RunPhaseTimingsV1::default(),
+                        Vec::new(),
+                    )?,
+                    None,
+                )
+                .await?;
+        }
+        fixture.advance_revision().await?;
+        let app = fixture.app(SolverRegistry::production()?, fixture.dependencies()?);
+        let mut current = legacy.clone();
+        current.options.explanation_mode = ExplanationMode::Standard;
+        // Fully specified Core callers still cannot change a recorded option on replay.
+        assert!(matches!(
+            app.solve_stored(current.clone(), &mut Progress).await,
+            Err(StoredSolveFailure::BeforeStart(AppError::Validation(_)))
+        ));
+        let mut native = current.clone();
+        let retained = app
+            .solve_lookup_native_request(&mut native)
+            .await
+            .map_err(boxed)?
+            .ok_or("native replay lost its retained run")?;
+        assert_eq!(retained.input, started.input);
+        assert_eq!(retained.manifest.is_some(), terminal);
+        assert_eq!(native.options.explanation_mode, ExplanationMode::None);
+        assert_eq!(native.options, legacy.options);
+
+        let mut new_request = current.clone();
+        new_request.request_id = id(600).parse()?;
+        assert!(
+            app.solve_lookup_native_request(&mut new_request)
+                .await
+                .map_err(boxed)?
+                .is_none()
+        );
+        assert_eq!(new_request.options, current.options);
+
+        let mut wrong_mode = current.clone();
+        wrong_mode.options.mode = SolveMode::Deep;
+        let mut wrong_limit = current.clone();
+        wrong_limit.options.time_limit_milliseconds = DurationMillis::new(10_001)?;
+        let mut wrong_source = current.clone();
+        wrong_source.scenario_id = id(601).parse()?;
+        let mut wrong_revision = current.clone();
+        wrong_revision.expected_revision = Some(Revision::new(1));
+        for mut changed in [wrong_mode, wrong_limit, wrong_source, wrong_revision] {
+            let submitted_options = changed.options.clone();
+            assert!(matches!(
+                app.solve_lookup_native_request(&mut changed).await,
+                Err(AppError::Validation(_))
+            ));
+            assert_eq!(changed.options, submitted_options);
+        }
+        assert_eq!(
+            fixture
+                .store
+                .load_solve_run_by_request(legacy.request_id)
+                .await?
+                .ok_or("replay changed durable request ownership")?,
+            retained
+        );
+    }
+    Ok(())
+}
+
 // This backend can only fail. It exercises dispatch/finalization, never accepted-result authority.
 struct FailingBackend {
     descriptor: SolverDescriptor,
@@ -358,6 +611,7 @@ struct FailingBackend {
     matrix: CapabilityMatrix,
     cancellation: Option<CancellationToken>,
     invocations: AtomicU32,
+    expire_backend_clock: Option<Arc<FixedMonotonicClock>>,
 }
 
 impl SolverBackend for FailingBackend {
@@ -366,6 +620,10 @@ impl SolverBackend for FailingBackend {
     }
     fn runtime_identity(&self) -> &BackendRuntimeIdentity {
         &self.runtime
+    }
+
+    fn verified_worker_manifest_sha256(&self) -> Option<&[u8; 32]> {
+        None
     }
     fn compatibility(
         &self,
@@ -383,13 +641,20 @@ impl SolverBackend for FailingBackend {
     }
     fn solve<'a>(
         &'a self,
-        _request: &'a SolveRequest,
+        request: &'a SolveRequest,
         _output: &'a mut dyn BackendOutputSink,
     ) -> BackendSolveFuture<'a> {
         Box::pin(async move {
             self.invocations.fetch_add(1, Ordering::SeqCst);
             if let Some(cancellation) = &self.cancellation {
                 cancellation.cancel();
+            }
+            if let Some(clock) = &self.expire_backend_clock {
+                assert!(
+                    clock
+                        .advance(request.dispatch_budget().remaining_backend_duration())
+                        .is_ok()
+                );
             }
             Err(BackendError::new(
                 "tests.headless.failure",
@@ -401,6 +666,7 @@ impl SolverBackend for FailingBackend {
 
 fn failing_registry(
     cancellation: Option<CancellationToken>,
+    expire_backend_clock: Option<Arc<FixedMonotonicClock>>,
 ) -> TestResult<(SolverRegistry, Arc<FailingBackend>)> {
     let generated = CapabilityMatrix::generated()?;
     let features: Vec<_> = generated.features().cloned().collect();
@@ -456,6 +722,7 @@ fn failing_registry(
         runtime,
         matrix: matrix.clone(),
         cancellation,
+        expire_backend_clock,
         invocations: AtomicU32::new(0),
     });
     let registered: Vec<Arc<dyn SolverBackend>> = vec![backend.clone()];
@@ -463,16 +730,22 @@ fn failing_registry(
 }
 
 #[tokio::test]
-async fn backend_failure_and_post_start_cancellation_commit_truthful_terminal_state_without_results()
+async fn backend_failure_cancellation_and_time_limit_commit_truthful_terminal_state_without_results()
 -> TestResult {
-    for (cancel_after_start, expected_status) in [
-        (false, SolveStatus::BackendFailed),
-        (true, SolveStatus::Cancelled),
+    for (cancel_after_start, expire_backend, expected_status) in [
+        (false, false, SolveStatus::BackendFailed),
+        (true, false, SolveStatus::Cancelled),
+        (false, true, SolveStatus::NoSolutionWithinLimit),
     ] {
         let fixture = Fixture::new().await?;
-        let dependencies = fixture.dependencies()?;
+        let mut dependencies = fixture.dependencies()?;
+        let clock = Arc::new(FixedMonotonicClock::default());
+        dependencies.monotonic_clock = clock.clone();
         let cancellation = dependencies.cancellation.clone();
-        let (registry, backend) = failing_registry(cancel_after_start.then_some(cancellation))?;
+        let (registry, backend) = failing_registry(
+            cancel_after_start.then_some(cancellation),
+            expire_backend.then_some(clock),
+        )?;
         let app = fixture.app(registry, dependencies);
         let request = fixture.request()?;
         let outcome = Box::pin(app.solve_stored(request.clone(), &mut Progress))
@@ -491,6 +764,42 @@ async fn backend_failure_and_post_start_cancellation_commit_truthful_terminal_st
                 status: expected_status
             }
         );
+        if expire_backend {
+            let manifest = outcome.state().manifest.as_ref().ok_or("manifest")?;
+            let native = manifest
+                .native_observations
+                .as_ref()
+                .ok_or("native observations")?;
+            assert_eq!(native.terminal_status, SolveStatus::NoSolutionWithinLimit);
+            assert_eq!(
+                native.terminal_reason,
+                eutheto_domain_ir::RunNativeRouterReason::BackendTerminated
+            );
+            let attempt = native.attempt.as_ref().ok_or("attempt")?;
+            assert_eq!(attempt.invocation_index, Some(1));
+            assert_eq!(
+                attempt.termination,
+                eutheto_domain_ir::RunNativeAttemptTermination::BackendOutcome(
+                    eutheto_domain_ir::RunNativeTerminationReason::TimeLimit,
+                )
+            );
+            assert!(attempt.outcome.is_none());
+            assert_eq!(
+                attempt.backend_failure_code.as_deref(),
+                Some("tests.headless.failure")
+            );
+            assert_eq!(
+                manifest.elapsed_milliseconds,
+                Some(attempt.backend_limit_milliseconds)
+            );
+            assert_eq!(
+                manifest.phase_timings.backend_milliseconds,
+                Some(attempt.backend_limit_milliseconds)
+            );
+            assert!(attempt.backend_limit_milliseconds < request.options.time_limit_milliseconds);
+            let decoded = RunManifest::from_json(&serde_json::to_vec(manifest)?)?;
+            assert_eq!(&decoded, manifest);
+        }
         assert!(outcome.accepted_result_id().is_none());
         assert!(outcome.portable_result().is_none());
         assert_eq!(
@@ -524,7 +833,7 @@ async fn backend_failure_and_post_start_cancellation_commit_truthful_terminal_st
 #[tokio::test]
 async fn compilation_resource_limit_starts_no_run_and_preserves_stored_revision() -> TestResult {
     let fixture = Fixture::new().await?;
-    let (registry, backend) = failing_registry(None)?;
+    let (registry, backend) = failing_registry(None, None)?;
     let app = fixture.app(registry, fixture.dependencies()?);
     let mut request = fixture.request()?;
     request.options.resource_limits.max_variables = 1;
@@ -572,7 +881,7 @@ async fn current_revision_capture_is_explicit_and_observed_revision_conflicts_ne
     fixture.advance_revision().await?;
     let mut dependencies = fixture.dependencies()?;
     dependencies.ids = Arc::new(FixedIdGenerator::new([id(400).parse()?, id(401).parse()?]));
-    let (registry, backend) = failing_registry(None)?;
+    let (registry, backend) = failing_registry(None, None)?;
     let app = fixture.app(registry, dependencies);
     let mut request = fixture.request()?;
     assert!(matches!(
@@ -597,5 +906,411 @@ async fn current_revision_capture_is_explicit_and_observed_revision_conflicts_ne
         "River at the newer revision"
     );
     assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_stored_objective_selection_is_rejected_before_run_admission() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let (registry, backend) = failing_registry(None, None)?;
+    let app = fixture.app(registry, fixture.dependencies()?);
+    let mut request = fixture.request()?;
+    request.objective_selection = Some(StoredObjectiveSelectionV1 {
+        schema_version: 2,
+        profile_id: ObjectiveProfileId::new(AUTHORED_OBJECTIVE_PROFILE_ID)?,
+        semantic_version: 1,
+        operation: RunObjectiveOperation::Optimize,
+        baseline_source: StoredBaselineSourceV1::Accepted,
+        alternatives_capture_id: None,
+    });
+    let Err(failure) = Box::pin(app.solve_stored(request.clone(), &mut Progress)).await else {
+        return Err("unsupported selector started a solve".into());
+    };
+    assert!(matches!(
+        &failure,
+        StoredSolveFailure::BeforeStart(AppError::Protocol(error))
+            if error.code == "solve.objective_selection_invalid"
+    ));
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 0);
+    assert!(
+        fixture
+            .store
+            .load_solve_run_by_request(request.request_id)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+fn external_repair_selection() -> TestResult<StoredObjectiveSelectionV1> {
+    Ok(StoredObjectiveSelectionV1 {
+        schema_version: 1,
+        profile_id: "official.workforce.objective.minimal-changes".parse()?,
+        semantic_version: 1,
+        operation: RunObjectiveOperation::Repair,
+        baseline_source: StoredBaselineSourceV1::External {
+            entity_id: id(50).parse()?,
+        },
+        alternatives_capture_id: None,
+    })
+}
+
+#[tokio::test]
+async fn external_stored_retry_preserves_captured_source_after_edit_and_deletion() -> TestResult {
+    let fixture = Fixture::new_with_external_plan(true).await?;
+    let (registry, backend) = failing_registry(None, None)?;
+    let app = fixture.app(registry, fixture.dependencies()?);
+    let mut request = fixture.request()?;
+    request.objective_selection = Some(external_repair_selection()?);
+    let first = app
+        .solve_stored(request.clone(), &mut Progress)
+        .await
+        .map_err(boxed)?;
+    let run_id = first.state().input.run_id;
+    let captured = fixture.store.load_solve_input(run_id).await?;
+    assert_eq!(captured.document, fixture.document);
+    let context = captured
+        .input
+        .objective_context
+        .as_ref()
+        .ok_or("missing external context")?;
+    assert_eq!(context.schema_version, 3);
+    assert!(context.baseline.is_none());
+    let binding = context
+        .external_baseline
+        .as_deref()
+        .ok_or("missing external source")?;
+    let pairs = [eutheto_workforce::model::AssignmentPair {
+        person_id: id(1).parse()?,
+        shift_id: id(8).parse()?,
+    }];
+    assert_eq!(
+        binding.selected_pair_content_hash,
+        eutheto_workforce::assignment_rules::workforce_pair_content_hash(&pairs, None)?,
+    );
+    assert_ne!(binding.selected_pair_content_hash, "b".repeat(64));
+    let input_bytes = serde_json::to_vec(&captured.input)?;
+    let snapshot_bytes = serde_json::to_vec(&captured.document)?;
+    let mut revision = Revision::INITIAL;
+    for remove in [false, true] {
+        revision = fixture.change_external_plan(&app, revision, remove).await?;
+        assert_eq!(
+            fixture
+                .store
+                .get_project(request.scenario_id)
+                .await?
+                .document
+                .domain
+                .entities
+                .contains_key(&id(50).parse()?),
+            !remove,
+        );
+        for expected_revision in [Some(Revision::INITIAL), None] {
+            let mut retry_request = request.clone();
+            retry_request.expected_revision = expected_revision;
+            let retry = app
+                .solve_stored(retry_request, &mut Progress)
+                .await
+                .map_err(boxed)?;
+            assert!(retry.reused);
+            assert!(retry.report.is_none());
+            assert_eq!(retry.state(), first.state());
+        }
+        for changed_source in [
+            StoredBaselineSourceV1::Accepted,
+            StoredBaselineSourceV1::External {
+                entity_id: id(51).parse()?,
+            },
+        ] {
+            let mut changed = request.clone();
+            changed
+                .objective_selection
+                .as_mut()
+                .ok_or("missing selector")?
+                .baseline_source = changed_source;
+            assert!(matches!(
+                app.solve_stored(changed, &mut Progress).await,
+                Err(StoredSolveFailure::BeforeStart(AppError::Validation(report)))
+                    if report.issues.iter().any(|issue| issue.code == "solve.request_id_conflict")
+            ));
+        }
+        let retained = fixture.store.load_solve_input(run_id).await?;
+        assert_eq!(serde_json::to_vec(&retained.input)?, input_bytes);
+        assert_eq!(serde_json::to_vec(&retained.document)?, snapshot_bytes);
+    }
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    assert!(
+        fixture
+            .store
+            .list_accepted_results(request.scenario_id)
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn external_alternatives_share_one_capture_and_refuse_new_members_after_deletion()
+-> TestResult {
+    let fixture = Fixture::new_with_external_plan(true).await?;
+    let mut dependencies = fixture.dependencies()?;
+    dependencies.ids = Arc::new(FixedIdGenerator::new(
+        (400..405)
+            .map(|index| id(index).parse())
+            .collect::<Result<Vec<_>, _>>()?,
+    ));
+    let (registry, backend) = failing_registry(None, None)?;
+    let app = fixture.app(registry, dependencies);
+    let options = options()?;
+    let parent = ParentSolveBudget::new(
+        options.time_limit_milliseconds,
+        Arc::new(FixedMonotonicClock::default()),
+        CancellationToken::new(),
+    )?;
+    let started_at = NOW.parse()?;
+    let capture = app
+        .capture_objective_alternatives_source(
+            fixture.document.scenario_id,
+            Some(Revision::INITIAL),
+            StoredBaselineSourceV1::External {
+                entity_id: id(50).parse()?,
+            },
+            OperationControl::Solve(parent.phase_view()),
+            started_at,
+        )
+        .await
+        .map_err(boxed)?;
+    let mut shared_source = None;
+    let mut retained_members = Vec::new();
+    for (index, profile) in [
+        "official.workforce.objective.balanced",
+        "official.workforce.objective.preference-focused",
+        "official.workforce.objective.fairness-first",
+        "official.workforce.objective.minimal-changes",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = StoredSolveRequest {
+            request_id: id(320 + u32::try_from(index)?).parse()?,
+            scenario_id: fixture.document.scenario_id,
+            expected_revision: Some(capture.revision()),
+            options: options.clone(),
+            objective_selection: Some(
+                capture.selection(profile.parse()?, RunObjectiveOperation::Optimize),
+            ),
+        };
+        let outcome = app
+            .solve_stored_with_budget_observer_in_capture(
+                request,
+                &mut Progress,
+                parent.clone(),
+                started_at,
+                Arc::new(|_| {}),
+                &capture,
+                u8::try_from(4 - index)?,
+            )
+            .await
+            .map_err(boxed)?;
+        let loaded = fixture
+            .store
+            .load_solve_input(outcome.state().input.run_id)
+            .await?;
+        let context = loaded
+            .input
+            .objective_context
+            .as_ref()
+            .ok_or("missing member context")?;
+        assert_eq!(context.schema_version, 3);
+        assert_eq!(context.profile_id.as_str(), profile);
+        assert!(context.baseline.is_none());
+        let baseline = context
+            .external_baseline
+            .as_deref()
+            .ok_or("missing member source")?;
+        assert_eq!(loaded.input.snapshot_id, capture.snapshot_id());
+        assert_eq!(loaded.input.scenario_revision, Revision::INITIAL.value());
+        assert_eq!(loaded.document, fixture.document);
+        assert_eq!(
+            outcome
+                .state()
+                .manifest
+                .as_ref()
+                .ok_or("missing member terminal")?
+                .started_at,
+            started_at,
+        );
+        let source = (
+            loaded.input.snapshot_document_hash.clone(),
+            loaded.input.snapshot_created_at,
+            baseline.clone(),
+        );
+        if let Some(expected) = &shared_source {
+            assert_eq!(&source, expected);
+        } else {
+            shared_source = Some(source);
+        }
+        retained_members.push((
+            loaded.input.run_id,
+            serde_json::to_vec(&loaded.input)?,
+            serde_json::to_vec(&loaded.document)?,
+        ));
+    }
+    let revision = fixture
+        .change_external_plan(&app, Revision::INITIAL, true)
+        .await?;
+    let refused = StoredSolveRequest {
+        request_id: id(324).parse()?,
+        scenario_id: fixture.document.scenario_id,
+        expected_revision: Some(capture.revision()),
+        options,
+        objective_selection: Some(capture.selection(
+            "official.workforce.objective.balanced".parse()?,
+            RunObjectiveOperation::Optimize,
+        )),
+    };
+    assert!(matches!(
+        app.solve_stored_with_budget_observer_in_capture(
+            refused.clone(),
+            &mut Progress,
+            parent,
+            started_at,
+            Arc::new(|_| {}),
+            &capture,
+            1,
+        ).await,
+        Err(StoredSolveFailure::BeforeStart(AppError::Conflict {
+            expected_revision: Revision::INITIAL,
+            actual_revision,
+        })) if actual_revision == revision
+    ));
+    assert!(
+        fixture
+            .store
+            .load_solve_run_by_request(refused.request_id)
+            .await?
+            .is_none()
+    );
+    for (run_id, input_bytes, snapshot_bytes) in retained_members {
+        let retained = fixture.store.load_solve_input(run_id).await?;
+        assert_eq!(serde_json::to_vec(&retained.input)?, input_bytes);
+        assert_eq!(serde_json::to_vec(&retained.document)?, snapshot_bytes);
+    }
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 4);
+    assert!(
+        !fixture
+            .store
+            .get_project(fixture.document.scenario_id)
+            .await?
+            .document
+            .domain
+            .entities
+            .contains_key(&id(50).parse()?)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn copying_external_plan_remaps_current_pairs_without_rewriting_provenance_or_capture()
+-> TestResult {
+    let fixture = Fixture::new_with_external_plan(true).await?;
+    let (registry, _) = failing_registry(None, None)?;
+    let app = fixture.app(registry, fixture.dependencies()?);
+    let mut request = fixture.request()?;
+    request.objective_selection = Some(external_repair_selection()?);
+    let outcome = app
+        .solve_stored(request.clone(), &mut Progress)
+        .await
+        .map_err(boxed)?;
+    let run_id = outcome.state().input.run_id;
+    let original = fixture.store.load_solve_input(run_id).await?;
+    let revision = fixture
+        .change_external_plan(&app, Revision::INITIAL, false)
+        .await?;
+    let source = fixture.store.get_project(request.scenario_id).await?;
+    let mut dependencies = fixture.dependencies()?;
+    dependencies.ids = Arc::new(FixedIdGenerator::new(
+        (500..550)
+            .map(|index| id(index).parse())
+            .collect::<Result<Vec<_>, _>>()?,
+    ));
+    let duplicator = fixture.app(SolverRegistry::production()?, dependencies);
+    let AppCommandResult::Project(copy) = duplicator
+        .execute(AppCommand::DuplicateProject {
+            request_id: id(330).parse()?,
+            source_id: request.scenario_id,
+            expected_revision: revision,
+            title: "Copied unverified starting plan".to_owned(),
+        })
+        .await
+        .map_err(boxed)?
+    else {
+        return Err("copy omitted project".into());
+    };
+    let copied = fixture.store.get_project(copy.scenario_id).await?;
+    let (plan_id, plan) = copied
+        .document
+        .domain
+        .entities
+        .iter()
+        .find(|(_, entity)| entity["kind"] == "externalStartingPlan")
+        .ok_or("copy omitted external plan")?;
+    assert_ne!(*plan_id, id(50).parse()?);
+    assert_eq!(plan["id"], serde_json::to_value(plan_id)?);
+    assert_eq!(
+        plan["originalImport"],
+        source.document.domain.entities[&id(50).parse()?]["originalImport"]
+    );
+    assert_eq!(
+        plan["name"],
+        source.document.domain.entities[&id(50).parse()?]["name"]
+    );
+    assert_eq!(
+        plan["assignments"].as_array().ok_or("copied pairs")?.len(),
+        1
+    );
+    let pair = &plan["assignments"][0];
+    let person_id: eutheto_types::EntityId =
+        pair["personId"].as_str().ok_or("copied person")?.parse()?;
+    let shift_id: eutheto_types::EntityId =
+        pair["shiftId"].as_str().ok_or("copied shift")?.parse()?;
+    assert_ne!(person_id, id(12).parse()?);
+    assert_ne!(shift_id, id(8).parse()?);
+    assert_eq!(copied.document.domain.entities[&person_id]["name"], "Sky");
+    assert_eq!(
+        copied.document.domain.entities[&shift_id]["kind"],
+        "shiftInstance"
+    );
+    let unchanged = fixture.store.get_project(request.scenario_id).await?;
+    assert_eq!(unchanged.document, source.document);
+    let retained = fixture.store.load_solve_input(run_id).await?;
+    assert_eq!(
+        serde_json::to_vec(&retained.input)?,
+        serde_json::to_vec(&original.input)?
+    );
+    assert_eq!(
+        serde_json::to_vec(&retained.document)?,
+        serde_json::to_vec(&original.document)?
+    );
+    assert_eq!(
+        fixture
+            .store
+            .load_solve_run_by_request(request.request_id)
+            .await?
+            .ok_or("original run")?,
+        *outcome.state(),
+    );
+    assert!(
+        fixture
+            .store
+            .list_solve_runs(SolveRunListRequestV1 {
+                scenario_id: copy.scenario_id,
+                scenario_revision: None,
+                limit: 10,
+            })
+            .await?
+            .is_empty()
+    );
     Ok(())
 }

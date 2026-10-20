@@ -28,16 +28,11 @@ pub(super) async fn run(
         _ => ProgressArg::None,
     };
     if mode == ProgressArg::None {
-        return Box::pin(execute_cli(
-            cli,
-            cancellation,
-            &mut PresentationProgress(None),
-        ))
-        .await;
+        return execute_cli(cli, cancellation, &mut PresentationProgress(None)).await;
     }
     let (sender, mut receiver) = mpsc::channel(32);
     let mut sink = PresentationProgress(Some(sender));
-    let mut execution = Box::pin(execute_cli(cli, cancellation, &mut sink));
+    let mut execution = execute_cli(cli, cancellation, &mut sink);
     let mut failed_output = false;
     let result = loop {
         tokio::select! {
@@ -81,15 +76,17 @@ fn render(
     match mode {
         ProgressArg::None => return Ok(()),
         ProgressArg::Jsonl => {
-            serde_json::to_writer(
-                &mut *stderr,
-                &serde_json::json!({
-                    "kind": "progress",
-                    "publication": "pending",
-                    "event": event,
-                }),
-            )
-            .map_err(std::io::Error::other)?;
+            let mut frame = serde_json::json!({
+                "kind": "progress",
+                "publication": "pending",
+                "event": event,
+            });
+            // Preserve the existing CLI wire shape; actual bounds use BoundImproved.
+            if matches!(event, SolveProgressEvent::IncumbentFound(value) if value.objective.is_some())
+            {
+                frame["event"]["value"]["objective"]["bestBoundValues"] = serde_json::Value::Null;
+            }
+            serde_json::to_writer(&mut *stderr, &frame).map_err(std::io::Error::other)?;
             writeln!(stderr)?;
         }
         ProgressArg::Human => {
@@ -113,4 +110,42 @@ fn render(
         }
     }
     stderr.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eutheto_solver_api::{BackendObjectiveEvidence, BoundSummary, IncumbentSummary};
+    use eutheto_types::DurationMillis;
+
+    #[test]
+    fn jsonl_preserves_incumbent_absence_and_independent_signed_bounds()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut bytes = Vec::new();
+        for objective in [Some(vec![i64::MIN, i64::MAX]), None] {
+            render(
+                &mut bytes,
+                ProgressArg::Jsonl,
+                &SolveProgressEvent::IncumbentFound(IncumbentSummary {
+                    sequence: 1,
+                    observed_after_milliseconds: DurationMillis::new(2)?,
+                    objective: objective
+                        .map(|objective_values| BackendObjectiveEvidence { objective_values }),
+                }),
+            )?;
+        }
+        render(
+            &mut bytes,
+            ProgressArg::Jsonl,
+            &SolveProgressEvent::BoundImproved(BoundSummary {
+                observed_after_milliseconds: DurationMillis::new(3)?,
+                bound_values: vec![-7],
+            }),
+        )?;
+        assert_eq!(
+            bytes,
+            include_bytes!("../tests/fixtures/progress-pre-terminal-bound-cutover.jsonl")
+        );
+        Ok(())
+    }
 }

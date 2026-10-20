@@ -18,11 +18,20 @@ The exact phase ref has an active ruleset with no bypass actors, deletion/non-fa
 
 Every phase PR requires these GitHub Actions app-bound contexts:
 
-- `Phase06 package / source checks`: locked Nix evaluation, locked dependency installation, DCO, `just check`, production `just frontend-build`, and browser keyboard/accessibility checks;
+- `Phase06 package / source checks`: locked Nix evaluation, locked dependency installation, DCO, `just check`, production `just frontend-build`, and required browser keyboard/accessibility checks;
 - `Locked policy, scans, and inventories`;
 - `Immutable inputs and migration isolation`;
 - `Phase06 package / native policy`;
 - `Phase06 package / packaged-worker policy`.
+
+In `pr.yml`, the browser component suite runs first in a dedicated `macos-15`
+arm64 job with the pinned headless Chromium and `chromiumSandbox: true`. The
+canonical Linux job retains its context name and commands, runs after that job
+regardless of its result, and fails its first step unless the browser job
+succeeded. A failed, cancelled or skipped browser job cannot satisfy the required
+context. Its sanitized report records the browser step outcome, job result and
+configured target separately. This is macOS Chromium component coverage; the
+Linux native Tauri/PDF journey and manual acceptance gates remain separate.
 
 The source job's `nix flake check --no-build --no-update-lock-file` is **evaluation-only**, not Nix build or native-platform evidence. Its report distinguishes this from the production frontend build. Local focused runtime/manual acceptance still applies to the changed surface.
 

@@ -136,6 +136,45 @@ impl RankIds {
     }
 }
 
+/// Derives the stable assignment projection identity without allocating rank channels,
+/// objective terms, or an integer decision variable.
+pub(super) fn projection_id(
+    pair: AssignmentPair,
+    identities: &mut PlanningIdentities,
+    budget: &mut OperationBudget<'_>,
+) -> Result<ProjectionId, AssignmentRuleError> {
+    ProjectionId::new(identities.derive(
+        IdentityKind::Projection,
+        &("assignment", pair.person_id, pair.shift_id),
+        budget,
+    )?)
+    .map_err(|_| invalid())
+}
+
+/// Emits the Boolean-only projection shared by ordinary and diagnostic Workforce models.
+pub(super) fn emit_projection(
+    pair: AssignmentPair,
+    decision: &BoolVariable,
+    id: ProjectionId,
+    budget: &mut OperationBudget<'_>,
+) -> Result<SolutionProjection, AssignmentRuleError> {
+    budget.steps(8)?;
+    budget.reserve(0, 4, 512)?;
+    let pair_text = format!("{}.{}", pair.person_id, pair.shift_id);
+    Ok(SolutionProjection {
+        id,
+        assignment_id: DomainAssignmentId::new(format!("{ASSIGNMENT_KIND}.{pair_text}"))
+            .map_err(|_| invalid())?,
+        entity: DomainEntityRef {
+            kind: DomainEntityKindId::new(ASSIGNMENT_KIND).map_err(|_| invalid())?,
+            id: DomainEntityId::new(pair_text).map_err(|_| invalid())?,
+        },
+        required: true,
+        expression: ProjectionExpression::Boolean(decision.id.clone()),
+        provenance: decision.provenance.clone(),
+    })
+}
+
 pub(super) struct RankEmission {
     pub variable: Variable,
     pub channels: [ConstraintRecord; 2],

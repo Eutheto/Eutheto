@@ -126,10 +126,21 @@ pub(super) fn publish_text(
         .map_err(|error| publication_error(&error, control))
 }
 
-fn publication_error(
+pub(super) fn publication_error(
     error: &eutheto_export::ExportError,
     control: &OperationControl,
 ) -> SafeCliError {
+    match error {
+        eutheto_export::ExportError::Cancelled => return SafeCliError::cancelled(),
+        eutheto_export::ExportError::DeadlineExceeded => {
+            return SafeCliError::new(
+                CliExitCode::NoVerifiedSolution,
+                "operation.deadline_exceeded",
+                "The operation reached its deadline before completion.",
+            );
+        }
+        _ => {}
+    }
     if let Err(interruption) = check_control(control) {
         return interruption;
     }

@@ -1,12 +1,13 @@
 //! Instance-owned gates around real pack behavior, shared by setup and accepted-view races.
 use eutheto_domain_api::{
-    CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
-    DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainSettingsMutation,
-    DomainShareResult, DomainValidationReport, DomainViewInput, DomainViewOutput,
+    CompileContext, CounterfactualCompileContext, DiagnosticCopyContext,
+    DiagnosticVerificationScope, DomainBatchCommand, DomainCatalog, DomainMutation, DomainPack,
+    DomainPackDescriptor, DomainPackError, DomainSettingsMutation, DomainShareResult,
+    DomainValidationReport, DomainViewInput, DomainViewOutput, InfeasibilityCompileContext,
     PortableImportContext, ShareResultOptions,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
+    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV2, EvidenceRenderResultV1,
     NormalizedSolution, ScoreVector, VerificationContextV1, VerificationReport, VerificationScope,
 };
 use eutheto_planning_ir::{CandidateValues, PlanningProblem};
@@ -17,7 +18,7 @@ use eutheto_types::{
 use serde_json::Value;
 use std::sync::{
     Arc, Condvar, Mutex,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 use tokio::sync::Notify;
 
@@ -27,12 +28,15 @@ pub enum PauseAt {
     Settings,
     FullValidation,
     View,
+    Score,
 }
 
 #[derive(Default)]
 pub struct PreparationGate {
     pub armed: AtomicBool,
     pub pause_at: AtomicU8,
+    pub remaining_pauses: AtomicUsize,
+    pub entered_count: AtomicUsize,
     pub full_report: Mutex<Option<DomainValidationReport>>,
     pub entered: Notify,
     released: Mutex<bool>,
@@ -42,10 +46,17 @@ pub struct PreparationGate {
 impl PreparationGate {
     fn pause(&self, at: PauseAt) -> Result<(), DomainPackError> {
         if self.pause_at.load(Ordering::SeqCst) != at as u8
-            || !self.armed.swap(false, Ordering::SeqCst)
+            || (!self.armed.swap(false, Ordering::SeqCst)
+                && self
+                    .remaining_pauses
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_err())
         {
             return Ok(());
         }
+        self.entered_count.fetch_add(1, Ordering::SeqCst);
         let mut released = self
             .released
             .lock()
@@ -121,12 +132,22 @@ impl<P: DomainPack> DomainPack for ControlledPack<P> {
     forward!(compile(document: &ScenarioDocument, context: &CompileContext) -> Result<PlanningProblem, DomainPackError>);
     forward!(project(problem: &PlanningProblem, candidate: &CandidateValues, solution_id: SolutionId, control: &OperationControl) -> Result<NormalizedSolution, DomainPackError>);
     forward!(verification_scope(document: &ScenarioDocument, scenario_revision: u64, control: &OperationControl) -> Result<VerificationScope, DomainPackError>);
-    forward!(verify(document: &ScenarioDocument, solution: &NormalizedSolution, context: &VerificationContextV1, authoritative_score: &ScoreVector, control: &OperationControl) -> Result<VerificationReport, DomainPackError>);
-    forward!(score(document: &ScenarioDocument, solution: &NormalizedSolution, control: &OperationControl) -> Result<ScoreVector, DomainPackError>);
+    forward!(verify(document: &ScenarioDocument, solution: &NormalizedSolution, objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>, context: &VerificationContextV1, authoritative_score: &ScoreVector, control: &OperationControl) -> Result<VerificationReport, DomainPackError>);
+    fn score(
+        &self,
+        document: &ScenarioDocument,
+        solution: &NormalizedSolution,
+        objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>,
+        control: &OperationControl,
+    ) -> Result<ScoreVector, DomainPackError> {
+        self.gate.pause(PauseAt::Score)?;
+        self.pack
+            .score(document, solution, objective_context, control)
+    }
     forward!(export_portable(document: &ScenarioDocument) -> Result<PortableDomainDocument, DomainPackError>);
     forward!(migrate_portable_step(document: PortableDomainDocument) -> Result<PortableDomainDocument, DomainPackError>);
     forward!(import_portable(document: &PortableDomainDocument, context: &PortableImportContext) -> Result<ScenarioDocument, DomainPackError>);
-    forward!(build_share_result(document: &ScenarioDocument, accepted: &AcceptedResult, options: ShareResultOptions) -> Result<DomainShareResult, DomainPackError>);
+    forward!(build_share_result(document: &ScenarioDocument, accepted: &AcceptedResult, objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>, options: ShareResultOptions) -> Result<DomainShareResult, DomainPackError>);
     fn build_view(
         &self,
         input: DomainViewInput<'_>,
@@ -135,6 +156,10 @@ impl<P: DomainPack> DomainPack for ControlledPack<P> {
         self.gate.pause(PauseAt::View)?;
         self.pack.build_view(input, control)
     }
-    forward!(render_evidence(document: &ScenarioDocument, request: &EvidenceRenderRequestV1) -> Result<EvidenceRenderResultV1, DomainPackError>);
+    forward!(render_evidence(document: &ScenarioDocument, request: &EvidenceRenderRequestV2, objective_context: Option<&eutheto_domain_ir::RunObjectiveContext>, control: &OperationControl) -> Result<EvidenceRenderResultV1, DomainPackError>);
+    forward!(render_repair_evidence(base_document: &ScenarioDocument, base: &eutheto_domain_ir::PortableAcceptedResult, candidate_document: &ScenarioDocument, candidate: &eutheto_domain_ir::PortableAcceptedResult, request: &EvidenceRenderRequestV2, control: &OperationControl) -> Result<EvidenceRenderResultV1, DomainPackError>);
     forward!(compile_counterfactual(document: &ScenarioDocument, condition: &CounterfactualConditionV1, context: &CounterfactualCompileContext<'_>) -> Result<PlanningProblem, DomainPackError>);
+    forward!(compile_infeasibility(document: &ScenarioDocument, context: &InfeasibilityCompileContext<'_>) -> Result<PlanningProblem, DomainPackError>);
+    forward!(diagnostic_verification_scope(document: &ScenarioDocument, scenario_revision: u64, control: &OperationControl) -> Result<DiagnosticVerificationScope, DomainPackError>);
+    forward!(prepare_diagnostic_copy_changes(source: &ScenarioDocument, context: &DiagnosticCopyContext<'_>) -> Result<DomainBatchCommand, DomainPackError>);
 }

@@ -560,11 +560,441 @@ macro_rules! safe_failure {
     };
 }
 
+/// Closed verification diagnostic code that can cross the application-error boundary.
+///
+/// The independent verifier owns the complete category inventory.  This type deliberately
+/// excludes clock and pre-review failures: those failures must not be promoted to a correctness
+/// alarm merely because they have a verification-looking string.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum KnownVerificationDiagnosticCode {
+    #[serde(rename = "verification.planning_problem_invalid")]
+    PlanningProblemInvalid,
+    #[serde(rename = "verification.projection_failed")]
+    ProjectionFailed,
+    #[serde(rename = "verification.structure_invalid")]
+    StructureInvalid,
+    #[serde(rename = "verification.scope_invalid")]
+    ScopeInvalid,
+    #[serde(rename = "verification.score_failed")]
+    ScoreFailed,
+    #[serde(rename = "verification.required_rules_failed")]
+    RequiredRulesFailed,
+    #[serde(rename = "verification.report_binding_invalid")]
+    ReportBindingInvalid,
+    #[serde(rename = "verification.required_rule_coverage_invalid")]
+    RequiredRuleCoverageInvalid,
+    #[serde(rename = "verification.required_rule_rejected")]
+    RequiredRuleRejected,
+    #[serde(rename = "verification.score_integrity_failed")]
+    ScoreIntegrityFailed,
+    #[serde(rename = "verification.infeasibility_contradicted")]
+    InfeasibilityContradicted,
+    #[serde(rename = "verification.counterfactual-condition-mismatch")]
+    CounterfactualConditionMismatch,
+}
+
+impl KnownVerificationDiagnosticCode {
+    /// Returns the stable machine code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PlanningProblemInvalid => "verification.planning_problem_invalid",
+            Self::ProjectionFailed => "verification.projection_failed",
+            Self::StructureInvalid => "verification.structure_invalid",
+            Self::ScopeInvalid => "verification.scope_invalid",
+            Self::ScoreFailed => "verification.score_failed",
+            Self::RequiredRulesFailed => "verification.required_rules_failed",
+            Self::ReportBindingInvalid => "verification.report_binding_invalid",
+            Self::RequiredRuleCoverageInvalid => "verification.required_rule_coverage_invalid",
+            Self::RequiredRuleRejected => "verification.required_rule_rejected",
+            Self::ScoreIntegrityFailed => "verification.score_integrity_failed",
+            Self::InfeasibilityContradicted => "verification.infeasibility_contradicted",
+            Self::CounterfactualConditionMismatch => {
+                "verification.counterfactual-condition-mismatch"
+            }
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "verification.planning_problem_invalid" => Self::PlanningProblemInvalid,
+            "verification.projection_failed" => Self::ProjectionFailed,
+            "verification.structure_invalid" => Self::StructureInvalid,
+            "verification.scope_invalid" => Self::ScopeInvalid,
+            "verification.score_failed" => Self::ScoreFailed,
+            "verification.required_rules_failed" => Self::RequiredRulesFailed,
+            "verification.report_binding_invalid" => Self::ReportBindingInvalid,
+            "verification.required_rule_coverage_invalid" => Self::RequiredRuleCoverageInvalid,
+            "verification.required_rule_rejected" => Self::RequiredRuleRejected,
+            "verification.score_integrity_failed" => Self::ScoreIntegrityFailed,
+            "verification.infeasibility_contradicted" => Self::InfeasibilityContradicted,
+            "verification.counterfactual-condition-mismatch" => {
+                Self::CounterfactualConditionMismatch
+            }
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for KnownVerificationDiagnosticCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for KnownVerificationDiagnosticCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DiagnosticCodeVisitor;
+
+        impl serde::de::Visitor<'_> for DiagnosticCodeVisitor {
+            type Value = KnownVerificationDiagnosticCode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a known non-clock verification diagnostic code")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                KnownVerificationDiagnosticCode::parse(value)
+                    .ok_or_else(|| E::custom("unknown non-clock verification diagnostic code"))
+            }
+        }
+
+        deserializer.deserialize_str(DiagnosticCodeVisitor)
+    }
+}
+
+/// Safe, finite secondary cause retained alongside an established verification alarm.
+///
+/// These values identify only bounded application outcomes.  Raw storage errors, paths, backend
+/// messages and other implementation details never enter the public carrier.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum KnownVerificationSecondaryCauseCode {
+    #[serde(rename = "solve.clock_invalid")]
+    SolveClockInvalid,
+    #[serde(rename = "storage.operation_failed")]
+    StorageOperationFailed,
+    #[serde(rename = "storage.private_path_unsafe")]
+    StoragePrivatePathUnsafe,
+    #[serde(rename = "operation.cancelled")]
+    OperationCancelled,
+    #[serde(rename = "operation.deadline_exceeded")]
+    OperationDeadlineExceeded,
+    #[serde(rename = "operation.resource_limit")]
+    OperationResourceLimit,
+}
+
+impl KnownVerificationSecondaryCauseCode {
+    /// Returns the stable machine code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SolveClockInvalid => "solve.clock_invalid",
+            Self::StorageOperationFailed => "storage.operation_failed",
+            Self::StoragePrivatePathUnsafe => "storage.private_path_unsafe",
+            Self::OperationCancelled => "operation.cancelled",
+            Self::OperationDeadlineExceeded => "operation.deadline_exceeded",
+            Self::OperationResourceLimit => "operation.resource_limit",
+        }
+    }
+
+    /// Converts a safe application code to the closed secondary-cause vocabulary.
+    #[must_use]
+    pub fn from_safe_code(value: &str) -> Option<Self> {
+        Some(match value {
+            "solve.clock_invalid" => Self::SolveClockInvalid,
+            "storage.operation_failed" => Self::StorageOperationFailed,
+            "storage.private_path_unsafe" => Self::StoragePrivatePathUnsafe,
+            "operation.cancelled" => Self::OperationCancelled,
+            "operation.deadline_exceeded" => Self::OperationDeadlineExceeded,
+            "operation.resource_limit" => Self::OperationResourceLimit,
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for KnownVerificationSecondaryCauseCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Terminalization state of a known verification alarm.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VerificationAlarmTerminalization {
+    /// File-mode verification failed before a durable terminalization was required.
+    NotApplicable,
+    /// Exact compatible durable alarm readback confirmed terminalization.
+    Confirmed,
+    /// Durable terminalization could not be established exactly.
+    Unconfirmed,
+}
+
+impl VerificationAlarmTerminalization {
+    /// Returns the stable wire label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "notApplicable",
+            Self::Confirmed => "confirmed",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
+
+/// Error returned when trusted code attempts to create a known verification context from
+/// unvalidated boundary values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerificationAlarmContextError {
+    /// The input checksum was not exactly lowercase hexadecimal BLAKE3 text.
+    InvalidInputChecksum,
+    /// The code was not in the closed non-clock verifier inventory.
+    UnknownDiagnosticCode,
+    /// The secondary code was not in the closed safe allowlist.
+    UnknownSecondaryCauseCode,
+}
+
+impl fmt::Display for VerificationAlarmContextError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidInputChecksum => {
+                "input checksum must be 64 lowercase hexadecimal characters"
+            }
+            Self::UnknownDiagnosticCode => {
+                "verification diagnostic code is not an allowed non-clock code"
+            }
+            Self::UnknownSecondaryCauseCode => "secondary cause code is not an allowed safe code",
+        })
+    }
+}
+
+impl std::error::Error for VerificationAlarmContextError {}
+
+/// Closed, redaction-safe metadata for one locally established verification alarm.
+///
+/// The constructor and deserializer enforce shape and vocabulary only.  These checks do not
+/// establish provenance; only trusted verifier producers may decide when an alarm is established.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnownVerificationAlarmV1 {
+    run_id: SolveRunId,
+    #[serde(deserialize_with = "deserialize_canonical_input_checksum")]
+    input_checksum: String,
+    diagnostic_code: KnownVerificationDiagnosticCode,
+    terminalization: VerificationAlarmTerminalization,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    secondary_cause_code: Option<KnownVerificationSecondaryCauseCode>,
+}
+
+impl KnownVerificationAlarmV1 {
+    /// Creates a checked context from native identity and bounded safe code strings.
+    ///
+    /// The run identity is already typed by [`SolveRunId`].  The checksum is admitted only in
+    /// canonical lowercase 64-hex form; diagnostic and secondary codes use finite allowlists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VerificationAlarmContextError`] when a checksum or closed code is invalid.
+    pub fn new(
+        run_id: SolveRunId,
+        input_checksum: &str,
+        diagnostic_code: &str,
+        terminalization: VerificationAlarmTerminalization,
+        secondary_cause_code: Option<&str>,
+    ) -> Result<Self, VerificationAlarmContextError> {
+        if !is_canonical_input_checksum(input_checksum) {
+            return Err(VerificationAlarmContextError::InvalidInputChecksum);
+        }
+        let diagnostic_code = KnownVerificationDiagnosticCode::parse(diagnostic_code)
+            .ok_or(VerificationAlarmContextError::UnknownDiagnosticCode)?;
+        let secondary_cause_code = match secondary_cause_code {
+            Some(value) => Some(
+                KnownVerificationSecondaryCauseCode::from_safe_code(value)
+                    .ok_or(VerificationAlarmContextError::UnknownSecondaryCauseCode)?,
+            ),
+            None => None,
+        };
+        Ok(Self {
+            run_id,
+            input_checksum: input_checksum.to_owned(),
+            diagnostic_code,
+            terminalization,
+            secondary_cause_code,
+        })
+    }
+
+    /// Native solve-run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> SolveRunId {
+        self.run_id
+    }
+
+    /// Canonical lowercase input checksum.
+    #[must_use]
+    pub fn input_checksum(&self) -> &str {
+        &self.input_checksum
+    }
+
+    /// Closed verification diagnostic code.
+    #[must_use]
+    pub const fn diagnostic_code(&self) -> KnownVerificationDiagnosticCode {
+        self.diagnostic_code
+    }
+
+    /// Terminalization state.
+    #[must_use]
+    pub const fn terminalization(&self) -> VerificationAlarmTerminalization {
+        self.terminalization
+    }
+
+    /// Optional closed secondary cause.
+    #[must_use]
+    pub const fn secondary_cause_code(&self) -> Option<KnownVerificationSecondaryCauseCode> {
+        self.secondary_cause_code
+    }
+
+    /// Returns the owned context with an updated terminalization state.
+    #[must_use]
+    pub fn with_terminalization(
+        mut self,
+        terminalization: VerificationAlarmTerminalization,
+    ) -> Self {
+        self.terminalization = terminalization;
+        self
+    }
+
+    /// Returns the owned context with an updated bounded secondary cause.
+    #[must_use]
+    pub fn with_secondary_cause(
+        mut self,
+        secondary_cause_code: Option<KnownVerificationSecondaryCauseCode>,
+    ) -> Self {
+        self.secondary_cause_code = secondary_cause_code;
+        self
+    }
+}
+
+fn deserialize_canonical_input_checksum<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct CanonicalInputChecksum;
+
+    impl serde::de::Visitor<'_> for CanonicalInputChecksum {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a lowercase 64-character hexadecimal input checksum")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if is_canonical_input_checksum(value) {
+                Ok(value.to_owned())
+            } else {
+                Err(E::custom(
+                    "input checksum must be 64 lowercase hexadecimal characters",
+                ))
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if is_canonical_input_checksum(&value) {
+                Ok(value)
+            } else {
+                Err(E::custom(
+                    "input checksum must be 64 lowercase hexadecimal characters",
+                ))
+            }
+        }
+    }
+
+    deserializer.deserialize_str(CanonicalInputChecksum)
+}
+
+fn is_canonical_input_checksum(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 safe_failure!(SolverFailure, "User-safe solver subsystem failure.");
-safe_failure!(
-    VerificationFailure,
-    "User-safe independent verification failure."
-);
+
+/// User-safe independent verification failure.
+///
+/// The first four fields intentionally retain the existing safe-failure wire order.  The
+/// optional known alarm is additive and omitted for ordinary failures.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerificationFailure {
+    /// Stable machine-readable failure code.
+    pub code: String,
+    /// User-safe localized-or-localizable message.
+    pub message: String,
+    /// Whether retrying without changing input may succeed.
+    pub retryable: bool,
+    /// Correlation identifier for separately retained redacted diagnostics.
+    pub diagnostic_id: Option<RequestId>,
+    /// Closed metadata for a known locally established verification alarm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_alarm: Option<KnownVerificationAlarmV1>,
+}
+
+impl VerificationFailure {
+    /// Fixed safe message used when a known alarm dominates an application error.
+    pub const KNOWN_ALARM_MESSAGE: &'static str = "Independent verification established a correctness alarm; no result from this run can be accepted.";
+
+    /// Creates the dominant verification failure from an already checked closed context.
+    #[must_use]
+    pub fn from_known_alarm(
+        known_alarm: KnownVerificationAlarmV1,
+        diagnostic_id: Option<RequestId>,
+    ) -> Self {
+        Self {
+            code: known_alarm.diagnostic_code().as_str().to_owned(),
+            message: Self::KNOWN_ALARM_MESSAGE.to_owned(),
+            retryable: false,
+            diagnostic_id,
+            known_alarm: Some(known_alarm),
+        }
+    }
+
+    /// Creates the dominant verification failure after checking all context boundary strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VerificationAlarmContextError`] when a checksum or closed code is invalid.
+    pub fn from_known_alarm_context(
+        run_id: SolveRunId,
+        input_checksum: &str,
+        diagnostic_code: &str,
+        terminalization: VerificationAlarmTerminalization,
+        secondary_cause_code: Option<&str>,
+        diagnostic_id: Option<RequestId>,
+    ) -> Result<Self, VerificationAlarmContextError> {
+        let known_alarm = KnownVerificationAlarmV1::new(
+            run_id,
+            input_checksum,
+            diagnostic_code,
+            terminalization,
+            secondary_cause_code,
+        )?;
+        Ok(Self::from_known_alarm(known_alarm, diagnostic_id))
+    }
+}
+
 safe_failure!(
     StorageFailure,
     "User-safe storage failure with no raw database text or path."
@@ -577,7 +1007,6 @@ safe_failure!(
     AiFailure,
     "User-safe AI subsystem failure with no provider secret or response."
 );
-
 /// Typed application failure serialized with stable category tagging.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "category", content = "details")]
@@ -1118,6 +1547,9 @@ pub enum EventTopic {
     /// Solver progress event.
     #[serde(rename = "solve://progress")]
     SolveProgress,
+    /// An independently accepted first candidate committed while its solve may continue.
+    #[serde(rename = "solve://verified")]
+    SolveVerified,
     /// Solver completion event.
     #[serde(rename = "solve://completed")]
     SolveCompleted,
@@ -1184,6 +1616,17 @@ pub enum EventPayload {
         /// Optional integer percentage in the inclusive range 0–100.
         percent: Option<u8>,
     },
+    /// A locally committed first independent acceptance, without terminal proof.
+    SolveVerified {
+        /// Common immutable scenario/revision/run binding.
+        context: EventContext,
+        /// Independently accepted solution identity.
+        solution_id: SolutionId,
+        /// Checksum of the accepted result, not a terminal run manifest.
+        result_checksum: String,
+        /// Versioned local checkpoint checksum for reconciling lost or reordered events.
+        checkpoint_checksum: String,
+    },
     /// Coarse progress for one counterfactual job.
     CounterfactualProgress {
         /// Common event metadata.
@@ -1230,8 +1673,9 @@ pub enum EventPayload {
 #[cfg(test)]
 mod tests {
     use super::{
-        CounterfactualProgressPhase, EventPayload, SCENARIO_FORMAT_VERSION, ScenarioCommand,
-        ScenarioDocument, SolveOptions, SolveOptionsError,
+        AppError, CounterfactualProgressPhase, EventPayload, KnownVerificationAlarmV1,
+        SCENARIO_FORMAT_VERSION, ScenarioCommand, ScenarioDocument, SolveOptions,
+        SolveOptionsError, VerificationAlarmTerminalization, VerificationFailure,
     };
     use serde_json::{Value, json};
 
@@ -1547,6 +1991,147 @@ mod tests {
         let mut unknown_context = input;
         unknown_context["payload"]["context"]["unexpected"] = json!(true);
         assert!(serde_json::from_value::<EventPayload>(unknown_context).is_err());
+        Ok(())
+    }
+    fn known_alarm() -> Result<KnownVerificationAlarmV1, Box<dyn std::error::Error>> {
+        Ok(KnownVerificationAlarmV1::new(
+            "018f47f2-e880-7000-8000-000000000010".parse()?,
+            &"ab".repeat(32),
+            "verification.projection_failed",
+            VerificationAlarmTerminalization::Unconfirmed,
+            Some("solve.clock_invalid"),
+        )?)
+    }
+
+    #[test]
+    fn ordinary_verification_failure_preserves_legacy_wire_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let error = AppError::Verification(VerificationFailure {
+            code: "solution.reverification_mismatch".to_owned(),
+            message: "Fresh independent verification did not match the retained accepted result."
+                .to_owned(),
+            retryable: false,
+            diagnostic_id: None,
+            known_alarm: None,
+        });
+        assert_eq!(
+            serde_json::to_string(&error)?,
+            r#"{"category":"verification","details":{"code":"solution.reverification_mismatch","message":"Fresh independent verification did not match the retained accepted result.","retryable":false,"diagnosticId":null}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<AppError>(&serde_json::to_string(&error)?)?,
+            error
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn known_alarm_is_closed_and_uses_fixed_dominant_failure_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let alarm = known_alarm()?;
+        let failure = VerificationFailure::from_known_alarm(alarm.clone(), None);
+        assert_eq!(failure.code, "verification.projection_failed");
+        assert_eq!(failure.message, VerificationFailure::KNOWN_ALARM_MESSAGE);
+        assert!(!failure.retryable);
+        let encoded = serde_json::to_value(&failure)?;
+        assert_eq!(
+            encoded,
+            json!({
+                "code": "verification.projection_failed",
+                "message": VerificationFailure::KNOWN_ALARM_MESSAGE,
+                "retryable": false,
+                "diagnosticId": null,
+                "knownAlarm": {
+                    "runId": "018f47f2-e880-7000-8000-000000000010",
+                    "inputChecksum": "abababababababababababababababababababababababababababababababab",
+                    "diagnosticCode": "verification.projection_failed",
+                    "terminalization": "unconfirmed",
+                    "secondaryCauseCode": "solve.clock_invalid"
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<VerificationFailure>(encoded)?,
+            failure
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn known_alarm_rejects_invalid_identity_checksum_codes_and_nested_fields() {
+        let valid = json!({
+            "runId": "018f47f2-e880-4100-8000-000000000010",
+            "inputChecksum": "abababababababababababababababababababababababababababababababab",
+            "diagnosticCode": "verification.projection_failed",
+            "terminalization": "confirmed"
+        });
+        assert!(serde_json::from_value::<KnownVerificationAlarmV1>(valid.clone()).is_err());
+
+        for checksum in [
+            "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+            "abababababababababababababababababababababababababababababababa",
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        ] {
+            let mut value = valid.clone();
+            value["runId"] = json!("018f47f2-e880-7000-8000-000000000010");
+            value["inputChecksum"] = json!(checksum);
+            assert!(serde_json::from_value::<KnownVerificationAlarmV1>(value).is_err());
+        }
+
+        for code in [
+            "verification.clock_invalid",
+            "verification.phase_timing_overflow",
+            "verification.solution_id_generation_failed",
+        ] {
+            let mut value = valid.clone();
+            value["runId"] = json!("018f47f2-e880-7000-8000-000000000010");
+            value["diagnosticCode"] = json!(code);
+            assert!(serde_json::from_value::<KnownVerificationAlarmV1>(value).is_err());
+        }
+
+        let mut unknown_nested = valid;
+        unknown_nested["runId"] = json!("018f47f2-e880-7000-8000-000000000010");
+        unknown_nested["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<KnownVerificationAlarmV1>(unknown_nested).is_err());
+    }
+
+    #[test]
+    fn known_alarm_context_constructor_checks_code_allowlists()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let run_id: crate::SolveRunId = "018f47f2-e880-7000-8000-000000000010".parse()?;
+        assert!(
+            VerificationFailure::from_known_alarm_context(
+                run_id,
+                &"ab".repeat(32),
+                "verification.counterfactual-condition-mismatch",
+                VerificationAlarmTerminalization::NotApplicable,
+                None,
+                None,
+            )
+            .is_ok()
+        );
+        assert!(
+            VerificationFailure::from_known_alarm_context(
+                run_id,
+                &"ab".repeat(32),
+                "verification.clock_invalid",
+                VerificationAlarmTerminalization::NotApplicable,
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            VerificationFailure::from_known_alarm_context(
+                run_id,
+                &"ab".repeat(32),
+                "verification.projection_failed",
+                VerificationAlarmTerminalization::Unconfirmed,
+                Some("raw.database.error"),
+                None,
+            )
+            .is_err()
+        );
         Ok(())
     }
 }

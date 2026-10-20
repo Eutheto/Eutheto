@@ -9,9 +9,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["sidecar/bin/ortools-worker"],
+    "externalBin": ["sidecar/bin/ortools-worker", "pdf-sidecar/bin/eutheto-pdf-worker"],
     "resources": {
-      "sidecar/resources/": "solver/ortools/"
+      "sidecar/resources/": "solver/ortools/",
+      "pdf-sidecar/resources/": "renderer/pdf/"
     }
   }
 }

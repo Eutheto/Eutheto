@@ -1,11 +1,13 @@
 //! Pure Workforce mutations. Persistence, revisions and production dispatch remain host-owned.
 
+mod diagnostic_copy;
 mod dispatch;
 mod effect;
 mod occurrences;
 mod payload;
 mod settings;
 
+pub(crate) use diagnostic_copy::prepare_diagnostic_copy_changes;
 pub use payload::*;
 pub(crate) use settings::reconcile_settings;
 

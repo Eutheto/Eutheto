@@ -10,7 +10,7 @@ export default defineConfig({
     include: ["src/**/*.browser.test.ts"],
     browser: {
       enabled: true,
-      provider: playwright(),
+      provider: playwright({ launchOptions: { chromiumSandbox: true } }),
       headless: true,
       screenshotDirectory: "../../.cache/browser-tests",
       instances: [{ browser: "chromium" }],

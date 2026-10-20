@@ -37,7 +37,7 @@ fn decode_inventory(source: &str) -> Result<Value, ApiError> {
             "authoritativeInputs",
             "packages",
         ],
-        &[],
+        &["assets"],
     ) || root.get("schemaVersion").and_then(Value::as_u64) != Some(2)
         || root.get("generatedBy").and_then(Value::as_str) != Some("cargo xtask licenses generate")
     {
@@ -64,6 +64,9 @@ fn decode_inventory(source: &str) -> Result<Value, ApiError> {
     }
     for package in packages {
         validate_package(package)?;
+    }
+    if let Some(assets) = root.get("assets") {
+        validate_assets(assets)?;
     }
     // Keep the generated fields unchanged, including absent checksums and NOASSERTION.
     root.insert(
@@ -116,6 +119,69 @@ fn validate_package(value: &Value) -> Result<(), ApiError> {
         let value = bounded_string(checksum.get("value"), MAX_METADATA_BYTES)?;
         if value.len() != digits || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(invalid_inventory_error().into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_assets(value: &Value) -> Result<(), ApiError> {
+    let assets = value.as_array().ok_or_else(invalid_inventory_error)?;
+    if assets.len() > MAX_PACKAGES {
+        return Err(inventory_limit_error().into());
+    }
+    for asset in assets {
+        let asset = asset.as_object().ok_or_else(invalid_inventory_error)?;
+        if !has_fields(
+            asset,
+            &[
+                "name",
+                "version",
+                "source",
+                "licenseConcluded",
+                "files",
+                "notices",
+            ],
+            &[],
+        ) {
+            return Err(invalid_inventory_error().into());
+        }
+        for field in ["name", "version", "source"] {
+            bounded_string(asset.get(field), MAX_METADATA_BYTES)?;
+        }
+        if !bounded_string(asset.get("source"), MAX_METADATA_BYTES)?.starts_with("https://") {
+            return Err(invalid_inventory_error().into());
+        }
+        bounded_string(asset.get("licenseConcluded"), MAX_LICENSE_BYTES)?;
+        for field in ["files", "notices"] {
+            let files = asset
+                .get(field)
+                .and_then(Value::as_array)
+                .ok_or_else(invalid_inventory_error)?;
+            if files.is_empty() || files.len() > MAX_PACKAGES {
+                return Err(invalid_inventory_error().into());
+            }
+            for file in files {
+                let file = file.as_object().ok_or_else(invalid_inventory_error)?;
+                if !has_fields(file, &["path", "sha256"], &[]) {
+                    return Err(invalid_inventory_error().into());
+                }
+                let path = bounded_string(file.get("path"), MAX_METADATA_BYTES)?;
+                if path.contains('\\')
+                    || path.split('/').any(|part| {
+                        part.is_empty() || part == "." || part == ".." || part.contains(':')
+                    })
+                {
+                    return Err(invalid_inventory_error().into());
+                }
+                let digest = bounded_string(file.get("sha256"), 64)?;
+                if digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(invalid_inventory_error().into());
+                }
+            }
         }
     }
     Ok(())
@@ -201,5 +267,35 @@ mod tests {
         value = package();
         value["source"] = Value::Null;
         assert!(validate_package(&value).is_err());
+    }
+    #[test]
+    fn assets_remain_distinct_from_packages_and_reject_malformed_files() {
+        let mut assets = json!([{
+            "name": "Font", "version": "1", "source": "https://example.test/font",
+            "licenseConcluded": "OFL-1.1",
+            "files": [{"path": "fonts/font.otf", "sha256": "a".repeat(64)}],
+            "notices": [{"path": "fonts/LICENSE", "sha256": "b".repeat(64)}]
+        }]);
+        assert!(super::validate_assets(&assets).is_ok());
+        let mut inventory = json!({
+            "schemaVersion": 2,
+            "generatedBy": "cargo xtask licenses generate",
+            "authoritativeInputs": super::AUTHORITATIVE_INPUTS,
+            "packages": []
+        });
+        assert!(super::decode_inventory(&inventory.to_string()).is_ok());
+        inventory["assets"] = assets.clone();
+        assert!(super::decode_inventory(&inventory.to_string()).is_ok());
+        inventory["assets"] = Value::Null;
+        assert!(super::decode_inventory(&inventory.to_string()).is_err());
+
+        assets[0]["files"][0]["path"] = json!("../font.otf");
+        assert!(super::validate_assets(&assets).is_err());
+        assets[0]["files"][0]["path"] = json!("fonts/font.otf");
+        assets[0]["files"][0]["sha256"] = json!("a".repeat(63));
+        assert!(super::validate_assets(&assets).is_err());
+        assets[0]["files"][0]["sha256"] = json!("a".repeat(64));
+        assets[0]["approved"] = json!(true);
+        assert!(super::validate_assets(&assets).is_err());
     }
 }

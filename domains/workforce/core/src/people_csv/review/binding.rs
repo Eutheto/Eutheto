@@ -1,11 +1,13 @@
 use super::{PeopleCsvReview, REVIEW_FORMAT};
 use crate::people_csv::{
+    hash,
     mapping::validate_mapping,
     types::{
         CSV_LIMITS_VERSION, CSV_PARSER_VERSION, CsvError, CsvErrorCode, IdentityDecision,
         MAX_CSV_DATA_RECORDS, MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_LOGICAL_RECORDS,
         MAX_CSV_REVIEW_BYTES, MAX_CSV_SOURCE_BYTES, RowDecision,
     },
+    valid_digest,
 };
 use crate::validation::validate_value_bounds;
 use eutheto_domain_api::{ContractJsonLimits, bounded_json_size};
@@ -13,15 +15,6 @@ use eutheto_types::{PortableJsonLimits, validate_nonsecret_portable_json_bytes};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
-
-/// Compact typed serialization with ordered maps matches existing Workforce hashes.
-/// Callers preflight recursive Values and their complete serialized byte budget.
-pub(super) fn hash<T: Serialize + ?Sized>(value: &T) -> Result<String, CsvError> {
-    let mut hasher = blake3::Hasher::new();
-    serde_json::to_writer(&mut hasher, value)
-        .map_err(|_| CsvError::source(CsvErrorCode::InvalidReview))?;
-    Ok(hasher.finalize().to_hex().to_string())
-}
 
 pub(super) fn validate_decisions(
     decisions: &[RowDecision],
@@ -49,13 +42,6 @@ pub(super) fn validate_decisions(
         }
     }
     Ok(())
-}
-
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validated_review_value(review: &PeopleCsvReview) -> Result<Value, CsvError> {

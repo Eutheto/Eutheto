@@ -144,6 +144,22 @@ test: test-rust test-doc test-ui
 coverage:
     cargo llvm-cov nextest --workspace --locked
 
+# Build the release PDF helper and its exact executable/renderer manifest.
+pdf-worker-build:
+    cargo xtask pdf build
+
+# Stage the offline renderer independently of the solver sidecar.
+pdf-worker-stage-desktop:
+    cargo xtask pdf stage-desktop
+
+# Build the pinned, finalized Nix PDF worker artifact.
+pdf-worker-build-nix:
+    nix build .#pdf-worker
+
+# Verify final extracted package bytes using the independently retained build digest.
+pdf-worker-verify executable manifest manifest_sha256:
+    cargo xtask pdf verify --executable "{{ executable }}" --manifest "{{ manifest }}" --manifest-sha256 "{{ manifest_sha256 }}"
+
 # Build the pinned Nix OR-Tools worker artifact.
 worker-build-nix:
     nix build .#ortools-worker
@@ -174,7 +190,7 @@ worker-smoke executable resource_root manifest_sha256:
 
 # Prove rule contributions and complete Workforce compilation/projection against the approved worker.
 workforce-rule-worker-test:
-    cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_ -- --ignored
+    cargo test -p eutheto-core --test workforce_assignment_rules --locked real_worker_ -- --ignored --test-threads=1
 
 
 # Reject Workforce generation drift and validate all original-domain fixture semantics.
@@ -304,13 +320,40 @@ bench:
     printf 'Benchmark evidence: %s\n' "$run_root"
 
 # Build and exercise real Linux desktop persistence through WebKit WebDriver.
-e2e:
+# `just e2e true` tests the unsigned, manifest-bound OR-Tools desktop bundle.
+# `EUTHETO_E2E_CONFLICT_ONLY=1 just e2e true` runs the complete isolated conflict/copy/export flow.
+# `EUTHETO_E2E_CONDITIONAL_ONLY=1 just e2e true` proves saved replacement pins, copy, Undo and Redo.
+# `EUTHETO_E2E_ALTERNATIVES_ONLY=1 just e2e true` exercises sequential profiles and retained recovery.
+# `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true` solves large-supported with the bundled worker, verifies the result, and measures keyboard view/page/calendar transitions.
+# `EUTHETO_E2E_RECIPIENT_EXPORT_ONLY=1 just e2e true` tests keyboard-operated accepted CSV/share reviews before publication checks.
+# `EUTHETO_E2E_KEYBOARD_WORKFLOW_ONLY=1 just e2e true` creates, configures, solves, repairs, compares, and reviews export for a fictional project using UI keyboard actions.
+# `EUTHETO_E2E_EXTERNAL_PLAN_ONLY=1 just e2e true` exercises unverified source editing, Repair and recovery.
+# `EUTHETO_E2E_ASSIGNMENT_CSV_ONLY=1 just e2e true` exercises native assignment import, reports and recovery.
+# `EUTHETO_E2E_ELIGIBILITY_CSV_ONLY=1 just e2e true` exercises sparse eligibility import and recovery.
+# `EUTHETO_E2E_ELIGIBILITY_MATRIX_ONLY=1 just e2e true` exercises real pasted-matrix native review, reports and recovery.
+# `EUTHETO_E2E_SHIFT_CSV_ONLY=1 just e2e true` exercises native shift/time mapping, reports and recovery.
+# `EUTHETO_E2E_AVAILABILITY_CSV_ONLY=1 just e2e true` exercises native availability/time-off import and recovery.
+# Set rebuild=false only to rerun against an existing artifact when application inputs are unchanged.
+# EUTHETO_NATIVE_DRIVER may select an explicit absolute native-driver launcher.
+e2e bundled="false" rebuild="true":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "$(uname -s)" != "Linux" ]]; then
       printf 'error: desktop WebDriver E2E is supported on Linux only\n' >&2
       exit 1
     fi
+    if [[ "{{ bundled }}" != "true" && "{{ bundled }}" != "false" ]]; then
+      printf 'error: e2e bundled must be true or false\n' >&2
+      exit 1
+    fi
+    if [[ "{{ rebuild }}" != "true" && "{{ rebuild }}" != "false" ]]; then
+      printf 'error: e2e rebuild must be true or false\n' >&2
+      exit 1
+    fi
+    if [[ "{{ bundled }}" == "true" && "{{ rebuild }}" == "true" ]]; then
+      just worker-build-desktop
+    fi
+
 
     e2e_root="$(mktemp -d "${TMPDIR:-/tmp}/eutheto-e2e.XXXXXX")"
     trap 'rm -rf -- "$e2e_root"' EXIT
@@ -322,11 +365,42 @@ e2e:
     mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_RUNTIME_DIR" "$XDG_STATE_HOME"
     chmod 700 "$XDG_RUNTIME_DIR"
 
-    pnpm --filter @eutheto/desktop run tauri build --debug --no-bundle
+    if [[ "{{ bundled }}" == "true" ]]; then
+      shopt -s nullglob
+      bundles=(.cache/cargo-target/release/bundle/deb/*.deb)
+      if [[ ${#bundles[@]} -ne 1 ]]; then
+        printf 'error: expected exactly one unsigned desktop DEB bundle\n' >&2
+        exit 1
+      fi
+      7z x -bd -y "-o$e2e_root/archive" "${bundles[0]}"
+      mkdir -p "$e2e_root/application"
+      tar -xf "$e2e_root/archive/data.tar" -C "$e2e_root/application"
+      if [[ ! -x "$e2e_root/application/usr/bin/eutheto-desktop" ||
+            ! -x "$e2e_root/application/usr/bin/ortools-worker" ||
+            ! -x "$e2e_root/application/usr/bin/eutheto-pdf-worker" ]]; then
+        printf 'error: unsigned desktop bundle is missing its application, solver, or PDF renderer\n' >&2
+        exit 1
+      fi
+      mapfile -d '' -t pdf_manifests < <(find "$e2e_root/application" -type f -path '*/renderer/pdf/eutheto-pdf-worker.json' -print0)
+      if [[ ${#pdf_manifests[@]} -ne 1 ]]; then
+        printf 'error: expected exactly one packaged PDF renderer manifest\n' >&2
+        exit 1
+      fi
+      pdf_digest_line="$(sha256sum apps/desktop/src-tauri/pdf-sidecar/resources/eutheto-pdf-worker.json)"
+      cargo xtask pdf verify \
+        --executable "$e2e_root/application/usr/bin/eutheto-pdf-worker" \
+        --manifest "${pdf_manifests[0]}" \
+        --manifest-sha256 "${pdf_digest_line%% *}"
+      export EUTHETO_E2E_APPLICATION="$e2e_root/application/usr/bin/eutheto-desktop"
+      export EUTHETO_E2E_PACKAGED_SOLVE=1
+    elif [[ "{{ rebuild }}" == "true" ]]; then
+      pnpm --filter @eutheto/desktop run tauri build --debug --no-bundle
+    fi
     e2e_command=(
       "$(command -v env)"
+      "PATH=$PATH"
       "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
-      "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
+      "EUTHETO_NATIVE_DRIVER=${EUTHETO_NATIVE_DRIVER:-$(command -v WebKitWebDriver)}"
       "EUTHETO_XDOTOOL=$(command -v xdotool)"
       "$(command -v xvfb-run)" -a --server-args="-screen 0 1600x1200x24"
       "$(command -v eutheto-desktop-runtime)"
@@ -351,25 +425,12 @@ e2e:
 # Enforce Rust advisory policy, including the reviewed deny.toml exceptions.
 rust-advisories:
     python3 -c 'from datetime import date, datetime, timezone; import sys; expiry = date.fromisoformat("2026-11-30"); today = datetime.now(timezone.utc).date(); sys.exit(f"RustSec exception review expired on {expiry}; update or remove each exception") if today > expiry else None'
+    python3 scripts/check_rust_advisories.py
     cargo deny --locked check advisories licenses bans sources
-    cargo audit --deny warnings \
-        --ignore RUSTSEC-2024-0370 \
-        --ignore RUSTSEC-2024-0411 \
-        --ignore RUSTSEC-2024-0412 \
-        --ignore RUSTSEC-2024-0413 \
-        --ignore RUSTSEC-2024-0414 \
-        --ignore RUSTSEC-2024-0415 \
-        --ignore RUSTSEC-2024-0416 \
-        --ignore RUSTSEC-2024-0417 \
-        --ignore RUSTSEC-2024-0418 \
-        --ignore RUSTSEC-2024-0419 \
-        --ignore RUSTSEC-2024-0420 \
-        --ignore RUSTSEC-2024-0429 \
-        --ignore RUSTSEC-2025-0075 \
-        --ignore RUSTSEC-2025-0080 \
-        --ignore RUSTSEC-2025-0081 \
-        --ignore RUSTSEC-2025-0098 \
-        --ignore RUSTSEC-2025-0100
+
+# Exercise maintenance expiry, exact package scope, and vulnerability rejection.
+rust-advisories-test:
+    python3 tests/security/test_rust_advisories.py
 
 # Generate and validate the Phase-01 third-party license inventory.
 licenses:
@@ -391,8 +452,9 @@ dco-self-test:
 # Exercise actual CI target selection and fail-closed terminal gates.
 ci-policy-test:
     python3 tests/security/test_ci_policy.py
+    python3 tests/e2e/test_native_runtime.py
 # Run the complete non-deferred Phase-01 repository suite.
-check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test fmt-check lint typecheck test
+check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test rust-advisories-test fmt-check lint typecheck test
 
 # Run real clean-tree checks, then stop at the unresolved Phase-11 release gate.
 release-preflight: check

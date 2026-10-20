@@ -10,17 +10,21 @@ use eutheto_domain_ir::{
     VerificationContextV1, VerificationReport, VerificationScope, blake3_hex,
 };
 use eutheto_planning_ir::{
-    CandidateValues, PlanningIrLimitsV1, PlanningProblem, ProjectionExpression, Variable,
-    canonical_ir_hash, project_candidate, validate,
+    CandidateValues, PlanningIrLimitsV1, PlanningPreparationBudget, PlanningPreparationError,
+    PlanningProblem, PreparedPlanningModel, ProjectionExpression, Variable, canonical_ir_hash,
+    project_candidate, project_candidate_admitted, validate,
 };
 use eutheto_solver_api::{BackendCandidate, BackendObjectiveEvidence};
 use eutheto_types::{
-    DurationMillis, OperationControl, OperationInterruption, REVISION_MAX_V1, ScenarioDocument,
-    SolutionId,
+    DurationMillis, MAX_SCENARIO_DOCUMENT_BYTES, OperationControl, OperationInterruption,
+    REVISION_MAX_V1, ScenarioDocument, SolutionId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
+
+mod diagnostic;
+pub use diagnostic::DiagnosticDecision;
 
 /// Stable category for a candidate that cannot cross the acceptance boundary.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -37,6 +41,8 @@ pub enum CorrectnessAlarmCategory {
     RequiredRuleRejected,
     ScoreIntegrityFailed,
     ClockFailed,
+    /// A complete original-source witness contradicts locally observed infeasibility.
+    InfeasibilityContradicted,
 }
 
 impl CorrectnessAlarmCategory {
@@ -55,6 +61,7 @@ impl CorrectnessAlarmCategory {
             Self::RequiredRuleRejected => "verification.required_rule_rejected",
             Self::ScoreIntegrityFailed => "verification.score_integrity_failed",
             Self::ClockFailed => "verification.clock_invalid",
+            Self::InfeasibilityContradicted => "verification.infeasibility_contradicted",
         }
     }
 }
@@ -107,6 +114,136 @@ impl StructuralValidationFailure {
             code,
             assignment_id,
         }
+    }
+}
+/// Failure from the controlled diagnostic structural path.
+#[derive(Debug)]
+pub(crate) enum DiagnosticStructuralFailure {
+    Invalid,
+    Preparation(PlanningPreparationError),
+}
+
+/// Validates a projected diagnostic witness against an already admitted immutable model.
+///
+/// This deliberately reuses the authenticated model hash and skips whole-IR validation and
+/// canonical hashing. All maps, projection output, and normalized-solution hashing are admitted
+/// against the inherited preparation budget before they are allocated.
+// Keep ordered structural gates and their inherited admission in one auditable scope.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn validate_structure_diagnostic(
+    problem: &PlanningProblem,
+    expected_model_hash: &str,
+    candidate: &CandidateValues,
+    expected_solution_id: SolutionId,
+    solution: &NormalizedSolution,
+    budget: &mut PlanningPreparationBudget,
+    control: &OperationControl,
+) -> Result<StructuralValidationReport, DiagnosticStructuralFailure> {
+    budget
+        .check()
+        .map_err(DiagnosticStructuralFailure::Preparation)?;
+    control.check().map_err(|reason| {
+        DiagnosticStructuralFailure::Preparation(match reason {
+            OperationInterruption::Cancelled => PlanningPreparationError::Cancelled,
+            OperationInterruption::DeadlineExceeded => PlanningPreparationError::DeadlineExceeded,
+        })
+    })?;
+    if expected_model_hash.is_empty() {
+        return Err(DiagnosticStructuralFailure::Invalid);
+    }
+    let units = u64::try_from(problem.variables.len())
+        .unwrap_or(u64::MAX)
+        .checked_add(u64::try_from(problem.projections.len()).unwrap_or(u64::MAX))
+        .and_then(|value| {
+            value.checked_add(u64::try_from(solution.assignments.len()).unwrap_or(u64::MAX))
+        })
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(candidate.booleans.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(u64::try_from(candidate.integers.len()).unwrap_or(u64::MAX)),
+            )
+        })
+        .ok_or(DiagnosticStructuralFailure::Preparation(
+            PlanningPreparationError::ArithmeticOverflow,
+        ))?;
+    let scratch = units
+        .checked_mul(256)
+        .and_then(|value| value.checked_add(8192))
+        .ok_or(DiagnosticStructuralFailure::Preparation(
+            PlanningPreparationError::ArithmeticOverflow,
+        ))?;
+    budget
+        .reserve_work(units.saturating_mul(4))
+        .map_err(DiagnosticStructuralFailure::Preparation)?;
+    budget
+        .reserve_transient(scratch)
+        .map_err(DiagnosticStructuralFailure::Preparation)?;
+    let result = (|| {
+        solution
+            .validate()
+            .map_err(|_| DiagnosticStructuralFailure::Invalid)?;
+        if solution.pack_id != problem.metadata.pack_id {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        if solution.scenario_id != problem.metadata.scenario_id {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        if solution.scenario_revision != problem.metadata.scenario_revision {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        if solution.projection_version != problem.metadata.projection_version {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        if solution.solution_id != expected_solution_id {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        let projections = problem
+            .projections
+            .iter()
+            .map(|projection| (&projection.assignment_id, projection))
+            .collect::<BTreeMap<_, _>>();
+        if projections.len() != problem.projections.len() {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        let assignments = solution
+            .assignments
+            .iter()
+            .map(|assignment| (&assignment.id, assignment))
+            .collect::<BTreeMap<_, _>>();
+        if assignments.len() != projections.len() {
+            return Err(DiagnosticStructuralFailure::Invalid);
+        }
+        for (assignment_id, projection) in projections {
+            budget
+                .check()
+                .map_err(DiagnosticStructuralFailure::Preparation)?;
+            let Some(assignment) = assignments.get(assignment_id) else {
+                return Err(DiagnosticStructuralFailure::Invalid);
+            };
+            if assignment.entity != projection.entity {
+                return Err(DiagnosticStructuralFailure::Invalid);
+            }
+            if !projected_value_matches(problem, projection, &assignment.value) {
+                return Err(DiagnosticStructuralFailure::Invalid);
+            }
+        }
+        validate_exact_projection_admitted(problem, candidate, expected_solution_id, solution)?;
+        let assignment_count = u32::try_from(solution.assignments.len())
+            .map_err(|_| DiagnosticStructuralFailure::Invalid)?;
+        let normalized_solution_hash = solution
+            .canonical_hash()
+            .map_err(|_| DiagnosticStructuralFailure::Invalid)?;
+        Ok(StructuralValidationReport {
+            assignment_count,
+            normalized_solution_hash,
+        })
+    })();
+    let release = budget.release_transient(scratch);
+    match (result, release) {
+        (Ok(report), Ok(())) => Ok(report),
+        (Err(error), Ok(())) => Err(error),
+        (_, Err(error)) => Err(DiagnosticStructuralFailure::Preparation(error)),
     }
 }
 
@@ -242,6 +379,33 @@ fn validate_exact_projection(
     }
     Ok(())
 }
+fn validate_exact_projection_admitted(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+    expected_solution_id: SolutionId,
+    solution: &NormalizedSolution,
+) -> Result<(), DiagnosticStructuralFailure> {
+    let expected = project_candidate_admitted(
+        problem,
+        candidate,
+        expected_solution_id,
+        PlanningIrLimitsV1::DEFAULT,
+    )
+    .map_err(|_| DiagnosticStructuralFailure::Invalid)?;
+    if solution
+        .assignments
+        .iter()
+        .zip(&expected.assignments)
+        .any(|(observed, expected)| {
+            observed.id != expected.id
+                || observed.entity != expected.entity
+                || observed.value != expected.value
+        })
+    {
+        return Err(DiagnosticStructuralFailure::Invalid);
+    }
+    Ok(())
+}
 
 fn projected_value_matches(
     problem: &PlanningProblem,
@@ -334,15 +498,26 @@ impl VerificationClock for SystemVerificationClock {
     }
 }
 
+/// Failure while admitting a diagnostic reviewer against the inherited preparation phase.
+#[derive(Debug)]
+pub enum DiagnosticReviewerError {
+    /// The admitted immutable model/source binding is inconsistent.
+    Alarm(CorrectnessAlarm),
+    /// Cooperative admission/control stopped before review could begin.
+    Preparation(PlanningPreparationError),
+}
+
 /// Router-agnostic acceptance service for one immutable scenario/planning problem.
 pub struct AcceptanceReviewer<'a> {
     pack: &'a dyn DomainPack,
     document: &'a ScenarioDocument,
     scenario_revision: u64,
     problem: &'a PlanningProblem,
+    objective_context: Option<&'a eutheto_domain_ir::RunObjectiveContext>,
     document_hash: String,
     planning_model_hash: String,
     clock: &'a dyn VerificationClock,
+    diagnostic_reservation: u64,
 }
 
 impl<'a> AcceptanceReviewer<'a> {
@@ -355,6 +530,7 @@ impl<'a> AcceptanceReviewer<'a> {
         document: &'a ScenarioDocument,
         scenario_revision: u64,
         problem: &'a PlanningProblem,
+        objective_context: Option<&'a eutheto_domain_ir::RunObjectiveContext>,
         clock: &'a dyn VerificationClock,
     ) -> Result<Self, CorrectnessAlarm> {
         validate(problem, PlanningIrLimitsV1::DEFAULT)
@@ -363,6 +539,11 @@ impl<'a> AcceptanceReviewer<'a> {
             || problem.metadata.pack_id != document.domain_pack.id
             || problem.metadata.scenario_id != document.scenario_id
             || problem.metadata.scenario_revision != scenario_revision
+            || objective_context.is_some_and(|recorded| {
+                recorded
+                    .validate_for(&document.domain_pack.id, document.scenario_id)
+                    .is_err()
+            })
         {
             return Err(CorrectnessAlarm::new(
                 CorrectnessAlarmCategory::InvalidPlanningProblem,
@@ -377,10 +558,127 @@ impl<'a> AcceptanceReviewer<'a> {
             document,
             scenario_revision,
             problem,
+            objective_context,
             document_hash: blake3_hex(&document_bytes),
             planning_model_hash,
             clock,
+            diagnostic_reservation: 0,
         })
+    }
+    /// Creates a diagnostic reviewer from the opaque, already-admitted model artifact.
+    ///
+    /// Unlike [`Self::new`], this path never validates, normalizes, clones, or hashes the full
+    /// planning IR. The prepared artifact is the authority for the immutable model hash. Source
+    /// serialization and retained structural-review scratch are admitted before they are built.
+    ///
+    /// # Errors
+    /// Rejects mismatched source identity, serialization failure, interruption or exhausted
+    /// inherited preparation capacity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_diagnostic(
+        pack: &'a dyn DomainPack,
+        document: &'a ScenarioDocument,
+        scenario_revision: u64,
+        prepared: &'a PreparedPlanningModel,
+        objective_context: Option<&'a eutheto_domain_ir::RunObjectiveContext>,
+        clock: &'a dyn VerificationClock,
+        budget: &mut PlanningPreparationBudget,
+        control: &OperationControl,
+    ) -> Result<Self, DiagnosticReviewerError> {
+        budget
+            .check()
+            .map_err(DiagnosticReviewerError::Preparation)?;
+        let problem = prepared.problem().as_ref();
+        if scenario_revision > REVISION_MAX_V1
+            || problem.metadata.pack_id != document.domain_pack.id
+            || problem.metadata.scenario_id != document.scenario_id
+            || problem.metadata.scenario_revision != scenario_revision
+            || objective_context.is_some_and(|recorded| {
+                recorded
+                    .validate_for(&document.domain_pack.id, document.scenario_id)
+                    .is_err()
+            })
+        {
+            return Err(DiagnosticReviewerError::Alarm(CorrectnessAlarm::new(
+                CorrectnessAlarmCategory::InvalidPlanningProblem,
+            )));
+        }
+        control.check().map_err(|reason| {
+            DiagnosticReviewerError::Preparation(match reason {
+                OperationInterruption::Cancelled => PlanningPreparationError::Cancelled,
+                OperationInterruption::DeadlineExceeded => {
+                    PlanningPreparationError::DeadlineExceeded
+                }
+            })
+        })?;
+
+        let encoded_bytes = budget
+            .precharge_serialized(document, MAX_SCENARIO_DOCUMENT_BYTES)
+            .map_err(DiagnosticReviewerError::Preparation)?;
+        let source_scratch = PlanningPreparationBudget::serialized_scratch_bytes(encoded_bytes)
+            .map_err(DiagnosticReviewerError::Preparation)?;
+        budget
+            .reserve_transient(source_scratch)
+            .map_err(DiagnosticReviewerError::Preparation)?;
+        let document_hash = if let Ok(bytes) = serde_json::to_vec(document) {
+            blake3_hex(&bytes)
+        } else {
+            let _ = budget.release_transient(source_scratch);
+            return Err(DiagnosticReviewerError::Alarm(CorrectnessAlarm::new(
+                CorrectnessAlarmCategory::InvalidPlanningProblem,
+            )));
+        };
+        budget
+            .release_transient(source_scratch)
+            .map_err(DiagnosticReviewerError::Preparation)?;
+
+        let summary = prepared.summary();
+        let units = summary
+            .variable_count
+            .checked_add(summary.constraint_count)
+            .and_then(|value| value.checked_add(summary.assumption_count))
+            .and_then(|value| value.checked_add(summary.projection_count))
+            .and_then(|value| value.checked_add(summary.provenance_count))
+            .ok_or(DiagnosticReviewerError::Preparation(
+                PlanningPreparationError::ArithmeticOverflow,
+            ))?;
+        let diagnostic_reservation = units
+            .checked_mul(192)
+            .and_then(|value| value.checked_add(8192))
+            .ok_or(DiagnosticReviewerError::Preparation(
+                PlanningPreparationError::ArithmeticOverflow,
+            ))?;
+        budget
+            .reserve_work(units.saturating_mul(2))
+            .map_err(DiagnosticReviewerError::Preparation)?;
+        if let Err(error) = budget.reserve_transient(diagnostic_reservation) {
+            return Err(DiagnosticReviewerError::Preparation(error));
+        }
+        Ok(Self {
+            pack,
+            document,
+            scenario_revision,
+            problem,
+            objective_context,
+            document_hash,
+            planning_model_hash: summary.canonical_ir_hash.clone(),
+            clock,
+            diagnostic_reservation,
+        })
+    }
+
+    /// Releases the retained diagnostic-review scratch after all candidates are reviewed.
+    ///
+    /// # Errors
+    /// Rejects retirement if the budget has insufficient matching raw reservation capacity.
+    pub fn release_diagnostic(
+        mut self,
+        budget: &mut PlanningPreparationBudget,
+    ) -> Result<(), PlanningPreparationError> {
+        let reservation = self.diagnostic_reservation;
+        self.diagnostic_reservation = 0;
+        drop(self);
+        budget.release_transient(reservation)
     }
 
     /// Projects, structurally validates, scores once, verifies required rules, and decides whether
@@ -404,10 +702,15 @@ impl<'a> AcceptanceReviewer<'a> {
         let projection = self
             .pack
             .project(self.problem, &candidate.values, solution_id, control);
+        let projection_failure =
+            pack_failure(&projection, CorrectnessAlarmCategory::ProjectionFailed);
         let finished = self.clock.now_milliseconds();
         let projection_elapsed = elapsed(started, finished);
         if let Some(duration) = projection_elapsed {
             timings.projection_milliseconds = duration;
+        }
+        if let Some(category) = projection_failure {
+            return quarantine(category, timings);
         }
         if let Some(reason) = interrupted(control, projection.as_ref().err()) {
             return AcceptanceDecision::Interrupted { reason, timings };
@@ -430,10 +733,17 @@ impl<'a> AcceptanceReviewer<'a> {
             solution_id,
             &solution,
         );
+        let structural_failure = structural
+            .as_ref()
+            .err()
+            .map(|_| CorrectnessAlarmCategory::StructuralValidationFailed);
         let finished = self.clock.now_milliseconds();
         let structural_elapsed = elapsed(started, finished);
         if let Some(duration) = structural_elapsed {
             timings.structural_validation_milliseconds = duration;
+        }
+        if let Some(category) = structural_failure {
+            return quarantine(category, timings);
         }
         if let Some(reason) = interrupted(control, None) {
             return AcceptanceDecision::Interrupted { reason, timings };
@@ -449,11 +759,20 @@ impl<'a> AcceptanceReviewer<'a> {
         };
 
         let started = finished;
-        let authoritative_score = self.pack.score(self.document, &solution, control);
+        let authoritative_score =
+            self.pack
+                .score(self.document, &solution, self.objective_context, control);
+        let score_failure = pack_failure(
+            &authoritative_score,
+            CorrectnessAlarmCategory::ScoreRecomputationFailed,
+        );
         let score_finished = self.clock.now_milliseconds();
         let score_elapsed = elapsed(started, score_finished);
         if let Some(duration) = score_elapsed {
             timings.score_recomputation_milliseconds = duration;
+        }
+        if let Some(category) = score_failure {
+            return quarantine(category, timings);
         }
         if let Some(reason) = interrupted(control, authoritative_score.as_ref().err()) {
             return AcceptanceDecision::Interrupted { reason, timings };
@@ -475,6 +794,17 @@ impl<'a> AcceptanceReviewer<'a> {
         let verification_scope =
             self.pack
                 .verification_scope(self.document, self.scenario_revision, control);
+        let classification_failure = pack_failure(
+            &verification_scope,
+            CorrectnessAlarmCategory::VerificationScopeFailed,
+        );
+        if let Some(category) = classification_failure {
+            let failed = self.clock.now_milliseconds();
+            if let Some(duration) = elapsed(verification_started, failed) {
+                timings.required_rule_verification_milliseconds = duration;
+            }
+            return quarantine(category, timings);
+        }
         if let Some(reason) = interrupted(control, verification_scope.as_ref().err()) {
             if let Some(duration) = elapsed(verification_started, self.clock.now_milliseconds()) {
                 timings.required_rule_verification_milliseconds = duration;
@@ -506,20 +836,31 @@ impl<'a> AcceptanceReviewer<'a> {
         );
         let Ok(context) = context else {
             let failed = self.clock.now_milliseconds();
-            let Some(verification_elapsed) = elapsed(verification_started, failed) else {
-                return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
-            };
-            timings.required_rule_verification_milliseconds = verification_elapsed;
+            if let Some(duration) = elapsed(verification_started, failed) {
+                timings.required_rule_verification_milliseconds = duration;
+            }
             return quarantine(CorrectnessAlarmCategory::ReportBindingFailed, timings);
         };
 
         let report = self.pack.verify(
             self.document,
             &solution,
+            self.objective_context,
             &context,
             &authoritative_score,
             control,
         );
+        let report_failure = pack_failure(
+            &report,
+            CorrectnessAlarmCategory::RequiredRuleVerificationFailed,
+        );
+        if let Some(category) = report_failure {
+            let failed = self.clock.now_milliseconds();
+            if let Some(duration) = elapsed(verification_started, failed) {
+                timings.required_rule_verification_milliseconds = duration;
+            }
+            return quarantine(category, timings);
+        }
         if let Some(reason) = interrupted(control, report.as_ref().err()) {
             if let Some(duration) = elapsed(verification_started, self.clock.now_milliseconds()) {
                 timings.required_rule_verification_milliseconds = duration;
@@ -548,19 +889,20 @@ impl<'a> AcceptanceReviewer<'a> {
             &authoritative_score,
             candidate.objective.as_ref(),
         );
+        let validation_failure = validation.as_ref().err().copied();
         let verify_finished = self.clock.now_milliseconds();
         let verify_elapsed = elapsed(verification_started, verify_finished);
         if let Some(duration) = verify_elapsed {
             timings.required_rule_verification_milliseconds = duration;
+        }
+        if let Some(category) = validation_failure {
+            return quarantine(category, timings);
         }
         if let Some(reason) = interrupted(control, None) {
             return AcceptanceDecision::Interrupted { reason, timings };
         }
         if verify_elapsed.is_none() {
             return quarantine(CorrectnessAlarmCategory::ClockFailed, timings);
-        }
-        if let Some(category) = validation.as_ref().err().copied() {
-            return quarantine(category, timings);
         }
         let Some(objective_reconciliation) = validation.ok() else {
             return quarantine(CorrectnessAlarmCategory::ReportBindingFailed, timings);
@@ -591,6 +933,25 @@ fn interrupted(
     })
 }
 
+fn pack_failure<T>(
+    result: &Result<T, DomainPackError>,
+    category: CorrectnessAlarmCategory,
+) -> Option<CorrectnessAlarmCategory> {
+    let Err(error) = result else {
+        return None;
+    };
+    if matches!(
+        error,
+        DomainPackError::Cancelled
+            | DomainPackError::BudgetExpired
+            | DomainPackError::ResourceLimitExceeded
+    ) {
+        None
+    } else {
+        Some(category)
+    }
+}
+
 fn validate_report(
     problem: &PlanningProblem,
     verification_scope: &VerificationScope,
@@ -599,6 +960,32 @@ fn validate_report(
     authoritative_score: &ScoreVector,
     backend_objective: Option<&BackendObjectiveEvidence>,
 ) -> Result<BackendObjectiveReconciliation, CorrectnessAlarmCategory> {
+    validate_report_integrity(verification_scope, context, report, authoritative_score)?;
+    if !report.accepted
+        || report
+            .required_rule_results
+            .iter()
+            .any(|evaluation| !evaluation.satisfied)
+    {
+        return Err(CorrectnessAlarmCategory::RequiredRuleRejected);
+    }
+    if report.score.feasibility != 0 {
+        return Err(CorrectnessAlarmCategory::ScoreIntegrityFailed);
+    }
+    validate_score(problem, &report.score)?;
+    Ok(reconcile_backend_objective(
+        &report.score,
+        backend_objective,
+    ))
+}
+
+/// Complete source bindings and ordered coverage shared by acceptance and unsaved diagnostics.
+fn validate_report_integrity(
+    verification_scope: &VerificationScope,
+    context: &VerificationContextV1,
+    report: &VerificationReport,
+    authoritative_score: &ScoreVector,
+) -> Result<(), CorrectnessAlarmCategory> {
     if &report.score != authoritative_score {
         return Err(CorrectnessAlarmCategory::ScoreIntegrityFailed);
     }
@@ -634,22 +1021,7 @@ fn validate_report(
     {
         return Err(CorrectnessAlarmCategory::RequiredRuleCoverageFailed);
     }
-    if !report.accepted
-        || report
-            .required_rule_results
-            .iter()
-            .any(|evaluation| !evaluation.satisfied)
-    {
-        return Err(CorrectnessAlarmCategory::RequiredRuleRejected);
-    }
-    if report.score.feasibility != 0 {
-        return Err(CorrectnessAlarmCategory::ScoreIntegrityFailed);
-    }
-    validate_score(problem, &report.score)?;
-    Ok(reconcile_backend_objective(
-        &report.score,
-        backend_objective,
-    ))
+    Ok(())
 }
 
 fn validate_score(

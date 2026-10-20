@@ -66,6 +66,7 @@ jobs:
 
       - name: Enforce Rust advisories, licenses, bans, and sources
         run: |
+          nix develop --no-update-lock-file .#full --command just rust-advisories-test
           nix develop --no-update-lock-file .#full --command just rust-advisories
           nix develop --no-update-lock-file .#release --command cargo about generate /dev/null >/dev/null
 

@@ -526,6 +526,10 @@ fn publication_error(error: &eutheto_export::ExportError) -> eutheto_types::ApiE
         eutheto_export::ExportError::Cancelled => {
             ("operation.cancelled", "Settings publication was cancelled.")
         }
+        eutheto_export::ExportError::DeadlineExceeded => (
+            "operation.deadline_exceeded",
+            "Settings publication reached its deadline.",
+        ),
         eutheto_export::ExportError::DestinationExists(_) => (
             "settings.destination_exists",
             "The destination already exists. Choose a new settings filename.",

@@ -23,6 +23,12 @@ use std::{
 };
 use support::id;
 
+fn kinds<Id>(map: &BTreeMap<Id, Value>) -> BTreeSet<String> {
+    map.values()
+        .filter_map(|record| record["kind"].as_str().map(str::to_owned))
+        .collect()
+}
+
 fn entity(document: &mut ScenarioDocument, index: u32) -> Result<&mut Value, Box<dyn Error>> {
     document
         .domain
@@ -264,17 +270,15 @@ fn workforce_archive_copy_remaps_owned_definitions_references_and_inert_results(
     assert_eq!(document.extensions, original.extensions);
     assert_eq!(document.metadata, original.metadata);
     assert_eq!(document.settings, original.settings);
-    let kinds = |map: &BTreeMap<_, Value>| -> BTreeSet<String> {
-        map.values()
-            .filter_map(|record| record["kind"].as_str().map(str::to_owned))
-            .collect()
-    };
     assert_eq!(
         kinds(&original.domain.entities),
         kinds(&document.domain.entities)
     );
-    assert_eq!(document.domain.rules.len(), 12);
-    assert_eq!(document.domain.preferences.len(), 11);
+    assert_eq!(kinds(&original.domain.rules), kinds(&document.domain.rules));
+    assert_eq!(
+        kinds(&original.domain.preferences),
+        kinds(&document.domain.preferences)
+    );
     assert_eq!(
         copied_result["scenarioId"],
         document.scenario_id.to_string()

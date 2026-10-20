@@ -3,10 +3,14 @@ use super::super::{
     budget::{OperationBudget, add, count},
     input::AssignmentInput,
 };
-use super::{RestWitness, Selected, Summary, Witness, arithmetic, invalid, predicates};
+use super::{
+    HealthDirection, HealthObservation, HealthObservationKind, HealthUnits, RestWitness, Selected,
+    Summary, Witness, arithmetic, invalid, predicates,
+};
 use crate::model::{AssignmentPair, MinimumRestRule};
 use jiff::SignedDuration;
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn evaluate(
     input: &AssignmentInput,
     selected: &Selected<'_>,
@@ -73,26 +77,67 @@ pub(super) fn evaluate(
                     .instant
                     .as_timestamp()
                     .duration_until(target.interval.starts_at.instant.as_timestamp());
+                let actual_nanos = i128::from(actual.as_secs())
+                    .checked_mul(1_000_000_000)
+                    .and_then(|value| value.checked_add(i128::from(actual.subsec_nanos())))
+                    .ok_or_else(arithmetic)?;
+                let required_nanos = i128::from(rule.minimum_minutes)
+                    .checked_mul(60_000_000_000)
+                    .ok_or_else(arithmetic)?;
+                let failed = actual < required;
+                if summary.collecting_health() {
+                    summary.record_health(
+                        HealthObservation {
+                            kind: HealthObservationKind::MinimumRest,
+                            rule_id: None,
+                            coverage_owner: None,
+                            person_id: Some(*person_id),
+                            shift_id: Some(source.id),
+                            other_shift_id: Some(target.id),
+                            period: None,
+                            units: HealthUnits::Minutes,
+                            direction: HealthDirection::Minimum,
+                            threshold: Some(required_nanos),
+                            observed: Some(actual_nanos),
+                            satisfied: Some(!failed),
+                            minimum_rank: None,
+                            affected_pairs: vec![
+                                AssignmentPair {
+                                    person_id: *person_id,
+                                    shift_id: source.id,
+                                },
+                                AssignmentPair {
+                                    person_id: *person_id,
+                                    shift_id: target.id,
+                                },
+                            ],
+                            affected_pair_count: 2,
+                            affected_pairs_truncated: false,
+                        },
+                        budget,
+                    )?;
+                }
                 // Every later target is safe for this source. Count that suffix above in
                 // checked arithmetic rather than walking quadratic numbers of passing pairs.
-                if actual >= required {
+                if failed {
+                    let mut witness = Witness::pair(
+                        AssignmentPair {
+                            person_id: *person_id,
+                            shift_id: source.id,
+                        },
+                        source.id.as_entity_id(),
+                        "shift",
+                        "minimum_rest",
+                    );
+                    witness.other_shift = Some(target.id);
+                    witness.rest = Some(RestWitness {
+                        minimum_minutes: rule.minimum_minutes,
+                        actual,
+                    });
+                    summary.failure(&witness, &witness, None, "direct", budget)?;
+                } else {
                     break;
                 }
-                let mut witness = Witness::pair(
-                    AssignmentPair {
-                        person_id: *person_id,
-                        shift_id: source.id,
-                    },
-                    source.id.as_entity_id(),
-                    "shift",
-                    "minimum_rest",
-                );
-                witness.other_shift = Some(target.id);
-                witness.rest = Some(RestWitness {
-                    minimum_minutes: rule.minimum_minutes,
-                    actual,
-                });
-                summary.failure(&witness)?;
             }
         }
     }

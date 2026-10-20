@@ -43,6 +43,10 @@ apps/desktop/src-tauri/sidecar/
 apps/desktop/src-tauri/sidecar.staging/
 apps/desktop/src-tauri/sidecar.previous/
 apps/desktop/src-tauri/sidecar.lock
+apps/desktop/src-tauri/pdf-sidecar/
+apps/desktop/src-tauri/pdf-sidecar.staging/
+apps/desktop/src-tauri/pdf-sidecar.previous/
+apps/desktop/src-tauri/pdf-sidecar.lock
 *.AppImage
 *.dmg
 *.msi

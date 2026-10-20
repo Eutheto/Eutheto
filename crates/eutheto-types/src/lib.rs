@@ -6,6 +6,8 @@ mod contracts;
 mod identity;
 mod ids;
 mod portable;
+mod recipient_pdf;
+mod recipient_report;
 mod values;
 
 pub use application_settings::*;
@@ -14,6 +16,8 @@ pub use contracts::*;
 pub use identity::*;
 pub use ids::*;
 pub use portable::*;
+pub use recipient_pdf::*;
+pub use recipient_report::*;
 pub use values::*;
 
 use serde::{Deserialize, Deserializer, Serialize};

@@ -1,17 +1,18 @@
 //! Original-domain assertions against fixed source intent, never a rebuilt-document echo.
 use super::{
     BASELINE_REQUIREMENT, EVERY_DAY, REPAIR_REQUIREMENT, WEEKDAYS, all, date_range, expected, id,
-    selected, type_scope, wall,
+    repair_payload, selected, type_scope, wall,
 };
 use crate::contract::{
-    CORPUS_VERSION, CaseId, ExpectedCase, FIXTURE_CLOCK, FORMAT_VERSION, PreservedObligation,
-    REPAIR_FORMAT, RepairFixture,
+    CORPUS_VERSION, CaseId, ExpectedCase, FIXTURE_CLOCK, PreservedObligation, REPAIR_FORMAT,
+    REPAIR_SCHEMA_VERSION, RepairFixture,
 };
 use anyhow::{Context, Result, bail, ensure};
 use eutheto_domain_api::{DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand};
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, EntityId, GapPolicy, OverlapPolicy, PersonId,
-    Revision, RuleId, ScenarioDocument, ScenarioSnapshotV1, TimeResolutionFailureKind, UnitSystem,
+    AssignmentId, CancellationToken, DomainCommandEnvelope, EntityId, GapPolicy, OverlapPolicy,
+    PersonId, Revision, RuleId, ScenarioDocument, ScenarioSnapshotV1, TimeResolutionFailureKind,
+    UnitSystem,
 };
 use eutheto_workforce::{
     commands,
@@ -21,13 +22,13 @@ use eutheto_workforce::{
     },
     model::{
         ActiveRange, AssignmentLock, AvailabilityKind, CalendarPeriod, ConsecutiveMode, Coverage,
-        DeviationPenalty, LocalInterval, LocationBehavior, LockState, OverlappingContribution,
-        PeerGroup, PersonSelection, PreferenceDirection, PreferencePriority,
-        QualificationExpression, ReportingAttribution, RequiredStrength, Scope, ShiftTiming,
-        TieBreakPolicy, TimeBehavior, TimeWindow, Weekday, WeeklyWindow, WindowMembership,
-        WorkWindow, WorkforceDomainV1, WorkforceEntity, WorkforcePreference, WorkforceRule,
-        WorkforceScorePolicy, WorkloadMeasurement, WorkloadTargetMode, WorkloadWeight,
-        planning_dates,
+        DateRange, DeviationPenalty, LocalInterval, LocationBehavior, LockState,
+        OverlappingContribution, PeerGroup, PersonSelection, PreferenceDirection,
+        PreferencePriority, QualificationExpression, ReportingAttribution, RequiredStrength, Scope,
+        ShiftTiming, TieBreakPolicy, TimeBehavior, TimeWindow, Weekday, WeeklyWindow,
+        WindowMembership, WorkWindow, WorkforceDomainV1, WorkforceEntity, WorkforcePreference,
+        WorkforceRule, WorkforceScorePolicy, WorkloadMeasurement, WorkloadQuotaMeasure,
+        WorkloadTargetMode, WorkloadWeight, planning_dates,
     },
     temporal,
     validation::validate_document,
@@ -557,35 +558,13 @@ fn check_friday(case: CaseId, domain: &WorkforceDomainV1, person_role: &str) -> 
     Ok(())
 }
 
-pub(crate) fn validate_semantics(
-    case: CaseId,
-    snapshot: &ScenarioSnapshotV1,
-    expectation: &ExpectedCase,
+fn check_source_inventory(
+    domain: &WorkforceDomainV1,
+    people: usize,
+    entities: usize,
+    rules: usize,
+    preferences: usize,
 ) -> Result<()> {
-    // This expectation is a source constant, independently of the loaded/generated document.
-    // No assignment solution is rebuilt, prescribed, or inferred from solver output here.
-    ensure!(
-        *expectation == expected(case)?,
-        "reviewed expectation differs from fixed source contract"
-    );
-    let doc = &snapshot.document;
-    let domain = validate_document(doc)?;
-    check_snapshot(case, snapshot, &domain)?;
-    let (people, days, shifts, entities, rules, preferences, start, end) = match case {
-        CaseId::AppendixF => (3, 30, 52, 17, 7, 2, "2026-09-01", "2026-10-01"),
-        CaseId::ClinicTiny => (3, 7, 5, 10, 4, 0, "2026-09-01", "2026-09-08"),
-        CaseId::ClinicInitial => (8, 28, 20, 15, 4, 0, "2026-09-01", "2026-09-29"),
-        CaseId::ClinicFull => (8, 28, 20, 16, 4, 2, "2026-09-01", "2026-09-29"),
-        CaseId::ClinicOvernight => (12, 28, 48, 22, 5, 0, "2026-09-01", "2026-09-29"),
-        CaseId::RollingHours => (8, 28, 20, 15, 6, 0, "2026-09-01", "2026-09-29"),
-        CaseId::SpecialistCoverage => (6, 7, 5, 14, 4, 0, "2026-09-01", "2026-09-08"),
-        CaseId::RepairBefore => (4, 7, 5, 10, 4, 0, "2026-09-01", "2026-09-08"),
-        CaseId::InfeasibleCoverage => (3, 1, 1, 9, 4, 0, "2026-09-01", "2026-09-02"),
-        CaseId::DstSpring => (2, 1, 1, 5, 4, 0, "2026-03-08", "2026-03-09"),
-        CaseId::DstFall => (2, 1, 1, 5, 4, 0, "2026-11-01", "2026-11-02"),
-        CaseId::LargeSupported => (100, 12, 12, 103, 4, 0, "2026-09-01", "2026-09-13"),
-        CaseId::LargePressure => (100, 20, 20, 103, 4, 0, "2026-09-01", "2026-09-21"),
-    };
     ensure!(
         domain.entities.len() == entities
             && domain.rules.len() == rules
@@ -601,6 +580,10 @@ pub(crate) fn validate_semantics(
             == people,
         "source population changed"
     );
+    Ok(())
+}
+
+fn check_source_horizon(doc: &ScenarioDocument, days: i64, start: &str, end: &str) -> Result<()> {
     let dates = planning_dates(&doc.settings)?;
     ensure!(
         dates.first_date == start.parse::<Date>()?
@@ -611,7 +594,14 @@ pub(crate) fn validate_semantics(
         start.parse::<Date>()?.checked_add(Span::new().days(days))? == end.parse::<Date>()?,
         "source horizon assertion is inconsistent"
     );
-    let resolved = temporal::resolve_shifts(doc, &CancellationToken::new())?;
+    Ok(())
+}
+
+fn check_source_recurrence(
+    doc: &ScenarioDocument,
+    resolved: &[temporal::ResolvedShift],
+    shifts: usize,
+) -> Result<()> {
     ensure!(
         resolved.len() == shifts,
         "source resolved shift count changed"
@@ -629,8 +619,50 @@ pub(crate) fn validate_semantics(
         )),
         "source recurrence replaced by manual intervals"
     );
+    Ok(())
+}
+
+pub(crate) fn validate_semantics(
+    case: CaseId,
+    snapshot: &ScenarioSnapshotV1,
+    expectation: &ExpectedCase,
+) -> Result<()> {
+    // This expectation is a source constant, independently of the loaded/generated document.
+    // No assignment solution is rebuilt, prescribed, or inferred from solver output here.
+    ensure!(
+        *expectation == expected(case),
+        "reviewed expectation differs from fixed source contract"
+    );
+    let doc = &snapshot.document;
+    let domain = validate_document(doc)?;
+    check_snapshot(case, snapshot, &domain)?;
+    let (people, days, shifts, entities, rules, preferences, start, end) = match case {
+        CaseId::AppendixF => (3, 30, 52, 17, 7, 2, "2026-09-01", "2026-10-01"),
+        CaseId::ClinicTiny => (3, 7, 5, 10, 4, 0, "2026-09-01", "2026-09-08"),
+        CaseId::ClinicInitial => (8, 28, 20, 15, 4, 0, "2026-09-01", "2026-09-29"),
+        CaseId::ClinicFull => (8, 28, 20, 16, 4, 2, "2026-09-01", "2026-09-29"),
+        CaseId::ClinicOvernight => (12, 28, 48, 22, 5, 0, "2026-09-01", "2026-09-29"),
+        CaseId::RollingHours => (8, 28, 20, 15, 6, 0, "2026-09-01", "2026-09-29"),
+        CaseId::SpecialistCoverage => (6, 7, 5, 14, 4, 0, "2026-09-01", "2026-09-08"),
+        CaseId::RepairBefore => (4, 7, 5, 10, 4, 0, "2026-09-01", "2026-09-08"),
+        CaseId::InfeasibleCoverage => (3, 1, 1, 9, 4, 0, "2026-09-01", "2026-09-02"),
+        CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible => {
+            (12, 28, 48, 27, 12, 2, "2027-02-01", "2027-03-01")
+        }
+        CaseId::DstSpring => (2, 1, 1, 5, 4, 0, "2026-03-08", "2026-03-09"),
+        CaseId::DstFall => (2, 1, 1, 5, 4, 0, "2026-11-01", "2026-11-02"),
+        CaseId::LargeSupported => (101, 12, 12, 104, 4, 0, "2026-09-01", "2026-09-13"),
+        CaseId::LargePressure => (100, 64, 64, 103, 4, 0, "2026-09-01", "2026-11-04"),
+    };
+    check_source_inventory(&domain, people, entities, rules, preferences)?;
+    check_source_horizon(doc, days, start, end)?;
+    let resolved = temporal::resolve_shifts(doc, &CancellationToken::new())?;
+    check_source_recurrence(doc, &resolved, shifts)?;
     check_basic(case, &domain)?;
-    if case != CaseId::RollingHours {
+    if !matches!(
+        case,
+        CaseId::RollingHours | CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible
+    ) {
         ensure!(
             domain.locked_assignments.is_empty(),
             "source-absent lock invented"
@@ -648,6 +680,11 @@ pub(crate) fn validate_semantics(
             check_large(case, &domain, &resolved, end)?;
         } else if case == CaseId::AppendixF {
             check_appendix(doc, &domain, &resolved)?;
+        } else if matches!(
+            case,
+            CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible
+        ) {
+            check_practitioner(case, doc, &domain, &resolved)?;
         } else {
             check_clinic(case, &domain, &resolved, people, end)?;
         }
@@ -1109,8 +1146,16 @@ fn check_clinic_intervals(
         );
         // 06:00 call finish to 08:00 next clinic is120 elapsed minutes, so the
         //600-minute required rest excludes that same-person pair, not the shifts themselves.
-        let call = shifts.iter().find(|shift| matches!(shift.origin, temporal::ResolvedShiftOrigin::Generated { template_id, .. } if template_id == call_id) && shift.reporting_date.to_string() == "2026-09-01").context("missing directional rest call")?;
-        let clinic = shifts.iter().find(|shift| matches!(shift.origin, temporal::ResolvedShiftOrigin::Generated { template_id, .. } if template_id == clinic_id) && shift.reporting_date.to_string() == "2026-09-02").context("missing directional rest clinic")?;
+        let (witness_call, witness_clinic) = if matches!(
+            case,
+            CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible
+        ) {
+            ("2027-02-01", "2027-02-02")
+        } else {
+            ("2026-09-01", "2026-09-02")
+        };
+        let call = shifts.iter().find(|shift| matches!(shift.origin, temporal::ResolvedShiftOrigin::Generated { template_id, .. } if template_id == call_id) && shift.reporting_date.to_string() == witness_call).context("missing directional rest call")?;
+        let clinic = shifts.iter().find(|shift| matches!(shift.origin, temporal::ResolvedShiftOrigin::Generated { template_id, .. } if template_id == clinic_id) && shift.reporting_date.to_string() == witness_clinic).context("missing directional rest clinic")?;
         ensure!(
             call.interval
                 .ends_at
@@ -1123,6 +1168,475 @@ fn check_clinic_intervals(
     }
     Ok(())
 }
+fn check_practitioner(
+    case: CaseId,
+    doc: &ScenarioDocument,
+    domain: &WorkforceDomainV1,
+    resolved: &[temporal::ResolvedShift],
+) -> Result<()> {
+    let range = date_range("2027-02-01", "2027-03-01")?;
+    let infeasible = case == CaseId::PractitionerInfeasible;
+    let activity_range = date_range("2027-02-01", "2027-03-02")?;
+    check_practitioner_population(case, domain, infeasible, activity_range)?;
+    check_practitioner_resources_and_templates(case, domain, infeasible)?;
+    check_practitioner_leave_and_calendar(case, domain, range)?;
+    check_practitioner_preferences_and_rest(case, domain)?;
+    check_practitioner_quotas(case, domain)?;
+    check_practitioner_maxima(case, domain)?;
+    check_practitioner_schedule(case, doc, domain, resolved, infeasible)
+}
+
+fn check_practitioner_population(
+    case: CaseId,
+    domain: &WorkforceDomainV1,
+    infeasible: bool,
+    activity_range: DateRange,
+) -> Result<()> {
+    let grant_start = Some("2027-01-31T06:00:00Z".parse()?);
+    let grant_end = Some("2027-03-02T06:00:00Z".parse()?);
+    let names = [
+        "Aster Vale",
+        "Brin Rowan",
+        "Cleo Maren",
+        "Dax Solis",
+        "Elian Moss",
+        "Faye Quill",
+        "Gio Lark",
+        "Hana Voss",
+        "Ira Nolin",
+        "Juno Pike",
+        "Kian Wren",
+        "Lumi Sable",
+    ];
+    for (index, name) in names.into_iter().enumerate() {
+        let role = format!("person-{index:02}");
+        let WorkforceEntity::Person(person) = entity(case, domain, &role)? else {
+            bail!("{role} is not a person")
+        };
+        ensure!(
+            person.name == name && person.active_range == ActiveRange::DateRange(activity_range),
+            "dated practitioner eligibility changed"
+        );
+        let expected_grants = if infeasible { index == 0 } else { index < 4 };
+        let mut grants: BTreeSet<_> = person
+            .qualification_grants
+            .iter()
+            .map(|grant| grant.qualification_id)
+            .collect();
+        let expected = [
+            id::<QualificationId>(case, "q-physician")?,
+            id::<QualificationId>(case, "q-call")?,
+        ];
+        ensure!(
+            grants.remove(&expected[0])
+                && grants.remove(&expected[1])
+                && (grants.remove(&id::<QualificationId>(case, "q-specialist")?)
+                    == expected_grants)
+                && grants.is_empty(),
+            "dated qualification inventory changed"
+        );
+        ensure!(
+            person
+                .qualification_grants
+                .iter()
+                .all(|grant| grant.effective_from == grant_start && grant.expires_at == grant_end),
+            "qualification grant dates changed"
+        );
+        let expected_weight = match index {
+            0..=3 => WorkloadWeight {
+                numerator: 1,
+                denominator: 1,
+            },
+            4..=7 => WorkloadWeight {
+                numerator: 3,
+                denominator: 4,
+            },
+            _ => WorkloadWeight {
+                numerator: 1,
+                denominator: 2,
+            },
+        };
+        ensure!(
+            person.workload_weight == expected_weight
+                && person.external_id.is_none()
+                && person.home_location_id.is_none()
+                && person.workload_target.is_none()
+                && person.tags.is_empty()
+                && person.team_ids.is_empty()
+                && person.display.is_none(),
+            "practitioner burden source fields changed"
+        );
+        let expected_types = [
+            id::<AssignmentTypeId>(case, "type-clinic-am")?,
+            id::<AssignmentTypeId>(case, "type-call-overnight")?,
+        ];
+        ensure!(
+            person
+                .eligible_assignment_type_ids
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                == expected_types.into_iter().collect(),
+            "clinic/call eligibility changed"
+        );
+    }
+    Ok(())
+}
+
+fn check_practitioner_resources_and_templates(
+    case: CaseId,
+    domain: &WorkforceDomainV1,
+    infeasible: bool,
+) -> Result<()> {
+    for (role, name) in [
+        ("q-physician", "Physician"),
+        ("q-call", "Overnight call eligible"),
+        ("q-specialist", "Synthetic specialist"),
+    ] {
+        ensure!(
+            matches!(
+                entity(case, domain, role)?,
+                WorkforceEntity::Qualification(value)
+                    if value.name == name && value.description.is_empty()
+            ),
+            "practitioner qualification changed"
+        );
+    }
+    for (role, measurement) in [
+        ("all-hours", WorkloadMeasurement::ElapsedMinutes),
+        ("combined-count", WorkloadMeasurement::AssignmentCount),
+        ("clinic-hours", WorkloadMeasurement::ElapsedMinutes),
+        ("call-hours", WorkloadMeasurement::ElapsedMinutes),
+    ] {
+        ensure!(
+            matches!(
+                entity(case, domain, role)?,
+                WorkforceEntity::WorkloadBucket(value)
+                    if value.measurement == measurement
+                        && value.overlapping_contribution == OverlappingContribution::Sum
+            ),
+            "operator burden bucket changed"
+        );
+    }
+    check_type(
+        case,
+        domain,
+        "type-clinic-am",
+        "Morning clinic",
+        "clinic",
+        240,
+        &["all-hours", "clinic-hours", "combined-count"],
+    )?;
+    check_type(
+        case,
+        domain,
+        "type-call-overnight",
+        "Overnight call",
+        "call",
+        600,
+        &["all-hours", "call-hours", "combined-count"],
+    )?;
+    let specialist_minimum = if infeasible { 2 } else { 1 };
+    let minima = [("q-physician", 2), ("q-specialist", specialist_minimum)];
+    check_template(
+        case,
+        domain,
+        &TemplateExpectation {
+            role: "template-weekday-clinic",
+            type_role: "type-clinic-am",
+            start: "2027-02-01",
+            end: "2027-03-01",
+            weekdays: &WEEKDAYS,
+            timing: wall("08:00:00", "12:00:00", 0)?,
+            count: 2,
+            minima: &minima,
+            location: false,
+            occurrences: 20,
+        },
+    )?;
+    check_template(
+        case,
+        domain,
+        &TemplateExpectation {
+            role: "template-nightly-call",
+            type_role: "type-call-overnight",
+            start: "2027-02-01",
+            end: "2027-03-01",
+            weekdays: &EVERY_DAY,
+            timing: wall("20:00:00", "06:00:00", 1)?,
+            count: 1,
+            minima: &[("q-call", 1)],
+            location: false,
+            occurrences: 28,
+        },
+    )?;
+    Ok(())
+}
+
+fn check_practitioner_leave_and_calendar(
+    case: CaseId,
+    domain: &WorkforceDomainV1,
+    range: DateRange,
+) -> Result<()> {
+    let WorkforceEntity::Availability(leave) = entity(case, domain, "availability-approved-leave")?
+    else {
+        bail!("approved leave record missing")
+    };
+    ensure!(
+        leave.person_id == id(case, "person-07")?
+            && leave.availability_kind == AvailabilityKind::ApprovedTimeOff
+            && leave.time_window
+                == TimeWindow::Instant {
+                    starts_at: "2027-02-17T13:00:00Z".parse()?,
+                    ends_at: "2027-02-18T01:00:00Z".parse()?
+                }
+            && leave.effective_range == range
+            && leave.assignment_type_ids.is_none()
+            && leave.location_ids.is_none()
+            && leave.source == "synthetic-practitioner"
+            && leave.note == "Approved study leave",
+        "approved leave boundary or source changed"
+    );
+    let WorkforceEntity::Calendar(week) = entity(case, domain, "calendar-week")? else {
+        bail!("weekly source calendar missing")
+    };
+    ensure!(
+        week.period
+            == CalendarPeriod::Custom {
+                intervals: vec![
+                    LocalInterval {
+                        starts_at: "2027-02-01T00:00:00".parse()?,
+                        ends_at: "2027-02-08T00:00:00".parse()?,
+                    },
+                    LocalInterval {
+                        starts_at: "2027-02-08T00:00:00".parse()?,
+                        ends_at: "2027-02-15T00:00:00".parse()?,
+                    },
+                    LocalInterval {
+                        starts_at: "2027-02-15T00:00:00".parse()?,
+                        ends_at: "2027-02-22T00:00:00".parse()?,
+                    },
+                    LocalInterval {
+                        starts_at: "2027-02-22T00:00:00".parse()?,
+                        ends_at: "2027-03-01T00:00:00".parse()?,
+                    },
+                ],
+            },
+        "four bounded weekly quota periods changed"
+    );
+    Ok(())
+}
+
+fn check_practitioner_preferences_and_rest(case: CaseId, domain: &WorkforceDomainV1) -> Result<()> {
+    check_score(
+        case,
+        domain,
+        Some((
+            "combined-count",
+            PersonSelection::All {},
+            "2027-02-01",
+            "2027-03-01",
+        )),
+    )?;
+    let WorkforcePreference::WeekendTarget {
+        scope,
+        priority,
+        weight,
+        target_count,
+        ..
+    } = source_preference(case, domain, "pref-weekend-target")?
+    else {
+        bail!("missing explicit weekend target")
+    };
+    ensure!(
+        *scope == all()
+            && *priority == PreferencePriority::Normal
+            && *weight == 1
+            && *target_count == 1,
+        "weekend target semantics changed"
+    );
+    let WorkforceRule::MinimumRest(call_clinic) =
+        source_rule(case, domain, "rule-rest-call-to-clinic")?
+    else {
+        bail!("missing call-to-clinic recovery")
+    };
+    let WorkforceRule::MinimumRest(clinic_call) =
+        source_rule(case, domain, "rule-rest-clinic-to-call")?
+    else {
+        bail!("missing clinic-to-call recovery")
+    };
+    ensure!(
+        call_clinic.strength == RequiredStrength::Required
+            && call_clinic.scope
+                == Scope {
+                    people: PersonSelection::All {},
+                    ..all()
+                }
+            && call_clinic.after_scope == type_scope(case, "type-call-overnight")?
+            && call_clinic.before_scope == type_scope(case, "type-clinic-am")?
+            && call_clinic.minimum_minutes == 600
+            && clinic_call.strength == RequiredStrength::Required
+            && clinic_call.scope
+                == Scope {
+                    people: PersonSelection::All {},
+                    ..all()
+                }
+            && clinic_call.after_scope == type_scope(case, "type-clinic-am")?
+            && clinic_call.before_scope == type_scope(case, "type-call-overnight")?
+            && clinic_call.minimum_minutes == 600,
+        "directional ten-hour rest policy changed"
+    );
+    Ok(())
+}
+
+fn check_practitioner_quotas(case: CaseId, domain: &WorkforceDomainV1) -> Result<()> {
+    let WorkforceRule::WorkloadQuota(count_quota) = source_rule(case, domain, "rule-quota-count")?
+    else {
+        bail!("missing weekly count quota")
+    };
+    let WorkforceRule::WorkloadQuota(hour_quota) = source_rule(case, domain, "rule-quota-hours")?
+    else {
+        bail!("missing weekly hour quota")
+    };
+    ensure!(
+        count_quota.strength == RequiredStrength::Required
+            && count_quota.scope == all()
+            && count_quota.calendar_id == id(case, "calendar-week")?
+            && count_quota.membership == WindowMembership::ReportingDate
+            && count_quota.minimum == 1
+            && count_quota.maximum == Some(3)
+            && count_quota.measure == WorkloadQuotaMeasure::AssignmentCount {}
+            && hour_quota.strength == RequiredStrength::Required
+            && hour_quota.scope == all()
+            && hour_quota.calendar_id == id(case, "calendar-week")?
+            && hour_quota.membership == WindowMembership::Intersection
+            && hour_quota.minimum == 240
+            && hour_quota.maximum == Some(2400)
+            && hour_quota.measure
+                == WorkloadQuotaMeasure::BucketMinutes {
+                    bucket_id: id(case, "all-hours")?
+                },
+        "weekly quota source semantics changed"
+    );
+    check_hours(case, domain, "rule-max-hours-fourteen-days", 20160, 6000)?;
+    Ok(())
+}
+
+fn check_practitioner_maxima(case: CaseId, domain: &WorkforceDomainV1) -> Result<()> {
+    ensure!(
+        matches!(
+            source_rule(case, domain, "rule-max-count-week")?,
+            WorkforceRule::MaximumAssignmentCount {
+                strength: RequiredStrength::Required,
+                scope,
+                calendar_id,
+                maximum: 3,
+                ..
+            } if *scope == all() && *calendar_id == id(case, "calendar-week")?
+        ) && matches!(
+            source_rule(case, domain, "rule-max-consecutive-call")?,
+            WorkforceRule::MaximumConsecutive {
+                strength: RequiredStrength::Required,
+                scope,
+                mode: ConsecutiveMode::Assignments { break_minutes: 900 },
+                maximum: 2,
+                ..
+            } if *scope == type_scope(case, "type-call-overnight")?
+        ) && matches!(
+            source_rule(case, domain, "rule-max-worked-weekends")?,
+            WorkforceRule::MaximumWorkedWeekends {
+                strength: RequiredStrength::Required,
+                scope,
+                maximum: 2,
+                ..
+            } if *scope == all()
+        ),
+        "required count/consecutive/weekend maxima changed"
+    );
+    Ok(())
+}
+
+fn check_practitioner_schedule(
+    case: CaseId,
+    doc: &ScenarioDocument,
+    domain: &WorkforceDomainV1,
+    resolved: &[temporal::ResolvedShift],
+    infeasible: bool,
+) -> Result<()> {
+    ensure!(
+        domain.locked_assignments.len() == 1,
+        "hard-protected work changed"
+    );
+    let lock = domain
+        .locked_assignments
+        .get(&id::<AssignmentId>(case, "lock-clinic-anchor")?)
+        .context("missing practitioner hard lock")?;
+    let clinic_id = id::<ShiftTemplateId>(case, "template-weekday-clinic")?;
+    let anchor = resolved
+        .iter()
+        .find(|shift| {
+            shift.reporting_date.to_string() == "2027-02-01"
+                && matches!(
+                    shift.origin,
+                    temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                        if template_id == clinic_id
+                )
+        })
+        .context("missing hard-lock clinic occurrence")?;
+    ensure!(
+        lock.person_id == id(case, "person-00")?
+            && lock.shift_id == anchor.id
+            && lock.state == LockState::Hard {},
+        "hard-protected clinic target changed"
+    );
+    ensure!(
+        resolved
+            .iter()
+            .filter(|shift| matches!(
+                shift.origin,
+                temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                    if template_id == clinic_id
+            ))
+            .count()
+            == 20
+            && resolved
+                .iter()
+                .filter(|shift| matches!(
+                    shift.origin,
+                    temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                        if template_id != clinic_id
+                ))
+                .count()
+                == 28,
+        "combined clinic/call occurrence granularity changed"
+    );
+    check_clinic_intervals(case, resolved, true, "2027-02-28")?;
+    let last_call = resolved
+        .iter()
+        .find(|shift| {
+            matches!(
+                shift.origin,
+                temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                    if template_id != clinic_id
+            ) && shift.reporting_date.to_string() == "2027-02-28"
+        })
+        .context("missing final practitioner call")?;
+    ensure!(
+        last_call.interval.ends_at.local.as_datetime().date() == "2027-03-01".parse::<Date>()?,
+        "overnight horizon boundary changed"
+    );
+    ensure!(
+        doc.metadata.title
+            == if infeasible {
+                "Synthetic practitioner workflow: specialist infeasible variation"
+            } else {
+                "Synthetic practitioner workflow: combined clinic and overnight call"
+            },
+        "practitioner metadata changed"
+    );
+    Ok(())
+}
+
 fn check_dst(
     case: CaseId,
     doc: &ScenarioDocument,
@@ -1272,7 +1786,12 @@ fn check_large(
     shifts: &[temporal::ResolvedShift],
     end: &str,
 ) -> Result<()> {
-    for index in 0..100 {
+    let people = if case == CaseId::LargeSupported {
+        101
+    } else {
+        100
+    };
+    for index in 0..people {
         check_person(
             case,
             domain,
@@ -1295,7 +1814,7 @@ fn check_large(
     let count = if case == CaseId::LargeSupported {
         12
     } else {
-        20
+        64
     };
     check_template(
         case,
@@ -1320,21 +1839,17 @@ fn check_large(
         );
     }
     // Exact entity inventory plus the checked universally active/type-eligible roster and
-    // unconstrained type prove all1200/2000 pairs survive input filtering. No later rules.
+    // unconstrained type prove all1212/6400 pairs survive input filtering. No later rules.
     check_score(case, domain, None)
 }
 
 pub(crate) fn validate_repair(recipe: &RepairFixture, before: &ScenarioSnapshotV1) -> Result<()> {
-    validate_semantics(
-        CaseId::RepairBefore,
-        before,
-        &expected(CaseId::RepairBefore)?,
-    )?;
+    validate_semantics(recipe.before_case, before, &expected(recipe.before_case))?;
     ensure!(
         recipe.format == REPAIR_FORMAT
-            && recipe.schema_version == FORMAT_VERSION
+            && recipe.schema_version == REPAIR_SCHEMA_VERSION
             && recipe.corpus_version == CORPUS_VERSION
-            && recipe.before_case == CaseId::RepairBefore,
+            && recipe.before_case == CaseId::PractitionerWorkflow,
         "repair recipe identity/version changed"
     );
     ensure!(
@@ -1347,28 +1862,46 @@ pub(crate) fn validate_repair(recipe: &RepairFixture, before: &ScenarioSnapshotV
         recipe.command_id == commands::ADD_ENTITY,
         "repair command is not the closed ADD_ENTITY operation"
     );
-    let WorkforceEntity::Availability(change) = &recipe.payload.entity else {
-        bail!("repair recipe must contain exactly one availability record, never result authority")
-    };
     ensure!(
-        change.id == id(CaseId::RepairBefore, "availability-callout")?
-            && change.person_id == id(CaseId::RepairBefore, "person-0")?
-            && change.availability_kind == AvailabilityKind::Unavailable,
-        "repair must change the concrete call-out person only"
+        recipe.availability_id == id(CaseId::PractitionerWorkflow, "availability-callout")?,
+        "repair availability identity changed"
     );
     ensure!(
-        change.time_window
+        recipe.time_window
             == TimeWindow::Instant {
-                starts_at: "2026-09-02T05:00:00Z".parse()?,
-                ends_at: "2026-09-03T05:00:00Z".parse()?
+                starts_at: "2027-02-10T13:00:00Z".parse()?,
+                ends_at: "2027-02-11T01:00:00Z".parse()?
             }
-            && change.effective_range == date_range("2026-09-01", "2026-09-08")?,
+            && recipe.effective_range == date_range("2027-02-01", "2027-03-01")?,
         "call-out day changed"
     );
+    let shifts = temporal::resolve_shifts(&before.document, &CancellationToken::new())?;
+    let clinic_template =
+        id::<ShiftTemplateId>(CaseId::PractitionerWorkflow, "template-weekday-clinic")?;
+    let mut targets = shifts.iter().filter(|shift| {
+        shift.reporting_date.to_string() == "2027-02-10"
+            && matches!(
+                shift.origin,
+                temporal::ResolvedShiftOrigin::Generated { template_id, .. }
+                    if template_id == clinic_template
+            )
+    });
+    let target = targets.next().context("repair target clinic absent")?;
     ensure!(
-        change.assignment_type_ids.is_none()
+        targets.next().is_none() && target.id == recipe.target_shift_id,
+        "repair target is not the exact native-resolved weekday clinic"
+    );
+    // The representative proves mutation validity only, not membership in accepted A.
+    // The CLI must bind an actual movable selected pair and pass that person explicitly.
+    let payload = repair_payload(recipe, id(CaseId::PractitionerWorkflow, "person-07")?);
+    let WorkforceEntity::Availability(change) = &payload.entity else {
+        bail!("repair payload is not an availability record")
+    };
+    ensure!(
+        change.availability_kind == AvailabilityKind::Unavailable
+            && change.assignment_type_ids.is_none()
             && change.location_ids.is_none()
-            && change.source == "synthetic-callout"
+            && change.source == "synthetic-practitioner-callout"
             && change.note == "Synthetic unexpected call-out",
         "call-out restrictions/source changed"
     );
@@ -1389,20 +1922,21 @@ pub(crate) fn validate_repair(recipe: &RepairFixture, before: &ScenarioSnapshotV
             label: None,
             commands: vec![DomainCommandEnvelope {
                 command_type: recipe.command_id.clone(),
-                payload: serde_json::to_value(&recipe.payload)?,
+                payload: serde_json::to_value(&payload)?,
             }],
         },
     )?;
+    let before_domain = validate_document(&before.document)?;
     let after = validate_document(&mutation.document)?;
     ensure!(
-        after.entities.len() == 11
-            && after.rules.len() == 4
-            && after.preferences.is_empty()
-            && after.locked_assignments.is_empty(),
+        after.entities.len() == before_domain.entities.len() + 1
+            && after.rules == before_domain.rules
+            && after.preferences == before_domain.preferences
+            && after.locked_assignments == before_domain.locked_assignments,
         "call-out introduced non-mutation authority or changed obligations"
     );
     ensure!(
-        after.entities.get(&change.id.as_entity_id()) == Some(&recipe.payload.entity),
+        after.entities.get(&change.id.as_entity_id()) == Some(&payload.entity),
         "call-out mutation did not apply"
     );
     let mut restored = mutation.document;
@@ -1411,14 +1945,7 @@ pub(crate) fn validate_repair(recipe: &RepairFixture, before: &ScenarioSnapshotV
         restored == before.document,
         "recipe changed anything beyond the one unavailable-person record"
     );
-    let shifts = temporal::resolve_shifts(&restored, &CancellationToken::new())?;
-    ensure!(
-        shifts
-            .iter()
-            .any(|shift| shift.reporting_date.to_string() == "2026-09-02"),
-        "call-out has no concrete affected shift"
-    );
-    // This proves a valid mutation only. There is intentionally no BaseSchedule,
-    // selected solution, solver invocation or accepted result created by this function.
+    // This proves a valid native ADD_ENTITY mutation only. There is intentionally no
+    // BaseSchedule, selected solution, solver invocation or accepted result created here.
     Ok(())
 }

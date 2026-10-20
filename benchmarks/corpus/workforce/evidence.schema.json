@@ -21,7 +21,9 @@
               "dst-spring",
               "dst-fall",
               "large-supported",
-              "large-pressure"
+              "large-pressure",
+              "practitioner-workflow",
+              "practitioner-infeasible"
             ],
             "type": "string"
           },
@@ -70,7 +72,7 @@
         ],
         "type": "object"
       },
-      "maxItems": 1664,
+      "maxItems": 1920,
       "minItems": 0,
       "type": "array"
     },
@@ -86,7 +88,7 @@
       "type": "string"
     },
     "corpusVersion": {
-      "const": 1
+      "const": 2
     },
     "enrichmentState": {
       "const": "notApplicable"
@@ -456,7 +458,9 @@
               "dst-spring",
               "dst-fall",
               "large-supported",
-              "large-pressure"
+              "large-pressure",
+              "practitioner-workflow",
+              "practitioner-infeasible"
             ],
             "type": "string"
           },
@@ -603,7 +607,7 @@
         ],
         "type": "object"
       },
-      "maxItems": 52,
+      "maxItems": 60,
       "minItems": 1,
       "type": "array"
     },
@@ -642,6 +646,6 @@
     "samples",
     "aggregates"
   ],
-  "title": "Workforce corpus v1 evidence",
+  "title": "Workforce corpus v2 evidence",
   "type": "object"
 }

@@ -5,9 +5,9 @@ use super::{
 };
 use crate::ids::{AssignmentTypeId, LocationId, WorkCalendarId, WorkloadBucketId};
 use crate::model::{
-    ActiveRange, Availability, Coverage, LocationBehavior, OverlappingContribution, Person,
-    QualificationExpression, QualificationMatch, QualificationMinimum, ShiftOrigin,
-    WindowMembership, WorkforceEntity, WorkloadMeasurement,
+    ActiveRange, Availability, Coverage, ExternalStartingPlan, LocationBehavior,
+    OverlappingContribution, Person, QualificationExpression, QualificationMatch,
+    QualificationMinimum, ShiftOrigin, WindowMembership, WorkforceEntity, WorkloadMeasurement,
 };
 use std::collections::BTreeSet;
 
@@ -104,8 +104,46 @@ impl Context<'_> {
                 }
                 Ok(())
             }
+            WorkforceEntity::ExternalStartingPlan(value) => {
+                self.external_starting_plan_record(value)
+            }
+            WorkforceEntity::ManualSelection(value) => self.manual_selection_record(value),
             WorkforceEntity::ScorePolicy(value) => validate_score_policy_shape(value),
         }
+    }
+
+    fn external_starting_plan_record(&self, value: &ExternalStartingPlan) -> Result {
+        require(
+            value.schema_version == 1,
+            "schemaVersion",
+            "unsupported starting-plan version",
+        )?;
+        text(&value.name, "name")?;
+        for (digest, path) in [
+            (
+                &value.original_import.source_blake3,
+                "originalImport.sourceBlake3",
+            ),
+            (
+                &value.original_import.pair_content_hash,
+                "originalImport.pairContentHash",
+            ),
+        ] {
+            require(
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                path,
+                "expected a lowercase BLAKE3 digest",
+            )?;
+        }
+        unique(&value.assignments, false, "assignments")?;
+        for pair in &value.assignments {
+            self.person(pair.person_id)?;
+            self.shift(pair.shift_id)?;
+        }
+        Ok(())
     }
 
     fn availability_record(&self, value: &Availability) -> Result {

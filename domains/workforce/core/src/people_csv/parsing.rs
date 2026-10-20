@@ -317,7 +317,7 @@ pub fn sample_people_csv_record<R: Read + ?Sized>(
     Ok(sample)
 }
 
-fn sample_record(record: &CsvRecord<'_>, maximum_cell_bytes: usize) -> CsvSampleRecord {
+pub(crate) fn sample_record(record: &CsvRecord<'_>, maximum_cell_bytes: usize) -> CsvSampleRecord {
     CsvSampleRecord {
         record: record.number,
         cells: record

@@ -1,11 +1,11 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "pack": {
     "id": "official.workforce",
     "packVersion": "0.1.0",
     "latestSchemaVersion": 1,
     "portableSchemaVersion": 1,
-    "shareResultSchemaVersion": 1
+    "shareResultSchemaVersion": 2
   },
   "$defs": {
     "SetupPageLimit": {
@@ -50,6 +50,9 @@
         },
         {
           "const": "baseSchedule"
+        },
+        {
+          "const": "externalStartingPlan"
         },
         {
           "const": "scorePolicy"
@@ -824,8 +827,8 @@
           "items": {
             "$ref": "#/$defs/SetupEntityKindCount"
           },
-          "minItems": 13,
-          "maxItems": 13
+          "minItems": 14,
+          "maxItems": 14
         },
         "requiredRules": {
           "$ref": "#/$defs/UInt32"
@@ -985,7 +988,7 @@
             "$ref": "#/$defs/SetupRuleCatalogEntry"
           },
           "minItems": 0,
-          "maxItems": 12
+          "maxItems": 14
         },
         "preferences": {
           "type": "array",
@@ -993,7 +996,7 @@
             "$ref": "#/$defs/SetupRuleCatalogEntry"
           },
           "minItems": 0,
-          "maxItems": 11
+          "maxItems": 12
         }
       }
     },
@@ -4686,6 +4689,119 @@
         }
       }
     },
+    "ExternalStartingPlanImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceBlake3", "pairContentHash"],
+      "properties": {
+        "sourceBlake3": { "$ref": "#/$defs/ContentHash" },
+        "pairContentHash": { "$ref": "#/$defs/ContentHash" }
+      }
+    },
+    "ExternalStartingPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schemaVersion", "id", "name", "assignments", "originalImport"],
+      "properties": {
+        "kind": { "const": "externalStartingPlan" },
+        "schemaVersion": { "const": 1 },
+        "id": { "$ref": "#/$defs/Uuid" },
+        "name": { "$ref": "#/$defs/DisplayText" },
+        "assignments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AssignmentPair" },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "originalImport": { "$ref": "#/$defs/ExternalStartingPlanImport" }
+      }
+    },
+    "ContentHash": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "DomainReferenceId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160
+    },
+    "BaselineEntityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/DomainReferenceId" },
+        "id": { "$ref": "#/$defs/DomainReferenceId" }
+      }
+    },
+    "BaselineAcceptedResultRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["solutionId", "resultChecksum"],
+      "properties": {
+        "solutionId": { "$ref": "#/$defs/Uuid" },
+        "resultChecksum": { "$ref": "#/$defs/ContentHash" }
+      }
+    },
+    "BaselineOriginal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "pairContentHash",
+        "acceptedResult",
+        "sourceScenarioId",
+        "sourceRevision",
+        "sourceDocumentHash",
+        "sourceRunId",
+        "sourceRunInputChecksum",
+        "sourceRunManifestChecksum"
+      ],
+      "properties": {
+        "entity": { "$ref": "#/$defs/BaselineEntityRef" },
+        "pairContentHash": { "$ref": "#/$defs/ContentHash" },
+        "acceptedResult": { "$ref": "#/$defs/BaselineAcceptedResultRef" },
+        "sourceScenarioId": { "$ref": "#/$defs/Uuid" },
+        "sourceRevision": { "$ref": "#/$defs/Revision" },
+        "sourceDocumentHash": { "$ref": "#/$defs/ContentHash" },
+        "sourceRunId": { "$ref": "#/$defs/Uuid" },
+        "sourceRunInputChecksum": { "$ref": "#/$defs/ContentHash" },
+        "sourceRunManifestChecksum": { "$ref": "#/$defs/ContentHash" }
+      }
+    },
+    "ManualSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schemaVersion",
+        "id",
+        "original",
+        "admissionSourceScenarioId",
+        "admissionSourceRevision",
+        "admissionSourceDocumentHash",
+        "admissionCommandId",
+        "assignments",
+        "checksum"
+      ],
+      "properties": {
+        "kind": { "const": "manualSelection" },
+        "schemaVersion": { "const": 1 },
+        "id": { "$ref": "#/$defs/Uuid" },
+        "original": { "$ref": "#/$defs/BaselineOriginal" },
+        "admissionSourceScenarioId": { "$ref": "#/$defs/Uuid" },
+        "admissionSourceRevision": { "$ref": "#/$defs/Revision" },
+        "admissionSourceDocumentHash": { "$ref": "#/$defs/ContentHash" },
+        "admissionCommandId": { "$ref": "#/$defs/Uuid" },
+        "assignments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AssignmentPair" },
+          "maxItems": 100000
+        },
+        "checksum": { "$ref": "#/$defs/ContentHash" }
+      }
+    },
     "HardLock": {
       "type": "object",
       "additionalProperties": false,
@@ -4861,6 +4977,18 @@
         }
       }
     },
+    "EqualShare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "equalShare"
+        }
+      }
+    },
     "WorkloadTargetMode": {
       "type": "object",
       "oneOf": [
@@ -4872,6 +5000,9 @@
         },
         {
           "$ref": "#/$defs/WeightedEqualShare"
+        },
+        {
+          "$ref": "#/$defs/EqualShare"
         }
       ]
     },
@@ -5062,8 +5193,18 @@
           "$ref": "#/$defs/BaseSchedule"
         },
         {
+          "$ref": "#/$defs/ExternalStartingPlan"
+        },
+        {
           "$ref": "#/$defs/ScorePolicy"
         }
+      ]
+    },
+    "SnapshotEntity": {
+      "type": "object",
+      "oneOf": [
+        { "$ref": "#/$defs/Entity" },
+        { "$ref": "#/$defs/ManualSelection" }
       ]
     },
     "CategoryPair": {
@@ -5368,6 +5509,38 @@
         }
       }
     },
+    "MaximumWorkedWeekendsRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "maximum",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "maximumWorkedWeekends"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "maximum": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
     "MaximumAssignmentCountRule": {
       "type": "object",
       "additionalProperties": false,
@@ -5398,6 +5571,92 @@
         },
         "calendarId": {
           "$ref": "#/$defs/Uuid"
+        },
+        "maximum": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "QuotaAssignmentCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "assignmentCount"
+        }
+      }
+    },
+    "QuotaBucketMinutes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucketId",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "bucketMinutes"
+        },
+        "bucketId": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "WorkloadQuotaMeasure": {
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/QuotaAssignmentCount"
+        },
+        {
+          "$ref": "#/$defs/QuotaBucketMinutes"
+        }
+      ]
+    },
+    "WorkloadQuotaRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "calendarId",
+        "id",
+        "kind",
+        "measure",
+        "membership",
+        "minimum",
+        "scope",
+        "strength"
+      ],
+      "properties": {
+        "kind": {
+          "const": "workloadQuota"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "strength": {
+          "const": "required"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "calendarId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "membership": {
+          "$ref": "#/$defs/WindowMembership"
+        },
+        "measure": {
+          "$ref": "#/$defs/WorkloadQuotaMeasure"
+        },
+        "minimum": {
+          "$ref": "#/$defs/UInt32"
         },
         "maximum": {
           "$ref": "#/$defs/UInt32"
@@ -5461,6 +5720,9 @@
           "$ref": "#/$defs/Uuid"
         },
         "active": {
+          "type": "boolean"
+        },
+        "assigned": {
           "type": "boolean"
         },
         "strength": {
@@ -5580,7 +5842,13 @@
           "$ref": "#/$defs/MaximumConsecutiveRule"
         },
         {
+          "$ref": "#/$defs/MaximumWorkedWeekendsRule"
+        },
+        {
           "$ref": "#/$defs/MaximumAssignmentCountRule"
+        },
+        {
+          "$ref": "#/$defs/WorkloadQuotaRule"
         },
         {
           "$ref": "#/$defs/RequiredSkillMixRule"
@@ -5888,6 +6156,42 @@
         }
       }
     },
+    "WeekendTargetPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "id",
+        "kind",
+        "priority",
+        "scope",
+        "targetCount",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "weekendTarget"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "priority": {
+          "$ref": "#/$defs/PreferencePriority"
+        },
+        "weight": {
+          "$ref": "#/$defs/Weight"
+        },
+        "targetCount": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
     "WorkloadBalancePreference": {
       "type": "object",
       "additionalProperties": false,
@@ -6166,6 +6470,9 @@
           "$ref": "#/$defs/AssignmentTargetPreference"
         },
         {
+          "$ref": "#/$defs/WeekendTargetPreference"
+        },
+        {
           "$ref": "#/$defs/WorkloadBalancePreference"
         },
         {
@@ -6199,7 +6506,7 @@
         "entities": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/Entity"
+            "$ref": "#/$defs/SnapshotEntity"
           }
         },
         "rules": {
@@ -6241,7 +6548,7 @@
         "entities": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/Entity"
+            "$ref": "#/$defs/SnapshotEntity"
           }
         },
         "rules": {
@@ -6361,6 +6668,1337 @@
       "properties": {
         "assignmentId": {
           "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "ResultSchedulePageLimit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "ResultScheduleParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "oneOf": [
+            {
+              "const": "decision"
+            },
+            {
+              "const": "people"
+            },
+            {
+              "const": "shifts"
+            },
+            {
+              "const": "assignments"
+            },
+            {
+              "const": "timeline"
+            },
+            {
+              "const": "fairness"
+            },
+            {
+              "const": "health"
+            },
+            {
+              "const": "baseDiff"
+            },
+            {
+              "const": "repairDiff"
+            },
+            {
+              "const": "calendarPeople"
+            },
+            {
+              "const": "calendarShifts"
+            }
+          ]
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "locationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "startDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "localDate": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "limit": {
+          "$ref": "#/$defs/ResultSchedulePageLimit"
+        }
+      }
+    },
+    "ResultSchedulePosition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "personId"],
+          "properties": {
+            "kind": {
+              "const": "person"
+            },
+            "personId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "shiftId"],
+          "properties": {
+            "kind": {
+              "const": "shift"
+            },
+            "shiftId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "personId", "shiftId"],
+          "properties": {
+            "kind": {
+              "const": "assignment"
+            },
+            "personId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "shiftId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "shiftId", "personId"],
+          "properties": {
+            "kind": {
+              "const": "timeline"
+            },
+            "shiftId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "personId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "personId", "policyId", "preferenceId", "periodStart"],
+          "properties": {
+            "kind": {
+              "const": "fairness"
+            },
+            "personId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "policyId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "preferenceId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "periodStart": {
+              "$ref": "#/$defs/TemporalText"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "index"],
+          "properties": {
+            "kind": {
+              "const": "health"
+            },
+            "index": {
+              "$ref": "#/$defs/UInt32"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "personId", "shiftId", "change"],
+          "properties": {
+            "kind": {
+              "const": "baseDiff"
+            },
+            "personId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "shiftId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "change": {
+              "$ref": "#/$defs/ResultScheduleBaseDiffChange"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "shiftId"],
+          "properties": {
+            "kind": { "const": "repairDiff" },
+            "shiftId": { "$ref": "#/$defs/Uuid" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "personId"],
+          "properties": {
+            "kind": {
+              "const": "calendarPerson"
+            },
+            "personId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "shiftId"],
+          "properties": {
+            "kind": {
+              "const": "calendarShift"
+            },
+            "shiftId": {
+              "$ref": "#/$defs/Uuid"
+            }
+          }
+        }
+      ]
+    },
+    "ResultScheduleContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "queryFingerprint",
+        "revision",
+        "scenarioId",
+        "schemaVersion"
+      ],
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/ResultSchedulePosition"
+        },
+        "queryFingerprint": {
+          "$ref": "#/$defs/SetupFingerprint"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "scenarioId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "schemaVersion": {
+          "const": 1
+        }
+      }
+    },
+    "ResultScheduleBaseDiffChange": {
+      "oneOf": [
+        {
+          "const": "added"
+        },
+        {
+          "const": "removed"
+        }
+      ]
+    },
+    "ResultScheduleBaseSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceSolutionId", "sourceRevision"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "sourceSolutionId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      }
+    },
+    "ResultScheduleBaseDiffRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["change", "personId", "shiftId", "personName", "shiftLabel"],
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/ResultScheduleBaseDiffChange"
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "personName": {
+          "type": "string"
+        },
+        "shiftLabel": {
+          "type": "string"
+        }
+      }
+    },
+    "ResultScheduleRepairSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scenarioId", "sourceRevision", "solutionId", "normalizedSolutionHash", "sourceDocumentHash"],
+      "properties": {
+        "scenarioId": { "$ref": "#/$defs/Uuid" },
+        "sourceRevision": { "$ref": "#/$defs/Revision" },
+        "solutionId": { "$ref": "#/$defs/Uuid" },
+        "normalizedSolutionHash": { "$ref": "#/$defs/ContentHash" },
+        "sourceDocumentHash": { "$ref": "#/$defs/ContentHash" }
+      }
+    },
+    "ResultScheduleRepairBaselineSelection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "originalAccepted" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "entity", "recordChecksum", "admissionSourceScenarioId", "admissionSourceRevision", "admissionSourceDocumentHash"],
+          "properties": {
+            "kind": { "const": "manualSelection" },
+            "entity": { "$ref": "#/$defs/BaselineEntityRef" },
+            "recordChecksum": { "$ref": "#/$defs/ContentHash" },
+            "admissionSourceScenarioId": { "$ref": "#/$defs/Uuid" },
+            "admissionSourceRevision": { "$ref": "#/$defs/Revision" },
+            "admissionSourceDocumentHash": { "$ref": "#/$defs/ContentHash" }
+          }
+        }
+      ]
+    },
+    "ResultScheduleRepairBaseline": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "original", "selection", "selectedPairContentHash", "verificationStatus"],
+          "properties": {
+            "kind": { "const": "accepted" },
+            "original": { "$ref": "#/$defs/BaselineOriginal" },
+            "selection": { "$ref": "#/$defs/ResultScheduleRepairBaselineSelection" },
+            "selectedPairContentHash": { "$ref": "#/$defs/ContentHash" },
+            "verificationStatus": { "const": "notEstablished" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "binding", "verificationStatus"],
+          "properties": {
+            "kind": { "const": "external" },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entity", "selectedPairContentHash"],
+              "properties": {
+                "entity": { "$ref": "#/$defs/BaselineEntityRef" },
+                "selectedPairContentHash": { "$ref": "#/$defs/ContentHash" }
+              }
+            },
+            "verificationStatus": { "const": "notEstablished" }
+          }
+        }
+      ]
+    },
+    "ResultScheduleRepairCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["removedPairs", "addedPairs", "unchangedPairs"],
+      "properties": {
+        "removedPairs": { "$ref": "#/$defs/UInt32" },
+        "addedPairs": { "$ref": "#/$defs/UInt32" },
+        "unchangedPairs": { "$ref": "#/$defs/UInt32" }
+      }
+    },
+    "ResultScheduleRepairMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["personId", "personName", "missingPerson"],
+      "properties": {
+        "personId": { "$ref": "#/$defs/Uuid" },
+        "personName": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ]
+        },
+        "missingPerson": { "type": "boolean" }
+      }
+    },
+    "ResultScheduleRepairRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["change", "shiftId", "shiftLabel", "missingShift", "beforeMemberCount", "afterMemberCount", "oldMembers", "newMembers", "unchangedParticipants", "removedPairs", "addedPairs"],
+      "properties": {
+        "change": {
+          "oneOf": [
+            { "const": "unchanged" },
+            { "const": "replacement" },
+            { "const": "newlyUnfilled" },
+            { "const": "newlyAssigned" }
+          ]
+        },
+        "shiftId": { "$ref": "#/$defs/Uuid" },
+        "shiftLabel": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ]
+        },
+        "missingShift": { "type": "boolean" },
+        "beforeMemberCount": { "$ref": "#/$defs/UInt32" },
+        "afterMemberCount": { "$ref": "#/$defs/UInt32" },
+        "oldMembers": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/ResultScheduleRepairMember" }
+        },
+        "newMembers": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/ResultScheduleRepairMember" }
+        },
+        "unchangedParticipants": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/ResultScheduleRepairMember" }
+        },
+        "removedPairs": { "$ref": "#/$defs/UInt32" },
+        "addedPairs": { "$ref": "#/$defs/UInt32" }
+      }
+    },
+    "ResultSchedulePersonRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["personId", "name", "selectedCount"],
+      "properties": {
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "selectedCount": {
+          "$ref": "#/$defs/UInt32"
+        }
+      }
+    },
+    "ResultScheduleShiftRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shiftId",
+        "assignmentTypeId",
+        "assignmentTypeName",
+        "locationId",
+        "locationName",
+        "startsAt",
+        "endsAt",
+        "required",
+        "minimum",
+        "preferred",
+        "maximum",
+        "selectedCount",
+        "margin"
+      ],
+      "properties": {
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeName": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locationId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locationName": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "required": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UInt32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "minimum": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "preferred": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UInt32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maximum": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UInt32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selectedCount": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "margin": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": -4294967295,
+              "maximum": 4294967295
+            },
+            {
+              "type": "string",
+              "format": "signed-u32-delta",
+              "minLength": 1,
+              "maxLength": 11
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ResultScheduleAssignmentRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentId",
+        "personId",
+        "personName",
+        "shiftId",
+        "assignmentTypeId",
+        "assignmentTypeName",
+        "locationId",
+        "locationName",
+        "startsAt",
+        "endsAt"
+      ],
+      "properties": {
+        "assignmentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "personId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "personName": {
+          "type": "string"
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "assignmentTypeName": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locationId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locationName": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        }
+      }
+    },
+    "ResultExactValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator", "numerator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      }
+    },
+    "ResultFairnessTargetMode": {
+      "oneOf": [
+        {"const": "explicit"},
+        {"const": "personTargets"},
+        {"const": "weightedEqualShare"},
+        {"const": "equalShare"}
+      ]
+    },
+    "ResultFairnessUnits": {
+      "oneOf": [
+        {"const": "assignments"},
+        {"const": "minutes"}
+      ]
+    },
+    "ResultFairnessRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scorePolicyId",
+        "policyId",
+        "preferenceId",
+        "bucketId",
+        "bucketName",
+        "calendarId",
+        "membership",
+        "targetMode",
+        "measure",
+        "units",
+        "preferencePriority",
+        "preferenceWeight",
+        "periodStartsAt",
+        "periodEndsAt",
+        "peerGroupSize",
+        "personId",
+        "personName",
+        "target",
+        "actual",
+        "deviation",
+        "groupActualMinimum",
+        "groupActualMaximum",
+        "groupSpread",
+        "groupDeviationMinimum",
+        "groupDeviationMaximum",
+        "groupDeviationSpread"
+      ],
+      "properties": {
+        "scorePolicyId": {"$ref": "#/$defs/Uuid"},
+        "policyId": {"$ref": "#/$defs/Uuid"},
+        "preferenceId": {"$ref": "#/$defs/Uuid"},
+        "bucketId": {"$ref": "#/$defs/Uuid"},
+        "bucketName": {"$ref": "#/$defs/DisplayText"},
+        "calendarId": {"$ref": "#/$defs/Uuid"},
+        "membership": {"$ref": "#/$defs/WindowMembership"},
+        "targetMode": {"$ref": "#/$defs/ResultFairnessTargetMode"},
+        "measure": {
+          "oneOf": [
+            {"const": "assignmentCount"},
+            {"const": "elapsedMinutes"},
+            {"const": "scheduledMinutes"}
+          ]
+        },
+        "units": {"$ref": "#/$defs/ResultFairnessUnits"},
+        "preferencePriority": {"$ref": "#/$defs/PreferencePriority"},
+        "preferenceWeight": {"$ref": "#/$defs/UInt32"},
+        "periodStartsAt": {"$ref": "#/$defs/ResolvedLocalTime"},
+        "periodEndsAt": {"$ref": "#/$defs/ResolvedLocalTime"},
+        "peerGroupSize": {"$ref": "#/$defs/UInt32"},
+        "personId": {"$ref": "#/$defs/Uuid"},
+        "personName": {"$ref": "#/$defs/DisplayText"},
+        "target": {"$ref": "#/$defs/ResultExactValue"},
+        "actual": {"$ref": "#/$defs/ResultExactValue"},
+        "deviation": {"$ref": "#/$defs/ResultExactValue"},
+        "groupActualMinimum": {"$ref": "#/$defs/ResultExactValue"},
+        "groupActualMaximum": {"$ref": "#/$defs/ResultExactValue"},
+        "groupSpread": {"$ref": "#/$defs/ResultExactValue"},
+        "groupDeviationMinimum": {"$ref": "#/$defs/ResultExactValue"},
+        "groupDeviationMaximum": {"$ref": "#/$defs/ResultExactValue"},
+        "groupDeviationSpread": {"$ref": "#/$defs/ResultExactValue"}
+      }
+    },
+    "ResultHealthCheck": {
+      "oneOf": [
+        {"const": "minimumRest"},
+        {"const": "maximumHours"},
+        {"const": "transitionTime"},
+        {"const": "coverageHeadcount"},
+        {"const": "coverageQualification"}
+      ]
+    },
+    "ResultHealthStatus": {
+      "oneOf": [
+        {"const": "satisfied"},
+        {"const": "violated"},
+        {"const": "noApplicable"}
+      ]
+    },
+    "ResultHealthUnits": {
+      "oneOf": [
+        {"const": "minutes"},
+        {"const": "people"}
+      ]
+    },
+    "ResultHealthDirection": {
+      "oneOf": [
+        {"const": "minimum"},
+        {"const": "maximum"},
+        {"const": "exact"}
+      ]
+    },
+    "ResultHealthCoverageOwnerKind": {
+      "oneOf": [
+        {"const": "shiftTemplate"},
+        {"const": "shiftInstance"},
+        {"const": "coverageRequirement"}
+      ]
+    },
+    "ResultHealthRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check",
+        "status",
+        "units",
+        "direction",
+        "sourceRuleId",
+        "coverageOwnerId",
+        "coverageOwnerKind",
+        "personId",
+        "shiftId",
+        "otherShiftId",
+        "windowStartsAt",
+        "windowEndsAt",
+        "minimumRank",
+        "threshold",
+        "observed",
+        "margin",
+        "affectedAssignmentIds",
+        "affectedAssignmentCount",
+        "affectedAssignmentsTruncated"
+      ],
+      "properties": {
+        "check": {"$ref": "#/$defs/ResultHealthCheck"},
+        "status": {"$ref": "#/$defs/ResultHealthStatus"},
+        "units": {"$ref": "#/$defs/ResultHealthUnits"},
+        "direction": {"$ref": "#/$defs/ResultHealthDirection"},
+        "sourceRuleId": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ]
+        },
+        "coverageOwnerId": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ]
+        },
+        "coverageOwnerKind": {
+          "oneOf": [
+            {"$ref": "#/$defs/ResultHealthCoverageOwnerKind"},
+            {"type": "null"}
+          ]
+        },
+        "personId": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ]
+        },
+        "shiftId": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ]
+        },
+        "otherShiftId": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ]
+        },
+        "windowStartsAt": {
+          "oneOf": [
+            {"$ref": "#/$defs/TemporalText"},
+            {"type": "null"}
+          ]
+        },
+        "windowEndsAt": {
+          "oneOf": [
+            {"$ref": "#/$defs/TemporalText"},
+            {"type": "null"}
+          ]
+        },
+        "minimumRank": {
+          "oneOf": [
+            {"$ref": "#/$defs/UInt32"},
+            {"type": "null"}
+          ]
+        },
+        "threshold": {
+          "oneOf": [
+            {"$ref": "#/$defs/ResultExactValue"},
+            {"type": "null"}
+          ]
+        },
+        "observed": {
+          "oneOf": [
+            {"$ref": "#/$defs/ResultExactValue"},
+            {"type": "null"}
+          ]
+        },
+        "margin": {
+          "oneOf": [
+            {"$ref": "#/$defs/ResultExactValue"},
+            {"type": "null"}
+          ]
+        },
+        "affectedAssignmentIds": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "affectedAssignmentCount": {"$ref": "#/$defs/UInt32"},
+        "affectedAssignmentsTruncated": {"type": "boolean"}
+      }
+    },
+    "ResultCalendarAssignmentSample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assignmentId", "shiftId", "startsAt", "endsAt"],
+      "properties": {
+        "assignmentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shiftId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "startsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/ResolvedLocalTime"
+        }
+      }
+    },
+    "ResultCalendarPersonDay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "selectedCount", "selectedShifts"],
+      "properties": {
+        "date": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "selectedCount": {
+          "$ref": "#/$defs/UInt32"
+        },
+        "selectedShifts": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/ResultCalendarAssignmentSample"
+          }
+        }
+      }
+    },
+    "ResultCalendarPersonRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["person", "days"],
+      "properties": {
+        "person": {
+          "$ref": "#/$defs/ResultSchedulePersonRow"
+        },
+        "days": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "items": {
+            "$ref": "#/$defs/ResultCalendarPersonDay"
+          }
+        }
+      }
+    },
+    "ResultCalendarShiftRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shift", "date", "selectedPersonIds"],
+      "properties": {
+        "shift": {
+          "$ref": "#/$defs/ResultScheduleShiftRow"
+        },
+        "date": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "selectedPersonIds": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          }
+        }
+      }
+    },
+    "ResultScheduleData": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "personId", "shiftId", "assignmentId", "selected"],
+          "properties": {
+            "kind": { "const": "decision" },
+            "personId": { "$ref": "#/$defs/Uuid" },
+            "shiftId": { "$ref": "#/$defs/Uuid" },
+            "assignmentId": {
+              "oneOf": [
+                { "type": "string", "minLength": 1, "maxLength": 160 },
+                { "type": "null" }
+              ]
+            },
+            "selected": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "people"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultSchedulePersonRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "shifts"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultScheduleShiftRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "assignments"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultScheduleAssignmentRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "timeline"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultScheduleAssignmentRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "fairness"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultFairnessRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "health"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultHealthRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "baseSchedule", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "baseDiff"
+            },
+            "baseSchedule": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleBaseSchedule"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultScheduleBaseDiffRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "availability", "source", "baseline", "counts", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": { "const": "repairDiff" },
+            "availability": {
+              "oneOf": [
+                { "const": "available" },
+                { "const": "absent" }
+              ]
+            },
+            "source": { "$ref": "#/$defs/ResultScheduleRepairSource" },
+            "baseline": {
+              "oneOf": [
+                { "$ref": "#/$defs/ResultScheduleRepairBaseline" },
+                { "type": "null" }
+              ]
+            },
+            "counts": {
+              "oneOf": [
+                { "$ref": "#/$defs/ResultScheduleRepairCounts" },
+                { "type": "null" }
+              ]
+            },
+            "totalItems": {
+              "oneOf": [
+                { "$ref": "#/$defs/UInt32" },
+                { "type": "null" }
+              ]
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": { "$ref": "#/$defs/ResultScheduleRepairRow" }
+            },
+            "continuation": {
+              "oneOf": [
+                { "$ref": "#/$defs/ResultScheduleContinuation" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "planningDates", "window", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "calendarPeople"
+            },
+            "planningDates": {
+              "$ref": "#/$defs/DateRange"
+            },
+            "window": {
+              "$ref": "#/$defs/DateRange"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultCalendarPersonRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "planningDates", "window", "totalItems", "items", "continuation"],
+          "properties": {
+            "kind": {
+              "const": "calendarShifts"
+            },
+            "planningDates": {
+              "$ref": "#/$defs/DateRange"
+            },
+            "window": {
+              "$ref": "#/$defs/DateRange"
+            },
+            "totalItems": {
+              "$ref": "#/$defs/UInt32"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/ResultCalendarShiftRow"
+              }
+            },
+            "continuation": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResultScheduleContinuation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ResultScheduleResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "timeZone", "result"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "timeZone": {
+          "$ref": "#/$defs/TemporalText"
+        },
+        "result": {
+          "$ref": "#/$defs/ResultScheduleData"
         }
       }
     }
@@ -8409,6 +10047,21 @@
         },
         {
           "preference": {
+            "kind": "weekendTarget",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "targetCount": 2
+          }
+        },
+        {
+          "preference": {
             "kind": "workloadBalance",
             "id": "018f7b40-a000-7000-8000-000000000028",
             "active": true,
@@ -8749,6 +10402,20 @@
               "kind": "workedDays"
             },
             "maximum": 5
+          }
+        },
+        {
+          "rule": {
+            "kind": "maximumWorkedWeekends",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "maximum": 1
           }
         },
         {
@@ -10474,6 +12141,21 @@
         },
         {
           "preference": {
+            "kind": "weekendTarget",
+            "id": "018f7b40-a000-7000-8000-000000000028",
+            "active": true,
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "priority": "normal",
+            "weight": 1,
+            "targetCount": 2
+          }
+        },
+        {
+          "preference": {
             "kind": "workloadBalance",
             "id": "018f7b40-a000-7000-8000-000000000028",
             "active": true,
@@ -10818,6 +12500,20 @@
         },
         {
           "rule": {
+            "kind": "maximumWorkedWeekends",
+            "id": "018f7b40-a000-7000-8000-00000000001e",
+            "active": true,
+            "strength": "required",
+            "scope": {
+              "people": {
+                "kind": "all"
+              }
+            },
+            "maximum": 1
+          }
+        },
+        {
+          "rule": {
             "kind": "maximumAssignmentCount",
             "id": "018f7b40-a000-7000-8000-00000000001e",
             "active": true,
@@ -11009,6 +12705,17 @@
       ]
     }
   ],
+  "resultViews": [
+    {
+      "id": "official.workforce.result.schedule",
+      "parameterSchema": {
+        "$ref": "#/$defs/ResultScheduleParameters"
+      },
+      "resultSchema": {
+        "$ref": "#/$defs/ResultScheduleResult"
+      }
+    }
+  ],
   "internalSchema": {
     "$ref": "#/$defs/Domain"
   },
@@ -11027,12 +12734,11 @@
       "status",
       "provenance",
       "privacy",
-      "assignments",
-      "score"
+      "assignments"
     ],
     "properties": {
       "schemaVersion": {
-        "const": 1
+        "const": 2
       },
       "scenarioId": {
         "$ref": "#/$defs/Uuid"
@@ -11090,50 +12796,6 @@
             },
             "shiftId": {
               "$ref": "#/$defs/Uuid"
-            }
-          }
-        }
-      },
-      "score": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["feasibility", "levels"],
-        "properties": {
-          "feasibility": {
-            "const": 0
-          },
-          "levels": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["levelId", "value", "direction", "categoryBreakdown"],
-              "properties": {
-                "levelId": {
-                  "const": "official.workforce.objective.assignment.rank"
-                },
-                "value": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 1000000000000000
-                },
-                "direction": {
-                  "const": "minimize"
-                },
-                "categoryBreakdown": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "official.workforce.score.assignment.rank": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000000000000
-                    }
-                  }
-                }
-              }
             }
           }
         }
@@ -11349,7 +13011,7 @@
         },
         "description": {
           "key": "official.workforce.rule.availability.description",
-          "defaultText": "Editable Required rule data for availability; stored shape does not imply solve support."
+          "defaultText": "Enforce availability restrictions on matching assignments; approved time off always remains unavailable."
         }
       },
       {
@@ -11360,7 +13022,7 @@
         },
         "description": {
           "key": "official.workforce.rule.coverage.description",
-          "defaultText": "Editable Required rule data for coverage; stored shape does not imply solve support."
+          "defaultText": "Require the authored number of people and qualification minimums on matching shifts."
         }
       },
       {
@@ -11371,7 +13033,7 @@
         },
         "description": {
           "key": "official.workforce.rule.eligibility.description",
-          "defaultText": "Editable Required rule data for eligibility; stored shape does not imply solve support."
+          "defaultText": "Require eligible people and valid qualification grants before they can take matching work."
         }
       },
       {
@@ -11382,7 +13044,7 @@
         },
         "description": {
           "key": "official.workforce.rule.fixed-assignment.description",
-          "defaultText": "Editable Required rule data for fixed assignments; stored shape does not imply solve support."
+          "defaultText": "Require the selected person to take the selected shift when this rule is active."
         }
       },
       {
@@ -11393,7 +13055,7 @@
         },
         "description": {
           "key": "official.workforce.rule.maximum-assignment-count.description",
-          "defaultText": "Editable Required rule data for maximum assignment count; stored shape does not imply solve support."
+          "defaultText": "Cap each person's matching assignments in each reporting-date period owned by the selected calendar."
         }
       },
       {
@@ -11404,7 +13066,7 @@
         },
         "description": {
           "key": "official.workforce.rule.maximum-consecutive.description",
-          "defaultText": "Editable Required rule data for maximum consecutive work; stored shape does not imply solve support."
+          "defaultText": "Cap consecutive worked reporting days or matching selected assignments."
         }
       },
       {
@@ -11415,7 +13077,18 @@
         },
         "description": {
           "key": "official.workforce.rule.maximum-hours.description",
-          "defaultText": "Editable Required rule data for maximum hours; stored shape does not imply solve support."
+          "defaultText": "Cap matching worked time over the selected calendar or rolling window."
+        }
+      },
+      {
+        "id": "official.workforce.rule.maximum-worked-weekends",
+        "title": {
+          "key": "official.workforce.rule.maximum-worked-weekends.title",
+          "defaultText": "Maximum worked weekends"
+        },
+        "description": {
+          "key": "official.workforce.rule.maximum-worked-weekends.description",
+          "defaultText": "Cap distinct local Saturday-to-Monday weekends with positive selected source overlap."
         }
       },
       {
@@ -11426,7 +13099,7 @@
         },
         "description": {
           "key": "official.workforce.rule.minimum-rest.description",
-          "defaultText": "Editable Required rule data for minimum rest; stored shape does not imply solve support."
+          "defaultText": "Require the authored elapsed break between directional matching assignments."
         }
       },
       {
@@ -11437,7 +13110,7 @@
         },
         "description": {
           "key": "official.workforce.rule.mutual-assignment-restriction.description",
-          "defaultText": "Editable Required rule data for assignment restrictions; stored shape does not imply solve support."
+          "defaultText": "Restrict selected people's matching coassignments or overlapping shifts."
         }
       },
       {
@@ -11448,7 +13121,7 @@
         },
         "description": {
           "key": "official.workforce.rule.no-overlap.description",
-          "defaultText": "Editable Required rule data for no overlap; stored shape does not imply solve support."
+          "defaultText": "Prevent a person from taking overlapping shifts unless their categories are explicitly compatible."
         }
       },
       {
@@ -11459,7 +13132,7 @@
         },
         "description": {
           "key": "official.workforce.rule.required-skill-mix.description",
-          "defaultText": "Editable Required rule data for required qualification mix; stored shape does not imply solve support."
+          "defaultText": "Require the authored qualification mix among people assigned to matching shifts."
         }
       },
       {
@@ -11470,7 +13143,18 @@
         },
         "description": {
           "key": "official.workforce.rule.transition-time.description",
-          "defaultText": "Editable Required rule data for transition time; stored shape does not imply solve support."
+          "defaultText": "Require the authored directed travel gap when matching locations change between shifts."
+        }
+      },
+      {
+        "id": "official.workforce.rule.workload-quota",
+        "title": {
+          "key": "official.workforce.rule.workload-quota.title",
+          "defaultText": "Required workload quota"
+        },
+        "description": {
+          "key": "official.workforce.rule.workload-quota.description",
+          "defaultText": "Require each selected person to meet an assignment count or configured minute range in every owned calendar period."
         }
       }
     ],
@@ -11483,7 +13167,7 @@
         },
         "description": {
           "key": "official.workforce.preference.adjacency.description",
-          "defaultText": "Editable Preference data for adjacency preferences; stored shape does not imply objective evaluation."
+          "defaultText": "Score selected work near or away from authored base assignments within the chosen elapsed gap."
         }
       },
       {
@@ -11494,7 +13178,7 @@
         },
         "description": {
           "key": "official.workforce.preference.assignment-target.description",
-          "defaultText": "Editable Preference data for assignment-count targets; stored shape does not imply objective evaluation."
+          "defaultText": "Guide each matching person's assignment count toward the authored target in each selected calendar period."
         }
       },
       {
@@ -11505,7 +13189,7 @@
         },
         "description": {
           "key": "official.workforce.preference.assignment-type.description",
-          "defaultText": "Editable Preference data for assignment type preferences; stored shape does not imply objective evaluation."
+          "defaultText": "Prefer or avoid matching assignment types; statically feasible assignments contribute to the objective."
         }
       },
       {
@@ -11516,7 +13200,7 @@
         },
         "description": {
           "key": "official.workforce.preference.base-stability.description",
-          "defaultText": "Editable Preference data for base-schedule stability; stored shape does not imply objective evaluation."
+          "defaultText": "Penalize changed person–shift assignments relative to an authored base schedule."
         }
       },
       {
@@ -11527,7 +13211,7 @@
         },
         "description": {
           "key": "official.workforce.preference.consecutive-work.description",
-          "defaultText": "Editable Preference data for consecutive-work preferences; stored shape does not imply objective evaluation."
+          "defaultText": "Penalize matching reporting-day or anchored-weekend runs beyond the authored threshold."
         }
       },
       {
@@ -11538,7 +13222,7 @@
         },
         "description": {
           "key": "official.workforce.preference.location.description",
-          "defaultText": "Editable Preference data for location preferences; stored shape does not imply objective evaluation."
+          "defaultText": "Location preference data; active definitions contribute bounded objective penalties during Workforce compilation."
         }
       },
       {
@@ -11549,7 +13233,7 @@
         },
         "description": {
           "key": "official.workforce.preference.preferred-coverage.description",
-          "defaultText": "Editable Preference data for above-minimum coverage; stored shape does not imply objective evaluation."
+          "defaultText": "Penalize shortfall from an explicitly preferred count on selected at-least coverage requirements."
         }
       },
       {
@@ -11560,7 +13244,7 @@
         },
         "description": {
           "key": "official.workforce.preference.requested-time-off.description",
-          "defaultText": "Editable Preference data for requested time off; stored shape does not imply objective evaluation."
+          "defaultText": "Requested time-off preference data; active definitions contribute bounded objective penalties for matching requested leave during Workforce compilation."
         }
       },
       {
@@ -11571,7 +13255,7 @@
         },
         "description": {
           "key": "official.workforce.preference.time.description",
-          "defaultText": "Editable Preference data for time preferences; stored shape does not imply objective evaluation."
+          "defaultText": "Prefer or avoid matching times; statically feasible assignments contribute to the objective."
         }
       },
       {
@@ -11582,7 +13266,18 @@
         },
         "description": {
           "key": "official.workforce.preference.together-separate.description",
-          "defaultText": "Editable Preference data for together or separate; stored shape does not imply objective evaluation."
+          "defaultText": "Score selected assignments for the authored together-or-separate group and pairing mode."
+        }
+      },
+      {
+        "id": "official.workforce.preference.weekend-target",
+        "title": {
+          "key": "official.workforce.preference.weekend-target.title",
+          "defaultText": "Worked-weekend target"
+        },
+        "description": {
+          "key": "official.workforce.preference.weekend-target.description",
+          "defaultText": "Guide each selected person's distinct worked-weekend count toward an explicit target across the planning horizon. Overnight tails count; this is not a Required cap."
         }
       },
       {
@@ -11593,13 +13288,25 @@
         },
         "description": {
           "key": "official.workforce.preference.workload-balance.description",
-          "defaultText": "Editable Preference data for workload balance; stored shape does not imply objective evaluation."
+          "defaultText": "Balance a named workload bucket against an explicit peer group and configured target mode."
         }
       }
     ],
     "scoreKinds": [],
     "provenanceKinds": [],
-    "resultViews": [],
+    "resultViews": [
+      {
+        "id": "official.workforce.result.schedule",
+        "title": {
+          "key": "official.workforce.result.schedule.title",
+          "defaultText": "Accepted schedule"
+        },
+        "description": {
+          "key": "official.workforce.result.schedule.description",
+          "defaultText": "Read-only pages over the exact accepted Workforce document and result."
+        }
+      }
+    ],
     "importers": [],
     "exporters": []
   }

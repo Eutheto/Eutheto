@@ -136,6 +136,11 @@ const navigationError = useValidationRoute(
     <p v-if="navigationError" class="text-danger" role="alert">{{ navigationError }}</p>
     <p>{{ copy.description }}</p>
     <template v-if="project.domainPackId === 'official.workforce'">
+      <RouterLink
+        :to="{ name: 'project-availability-import', params: { scenarioId: project.scenarioId } }"
+      >
+        {{ messages.availabilityCsv.title }}
+      </RouterLink>
       <button type="button" :disabled="busy" @click="vm.refresh">{{ copy.refresh }}</button>
       <p v-if="state.factsLoading" role="status">{{ copy.factsLoading }}</p>
       <p v-if="state.factsError" role="alert">{{ state.factsError }}</p>

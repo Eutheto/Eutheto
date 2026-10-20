@@ -5,16 +5,19 @@ use crate::counterfactual::{
 };
 use eutheto_command::{CommandError, apply_command_with_registry, validate_document_shape};
 use eutheto_domain_api::{
-    DomainCatalog, DomainPackDescriptor, DomainPackError, DomainPackRegistry, DomainView,
-    PortableImportContext,
+    DomainCatalog, DomainPackDescriptor, DomainPackError, DomainPackRegistry,
+    DomainSetupQueryV1 as AcceptedDomainQueryV1, DomainView, PortableImportContext,
+    SetupContinuationV1 as AcceptedViewContinuationV1, SetupViewContext,
+    bounded_json_size as measure_accepted_view_json_size,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AcceptedResultRefV1, AssignmentEvidenceV1, ComparisonContext,
-    ComparisonRunManifests, EvidenceRenderRequestV1, ExplanationEvidencePayloadV1,
-    ExplanationEvidenceV1, ExplanationRequestSubjectV1, ExplanationRequestV1, ExplanationResultV1,
-    OptimalityStatusEvidenceV1, PortableAcceptedResultV2, RepairCausalityV1, RepairEvidenceV1,
-    ScoreVector, SolutionComparisonV1, VerificationContextV1, VerificationReport, blake3_hex,
-    compare_accepted_results,
+    AcceptedResult, AcceptedResultRefV1, AssignmentEvidenceV1, EvidenceRenderRequestV2,
+    ExplanationEvidencePayloadV2, ExplanationEvidenceV2, ExplanationRequestSubjectV1,
+    ExplanationRequestV1, ExplanationResultV2, ExplanationValidationSeverity,
+    OptimalityStatusEvidence, PortableAcceptedResult, RepairCausalityV1, RepairEvidenceV2,
+    RunBaselineOriginal, RunInput, ScoreVector, SolutionComparisonV2, ValidationIssueEvidenceV1,
+    VerificationContextV1, VerificationReport, VerifiedCheckpoint, blake3_hex,
+    prepare_comparison_v2, validation_issue_identity,
 };
 use eutheto_export::{
     ApplicationMetadata, BACKUP_SELECTION_EXTENSION, BACKUP_SELECTION_VERSION, BackupSections,
@@ -40,33 +43,44 @@ pub use eutheto_solver_api::{
 };
 use eutheto_solver_api::{DeferredBackendCandidate, SolverDescriptor, SolverRegistry};
 use eutheto_store::{
-    AppSetting, CommandWrite, HistoryCommand, HistoryEntry, InitializationOutcome, JournalWrite,
-    NewProject, ProjectListScope, RedoBranchPolicy, SafetyBackupFailureReceipt,
-    SqliteScenarioStore, StagedLibraryApply, StoreError, StoredAcceptedResultSummary,
-    StoredAcceptedResultV2, StoredProject,
+    AppSetting, CommandWrite, CounterfactualJobListCursorV1, CounterfactualJobListPageV1,
+    HistoryCommand, HistoryEntry, InitializationOutcome, JournalWrite, NewProject, NewSolveRunV1,
+    ProjectListScope, RedoBranchPolicy, SafetyBackupFailureReceipt, SqliteScenarioStore,
+    StagedLibraryApply, StoreError, StoredAcceptedResultSummary, StoredAcceptedResultV2,
+    StoredProject,
 };
+pub use eutheto_store::{ExistingSolveRunV1, MAX_SOLVE_RUN_LIST_LIMIT, SolveRunListRequestV1};
 use eutheto_types::{
     ActorRef, AppError, ApplicationSettingsWriteResultV1, BackendId, BundleId, CancellationToken,
-    Change, ChangeKind, ChangeSet, Clock, CommandEnvelope, CommandResult, CommandSource,
-    DirectoryAvailabilityLabel, DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator,
+    Change, ChangeKind, ChangeSet, Clock, CommandEnvelope, CommandId, CommandResult, CommandSource,
+    CounterfactualJobId, DirectoryAvailabilityLabel, DomainCommandEnvelope, DomainPackRef,
+    EntityId, EventContext, EventPayload, EventTopic, IdGenerator, KnownVerificationAlarmV1,
     MonotonicClock, OperationControl, OperationInterruption, PROJECT_LIST_SCHEMA_VERSION, PackId,
     PortableAsset, PortableDomainDocument, PortableProjectMetadata, ProjectListItemV1,
     ProjectMetadataDto, ProtocolFailure, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
     SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioDocument,
     ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
-    ScenarioViewDto, SolutionId, SolveRunId, SolveStatus, StorageFailure,
+    ScenarioViewDto, SolutionId, SolvePhase, SolveRunId, SolveStatus, StorageFailure,
     SupportApplicationMetadataDto, SupportDirectoryMetadataDto, SupportLibraryMetadataDto,
     SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue,
-    ValidationReport, ValidationSeverity, VerificationFailure, collect_scenario_owned_uuids,
-    extract_asset_references, extract_result_dependency, extract_result_id,
-    extract_scenario_references,
+    ValidationReport, ValidationSeverity, VerificationAlarmTerminalization, VerificationFailure,
+    collect_scenario_owned_uuids, extract_asset_references, extract_result_dependency,
+    extract_result_id, extract_scenario_references,
+};
+use eutheto_workforce::{
+    assignment_rules::decode_workforce_assignment,
+    commands::{ADD_ENTITY, EntityPayload, UPDATE_ENTITY},
+    generated_workforce_pack_contract::WORKFORCE_PACK_ID,
+    model::{AssignmentPair, BaseSchedule, WorkforceEntity},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
+use tokio::sync::{Mutex, Semaphore, broadcast};
 use uuid::Uuid;
 
 #[path = "application_settings.rs"]
@@ -82,6 +96,10 @@ pub use people_csv::*;
 mod headless;
 pub use headless::*;
 
+#[path = "model_estimate.rs"]
+mod model_estimate;
+pub use model_estimate::*;
+
 #[path = "setup.rs"]
 mod setup;
 pub use setup::*;
@@ -89,10 +107,43 @@ pub use setup::*;
 #[path = "history.rs"]
 mod history;
 pub use history::*;
+#[path = "manual.rs"]
+mod manual;
+pub use manual::*;
+#[path = "recipient_pdf.rs"]
+mod recipient_pdf;
+#[path = "recipient_report.rs"]
+mod recipient_report;
+pub use recipient_pdf::*;
+pub use recipient_report::*;
+
+#[path = "result_publication.rs"]
+mod result_publication;
+
+#[path = "schedule_export.rs"]
+mod schedule_export;
+pub use schedule_export::*;
+
+#[path = "recipient_memory.rs"]
+pub(crate) mod recipient_memory;
+
+#[path = "diagnostic_actions.rs"]
+mod diagnostic_actions;
+pub use diagnostic_actions::{
+    CapturedDiagnosticExport, DIAGNOSTIC_COPY_API_SCHEMA_VERSION,
+    DIAGNOSTIC_EXPORT_API_SCHEMA_VERSION, DIAGNOSTIC_REPORT_SCHEMA_VERSION,
+    DiagnosticCopyRequestV1, DiagnosticCopyResultV1, DiagnosticExportMetadataV1,
+    DiagnosticExportRequestV1, DiagnosticReport, MAX_DIAGNOSTIC_REPORT_BYTES,
+    PreparedDiagnosticExport,
+};
 
 const EVENT_VERSION: u32 = 1;
 /// Current application solution-read wire schema.
 pub const SOLUTION_API_SCHEMA_VERSION: u32 = 1;
+/// Current explicit accepted-result base-adoption request wire schema.
+pub const SOLUTION_ADOPT_BASE_SCHEMA_VERSION: u32 = 1;
+/// Current complete comparison wire schema; older general requests are refused.
+pub const SOLUTION_COMPARE_SCHEMA_VERSION: u32 = 3;
 const MAX_PENDING_PREVIEWS: usize = 3;
 const MAX_ID_ALLOCATION_ATTEMPTS: usize = 64;
 const MAX_PENDING_PREVIEW_BYTES: usize = 64 * 1024 * 1024;
@@ -212,7 +263,6 @@ struct CreatedPortableSafetyBackup {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeferredCapability {
     Solve,
-    Solution,
     ArtificialIntelligence,
 }
 
@@ -252,6 +302,24 @@ pub struct SolutionListRequestV1 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
 }
+/// Reads one durable counterfactual job owned by the requested scenario.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolutionGetCounterfactualRequestV1 {
+    pub schema_version: u32,
+    pub scenario_id: ScenarioId,
+    pub job_id: CounterfactualJobId,
+}
+
+/// Pages durable diagnostic jobs for one scenario, newest first.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolutionListCounterfactualsRequestV1 {
+    pub schema_version: u32,
+    pub scenario_id: ScenarioId,
+    pub before: Option<CounterfactualJobListCursorV1>,
+    pub limit: u32,
+}
 
 /// Requests one locally accepted solution's summary.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -272,17 +340,40 @@ pub struct SolutionSelectRequestV1 {
     pub expected_revision: Revision,
     pub solution_id: SolutionId,
 }
+/// Explicitly adopts one independently verified accepted result as the Workforce base schedule.
+///
+/// Selection is a read-only viewing state and never implies adoption. Adoption is an ordinary
+/// revisioned scenario command and therefore participates in the normal journal/undo/redo path.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolutionAdoptBaseRequestV1 {
+    pub schema_version: u32,
+    pub request_id: RequestId,
+    pub command_id: CommandId,
+    pub scenario_id: ScenarioId,
+    pub expected_revision: Revision,
+    pub result: AcceptedResultRefV1,
+    pub actor: ActorRef,
+    pub truncate_redo: bool,
+}
 
 /// Selects one pack-owned result view from an accepted solution.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SolutionViewRequestV1 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
     pub solution_id: SolutionId,
     pub view_id: String,
+    #[serde(default = "default_solution_view_parameters")]
+    pub parameters: Value,
+    #[serde(default)]
+    pub continuation: Option<AcceptedViewContinuationV1>,
 }
 
+fn default_solution_view_parameters() -> Value {
+    Value::Object(serde_json::Map::new())
+}
 /// Requests current independent re-verification of one accepted solution.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -292,10 +383,10 @@ pub struct SolutionVerifyRequestV1 {
     pub solution_id: SolutionId,
 }
 
-/// Selects two independently accepted results for deterministic comparison.
+/// Selects two independently accepted sources for the complete current comparison.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SolutionCompareRequestV1 {
+pub struct SolutionCompareRequestV3 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
     pub base_solution_id: SolutionId,
@@ -336,7 +427,29 @@ pub struct SolutionListDtoV1 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
     pub current_revision: Revision,
+    /// Scores and checksums are retained metadata, not freshly independently verified.
+    pub freshly_verified: bool,
     pub solutions: Vec<SolutionSummaryDtoV1>,
+}
+
+/// Original scenario, revision and durable diagnostic ownership are always returned together.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolutionGetCounterfactualDtoV1 {
+    pub schema_version: u32,
+    pub scenario_id: ScenarioId,
+    pub current_revision: Revision,
+    pub job: eutheto_domain_ir::CounterfactualJobRecordV1,
+}
+
+/// Bounded persisted diagnostic page; events never substitute for this authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolutionListCounterfactualsDtoV1 {
+    pub schema_version: u32,
+    pub scenario_id: ScenarioId,
+    pub current_revision: Revision,
+    pub page: CounterfactualJobListPageV1,
 }
 
 /// Complete accepted-only result detail.
@@ -375,25 +488,38 @@ pub struct SolutionVerificationDtoV1 {
     pub verification: VerificationReport,
 }
 
-/// Deterministic comparison envelope.
+/// Complete source-bound comparison with independently gated aggregate scores.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SolutionComparisonDtoV1 {
+pub struct SolutionComparisonDtoV3 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
     pub current_revision: Revision,
-    pub comparison: SolutionComparisonV1,
+    pub comparison: SolutionComparisonV2,
 }
 
 /// Rendered typed evidence and all selected recorded revisions.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SolutionExplanationDtoV1 {
+pub struct SolutionExplanationDtoV2 {
     pub schema_version: u32,
     pub scenario_id: ScenarioId,
     pub current_revision: Revision,
     pub scenario_revisions: Vec<Revision>,
-    pub explanation: ExplanationResultV1,
+    pub explanation: ExplanationResultV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infeasibility_context: Option<InfeasibilityExplanationContextV1>,
+}
+
+/// Native custody references for actions on one retained diagnostic.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InfeasibilityExplanationContextV1 {
+    pub run_id: SolveRunId,
+    pub source_revision: Revision,
+    pub run_manifest_checksum: String,
+    pub evidence_checksum: String,
+    pub conflict_id: eutheto_domain_ir::DomainEvidenceId,
 }
 
 /// State-changing application operations.
@@ -433,6 +559,10 @@ pub enum AppCommand {
         envelope: CommandEnvelope,
         truncate_redo: bool,
     },
+    CreateDiagnosticCopy {
+        request: DiagnosticCopyRequestV1,
+        control: OperationControl,
+    },
     Undo {
         request_id: RequestId,
         scenario_id: ScenarioId,
@@ -455,6 +585,7 @@ pub enum AppCommand {
         key: String,
     },
     SolutionSelect(SolutionSelectRequestV1),
+    AdoptBaseSchedule(SolutionAdoptBaseRequestV1),
     SolutionStartCounterfactual(SolutionStartCounterfactualRequestV1),
     SolutionCancelCounterfactual(SolutionCancelCounterfactualRequestV1),
     ExportScenario {
@@ -511,12 +642,18 @@ pub enum AppQuery {
     History(ScenarioId),
     HistoryPage(HistoryPageRequestV1),
     Setting(String),
+    SolutionGetCounterfactual(SolutionGetCounterfactualRequestV1),
+    SolutionListCounterfactuals(SolutionListCounterfactualsRequestV1),
     SolutionList(SolutionListRequestV1),
     SolutionGetSummary(SolutionSummaryRequestV1),
     SolutionGetView(SolutionViewRequestV1),
     SolutionVerify(SolutionVerifyRequestV1),
-    SolutionCompare(SolutionCompareRequestV1),
-    SolutionExplain(SolutionExplainRequestV1),
+    SolutionCompareV3(SolutionCompareRequestV3),
+    SolutionExplain {
+        request: SolutionExplainRequestV1,
+        source_revision: Revision,
+        control: OperationControl,
+    },
     PreviewImport {
         bytes: Vec<u8>,
         options: ImportOptions,
@@ -564,6 +701,7 @@ pub enum AppCommandResult {
     Project(ProjectMetadataDto),
     Deleted,
     ScenarioCommand(CommandResult),
+    DiagnosticCopy(DiagnosticCopyResultV1),
     SettingsWritten(ApplicationSettingsWriteResultV1),
     SolutionSelected(SolutionSummaryDtoV1),
     CounterfactualStarted(SolutionStartCounterfactualDtoV1),
@@ -589,12 +727,14 @@ pub enum AppQueryResult {
     History(Vec<HistoryEntry>),
     HistoryPage(HistoryPageDtoV1),
     Setting(Option<AppSetting<Value>>),
+    SolutionGetCounterfactual(Box<SolutionGetCounterfactualDtoV1>),
+    SolutionListCounterfactuals(Box<SolutionListCounterfactualsDtoV1>),
     SolutionList(SolutionListDtoV1),
     SolutionSummary(Box<SolutionDetailDtoV1>),
     SolutionView(Box<SolutionViewDtoV1>),
     SolutionVerification(Box<SolutionVerificationDtoV1>),
-    SolutionComparison(Box<SolutionComparisonDtoV1>),
-    SolutionExplanation(Box<SolutionExplanationDtoV1>),
+    SolutionComparisonV3(Box<SolutionComparisonDtoV3>),
+    SolutionExplanation(Box<SolutionExplanationDtoV2>),
     PortablePreview {
         preview_id: RequestId,
         preview: Box<ImportPreview>,
@@ -898,7 +1038,7 @@ fn pending_tree_memory_charge(items: usize, item_size: usize) -> Option<usize> {
 enum PendingPortablePreview {
     Import(Box<PendingImportPreview>),
     Unopened(UnopenedBundle),
-    PeopleCsv(PendingPeopleCsvPreview),
+    Csv(PendingCsvPreview),
     Settings(PendingSettingsPreview),
 }
 
@@ -909,7 +1049,7 @@ impl PendingPortablePreview {
             Self::Unopened(bundle) => bundle.retained_memory_bytes().saturating_add(
                 pending_tree_memory_charge(1, size_of::<(RequestId, Self)>()).unwrap_or(usize::MAX),
             ),
-            Self::PeopleCsv(preview) => preview.retained_bytes(),
+            Self::Csv(preview) => preview.retained_bytes(),
             Self::Settings(preview) => preview.retained_bytes(),
         }
     }
@@ -941,6 +1081,534 @@ enum ProjectLifecycleAction {
     Delete,
 }
 
+const ACCEPTED_VERIFICATION_CACHE_CAPACITY: usize = 4;
+const ACCEPTED_VERIFICATION_MAX_IN_FLIGHT: usize = 4;
+const ACCEPTED_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(30);
+type AcceptedContentHash = [u8; 32];
+
+// An accepted read owns its source snapshot and query slot until the store actor finishes,
+// even if the requesting window times out or detaches.
+#[allow(clippy::large_enum_variant)]
+enum AcceptedQuerySource {
+    Terminal(StoredAcceptedResultV2),
+    Checkpoint(ScenarioDocument, VerifiedCheckpoint),
+}
+
+impl AcceptedQuerySource {
+    fn run_id(&self) -> SolveRunId {
+        match self {
+            Self::Terminal(stored) => stored.portable.run_input.run_id,
+            Self::Checkpoint(_, checkpoint) => checkpoint.run_input.run_id,
+        }
+    }
+}
+
+// This is only a bounded change detector for freshly loaded tuples, never a signature.
+struct AcceptedVerificationCache {
+    completed: Mutex<VecDeque<AcceptedContentHash>>,
+    slots: Arc<Semaphore>,
+}
+
+impl AcceptedVerificationCache {
+    fn new() -> Self {
+        Self {
+            completed: Mutex::new(VecDeque::with_capacity(
+                ACCEPTED_VERIFICATION_CACHE_CAPACITY,
+            )),
+            slots: Arc::new(Semaphore::new(ACCEPTED_VERIFICATION_MAX_IN_FLIGHT)),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AcceptedVerificationState {
+    cache: Arc<AcceptedVerificationCache>,
+}
+
+impl AcceptedVerificationState {
+    fn new() -> Self {
+        Self {
+            cache: Arc::new(AcceptedVerificationCache::new()),
+        }
+    }
+}
+
+struct CapturedOptimalityStatus {
+    document: ScenarioDocument,
+    run_input: RunInput,
+    run_manifest: eutheto_domain_ir::RunManifest,
+    stored: Option<Box<StoredAcceptedResultV2>>,
+    result: Option<AcceptedResultRefV1>,
+}
+enum CapturedExplanation {
+    Validation {
+        document: Box<ScenarioDocument>,
+        revision: Revision,
+        issue_id: eutheto_domain_ir::VerificationIssueId,
+    },
+    Assignment {
+        stored: Box<StoredAcceptedResultV2>,
+        assignment_id: eutheto_domain_ir::DomainAssignmentId,
+    },
+    Counterfactual {
+        stored: Box<StoredAcceptedResultV2>,
+        result: Box<eutheto_domain_ir::CounterfactualResult>,
+        alternative: Option<Box<StoredAcceptedResultV2>>,
+    },
+    SolutionDifference {
+        base: Box<StoredAcceptedResultV2>,
+        candidate: Box<StoredAcceptedResultV2>,
+    },
+    Repair {
+        current: Box<StoredAcceptedResultV2>,
+        base: Box<StoredAcceptedResultV2>,
+    },
+    OptimalityStatus(Box<CapturedOptimalityStatus>),
+    Infeasibility(Box<eutheto_store::StoredInfeasibilitySourceV1>),
+}
+
+const MAX_ORDINARY_SOLVE_CUSTODY: usize = 16;
+type OrdinarySolveCustody = Arc<StdMutex<BTreeMap<SolveRunId, Arc<StdMutex<OrdinarySolveState>>>>>;
+
+struct OrdinaryRunBinding {
+    run_id: SolveRunId,
+    request_id: RequestId,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    input_checksum: String,
+    started_at: Rfc3339Timestamp,
+}
+
+struct OrdinaryFirstAccepted {
+    solution_id: SolutionId,
+    checksum: String,
+    accepted_at: Rfc3339Timestamp,
+}
+
+// These are independent producer/checkpoint/confirmation facts, not one exclusive state.
+#[allow(clippy::struct_excessive_bools)]
+struct OrdinarySolveState {
+    pending_start: Option<NewSolveRunV1>,
+    binding: Option<OrdinaryRunBinding>,
+    first_accepted: Option<OrdinaryFirstAccepted>,
+    alarm: Option<eutheto_verify::CorrectnessAlarm>,
+    secondary_cause: Option<eutheto_types::KnownVerificationSecondaryCauseCode>,
+    confirmed: bool,
+    producer_done: bool,
+    checkpoint_claimed: bool,
+    checkpoint_done: bool,
+    observations: OrdinaryObservationBounds,
+    native_observations: Option<Arc<eutheto_domain_ir::RunNativeObservations>>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OrdinaryObservationBounds {
+    pub(crate) latest_wall: Option<Rfc3339Timestamp>,
+    pub(crate) latest_elapsed: Option<Duration>,
+    pub(crate) unreliable: bool,
+}
+
+fn lock_ordinary_state(
+    state: &StdMutex<OrdinarySolveState>,
+) -> std::sync::MutexGuard<'_, OrdinarySolveState> {
+    state.lock().unwrap_or_else(|poisoned| {
+        // Closed binding/scalar updates survive unwinding; timing no longer does.
+        let mut state = poisoned.into_inner();
+        state.observations.unreliable = true;
+        state
+    })
+}
+
+impl OrdinarySolveState {
+    fn observe_wall(&mut self, timestamp: Rfc3339Timestamp) {
+        if self
+            .observations
+            .latest_wall
+            .is_some_and(|previous| timestamp < previous)
+        {
+            self.observations.unreliable = true;
+        } else {
+            self.observations.latest_wall = Some(timestamp);
+        }
+    }
+
+    fn observe_elapsed(&mut self, elapsed: Duration) {
+        let representable = u64::try_from(elapsed.as_millis())
+            .ok()
+            .and_then(|value| eutheto_types::DurationMillis::new(value).ok())
+            .is_some();
+        if !representable
+            || self
+                .observations
+                .latest_elapsed
+                .is_some_and(|previous| elapsed < previous)
+        {
+            self.observations.unreliable = true;
+        } else {
+            self.observations.latest_elapsed = Some(elapsed);
+        }
+    }
+
+    fn validate_input(&self, input: &RunInput) -> Result<(), AppError> {
+        if self.binding.as_ref().is_some_and(|binding| {
+            binding.run_id != input.run_id
+                || binding.request_id != input.request_id
+                || binding.scenario_id != input.scenario_id
+                || binding.revision != Revision::new(input.scenario_revision)
+                || binding.input_checksum != input.checksum
+        }) {
+            return Err(solution_contract_error());
+        }
+        Ok(())
+    }
+
+    fn admit(&self) -> Result<(), AppError> {
+        let Some(alarm) = &self.alarm else {
+            return Ok(());
+        };
+        let binding = self.binding.as_ref().ok_or_else(solution_contract_error)?;
+        let known = KnownVerificationAlarmV1::new(
+            binding.run_id,
+            &binding.input_checksum,
+            &alarm.diagnostic_code,
+            if self.confirmed {
+                VerificationAlarmTerminalization::Confirmed
+            } else {
+                VerificationAlarmTerminalization::Unconfirmed
+            },
+            self.secondary_cause
+                .map(eutheto_types::KnownVerificationSecondaryCauseCode::as_str),
+        )
+        .map_err(|_| solution_contract_error())?;
+        Err(AppError::Verification(
+            VerificationFailure::from_known_alarm(known, None),
+        ))
+    }
+}
+
+/// One native producer owns admission; publication handles never own this lease.
+pub(crate) struct OrdinarySolveLease {
+    custody: OrdinarySolveCustody,
+    run_id: SolveRunId,
+    state: Arc<StdMutex<OrdinarySolveState>>,
+}
+
+/// Independent checkpoint completion is required even when its producer is dropped.
+pub(crate) struct OrdinaryCheckpointWork {
+    custody: OrdinarySolveCustody,
+    run_id: SolveRunId,
+    state: Arc<StdMutex<OrdinarySolveState>>,
+}
+
+#[derive(Clone)]
+struct OrdinaryPublicationHandle(Arc<StdMutex<OrdinarySolveState>>);
+
+fn matches_ordinary_start(
+    pending: &NewSolveRunV1,
+    input: &RunInput,
+    started_at: Rfc3339Timestamp,
+) -> bool {
+    pending.run_id == input.run_id
+        && pending.request_id == input.request_id
+        && pending.scenario_id == input.scenario_id
+        && pending.expected_revision == Revision::new(input.scenario_revision)
+        && pending.started_at == started_at
+        && pending.planning_ir_schema_version == input.planning_ir_schema_version
+        && pending.compiler_version == input.compiler_version
+        && pending.application_version == input.application_version
+        && pending.backend_id == input.backend_id
+        && pending.backend_version == input.backend_version
+        && pending.adapter_version == input.adapter_version
+        && pending.worker_version == input.worker_version
+        && pending.solver_version == input.solver_version
+        && pending.protocol_major == input.protocol_major
+        && pending.protocol_minor == input.protocol_minor
+        && pending.model_hash == input.model_hash
+        && pending.objective_policy_hash == input.objective_policy_hash
+        && pending.solve_options == input.solve_options
+        && pending.temporary_condition_hash == input.temporary_condition_hash
+        && pending.objective_context == input.objective_context
+}
+
+impl OrdinarySolveLease {
+    pub(crate) fn bind_started(
+        &self,
+        input: &RunInput,
+        started_at: Rfc3339Timestamp,
+    ) -> Result<(), AppError> {
+        let mut state = lock_ordinary_state(&self.state);
+        let pending = state
+            .pending_start
+            .as_ref()
+            .ok_or_else(solution_contract_error)?;
+        if !matches_ordinary_start(pending, input, started_at) {
+            return Err(solution_contract_error());
+        }
+        state.binding = Some(OrdinaryRunBinding {
+            run_id: input.run_id,
+            request_id: input.request_id,
+            scenario_id: input.scenario_id,
+            revision: Revision::new(input.scenario_revision),
+            input_checksum: input.checksum.clone(),
+            started_at,
+        });
+        state.pending_start = None;
+        state.observe_wall(started_at);
+        Ok(())
+    }
+
+    pub(crate) fn retain_native_observations(
+        &self,
+        input: &RunInput,
+        observations: Arc<eutheto_domain_ir::RunNativeObservations>,
+    ) -> Result<(), AppError> {
+        let mut state = lock_ordinary_state(&self.state);
+        if state.binding.as_ref().is_none_or(|binding| {
+            binding.run_id != input.run_id || binding.input_checksum != input.checksum
+        }) || state.native_observations.is_some()
+        {
+            return Err(solution_contract_error());
+        }
+        state.native_observations = Some(observations);
+        Ok(())
+    }
+
+    pub(crate) fn native_observations(
+        &self,
+    ) -> Option<Arc<eutheto_domain_ir::RunNativeObservations>> {
+        lock_ordinary_state(&self.state).native_observations.clone()
+    }
+
+    /// Only a native no-start/reused result may settle a provisional loser.
+    pub(crate) fn release_unowned_start(&self) -> Result<(), AppError> {
+        let mut state = lock_ordinary_state(&self.state);
+        if state.binding.is_some() {
+            return Err(solution_contract_error());
+        }
+        state.pending_start = None;
+        Ok(())
+    }
+
+    pub(crate) fn capture_alarm(&self, alarm: &eutheto_verify::CorrectnessAlarm) {
+        if alarm.category == eutheto_verify::CorrectnessAlarmCategory::ClockFailed {
+            return;
+        }
+        lock_ordinary_state(&self.state)
+            .alarm
+            .get_or_insert_with(|| alarm.clone());
+    }
+
+    pub(crate) fn observe_wall(&self, timestamp: Rfc3339Timestamp) {
+        lock_ordinary_state(&self.state).observe_wall(timestamp);
+    }
+
+    pub(crate) fn observe_elapsed(&self, elapsed: Duration) {
+        lock_ordinary_state(&self.state).observe_elapsed(elapsed);
+    }
+
+    pub(crate) fn observation_bounds(&self) -> Result<OrdinaryObservationBounds, AppError> {
+        let state = lock_ordinary_state(&self.state);
+        if state.binding.is_none() {
+            return Err(solution_contract_error());
+        }
+        Ok(state.observations)
+    }
+
+    pub(crate) fn retain_secondary_cause(
+        &self,
+        cause: Option<eutheto_types::KnownVerificationSecondaryCauseCode>,
+    ) {
+        let mut state = lock_ordinary_state(&self.state);
+        if state.secondary_cause.is_none() {
+            state.secondary_cause = cause;
+        }
+    }
+
+    pub(crate) fn record_first_accepted(
+        &self,
+        solution_id: SolutionId,
+        checksum: &str,
+        accepted_at: Rfc3339Timestamp,
+    ) -> Result<(), AppError> {
+        let mut state = lock_ordinary_state(&self.state);
+        state.admit()?;
+        if state.binding.is_none() || state.first_accepted.is_some() {
+            return Err(solution_contract_error());
+        }
+        state.observe_wall(accepted_at);
+        state.first_accepted = Some(OrdinaryFirstAccepted {
+            solution_id,
+            checksum: checksum.to_owned(),
+            accepted_at,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn checkpoint_work(&self) -> Result<OrdinaryCheckpointWork, AppError> {
+        let mut state = lock_ordinary_state(&self.state);
+        if state.binding.is_none() || state.checkpoint_claimed {
+            return Err(solution_contract_error());
+        }
+        state.checkpoint_claimed = true;
+        state.checkpoint_done = false;
+        Ok(OrdinaryCheckpointWork {
+            custody: Arc::clone(&self.custody),
+            run_id: self.run_id,
+            state: Arc::clone(&self.state),
+        })
+    }
+}
+
+fn retire_ordinary_solve(
+    custody: &OrdinarySolveCustody,
+    run_id: SolveRunId,
+    state: &Arc<StdMutex<OrdinarySolveState>>,
+) {
+    let Ok(mut entries) = custody.lock() else {
+        return;
+    };
+    let current = lock_ordinary_state(state);
+    if current.producer_done
+        && current.checkpoint_done
+        && current.pending_start.is_none()
+        && (current.alarm.is_none() || current.confirmed)
+        && entries
+            .get(&run_id)
+            .is_some_and(|entry| Arc::ptr_eq(entry, state))
+    {
+        entries.remove(&run_id);
+    }
+}
+
+impl Drop for OrdinarySolveLease {
+    fn drop(&mut self) {
+        lock_ordinary_state(&self.state).producer_done = true;
+        retire_ordinary_solve(&self.custody, self.run_id, &self.state);
+    }
+}
+
+impl Drop for OrdinaryCheckpointWork {
+    fn drop(&mut self) {
+        lock_ordinary_state(&self.state).checkpoint_done = true;
+        retire_ordinary_solve(&self.custody, self.run_id, &self.state);
+    }
+}
+
+impl OrdinaryPublicationHandle {
+    fn recipient_retained_bytes(&self, control: &OperationControl) -> Result<usize, AppError> {
+        let mut bytes = recipient_memory::SourceBytes::new(control)?;
+        let state = lock_ordinary_state(&self.0);
+        let OrdinarySolveState {
+            pending_start,
+            binding,
+            first_accepted,
+            alarm,
+            secondary_cause: _,
+            confirmed: _,
+            producer_done: _,
+            checkpoint_claimed: _,
+            checkpoint_done: _,
+            observations: _,
+            native_observations,
+        } = &*state;
+        // Recipient custody binds only a started source; native observations can still be
+        // pending for an early verified checkpoint. No request-sized pending start may remain.
+        if pending_start.is_some() {
+            return Err(solution_contract_error());
+        }
+        let binding = binding.as_ref().ok_or_else(solution_contract_error)?;
+        bytes.add(size_of::<Self>())?;
+        bytes.arc::<StdMutex<OrdinarySolveState>>()?;
+        let OrdinaryRunBinding {
+            run_id: _,
+            request_id: _,
+            scenario_id: _,
+            revision: _,
+            input_checksum,
+            started_at: _,
+        } = binding;
+        bytes.strings([input_checksum])?;
+        // A verified checkpoint can precede the first terminal acceptance; its later checksum
+        // is copied from a canonical 64-hex string. All other late fields are inline scalars.
+        if let Some(accepted) = first_accepted {
+            let OrdinaryFirstAccepted {
+                solution_id: _,
+                checksum,
+                accepted_at: _,
+            } = accepted;
+            bytes.strings([checksum])?;
+        } else {
+            bytes.add(64)?;
+        }
+        if let Some(alarm) = alarm {
+            let eutheto_verify::CorrectnessAlarm {
+                category: _,
+                diagnostic_code,
+            } = alarm;
+            bytes.strings([diagnostic_code])?;
+        } else {
+            // capture_alarm clones a closed native verifier code, never a raw diagnostic.
+            bytes.add(eutheto_domain_ir::MAX_RUN_DIAGNOSTIC_CODE_BYTES)?;
+        }
+        if let Some(observations) = native_observations {
+            bytes.observations(observations)?;
+        } else {
+            bytes.pending_observations()?;
+        }
+        Ok(bytes.finish())
+    }
+
+    fn admit(&self) -> Result<(), AppError> {
+        lock_ordinary_state(&self.0).admit()
+    }
+
+    fn validate_diagnostic_scope(
+        &self,
+        scenario_id: ScenarioId,
+        source_revision: Revision,
+        run_id: SolveRunId,
+    ) -> Result<(), AppError> {
+        let state = lock_ordinary_state(&self.0);
+        let (native_scenario, native_revision, native_run) = if let Some(binding) = &state.binding {
+            (binding.scenario_id, binding.revision, binding.run_id)
+        } else if let Some(start) = &state.pending_start {
+            (start.scenario_id, start.expected_revision, start.run_id)
+        } else {
+            return Err(solution_contract_error());
+        };
+        if native_scenario != scenario_id || native_run != run_id {
+            return Err(solution_reference_error("/request"));
+        }
+        if native_revision != source_revision {
+            return Err(solution_reference_error("/sourceRevision"));
+        }
+        Ok(())
+    }
+
+    fn validate_input(&self, input: &RunInput) -> Result<(), AppError> {
+        lock_ordinary_state(&self.0).validate_input(input)
+    }
+
+    fn validate_summary(&self, summary: &StoredAcceptedResultSummary) -> Result<(), AppError> {
+        let state = lock_ordinary_state(&self.0);
+        if let Some(binding) = &state.binding
+            && (binding.run_id != summary.run_id
+                || binding.scenario_id != summary.scenario_id
+                || binding.revision != summary.scenario_revision
+                || binding.input_checksum != summary.run_input_checksum)
+        {
+            return Err(solution_contract_error());
+        }
+        Ok(())
+    }
+
+    fn admit_input(&self, input: &RunInput) -> Result<(), AppError> {
+        let state = lock_ordinary_state(&self.0);
+        state.validate_input(input)?;
+        state.admit()
+    }
+}
+
 /// Reusable application service with no Tauri or CLI dependency.
 #[derive(Clone)]
 pub struct EuthetoApp {
@@ -953,11 +1621,15 @@ pub struct EuthetoApp {
     ids: Arc<dyn IdGenerator>,
     monotonic_clock: Arc<dyn MonotonicClock>,
     cancellation: CancellationToken,
+    accepted_verification: AcceptedVerificationState,
+    /// Bounds complete accepted tuples and projections outside scenario mutation locks.
+    accepted_query_slots: Arc<Semaphore>,
     mutation_locks: ScenarioLocks,
     validation_readiness: Arc<ValidationReadiness>,
     previews: Arc<Mutex<BTreeMap<RequestId, PendingPortablePreview>>>,
     events: broadcast::Sender<AppEvent>,
     counterfactual: CounterfactualRuntime,
+    ordinary_solve_custody: OrdinarySolveCustody,
 }
 
 impl EuthetoApp {
@@ -1084,11 +1756,14 @@ impl EuthetoApp {
             monotonic_clock: dependencies.monotonic_clock,
             ids: dependencies.ids,
             cancellation: dependencies.cancellation,
+            accepted_verification: AcceptedVerificationState::new(),
+            accepted_query_slots: Arc::new(Semaphore::new(ACCEPTED_VERIFICATION_MAX_IN_FLIGHT)),
             mutation_locks: Arc::new(Mutex::new(BTreeMap::new())),
             validation_readiness: Arc::default(),
             previews: Arc::new(Mutex::new(BTreeMap::new())),
             events,
             counterfactual,
+            ordinary_solve_custody: Arc::default(),
         }
     }
 
@@ -1112,6 +1787,585 @@ impl EuthetoApp {
             topic,
             receiver: self.events.subscribe(),
         })
+    }
+
+    /// Whether this process has an actual registered executable solver runtime.
+    ///
+    /// Generated support metadata alone is not an execution capability.
+    #[must_use]
+    pub fn solve_runtime_available(&self) -> bool {
+        !self.solver_registry.is_empty()
+    }
+
+    /// Returns descriptors for executable backends only.
+    #[must_use]
+    pub fn solve_backend_descriptors(&self) -> Vec<SolverDescriptor> {
+        self.solver_registry.descriptors().cloned().collect()
+    }
+
+    /// Reads one scenario-bound retained solve run without starting work.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation or a store read/recovery error; a run belonging
+    /// to another scenario is absent rather than disclosed.
+    pub async fn solve_get_job(
+        &self,
+        scenario_id: ScenarioId,
+        run_id: SolveRunId,
+    ) -> Result<Option<ExistingSolveRunV1>, AppError> {
+        let ordinary = self.ordinary_run_handle(scenario_id, run_id)?;
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        self.check_cancelled()?;
+        let retained = self.store.load_solve_run(scenario_id, run_id).await;
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        if let Some(ordinary) = &ordinary {
+            if let Ok(Some(run)) = &retained {
+                ordinary.admit_input(&run.input)?;
+            } else {
+                ordinary.admit()?;
+            }
+        }
+        if let Ok(Some(run)) = &retained
+            && let Some(manifest) = &run.manifest
+        {
+            crate::native_observations::validate_fingerprint(&run.input, manifest)
+                .map_err(|_| solution_contract_error())?;
+        }
+        retained.map_err(store_error)
+    }
+
+    /// Reads one durable first-verified candidate only after the parent run is bound to
+    /// the requested scenario. A non-alarm terminal failure does not revoke that checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation or invalid persisted authority without disclosing another
+    /// scenario's candidate.
+    pub async fn solve_get_verified_checkpoint(
+        &self,
+        scenario_id: ScenarioId,
+        run_id: SolveRunId,
+    ) -> Result<Option<VerifiedCheckpoint>, AppError> {
+        let ordinary = self.ordinary_run_handle(scenario_id, run_id)?;
+        let Some(run) = self.solve_get_job(scenario_id, run_id).await? else {
+            return Ok(None);
+        };
+        let checkpoint = self.store.load_verified_checkpoint(run_id).await;
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        let checkpoint = checkpoint.map_err(store_error)?;
+        if checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.run_input != run.input)
+        {
+            return Err(solution_contract_error());
+        }
+        if let Some(ordinary) = ordinary {
+            ordinary.admit_input(&run.input)?;
+        }
+        Ok(checkpoint)
+    }
+
+    /// Reads a bounded scenario/revision run list without taking execution
+    /// ownership of any running row.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation, an invalid list limit, or a store read/recovery
+    /// error.
+    pub async fn solve_list_runs(
+        &self,
+        request: SolveRunListRequestV1,
+    ) -> Result<Vec<ExistingSolveRunV1>, AppError> {
+        self.check_cancelled()?;
+        let scenario_id = request.scenario_id;
+        let mut ordinary = self.ordinary_scenario_handles(scenario_id)?;
+        let mut runs = self
+            .store
+            .list_solve_runs(request)
+            .await
+            .map_err(store_error)?;
+        for run in &mut runs {
+            if ordinary
+                .iter()
+                .any(|(run_id, _)| *run_id == run.input.run_id)
+            {
+                continue;
+            }
+            if let Some(handle) = self.ordinary_run_handle(scenario_id, run.input.run_id)? {
+                ordinary.push((run.input.run_id, handle));
+            } else if run.manifest.is_none() {
+                // A newly listed owner may already have drained and retired after exact
+                // quarantine. Absence is not permission to publish its older Running row.
+                let fresh = self
+                    .store
+                    .load_solve_run(scenario_id, run.input.run_id)
+                    .await
+                    .map_err(store_error)?
+                    .ok_or_else(solution_contract_error)?;
+                if fresh.input != run.input || fresh.started_at != run.started_at {
+                    return Err(solution_contract_error());
+                }
+                *run = fresh;
+                if let Some(handle) = self.ordinary_run_handle(scenario_id, run.input.run_id)? {
+                    ordinary.push((run.input.run_id, handle));
+                }
+            }
+        }
+        for run in &runs {
+            self.counterfactual
+                .guard_run_publication(scenario_id, run.input.run_id)
+                .await?;
+        }
+        for run in &runs {
+            if let Some((_, handle)) = ordinary
+                .iter()
+                .find(|(run_id, _)| *run_id == run.input.run_id)
+            {
+                handle.validate_input(&run.input)?;
+            }
+        }
+        for run in &runs {
+            if let Some((_, handle)) = ordinary
+                .iter()
+                .find(|(run_id, _)| *run_id == run.input.run_id)
+            {
+                handle.admit()?;
+            }
+        }
+        for run in &runs {
+            if let Some(manifest) = &run.manifest {
+                crate::native_observations::validate_fingerprint(&run.input, manifest)
+                    .map_err(|_| solution_contract_error())?;
+            }
+        }
+        Ok(runs)
+    }
+
+    /// Publishes advisory progress after the caller has already bound the
+    /// immutable scenario/revision/run identity.
+    pub fn publish_solve_progress(
+        &self,
+        request_id: RequestId,
+        scenario_id: ScenarioId,
+        revision: Revision,
+        run_id: SolveRunId,
+        phase: SolvePhase,
+        percent: Option<u8>,
+    ) {
+        let _ = self.events.send(AppEvent {
+            topic: EventTopic::SolveProgress,
+            payload: EventPayload::SolveProgress {
+                context: EventContext {
+                    event_version: EVENT_VERSION,
+                    timestamp: self.clock.now(),
+                    request_id: Some(request_id),
+                    scenario_id: Some(scenario_id),
+                    revision: Some(revision),
+                    solve_run_id: Some(run_id),
+                },
+                phase,
+                percent,
+            },
+        });
+    }
+
+    fn ordinary_scenario_handles(
+        &self,
+        scenario_id: ScenarioId,
+    ) -> Result<Vec<(SolveRunId, OrdinaryPublicationHandle)>, AppError> {
+        let entries = self
+            .ordinary_solve_custody
+            .lock()
+            .map_err(|_| solution_contract_error())?;
+        let mut handles = Vec::new();
+        for (run_id, entry) in entries.iter() {
+            let state = lock_ordinary_state(entry);
+            let owner = state
+                .binding
+                .as_ref()
+                .map(|binding| binding.scenario_id)
+                .or_else(|| {
+                    state
+                        .pending_start
+                        .as_ref()
+                        .map(|pending| pending.scenario_id)
+                });
+            if owner == Some(scenario_id) {
+                handles.push((*run_id, OrdinaryPublicationHandle(Arc::clone(entry))));
+            }
+        }
+        Ok(handles)
+    }
+
+    fn ordinary_request_handle(
+        &self,
+        scenario_id: ScenarioId,
+        request_id: RequestId,
+    ) -> Result<Option<OrdinaryPublicationHandle>, AppError> {
+        let entries = self
+            .ordinary_solve_custody
+            .lock()
+            .map_err(|_| solution_contract_error())?;
+        let mut pending = None;
+        for entry in entries.values() {
+            let state = lock_ordinary_state(entry);
+            if state.binding.as_ref().is_some_and(|binding| {
+                binding.scenario_id == scenario_id && binding.request_id == request_id
+            }) {
+                return Ok(Some(OrdinaryPublicationHandle(Arc::clone(entry))));
+            }
+            if pending.is_none()
+                && state.pending_start.as_ref().is_some_and(|start| {
+                    start.scenario_id == scenario_id && start.request_id == request_id
+                })
+            {
+                pending = Some(OrdinaryPublicationHandle(Arc::clone(entry)));
+            }
+        }
+        Ok(pending)
+    }
+
+    fn ordinary_run_handle(
+        &self,
+        scenario_id: ScenarioId,
+        run_id: SolveRunId,
+    ) -> Result<Option<OrdinaryPublicationHandle>, AppError> {
+        let entries = self
+            .ordinary_solve_custody
+            .lock()
+            .map_err(|_| solution_contract_error())?;
+        let Some(entry) = entries.get(&run_id) else {
+            return Ok(None);
+        };
+        let state = lock_ordinary_state(entry);
+        let owner = state
+            .binding
+            .as_ref()
+            .map(|binding| binding.scenario_id)
+            .or_else(|| {
+                state
+                    .pending_start
+                    .as_ref()
+                    .map(|pending| pending.scenario_id)
+            });
+        Ok((owner == Some(scenario_id)).then(|| OrdinaryPublicationHandle(Arc::clone(entry))))
+    }
+
+    fn ordinary_reference_handle(
+        &self,
+        scenario_id: ScenarioId,
+        reference: &AcceptedResultRefV1,
+    ) -> Result<Option<OrdinaryPublicationHandle>, AppError> {
+        let Some(handle) = self.ordinary_solution_handle(scenario_id, reference.solution_id)?
+        else {
+            return Ok(None);
+        };
+        let matches = lock_ordinary_state(&handle.0)
+            .first_accepted
+            .as_ref()
+            .is_some_and(|first| first.checksum == reference.result_checksum);
+        Ok(matches.then_some(handle))
+    }
+
+    fn ordinary_explanation_handles(
+        &self,
+        request: &SolutionExplainRequestV1,
+    ) -> Result<[Option<OrdinaryPublicationHandle>; 2], AppError> {
+        let (first, second) = match &request.request.subject {
+            ExplanationRequestSubjectV1::Assignment { result, .. } => (result, None),
+            ExplanationRequestSubjectV1::Counterfactual { base, .. } => (base, None),
+            ExplanationRequestSubjectV1::SolutionDifference { left, right } => (left, Some(right)),
+            ExplanationRequestSubjectV1::Repair { current, base } => (current, Some(base)),
+            ExplanationRequestSubjectV1::Infeasibility { solve_run_id, .. }
+            | ExplanationRequestSubjectV1::OptimalityStatus { solve_run_id, .. } => {
+                return Ok([
+                    self.ordinary_run_handle(request.scenario_id, *solve_run_id)?,
+                    None,
+                ]);
+            }
+            ExplanationRequestSubjectV1::Validation { .. } => return Ok([None, None]),
+        };
+        Ok([
+            self.ordinary_reference_handle(request.scenario_id, first)?,
+            second
+                .map(|reference| self.ordinary_reference_handle(request.scenario_id, reference))
+                .transpose()?
+                .flatten(),
+        ])
+    }
+
+    fn ordinary_explanation_scope_admitted(
+        request: &SolutionExplainRequestV1,
+        source_revision: Revision,
+        handles: &[Option<OrdinaryPublicationHandle>; 2],
+    ) -> Result<bool, AppError> {
+        let anchor = match &request.request.subject {
+            ExplanationRequestSubjectV1::Assignment { .. }
+            | ExplanationRequestSubjectV1::Counterfactual { .. }
+            | ExplanationRequestSubjectV1::Repair { .. } => 0,
+            ExplanationRequestSubjectV1::SolutionDifference { .. } => 1,
+            _ => return Ok(false),
+        };
+        let Some(handle) = handles[anchor].as_ref() else {
+            return Ok(false);
+        };
+        let state = lock_ordinary_state(&handle.0);
+        let Some(binding) = state.binding.as_ref() else {
+            return Ok(false);
+        };
+        if binding.revision != source_revision {
+            return Err(solution_reference_error("/sourceRevision"));
+        }
+        Ok(true)
+    }
+
+    fn ordinary_solution_handle(
+        &self,
+        scenario_id: ScenarioId,
+        solution_id: SolutionId,
+    ) -> Result<Option<OrdinaryPublicationHandle>, AppError> {
+        let entries = self
+            .ordinary_solve_custody
+            .lock()
+            .map_err(|_| solution_contract_error())?;
+        for entry in entries.values() {
+            let state = lock_ordinary_state(entry);
+            if state
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.scenario_id == scenario_id)
+                && state
+                    .first_accepted
+                    .as_ref()
+                    .is_some_and(|first| first.solution_id == solution_id)
+            {
+                return Ok(Some(OrdinaryPublicationHandle(Arc::clone(entry))));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Reader validation also proves absence of solutions, checkpoints and proof payloads.
+    pub(crate) async fn reconcile_ordinary_solve_custody(&self) -> Result<(), AppError> {
+        let entries: Vec<_> = self
+            .ordinary_solve_custody
+            .lock()
+            .map_err(|_| solution_contract_error())?
+            .iter()
+            .map(|(run_id, entry)| (*run_id, Arc::clone(entry)))
+            .collect();
+        let mut first_error = None;
+        for (run_id, entry) in entries {
+            let pending = {
+                let state = lock_ordinary_state(&entry);
+                if state.producer_done && state.checkpoint_done {
+                    state.pending_start.clone()
+                } else {
+                    None
+                }
+            };
+            if let Some(pending) = pending {
+                let existing = match self
+                    .store
+                    .load_solve_run_by_request(pending.request_id)
+                    .await
+                {
+                    Ok(existing) => existing,
+                    Err(error) => {
+                        first_error.get_or_insert_with(|| store_error(error));
+                        continue;
+                    }
+                };
+                let resolved = existing.as_ref().is_none_or(|existing| {
+                    existing.input.run_id != run_id
+                        || matches_ordinary_start(&pending, &existing.input, existing.started_at)
+                });
+                if resolved {
+                    let mut state = lock_ordinary_state(&entry);
+                    if state.producer_done && state.checkpoint_done {
+                        state.pending_start = None;
+                    }
+                }
+            }
+            let alarm_binding = {
+                let state = lock_ordinary_state(&entry);
+                state
+                    .binding
+                    .as_ref()
+                    .zip(state.alarm.as_ref())
+                    .map(|(binding, alarm)| {
+                        (
+                            binding.scenario_id,
+                            binding.request_id,
+                            binding.revision,
+                            binding.started_at,
+                            binding.input_checksum.clone(),
+                            alarm.diagnostic_code.clone(),
+                        )
+                    })
+            };
+            if let Some((scenario_id, request_id, revision, started_at, checksum, code)) =
+                alarm_binding
+            {
+                let existing = match self.store.load_solve_run(scenario_id, run_id).await {
+                    Ok(existing) => existing,
+                    Err(error) => {
+                        first_error.get_or_insert_with(|| store_error(error));
+                        continue;
+                    }
+                };
+                let exact = existing.as_ref().is_some_and(|existing| {
+                    existing.input.run_id == run_id
+                        && existing.input.request_id == request_id
+                        && Revision::new(existing.input.scenario_revision) == revision
+                        && existing.input.checksum == checksum
+                        && existing.started_at == started_at
+                        && existing.manifest.as_ref().is_some_and(|manifest| {
+                            manifest.run_id == run_id
+                                && manifest.run_input_checksum == checksum
+                                && matches!(&manifest.outcome,
+                                    eutheto_domain_ir::RunTerminalOutcomeV1::VerificationAlarm {
+                                        diagnostic_code
+                                    } if diagnostic_code == &code)
+                        })
+                });
+                if exact {
+                    lock_ordinary_state(&entry).confirmed = true;
+                }
+            }
+            retire_ordinary_solve(&self.ordinary_solve_custody, run_id, &entry);
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    pub(crate) fn reserve_ordinary_solve_custody(
+        &self,
+        request: &NewSolveRunV1,
+    ) -> Result<OrdinarySolveLease, AppError> {
+        let mut entries = self
+            .ordinary_solve_custody
+            .lock()
+            .map_err(|_| solution_contract_error())?;
+        if entries.len() >= MAX_ORDINARY_SOLVE_CUSTODY || entries.contains_key(&request.run_id) {
+            return Err(resource_limit_error());
+        }
+        let state = Arc::new(StdMutex::new(OrdinarySolveState {
+            pending_start: Some(request.clone()),
+            binding: None,
+            first_accepted: None,
+            alarm: None,
+            secondary_cause: None,
+            confirmed: false,
+            producer_done: false,
+            checkpoint_claimed: false,
+            checkpoint_done: true,
+            native_observations: None,
+            observations: OrdinaryObservationBounds {
+                latest_wall: None,
+                latest_elapsed: None,
+                unreliable: false,
+            },
+        }));
+        entries.insert(request.run_id, Arc::clone(&state));
+        Ok(OrdinarySolveLease {
+            custody: Arc::clone(&self.ordinary_solve_custody),
+            run_id: request.run_id,
+            state,
+        })
+    }
+
+    /// Announces an independently accepted result only after its exact local checkpoint
+    /// has committed; listeners must still read store authority after this advisory event.
+    pub(crate) fn publish_solve_verified(
+        &self,
+        checkpoint: &VerifiedCheckpoint,
+        work: &OrdinaryCheckpointWork,
+    ) -> Result<(), AppError> {
+        if !Arc::ptr_eq(&self.ordinary_solve_custody, &work.custody) {
+            return Err(solution_contract_error());
+        }
+        let input = &checkpoint.run_input;
+        let mut state = lock_ordinary_state(&work.state);
+        let binding = state.binding.as_ref().ok_or_else(solution_contract_error)?;
+        let first = state
+            .first_accepted
+            .as_ref()
+            .ok_or_else(solution_contract_error)?;
+        if work.run_id != input.run_id
+            || binding.run_id != input.run_id
+            || binding.scenario_id != input.scenario_id
+            || binding.request_id != input.request_id
+            || binding.revision != Revision::new(input.scenario_revision)
+            || binding.input_checksum != input.checksum
+            || first.solution_id != checkpoint.accepted_result.solution.solution_id
+            || first.checksum != checkpoint.accepted_result.checksum
+            || first.accepted_at != checkpoint.accepted_at
+        {
+            return Err(solution_contract_error());
+        }
+        state.admit()?;
+        let timestamp = self.clock.now();
+        state.observe_wall(timestamp);
+        if state.observations.unreliable {
+            return Err(timing_error());
+        }
+        let _ = self.events.send(AppEvent {
+            topic: EventTopic::SolveVerified,
+            payload: EventPayload::SolveVerified {
+                context: EventContext {
+                    event_version: EVENT_VERSION,
+                    timestamp,
+                    request_id: Some(input.request_id),
+                    scenario_id: Some(input.scenario_id),
+                    revision: Some(Revision::new(input.scenario_revision)),
+                    solve_run_id: Some(input.run_id),
+                },
+                solution_id: checkpoint.accepted_result.solution.solution_id,
+                result_checksum: checkpoint.accepted_result.checksum.clone(),
+                checkpoint_checksum: checkpoint.checksum.clone(),
+            },
+        });
+        Ok(())
+    }
+
+    /// Publishes terminal state only after durable run finalization succeeds.
+    pub fn publish_solve_completed(
+        &self,
+        request_id: RequestId,
+        scenario_id: ScenarioId,
+        revision: Revision,
+        run_id: SolveRunId,
+        status: SolveStatus,
+        solution_id: Option<SolutionId>,
+    ) {
+        let _ = self.events.send(AppEvent {
+            topic: EventTopic::SolveCompleted,
+            payload: EventPayload::SolveCompleted {
+                context: EventContext {
+                    event_version: EVENT_VERSION,
+                    timestamp: self.clock.now(),
+                    request_id: Some(request_id),
+                    scenario_id: Some(scenario_id),
+                    revision: Some(revision),
+                    solve_run_id: Some(run_id),
+                },
+                status,
+                solution_id,
+            },
+        });
     }
 
     /// Executes one application mutation.
@@ -1145,6 +2399,9 @@ impl EuthetoApp {
                 )
                 .await
                 .map(AppCommandResult::ScenarioCommand),
+            AppCommand::CreateDiagnosticCopy { request, control } => {
+                self.create_diagnostic_copy(request, control).await
+            }
             AppCommand::Undo {
                 request_id,
                 scenario_id,
@@ -1165,6 +2422,7 @@ impl EuthetoApp {
                 self.execute_setting_command(command).await
             }
             AppCommand::SolutionSelect(request) => self.select_solution(request).await,
+            AppCommand::AdoptBaseSchedule(request) => self.adopt_base_schedule(request).await,
             AppCommand::SolutionStartCounterfactual(request) => {
                 self.start_counterfactual(request).await
             }
@@ -1301,7 +2559,11 @@ impl EuthetoApp {
     ) -> Result<AppCommandResult, AppError> {
         let mutation = self.scenario_lock(source_id).await;
         let _guard = mutation.lock().await;
-        let library = self.store.library_snapshot().await.map_err(store_error)?;
+        let library = self
+            .store
+            .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+            .await
+            .map_err(store_error)?;
         let source = library
             .projects
             .iter()
@@ -1335,6 +2597,9 @@ impl EuthetoApp {
                 id_remap,
                 title,
                 self.clock.now(),
+                |original, copied, mapping| {
+                    normalize_workforce_manual_copy(original, copied, mapping, mapping, None)
+                },
             )
             .await
             .map_err(store_error)?;
@@ -1508,6 +2773,12 @@ impl EuthetoApp {
                     .map(AppQueryResult::Setting)
                     .map_err(store_error)
             }
+            AppQuery::SolutionGetCounterfactual(request) => {
+                self.query_counterfactual_job(request).await
+            }
+            AppQuery::SolutionListCounterfactuals(request) => {
+                self.query_counterfactual_jobs(request).await
+            }
             AppQuery::SolutionList(request) => self.query_solution_list(request).await,
             AppQuery::SolutionGetSummary(request) => self.query_solution_summary(request).await,
             AppQuery::SolutionGetView(request) => self
@@ -1515,8 +2786,15 @@ impl EuthetoApp {
                 .await
                 .map(|view| AppQueryResult::SolutionView(Box::new(view))),
             AppQuery::SolutionVerify(request) => self.query_solution_verify(request).await,
-            AppQuery::SolutionCompare(request) => self.query_solution_compare(request).await,
-            AppQuery::SolutionExplain(request) => self.query_solution_explain(request).await,
+            AppQuery::SolutionCompareV3(request) => self.query_solution_compare(request).await,
+            AppQuery::SolutionExplain {
+                request,
+                source_revision,
+                control,
+            } => {
+                self.query_solution_explain(request, source_revision, control)
+                    .await
+            }
             query @ (AppQuery::PreviewImport { .. }
             | AppQuery::PreviewRestore { .. }
             | AppQuery::ExportScenario { .. }
@@ -1651,43 +2929,257 @@ impl EuthetoApp {
         request: SolutionSelectRequestV1,
     ) -> Result<AppCommandResult, AppError> {
         ensure_solution_schema(request.schema_version)?;
-        let mutation = self.scenario_lock(request.scenario_id).await;
-        let _guard = mutation.lock().await;
-        let selected = self
-            .store
-            .select_accepted_result(
-                request.scenario_id,
-                request.expected_revision,
-                request.solution_id,
+        let scenario_id = request.scenario_id;
+        let ordinary = self.ordinary_solution_handle(scenario_id, request.solution_id)?;
+        let mut source_admitted = false;
+        let result = async {
+            let cancellation = self.cancellation.child();
+            let _query_slot = self.acquire_accepted_query_slot(&cancellation).await?;
+            let stored = {
+                let mutation = self.scenario_lock(scenario_id).await;
+                let _guard = mutation.lock().await;
+                let actual_revision = self.current_scenario_revision(scenario_id).await?;
+                if request.expected_revision != actual_revision {
+                    return Err(AppError::Conflict {
+                        expected_revision: request.expected_revision,
+                        actual_revision,
+                    });
+                }
+                let stored = self
+                    .store
+                    .load_accepted_result(request.solution_id)
+                    .await
+                    .map_err(store_error)?;
+                if stored.portable.scenario_id != scenario_id
+                    || stored.document.scenario_id != scenario_id
+                    || stored.portable.accepted_result.solution.scenario_id != scenario_id
+                {
+                    return Err(AppError::NotFound(ResourceRef::Solution(
+                        request.solution_id,
+                    )));
+                }
+                stored
+            };
+            if let Some(handle) = &ordinary {
+                handle.admit_input(&stored.portable.run_input)?;
+            }
+            source_admitted = true;
+            let verified = self.ensure_fresh_accepted(stored, cancellation).await?;
+            let mutation = self.scenario_lock(scenario_id).await;
+            let _guard = mutation.lock().await;
+            ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+            let selected = self
+                .store
+                .select_accepted_result(
+                    scenario_id,
+                    request.expected_revision,
+                    request.solution_id,
+                    verified,
+                )
+                .await
+                .map_err(store_error)?;
+            Ok(AppCommandResult::SolutionSelected(solution_summary(
+                &selected,
+            )))
+        }
+        .await;
+        if source_admitted {
+            ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        }
+        result
+    }
+    // Keep source admission, verified preparation and the final revision CAS in order.
+    #[allow(clippy::too_many_lines)]
+    async fn adopt_base_schedule(
+        &self,
+        request: SolutionAdoptBaseRequestV1,
+    ) -> Result<AppCommandResult, AppError> {
+        ensure_adopt_base_schema(request.schema_version)?;
+        request
+            .result
+            .validate()
+            .map_err(|_| solution_reference_error("/result"))?;
+
+        let scenario_id = request.scenario_id;
+        let expected_revision = request.expected_revision;
+        let ordinary = self.ordinary_reference_handle(scenario_id, &request.result)?;
+        let mut source_admitted = false;
+        let result = async {
+            let cancellation = self.cancellation.child();
+            let _query_slot = self.acquire_accepted_query_slot(&cancellation).await?;
+
+            // Capture and independently verify the immutable accepted source without holding the
+            // per-scenario mutation mutex. The final ordinary scenario command below is the CAS and
+            // validates person/shift references against the current document in the same transaction.
+            let actual_revision = self.current_scenario_revision(scenario_id).await?;
+            if expected_revision != actual_revision {
+                return Err(AppError::Conflict {
+                    expected_revision,
+                    actual_revision,
+                });
+            }
+            let stored = self
+                .load_referenced_solution(scenario_id, &request.result)
+                .await?;
+            if let Some(handle) = &ordinary {
+                handle.admit_input(&stored.portable.run_input)?;
+            }
+            source_admitted = true;
+            let verified = self.ensure_fresh_accepted(stored, cancellation).await?;
+            if verified.document.domain_pack.id.as_str() != WORKFORCE_PACK_ID {
+                return Err(unsupported_project_pack(&verified.document.domain_pack));
+            }
+            // This read is only used to prepare the typed pack payload. apply_scenario performs the
+            // authoritative expected-revision CAS and retries no part of this preparation.
+            let project = self
+                .store
+                .get_project(scenario_id)
+                .await
+                .map_err(store_error)?;
+            if project.summary.revision != expected_revision {
+                return Err(AppError::Conflict {
+                    expected_revision,
+                    actual_revision: project.summary.revision,
+                });
+            }
+            if project.document.domain_pack.id.as_str() != WORKFORCE_PACK_ID {
+                return Err(unsupported_project_pack(&project.document.domain_pack));
+            }
+            // A previously accepted source may be adopted historically; retain its source revision
+            // while the current document reference check remains authoritative at commit.
+            let source_revision = solution_revision(&verified)?;
+            let assignments = selected_workforce_assignments(&verified.portable.accepted_result)?;
+            let source_solution_id = verified.portable.accepted_result.solution.solution_id;
+            let existing = workforce_base_schedule(&project.document)?;
+            let (entity_id, command_type) = if let Some(base) = &existing {
+                // An exact repeat is an explicit no-op: do not manufacture a revision or journal row.
+                if base.source_solution_id == source_solution_id
+                    && base.source_revision == source_revision
+                    && base.assignments == assignments
+                {
+                    return Err(validation_error(
+                        "solution.base_adoption_noop",
+                        "/result",
+                        "The accepted result is already the current base schedule.",
+                    ));
+                }
+                (base.id, UPDATE_ENTITY)
+            } else {
+                let occupied = collect_scenario_owned_uuids(&portable_scenario(&project, true));
+                (
+                    EntityId::from_uuid(allocate_unique_uuid(
+                        self.ids.as_ref(),
+                        &occupied,
+                        &mut BTreeSet::new(),
+                    )?),
+                    ADD_ENTITY,
+                )
+            };
+
+            let payload = serde_json::to_value(EntityPayload {
+                entity: WorkforceEntity::BaseSchedule(BaseSchedule {
+                    id: entity_id,
+                    source_solution_id,
+                    source_revision,
+                    assignments,
+                }),
+            })
+            .map_err(|_| solution_contract_error())?;
+            let envelope = CommandEnvelope {
+                command_id: request.command_id,
+                scenario_id,
+                expected_revision,
+                actor: request.actor,
+                source: CommandSource::Desktop,
+                command: ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+                    command_type: command_type.to_owned(),
+                    payload,
+                }),
+            };
+            ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+            self.apply_scenario(
+                request.request_id,
+                envelope,
+                request.truncate_redo,
+                self.cancellation.clone(),
             )
             .await
-            .map_err(store_error)?;
-        Ok(AppCommandResult::SolutionSelected(solution_summary(
-            &selected,
-        )))
+            .map(AppCommandResult::ScenarioCommand)
+        }
+        .await;
+        if source_admitted {
+            ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        }
+        result
     }
+
     async fn start_counterfactual(
         &self,
         request: SolutionStartCounterfactualRequestV1,
     ) -> Result<AppCommandResult, AppError> {
         let request_id = request.request_id;
         let scenario_id = request.scenario_id;
-        let mutation = self.scenario_lock(scenario_id).await;
-        let _guard = mutation.lock().await;
-        let job = Box::pin(
+        let ordinary = self.ordinary_solution_handle(scenario_id, request.base_solution_id)?;
+        let mut source_admitted = false;
+        let result = async {
+            let cancellation = self.cancellation.child();
+            let _query_slot = self.acquire_accepted_query_slot(&cancellation).await?;
+            let stored = {
+                let mutation = self.scenario_lock(scenario_id).await;
+                let _guard = mutation.lock().await;
+                self.load_solution(scenario_id, request.base_solution_id)
+                    .await?
+            };
+            crate::counterfactual::validate_counterfactual_source(&request, &stored)?;
+            if let Some(handle) = &ordinary {
+                handle.admit_input(&stored.portable.run_input)?;
+            }
+            source_admitted = true;
+            let verified = self.ensure_fresh_accepted(stored, cancellation).await?;
+            let mutation = self.scenario_lock(scenario_id).await;
+            let _guard = mutation.lock().await;
+            ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+            let job = Box::pin(self.counterfactual.start(
+                request,
+                verified,
+                Arc::clone(&self.monotonic_clock),
+            ))
+            .await?;
+            let current_revision = self.current_scenario_revision(scenario_id).await;
             self.counterfactual
-                .start(request, Arc::clone(&self.monotonic_clock)),
-        )
-        .await?;
-        let current_revision = self.current_scenario_revision(scenario_id).await?;
-        Ok(AppCommandResult::CounterfactualStarted(
-            SolutionStartCounterfactualDtoV1 {
-                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
-                request_id,
-                current_revision,
-                job,
-            },
-        ))
+                .guard_job_publication(scenario_id, job.request.job_id)
+                .await?;
+            let current_revision = current_revision?;
+            if let Some(result) = &job.result {
+                crate::native_observations::validate_counterfactual_fingerprints(result)
+                    .map_err(|_| solution_contract_error())?;
+            }
+            Ok(AppCommandResult::CounterfactualStarted(
+                SolutionStartCounterfactualDtoV1 {
+                    schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                    request_id,
+                    current_revision,
+                    job,
+                },
+            ))
+        }
+        .await;
+        if source_admitted {
+            ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        }
+        result
     }
 
     async fn cancel_counterfactual(
@@ -1698,8 +3190,16 @@ impl EuthetoApp {
         let scenario_id = request.scenario_id;
         let mutation = self.scenario_lock(scenario_id).await;
         let _guard = mutation.lock().await;
-        let job = self.counterfactual.cancel(request).await?;
-        let current_revision = self.current_scenario_revision(scenario_id).await?;
+        let job = self.counterfactual.cancel(&request).await?;
+        let current_revision = self.current_scenario_revision(scenario_id).await;
+        self.counterfactual
+            .guard_job_publication(scenario_id, job.request.job_id)
+            .await?;
+        let current_revision = current_revision?;
+        if let Some(result) = &job.result {
+            crate::native_observations::validate_counterfactual_fingerprints(result)
+                .map_err(|_| solution_contract_error())?;
+        }
         Ok(AppCommandResult::CounterfactualCancelled(
             SolutionCancelCounterfactualDtoV1 {
                 schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
@@ -1710,11 +3210,82 @@ impl EuthetoApp {
         ))
     }
 
+    async fn query_counterfactual_job(
+        &self,
+        request: SolutionGetCounterfactualRequestV1,
+    ) -> Result<AppQueryResult, AppError> {
+        ensure_counterfactual_schema(request.schema_version)?;
+        let mutation = self.scenario_lock(request.scenario_id).await;
+        let _guard = mutation.lock().await;
+        self.counterfactual
+            .guard_job_publication(request.scenario_id, request.job_id)
+            .await?;
+        let job = self.store.load_counterfactual_job(request.job_id).await;
+        self.counterfactual
+            .guard_job_publication(request.scenario_id, request.job_id)
+            .await?;
+        let job = job.map_err(store_error)?;
+        if job.request.semantics.scenario_id != request.scenario_id {
+            return Err(validation_error(
+                "solution.counterfactual_not_found",
+                "/jobId",
+                "The selected counterfactual was not found in this scenario.",
+            ));
+        }
+        let current_revision = self.current_scenario_revision(request.scenario_id).await;
+        self.counterfactual
+            .guard_job_publication(request.scenario_id, request.job_id)
+            .await?;
+        let current_revision = current_revision?;
+        if let Some(result) = &job.result {
+            crate::native_observations::validate_counterfactual_fingerprints(result)
+                .map_err(|_| solution_contract_error())?;
+        }
+        Ok(AppQueryResult::SolutionGetCounterfactual(Box::new(
+            SolutionGetCounterfactualDtoV1 {
+                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                scenario_id: request.scenario_id,
+                current_revision,
+                job,
+            },
+        )))
+    }
+
+    async fn query_counterfactual_jobs(
+        &self,
+        request: SolutionListCounterfactualsRequestV1,
+    ) -> Result<AppQueryResult, AppError> {
+        ensure_counterfactual_schema(request.schema_version)?;
+        let mutation = self.scenario_lock(request.scenario_id).await;
+        let _guard = mutation.lock().await;
+        let page = self
+            .store
+            .list_counterfactual_jobs(request.scenario_id, request.before, request.limit)
+            .await
+            .map_err(store_error)?;
+        let current_revision = self.current_scenario_revision(request.scenario_id).await;
+        for job in &page.jobs {
+            self.counterfactual
+                .guard_job_publication(request.scenario_id, job.job_id)
+                .await?;
+        }
+        let current_revision = current_revision?;
+        Ok(AppQueryResult::SolutionListCounterfactuals(Box::new(
+            SolutionListCounterfactualsDtoV1 {
+                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                scenario_id: request.scenario_id,
+                current_revision,
+                page,
+            },
+        )))
+    }
+
     async fn query_solution_list(
         &self,
         request: SolutionListRequestV1,
     ) -> Result<AppQueryResult, AppError> {
         ensure_solution_schema(request.schema_version)?;
+        let mut ordinary = self.ordinary_scenario_handles(request.scenario_id)?;
         let mutation = self.scenario_lock(request.scenario_id).await;
         let _guard = mutation.lock().await;
         let summaries = self
@@ -1722,11 +3293,42 @@ impl EuthetoApp {
             .list_accepted_results(request.scenario_id)
             .await
             .map_err(store_error)?;
-        let current_revision = self.current_scenario_revision(request.scenario_id).await?;
+        for summary in &summaries {
+            if !ordinary.iter().any(|(run_id, _)| *run_id == summary.run_id)
+                && let Some(handle) =
+                    self.ordinary_run_handle(request.scenario_id, summary.run_id)?
+            {
+                ordinary.push((summary.run_id, handle));
+            }
+        }
+        let current_revision = self.current_scenario_revision(request.scenario_id).await;
+        for summary in &summaries {
+            self.counterfactual
+                .guard_run_publication(request.scenario_id, summary.run_id)
+                .await?;
+        }
+        let current_revision = current_revision?;
+        for summary in &summaries {
+            if let Some((_, handle)) = ordinary
+                .iter()
+                .find(|(run_id, _)| *run_id == summary.run_id)
+            {
+                handle.validate_summary(summary)?;
+            }
+        }
+        for summary in &summaries {
+            if let Some((_, handle)) = ordinary
+                .iter()
+                .find(|(run_id, _)| *run_id == summary.run_id)
+            {
+                handle.admit()?;
+            }
+        }
         Ok(AppQueryResult::SolutionList(SolutionListDtoV1 {
             schema_version: SOLUTION_API_SCHEMA_VERSION,
             scenario_id: request.scenario_id,
             current_revision,
+            freshly_verified: false,
             solutions: summaries.iter().map(solution_summary).collect(),
         }))
     }
@@ -1736,23 +3338,40 @@ impl EuthetoApp {
         request: SolutionSummaryRequestV1,
     ) -> Result<AppQueryResult, AppError> {
         ensure_solution_schema(request.schema_version)?;
-        let mutation = self.scenario_lock(request.scenario_id).await;
-        let _guard = mutation.lock().await;
-        let stored = self
-            .load_solution(request.scenario_id, request.solution_id)
-            .await?;
-        let selected = self
-            .store
-            .selected_accepted_result(request.scenario_id)
-            .await
-            .map_err(store_error)?
-            .is_some_and(|summary| summary.result.solution_id == request.solution_id);
-        let current_revision = self.current_scenario_revision(request.scenario_id).await?;
-        Ok(AppQueryResult::SolutionSummary(Box::new(solution_detail(
-            &stored,
-            current_revision,
-            selected,
-        )?)))
+        let ordinary = self.ordinary_solution_handle(request.scenario_id, request.solution_id)?;
+        let result = async {
+            let cancellation = self.cancellation.child();
+            let _query_slot = self.acquire_accepted_query_slot(&cancellation).await?;
+            let (stored, selected, current_revision) = {
+                let mutation = self.scenario_lock(request.scenario_id).await;
+                let _guard = mutation.lock().await;
+                let stored = self
+                    .load_solution(request.scenario_id, request.solution_id)
+                    .await?;
+                let selected = self
+                    .store
+                    .selected_accepted_result(request.scenario_id)
+                    .await
+                    .map_err(store_error)?
+                    .is_some_and(|summary| summary.result.solution_id == request.solution_id);
+                let current_revision = self.current_scenario_revision(request.scenario_id).await?;
+                (stored, selected, current_revision)
+            };
+            if let Some(handle) = &ordinary {
+                handle.admit_input(&stored.portable.run_input)?;
+            }
+            let stored = self.ensure_fresh_accepted(stored, cancellation).await?;
+            Ok(AppQueryResult::SolutionSummary(Box::new(solution_detail(
+                &stored,
+                current_revision,
+                selected,
+            )?)))
+        }
+        .await;
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        result
     }
 
     /// Captures an exact accepted result/document pair before projecting off the async executor.
@@ -1761,266 +3380,1340 @@ impl EuthetoApp {
     ///
     /// Returns an error for unsupported requests, unavailable accepted results, storage or
     /// projection failures, cancellation, or exhausted response limits.
+    // Snapshot capture, authority refresh and off-executor projection share one query-slot owner.
+    #[allow(clippy::too_many_lines)]
     pub async fn solution_view_with_cancellation(
         &self,
         request: SolutionViewRequestV1,
         cancellation: CancellationToken,
     ) -> Result<SolutionViewDtoV1, AppError> {
-        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+        const QUERY_BYTES: usize = 64 * 1024;
+        let deadline = tokio::time::Instant::now() + ACCEPTED_VERIFICATION_TIMEOUT;
+        let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
+        let cancellation_for_gate = cancellation.clone();
         let control = OperationControl::Cancellation(cancellation);
         self.check_cancelled()?;
         control.check().map_err(operation_interrupted)?;
         ensure_solution_schema(request.schema_version)?;
-        let (stored, current_revision) = {
-            let mutation = self.scenario_lock(request.scenario_id).await;
-            let _guard = mutation.lock().await;
-            control.check().map_err(operation_interrupted)?;
-            let stored = self
-                .load_solution(request.scenario_id, request.solution_id)
-                .await?;
-            let current_revision = self.current_scenario_revision(request.scenario_id).await?;
-            (stored, current_revision)
+        measure_accepted_view_json_size(&request, QUERY_BYTES)
+            .map_err(|error| solution_view_error(&error))?;
+        let query = AcceptedDomainQueryV1 {
+            schema_version: 1,
+            view_id: request.view_id.clone(),
+            parameters: request.parameters.clone(),
+            continuation: request.continuation.clone(),
         };
-        let registry = Arc::clone(&self.pack_registry);
-        tokio::task::spawn_blocking(move || {
+        let (source, current_revision, query_slot, ordinary) = self
+            .capture_accepted_source(
+                request.scenario_id,
+                request.solution_id,
+                &cancellation_for_gate,
+                deadline,
+            )
+            .await?;
+        let result = async {
+            let source = match source {
+                AcceptedQuerySource::Terminal(stored) => AcceptedQuerySource::Terminal(
+                    self.ensure_fresh_accepted_until(
+                        stored,
+                        OperationControl::Cancellation(cancellation_for_gate),
+                        deadline,
+                        None,
+                    )
+                    .await?,
+                ),
+                checkpoint @ AcceptedQuerySource::Checkpoint(..) => checkpoint,
+            };
+            let run_id = source.run_id();
+            self.counterfactual
+                .guard_run_publication(request.scenario_id, run_id)
+                .await?;
             control.check().map_err(operation_interrupted)?;
-            let pack = solution_pack(&stored, &registry)?;
-            let accepted = &stored.portable.accepted_result;
-            let output = pack
-                .build_view(
-                    eutheto_domain_api::DomainViewInput::AcceptedSolution {
-                        document: &stored.document,
-                        solution: &accepted.solution,
-                        view_id: &request.view_id,
-                    },
-                    &control,
-                )
-                .map_err(|error| solution_view_error(&error))?;
-            control.check().map_err(operation_interrupted)?;
-            if output.reconciliation.is_some() {
-                return Err(solution_view_error(&DomainPackError::Contract(
-                    "accepted-solution view returned command reconciliation".to_owned(),
-                )));
-            }
-            Ok(SolutionViewDtoV1 {
-                schema_version: SOLUTION_API_SCHEMA_VERSION,
-                scenario_id: request.scenario_id,
-                current_revision,
-                scenario_revision: solution_revision(&stored)?,
-                result: accepted_reference(accepted)?,
-                view: output.view,
-            })
-        })
-        .await
-        .map_err(join_error)?
+            let registry = Arc::clone(&self.pack_registry);
+            let view = tokio::task::spawn_blocking(move || {
+                let _query_slot = query_slot;
+                control.check().map_err(operation_interrupted)?;
+                let (document, accepted, scenario_revision, objective_context) = match source {
+                    AcceptedQuerySource::Terminal(stored) => {
+                        let revision = solution_revision(&stored)?;
+                        (
+                            stored.document,
+                            stored.portable.accepted_result,
+                            revision,
+                            stored.portable.run_input.objective_context,
+                        )
+                    }
+                    AcceptedQuerySource::Checkpoint(document, checkpoint) => {
+                        reverify_checkpoint_solution(&document, &checkpoint, &registry, &control)?;
+                        let revision = Revision::try_new(checkpoint.run_input.scenario_revision)
+                            .map_err(|_| solution_contract_error())?;
+                        (
+                            document,
+                            checkpoint.accepted_result,
+                            revision,
+                            checkpoint.run_input.objective_context,
+                        )
+                    }
+                };
+                let pack = available_pack(&document, &registry)
+                    .ok_or_else(|| unsupported_project_pack(&document.domain_pack))?;
+                let context = SetupViewContext {
+                    revision: scenario_revision,
+                    query_fingerprint: accepted_view_fingerprint(&accepted, &query)?,
+                };
+                let output = pack
+                    .build_view(
+                        eutheto_domain_api::DomainViewInput::AcceptedSolution {
+                            document: &document,
+                            solution: &accepted.solution,
+                            objective_context: objective_context.as_ref(),
+                            view_id: &query.view_id,
+                            query: &query,
+                            context,
+                        },
+                        &control,
+                    )
+                    .map_err(|error| solution_view_error(&error))?;
+                control.check().map_err(operation_interrupted)?;
+                if output.reconciliation.is_some() {
+                    return Err(solution_view_error(&DomainPackError::Contract(
+                        "accepted-solution view returned command reconciliation".to_owned(),
+                    )));
+                }
+                Ok(SolutionViewDtoV1 {
+                    schema_version: SOLUTION_API_SCHEMA_VERSION,
+                    scenario_id: request.scenario_id,
+                    current_revision,
+                    scenario_revision,
+                    result: accepted_reference(&accepted)?,
+                    view: output.view,
+                })
+            });
+            let projected = tokio::time::timeout_at(deadline, view).await;
+            self.counterfactual
+                .guard_run_publication(request.scenario_id, run_id)
+                .await?;
+            projected
+                .map_err(|_| operation_interrupted(OperationInterruption::DeadlineExceeded))?
+                .map_err(join_error)?
+        }
+        .await;
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        result
     }
 
     async fn query_solution_verify(
         &self,
         request: SolutionVerifyRequestV1,
     ) -> Result<AppQueryResult, AppError> {
+        let deadline = tokio::time::Instant::now() + ACCEPTED_VERIFICATION_TIMEOUT;
         ensure_solution_schema(request.schema_version)?;
-        let mutation = self.scenario_lock(request.scenario_id).await;
-        let _guard = mutation.lock().await;
-        let stored = self
-            .load_solution(request.scenario_id, request.solution_id)
+        let cancellation = self.cancellation.child();
+        let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
+        let (source, current_revision, _query_slot, ordinary) = self
+            .capture_accepted_source(
+                request.scenario_id,
+                request.solution_id,
+                &cancellation,
+                deadline,
+            )
             .await?;
-        let current_revision = self.current_scenario_revision(request.scenario_id).await?;
-        let accepted = &stored.portable.accepted_result;
-        let report = reverify_accepted_solution(
-            &stored,
-            &self.pack_registry,
-            &OperationControl::Cancellation(self.cancellation.clone()),
-        )?;
-        Ok(AppQueryResult::SolutionVerification(Box::new(
-            SolutionVerificationDtoV1 {
-                schema_version: SOLUTION_API_SCHEMA_VERSION,
-                scenario_id: request.scenario_id,
-                current_revision,
-                scenario_revision: solution_revision(&stored)?,
-                result: accepted_reference(accepted)?,
-                verification: report,
-            },
-        )))
+        let result = async {
+            let permit = self
+                .acquire_verification_slot(
+                    &OperationControl::Cancellation(cancellation.clone()),
+                    deadline,
+                )
+                .await?;
+            let (accepted, scenario_revision, report) = match source {
+                AcceptedQuerySource::Terminal(stored) => {
+                    let (stored, report) = self
+                        .verify_accepted_off_lock(
+                            stored,
+                            OperationControl::Cancellation(cancellation.child()),
+                            permit,
+                            deadline,
+                            None,
+                        )
+                        .await?;
+                    let scenario_revision = solution_revision(&stored)?;
+                    (stored.portable.accepted_result, scenario_revision, report)
+                }
+                AcceptedQuerySource::Checkpoint(document, checkpoint) => {
+                    let (checkpoint, report) = self
+                        .verify_checkpoint_off_lock(
+                            document,
+                            checkpoint,
+                            cancellation.clone(),
+                            permit,
+                            deadline,
+                        )
+                        .await?;
+                    let scenario_revision =
+                        Revision::try_new(checkpoint.run_input.scenario_revision)
+                            .map_err(|_| solution_contract_error())?;
+                    (checkpoint.accepted_result, scenario_revision, report)
+                }
+            };
+            Ok(AppQueryResult::SolutionVerification(Box::new(
+                SolutionVerificationDtoV1 {
+                    schema_version: SOLUTION_API_SCHEMA_VERSION,
+                    scenario_id: request.scenario_id,
+                    current_revision,
+                    scenario_revision,
+                    result: accepted_reference(&accepted)?,
+                    verification: report,
+                },
+            )))
+        }
+        .await;
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        result
     }
 
     async fn query_solution_compare(
         &self,
-        request: SolutionCompareRequestV1,
+        request: SolutionCompareRequestV3,
     ) -> Result<AppQueryResult, AppError> {
-        ensure_solution_schema(request.schema_version)?;
-        let mutation = self.scenario_lock(request.scenario_id).await;
-        let _guard = mutation.lock().await;
-        let base = self
-            .load_solution(request.scenario_id, request.base_solution_id)
+        if request.schema_version != SOLUTION_COMPARE_SCHEMA_VERSION {
+            return Err(unsupported_solution_schema());
+        }
+        let (base, candidate, current_revision, query_slot, control, deadline, ordinary) = self
+            .comparison_sources(
+                request.scenario_id,
+                request.base_solution_id,
+                request.candidate_solution_id,
+            )
             .await?;
-        let candidate = self
-            .load_solution(request.scenario_id, request.candidate_solution_id)
-            .await?;
-        let current_revision = self.current_scenario_revision(request.scenario_id).await?;
-        let comparison = compare_stored_solutions(&base, &candidate)?;
-        Ok(AppQueryResult::SolutionComparison(Box::new(
-            SolutionComparisonDtoV1 {
-                schema_version: SOLUTION_API_SCHEMA_VERSION,
+        let app = self.clone();
+        let comparison_control = control.clone();
+        let mut comparison = tokio::spawn(async move {
+            app.compare_source_records(base, candidate, comparison_control, query_slot)
+                .await
+                .map(|(_, comparison)| comparison)
+        });
+        let result = if let Ok(joined) = tokio::time::timeout_at(deadline, &mut comparison).await {
+            joined.map_err(join_error).and_then(|result| result)
+        } else {
+            control.cancellation().cancel();
+            let _ = comparison.await;
+            Err(operation_interrupted(
+                OperationInterruption::DeadlineExceeded,
+            ))
+        };
+        for handle in ordinary.iter().flatten() {
+            handle.admit()?;
+        }
+        result.map(|comparison| {
+            AppQueryResult::SolutionComparisonV3(Box::new(SolutionComparisonDtoV3 {
+                schema_version: SOLUTION_COMPARE_SCHEMA_VERSION,
                 scenario_id: request.scenario_id,
                 current_revision,
                 comparison,
-            },
-        )))
+            }))
+        })
     }
 
-    // Keeping the seven typed subjects together makes the evidence/reference binding auditable.
-    #[allow(clippy::too_many_lines)]
+    async fn comparison_sources(
+        &self,
+        scenario_id: ScenarioId,
+        base_solution_id: SolutionId,
+        candidate_solution_id: SolutionId,
+    ) -> Result<
+        (
+            StoredAcceptedResultV2,
+            StoredAcceptedResultV2,
+            Revision,
+            Arc<tokio::sync::OwnedSemaphorePermit>,
+            OperationControl,
+            tokio::time::Instant,
+            [Option<OrdinaryPublicationHandle>; 2],
+        ),
+        AppError,
+    > {
+        let ordinary = [
+            self.ordinary_solution_handle(scenario_id, base_solution_id)?,
+            self.ordinary_solution_handle(scenario_id, candidate_solution_id)?,
+        ];
+        for handle in ordinary.iter().flatten() {
+            handle.admit()?;
+        }
+        let result = async {
+            let cancellation = self.cancellation.child();
+            let query_slot = Arc::new(self.acquire_accepted_query_slot(&cancellation).await?);
+            let (base, candidate, current_revision) = {
+                let mutation = self.scenario_lock(scenario_id).await;
+                let _guard = mutation.lock().await;
+                let base = self.load_solution(scenario_id, base_solution_id).await?;
+                let candidate = self
+                    .load_solution(scenario_id, candidate_solution_id)
+                    .await?;
+                for (handle, input) in ordinary
+                    .iter()
+                    .zip([&base.portable.run_input, &candidate.portable.run_input])
+                {
+                    if let Some(handle) = handle {
+                        handle.validate_input(input)?;
+                    }
+                }
+                for handle in ordinary.iter().flatten() {
+                    handle.admit()?;
+                }
+                let current_revision = self.current_scenario_revision(scenario_id).await?;
+                (base, candidate, current_revision)
+            };
+            let budget = eutheto_types::ParentSolveBudget::new(
+                eutheto_types::DurationMillis::new(30_000).map_err(|_| resource_limit_error())?,
+                Arc::clone(&self.monotonic_clock),
+                cancellation,
+            )
+            .map_err(|_| resource_limit_error())?;
+            let control = OperationControl::Solve(budget.phase_view());
+            let deadline = tokio::time::Instant::now() + ACCEPTED_VERIFICATION_TIMEOUT;
+            let base = self
+                .ensure_fresh_accepted_until(
+                    base,
+                    control.clone(),
+                    deadline,
+                    Some(Arc::clone(&query_slot)),
+                )
+                .await?;
+            let candidate = self
+                .ensure_fresh_accepted_until(
+                    candidate,
+                    control.clone(),
+                    deadline,
+                    Some(Arc::clone(&query_slot)),
+                )
+                .await?;
+            Ok::<_, AppError>((
+                base,
+                candidate,
+                current_revision,
+                query_slot,
+                control,
+                deadline,
+            ))
+        }
+        .await;
+        for handle in ordinary.iter().flatten() {
+            handle.admit()?;
+        }
+        result.map(|(base, candidate, revision, slot, control, deadline)| {
+            (base, candidate, revision, slot, control, deadline, ordinary)
+        })
+    }
+
+    async fn compare_source_records(
+        &self,
+        base: StoredAcceptedResultV2,
+        candidate: StoredAcceptedResultV2,
+        control: OperationControl,
+        query_slot: Arc<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<(StoredAcceptedResultV2, SolutionComparisonV2), AppError> {
+        let registry = Arc::clone(&self.pack_registry);
+        tokio::task::spawn_blocking(move || {
+            let _query_slot = query_slot;
+            let comparison = compare_stored_solutions(&base, &candidate, &registry, &control)?;
+            Ok((candidate, comparison))
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    async fn render_repair_sources(
+        &self,
+        base: Box<StoredAcceptedResultV2>,
+        current: Box<StoredAcceptedResultV2>,
+        control: OperationControl,
+        query_slot: Arc<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<
+        (
+            ScenarioDocument,
+            EvidenceRenderRequestV2,
+            eutheto_domain_ir::EvidenceRenderResultV1,
+        ),
+        AppError,
+    > {
+        let registry = Arc::clone(&self.pack_registry);
+        tokio::task::spawn_blocking(move || {
+            let _query_slot = query_slot;
+            let comparison = compare_stored_solutions(&base, &current, &registry, &control)?;
+            let request = explanation_render_request(ExplanationEvidencePayloadV2::Repair {
+                repair: Box::new(RepairEvidenceV2 {
+                    comparison,
+                    causality: RepairCausalityV1::NotEstablished,
+                }),
+            })?;
+            let pack = available_pack(&current.document, &registry)
+                .ok_or_else(|| unsupported_project_pack(&current.document.domain_pack))?;
+            let rendered = pack
+                .render_repair_evidence(
+                    &base.document,
+                    &base.portable,
+                    &current.document,
+                    &current.portable,
+                    &request,
+                    &control,
+                )
+                .map_err(|error| {
+                    domain_interruption(&error).unwrap_or_else(|| explanation_render_error(&error))
+                })?;
+            control.check().map_err(operation_interrupted)?;
+            Ok((current.document, request, rendered))
+        })
+        .await
+        .map_err(join_error)?
+    }
+
     async fn query_solution_explain(
         &self,
         request: SolutionExplainRequestV1,
+        source_revision: Revision,
+        control: OperationControl,
     ) -> Result<AppQueryResult, AppError> {
         ensure_solution_schema(request.schema_version)?;
-        let mutation = self.scenario_lock(request.scenario_id).await;
-        let _guard = mutation.lock().await;
         request
             .request
             .validate()
             .map_err(|_| solution_reference_error("/request"))?;
-        let (document, revisions, payload) = match &request.request.subject {
-            ExplanationRequestSubjectV1::Validation { .. } => {
-                return Err(explanation_unavailable("validation"));
-            }
-            ExplanationRequestSubjectV1::Infeasibility { .. } => {
-                return Err(explanation_unavailable("infeasibility"));
-            }
-            ExplanationRequestSubjectV1::Assignment {
-                result,
-                assignment_id,
-            } => {
-                let stored = self
-                    .load_referenced_solution(request.scenario_id, result)
-                    .await?;
-                let assignment =
-                    assignment_evidence(&stored.portable.accepted_result, assignment_id)?;
-                let revision = solution_revision(&stored)?;
-                (
-                    stored.document,
-                    vec![revision],
-                    ExplanationEvidencePayloadV1::Assignment { assignment },
-                )
-            }
+        let scenario_id = request.scenario_id;
+        let ordinary = self.ordinary_explanation_handles(&request)?;
+        let native_scope_admitted =
+            Self::ordinary_explanation_scope_admitted(&request, source_revision, &ordinary)?;
+        let counterfactual_reference = match &request.request.subject {
             ExplanationRequestSubjectV1::Counterfactual { job_id, base } => {
-                let stored = self
-                    .load_referenced_solution(request.scenario_id, base)
-                    .await?;
-                let job = self
-                    .store
-                    .load_counterfactual_job(*job_id)
-                    .await
-                    .map_err(store_error)?;
-                if job.request.semantics.scenario_id != request.scenario_id
-                    || job.request.semantics.base != *base
-                {
-                    return Err(solution_reference_error("/request/subject"));
+                Some((*job_id, base.clone()))
+            }
+            _ => None,
+        };
+        if let Some((job_id, base)) = &counterfactual_reference {
+            self.counterfactual
+                .guard_job_explanation_publication(scenario_id, source_revision, *job_id, base)
+                .await?;
+        }
+        if native_scope_admitted {
+            for handle in ordinary.iter().flatten() {
+                handle.admit()?;
+            }
+        }
+        let result = async {
+            let control = match control {
+                OperationControl::Cancellation(cancellation) => {
+                    let limit = eutheto_types::DurationMillis::new(30_000)
+                        .map_err(|_| resource_limit_error())?;
+                    let budget = eutheto_types::ParentSolveBudget::new(
+                        limit,
+                        Arc::clone(&self.monotonic_clock),
+                        cancellation,
+                    )
+                    .map_err(|_| {
+                        protocol_error(
+                            "operation.budget_invalid",
+                            "The operation deadline could not be represented safely.",
+                            false,
+                        )
+                    })?;
+                    OperationControl::Solve(budget.phase_view())
                 }
-                let result = job
-                    .result
-                    .ok_or_else(|| explanation_unavailable("counterfactual"))?;
-                let revision = solution_revision(&stored)?;
-                (
-                    stored.document,
-                    vec![revision],
-                    ExplanationEvidencePayloadV1::Counterfactual {
+                OperationControl::Solve(budget) => {
+                    OperationControl::Solve(budget.capped_phase_view(ACCEPTED_VERIFICATION_TIMEOUT))
+                }
+            };
+            control.check().map_err(operation_interrupted)?;
+            let remaining = match &control {
+                OperationControl::Cancellation(_) => ACCEPTED_VERIFICATION_TIMEOUT,
+                OperationControl::Solve(budget) => budget
+                    .remaining_duration()
+                    .min(ACCEPTED_VERIFICATION_TIMEOUT),
+            };
+            let deadline = tokio::time::Instant::now() + remaining;
+            let mut guard = CancelOnDrop::new(control.cancellation().clone());
+            let result = self
+                .query_solution_explain_controlled(
+                    request,
+                    source_revision,
+                    control,
+                    deadline,
+                    counterfactual_reference.as_ref(),
+                    &ordinary,
+                )
+                .await;
+            guard.disarm();
+            result
+        }
+        .await;
+        if let Some((job_id, base)) = &counterfactual_reference {
+            self.counterfactual
+                .guard_job_explanation_publication(scenario_id, source_revision, *job_id, base)
+                .await?;
+        }
+        if native_scope_admitted {
+            for handle in ordinary.iter().flatten() {
+                handle.admit()?;
+            }
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn capture_explanation(
+        &self,
+        request: &SolutionExplainRequestV1,
+        source_revision: Revision,
+        control: &OperationControl,
+        ordinary: &[Option<OrdinaryPublicationHandle>],
+    ) -> Result<CapturedExplanation, AppError> {
+        control.check().map_err(operation_interrupted)?;
+        let captured = {
+            let mutation = self.scenario_lock(request.scenario_id).await;
+            let _guard = mutation.lock().await;
+            match &request.request.subject {
+                ExplanationRequestSubjectV1::Validation { issue_id } => {
+                    let Some(issue_id) = issue_id else {
+                        return Err(explanation_unavailable("validation"));
+                    };
+                    control.check().map_err(operation_interrupted)?;
+                    let project = self
+                        .store
+                        .get_project(request.scenario_id)
+                        .await
+                        .map_err(store_error)?;
+                    ensure_supported_document(&project.document, &self.pack_registry)
+                        .map_err(store_error)?;
+                    control.check().map_err(operation_interrupted)?;
+                    CapturedExplanation::Validation {
+                        document: Box::new(project.document),
+                        revision: project.summary.revision,
+                        issue_id: issue_id.clone(),
+                    }
+                }
+                ExplanationRequestSubjectV1::Infeasibility {
+                    solve_run_id,
+                    run_manifest_checksum,
+                    conflict_id,
+                } => {
+                    control.check().map_err(operation_interrupted)?;
+                    let retained = self
+                        .store
+                        .load_run_infeasibility_source(request.scenario_id, *solve_run_id)
+                        .await
+                        .map_err(store_error)?
+                        .ok_or(AppError::NotFound(ResourceRef::SolveRun(*solve_run_id)))?;
+                    if &retained.manifest.checksum != run_manifest_checksum {
+                        return Err(solution_reference_error("/request/subject"));
+                    }
+                    crate::native_observations::validate_fingerprint(
+                        &retained.input,
+                        &retained.manifest,
+                    )
+                    .map_err(|_| solution_contract_error())?;
+                    if let Some(conflict_id) = conflict_id {
+                        let evidence = retained
+                            .evidence
+                            .as_ref()
+                            .ok_or_else(|| explanation_unavailable("infeasibility"))?;
+                        let expected = eutheto_domain_ir::DomainEvidenceId::new(format!(
+                            "infeasibility.{}",
+                            evidence.checksum
+                        ))
+                        .map_err(|_| solution_contract_error())?;
+                        if conflict_id != &expected {
+                            return Err(solution_reference_error("/request/subject/conflictId"));
+                        }
+                    }
+                    CapturedExplanation::Infeasibility(Box::new(retained))
+                }
+                ExplanationRequestSubjectV1::Assignment {
+                    result,
+                    assignment_id,
+                } => CapturedExplanation::Assignment {
+                    stored: Box::new(
+                        self.load_referenced_solution(request.scenario_id, result)
+                            .await?,
+                    ),
+                    assignment_id: assignment_id.clone(),
+                },
+                ExplanationRequestSubjectV1::Counterfactual { job_id, base } => {
+                    self.counterfactual
+                        .guard_job_explanation_publication(
+                            request.scenario_id,
+                            source_revision,
+                            *job_id,
+                            base,
+                        )
+                        .await?;
+                    let completion = self
+                        .store
+                        .load_counterfactual_completion_for_evidence(*job_id)
+                        .await;
+                    self.counterfactual
+                        .guard_job_explanation_publication(
+                            request.scenario_id,
+                            source_revision,
+                            *job_id,
+                            base,
+                        )
+                        .await?;
+                    let (job, stored, alternative) = completion.map_err(store_error)?;
+                    if job.request.semantics.scenario_id != request.scenario_id
+                        || job.request.semantics.base != *base
+                    {
+                        return Err(solution_reference_error("/request/subject"));
+                    }
+                    let result = job
+                        .result
+                        .ok_or_else(|| explanation_unavailable("counterfactual"))?;
+                    crate::native_observations::validate_counterfactual_fingerprints(&result)
+                        .map_err(|_| solution_contract_error())?;
+                    let stored = stored.ok_or_else(solution_verification_mismatch)?;
+                    let alternative = alternative.map(Box::new);
+                    CapturedExplanation::Counterfactual {
+                        stored: Box::new(stored),
                         result: Box::new(result),
-                    },
-                )
-            }
-            ExplanationRequestSubjectV1::SolutionDifference { left, right } => {
-                let base = self
-                    .load_referenced_solution(request.scenario_id, left)
-                    .await?;
-                let candidate = self
-                    .load_referenced_solution(request.scenario_id, right)
-                    .await?;
-                let base_revision = solution_revision(&base)?;
-                let candidate_revision = solution_revision(&candidate)?;
-                let comparison = compare_stored_solutions(&base, &candidate)?;
-                (
-                    candidate.document,
-                    vec![base_revision, candidate_revision],
-                    ExplanationEvidencePayloadV1::SolutionDifference {
-                        comparison: Box::new(comparison),
-                    },
-                )
-            }
-            ExplanationRequestSubjectV1::Repair { current, base } => {
-                let current_result = self
-                    .load_referenced_solution(request.scenario_id, current)
-                    .await?;
-                let base_result = self
-                    .load_referenced_solution(request.scenario_id, base)
-                    .await?;
-                let base_revision = solution_revision(&base_result)?;
-                let current_revision = solution_revision(&current_result)?;
-                let comparison = compare_stored_solutions(&base_result, &current_result)?;
-                (
-                    current_result.document,
-                    vec![current_revision, base_revision],
-                    ExplanationEvidencePayloadV1::Repair {
-                        repair: Box::new(RepairEvidenceV1 {
-                            comparison,
-                            causality: RepairCausalityV1::NotEstablished,
-                        }),
-                    },
-                )
-            }
-            ExplanationRequestSubjectV1::OptimalityStatus {
-                solve_run_id,
-                run_manifest_checksum,
-                result,
-            } => {
-                let result = result
-                    .as_ref()
-                    .ok_or_else(|| explanation_unavailable("optimality_status"))?;
-                let stored = self
-                    .load_referenced_solution(request.scenario_id, result)
-                    .await?;
-                if stored.portable.run_input.run_id != *solve_run_id
-                    || stored.portable.run_manifest.checksum != *run_manifest_checksum
-                {
-                    return Err(solution_reference_error("/request/subject"));
+                        alternative,
+                    }
                 }
-                let revision = solution_revision(&stored)?;
-                (
-                    stored.document,
-                    vec![revision],
-                    ExplanationEvidencePayloadV1::OptimalityStatus {
-                        status: Box::new(OptimalityStatusEvidenceV1 {
-                            run_input: stored.portable.run_input,
-                            run_manifest: stored.portable.run_manifest,
-                            result: Some(result.clone()),
-                        }),
-                    },
-                )
+                ExplanationRequestSubjectV1::SolutionDifference { left, right } => {
+                    let candidate = self
+                        .load_referenced_solution(request.scenario_id, right)
+                        .await?;
+                    if solution_revision(&candidate)? != source_revision {
+                        return Err(solution_reference_error("/sourceRevision"));
+                    }
+                    for handle in ordinary.iter().flatten() {
+                        handle.admit()?;
+                    }
+                    CapturedExplanation::SolutionDifference {
+                        base: Box::new(
+                            self.load_referenced_solution(request.scenario_id, left)
+                                .await?,
+                        ),
+                        candidate: Box::new(candidate),
+                    }
+                }
+                ExplanationRequestSubjectV1::Repair { current, base } => {
+                    let current = self
+                        .load_referenced_solution(request.scenario_id, current)
+                        .await?;
+                    if solution_revision(&current)? != source_revision {
+                        return Err(solution_reference_error("/sourceRevision"));
+                    }
+                    for handle in ordinary.iter().flatten() {
+                        handle.admit()?;
+                    }
+                    CapturedExplanation::Repair {
+                        current: Box::new(current),
+                        base: Box::new(
+                            self.load_referenced_solution(request.scenario_id, base)
+                                .await?,
+                        ),
+                    }
+                }
+                ExplanationRequestSubjectV1::OptimalityStatus {
+                    solve_run_id,
+                    run_manifest_checksum,
+                    result,
+                } => {
+                    let retained = self
+                        .store
+                        .load_solve_run(request.scenario_id, *solve_run_id)
+                        .await
+                        .map_err(store_error)?
+                        .ok_or(AppError::NotFound(ResourceRef::SolveRun(*solve_run_id)))?;
+                    let run_manifest = retained
+                        .manifest
+                        .ok_or_else(|| explanation_unavailable("optimality_status"))?;
+                    if run_manifest.run_id != *solve_run_id
+                        || run_manifest.checksum.as_str() != run_manifest_checksum
+                        || run_manifest.run_input_checksum.as_str()
+                            != retained.input.checksum.as_str()
+                    {
+                        return Err(solution_reference_error("/request/subject"));
+                    }
+                    let loaded = self
+                        .store
+                        .load_solve_input(*solve_run_id)
+                        .await
+                        .map_err(store_error)?;
+                    if loaded.input != retained.input
+                        || loaded.input.scenario_id != request.scenario_id
+                    {
+                        return Err(solution_contract_error());
+                    }
+                    crate::native_observations::validate_fingerprint(&loaded.input, &run_manifest)
+                        .map_err(|_| solution_contract_error())?;
+                    let (stored, result) = match (&run_manifest.outcome, result) {
+                        (
+                            eutheto_domain_ir::RunTerminalOutcomeV1::Accepted {
+                                solution_id,
+                                accepted_result_checksum,
+                                ..
+                            },
+                            Some(result),
+                        ) if solution_id == &result.solution_id
+                            && accepted_result_checksum == &result.result_checksum =>
+                        {
+                            let stored = self
+                                .load_referenced_solution(request.scenario_id, result)
+                                .await?;
+                            if stored.portable.run_input != loaded.input
+                                || stored.portable.run_manifest != run_manifest
+                                || stored.document != loaded.document
+                                || stored.portable.accepted_result.solution.solution_id
+                                    != *solution_id
+                                || stored.portable.accepted_result.checksum.as_str()
+                                    != accepted_result_checksum
+                            {
+                                return Err(solution_verification_mismatch());
+                            }
+                            (Some(Box::new(stored)), Some(result.clone()))
+                        }
+                        (eutheto_domain_ir::RunTerminalOutcomeV1::Accepted { .. }, _)
+                        | (_, Some(_)) => {
+                            return Err(solution_reference_error("/request/subject"));
+                        }
+                        (_, None) => (None, None),
+                    };
+                    CapturedExplanation::OptimalityStatus(Box::new(CapturedOptimalityStatus {
+                        document: loaded.document,
+                        run_input: loaded.input,
+                        run_manifest,
+                        stored,
+                        result,
+                    }))
+                }
             }
         };
-        let evidence =
-            ExplanationEvidenceV1::new(payload).map_err(|_| solution_contract_error())?;
-        let render_request = EvidenceRenderRequestV1::new(evidence.clone())
-            .map_err(|_| solution_contract_error())?;
-        let pack = available_pack(&document, &self.pack_registry)
-            .ok_or_else(|| unsupported_project_pack(&document.domain_pack))?;
-        let rendered = pack
-            .render_evidence(&document, &render_request)
-            .map_err(|error| explanation_render_error(&error))?;
-        let explanation =
-            ExplanationResultV1::new(evidence, rendered).map_err(|_| solution_contract_error())?;
-        let current_revision = self.current_scenario_revision(request.scenario_id).await?;
-        Ok(AppQueryResult::SolutionExplanation(Box::new(
-            SolutionExplanationDtoV1 {
-                schema_version: SOLUTION_API_SCHEMA_VERSION,
-                scenario_id: request.scenario_id,
-                current_revision,
-                scenario_revisions: revisions,
-                explanation,
-            },
-        )))
+        Ok(captured)
+    }
+
+    // Keeping the seven typed subjects together makes the evidence/reference binding auditable.
+    #[allow(clippy::too_many_lines)]
+    async fn query_solution_explain_controlled(
+        &self,
+        request: SolutionExplainRequestV1,
+        source_revision: Revision,
+        control: OperationControl,
+        deadline: tokio::time::Instant,
+        counterfactual_reference: Option<&(CounterfactualJobId, AcceptedResultRefV1)>,
+        ordinary: &[Option<OrdinaryPublicationHandle>; 2],
+    ) -> Result<AppQueryResult, AppError> {
+        let mut source_admitted = false;
+        let run_reference = match &request.request.subject {
+            ExplanationRequestSubjectV1::Infeasibility { solve_run_id, .. }
+            | ExplanationRequestSubjectV1::OptimalityStatus { solve_run_id, .. } => {
+                Some(*solve_run_id)
+            }
+            _ => None,
+        };
+        let result = async {
+            let scenario_id = request.scenario_id;
+            let cancellation = control.cancellation().clone();
+            let query_slot =
+                Self::acquire_accepted_slot(&self.accepted_query_slots, &cancellation, deadline)
+                    .await;
+            if let Some((job_id, base)) = counterfactual_reference {
+                self.counterfactual
+                    .guard_job_explanation_publication(scenario_id, source_revision, *job_id, base)
+                    .await?;
+            }
+            if let Some(run_id) = run_reference {
+                self.counterfactual
+                    .guard_run_publication(scenario_id, run_id)
+                    .await?;
+            }
+            let query_slot = Arc::new(query_slot?);
+            let app = self.clone();
+            let capture_control = control.clone();
+            let capture_slot = Arc::clone(&query_slot);
+            let capture_ordinary = (*ordinary).clone();
+            let mut capture = tokio::spawn(async move {
+                let _query_slot = capture_slot;
+                let captured = app
+                    .capture_explanation(
+                        &request,
+                        source_revision,
+                        &capture_control,
+                        &capture_ordinary,
+                    )
+                    .await?;
+                Ok::<_, AppError>((request, captured))
+            });
+            let Ok(captured) = tokio::time::timeout_at(deadline, &mut capture).await else {
+                cancellation.cancel();
+                // The native operation retains admission while this source owner drains.
+                let _ = capture.await;
+                if let Some((job_id, base)) = counterfactual_reference {
+                    self.counterfactual
+                        .guard_job_explanation_publication(
+                            scenario_id,
+                            source_revision,
+                            *job_id,
+                            base,
+                        )
+                        .await?;
+                }
+                if let Some(run_id) = run_reference {
+                    self.counterfactual
+                        .guard_run_publication(scenario_id, run_id)
+                        .await?;
+                }
+                return Err(operation_interrupted(
+                    OperationInterruption::DeadlineExceeded,
+                ));
+            };
+            if let Some((job_id, base)) = counterfactual_reference {
+                self.counterfactual
+                    .guard_job_explanation_publication(scenario_id, source_revision, *job_id, base)
+                    .await?;
+            }
+            if let Some(run_id) = run_reference {
+                self.counterfactual
+                    .guard_run_publication(scenario_id, run_id)
+                    .await?;
+            }
+            let (request, captured) = captured.map_err(join_error)??;
+            let captured_revision = match &captured {
+                CapturedExplanation::Validation { revision, .. } => *revision,
+                CapturedExplanation::Infeasibility(source) => {
+                    Revision::try_new(source.input.scenario_revision)
+                        .map_err(|_| solution_contract_error())?
+                }
+                CapturedExplanation::Assignment { stored, .. }
+                | CapturedExplanation::Counterfactual { stored, .. } => solution_revision(stored)?,
+                CapturedExplanation::SolutionDifference { candidate, .. } => {
+                    solution_revision(candidate)?
+                }
+                CapturedExplanation::Repair { current, .. } => solution_revision(current)?,
+                CapturedExplanation::OptimalityStatus(source) => {
+                    Revision::try_new(source.run_input.scenario_revision)
+                        .map_err(|_| solution_contract_error())?
+                }
+            };
+            if captured_revision != source_revision {
+                return Err(solution_reference_error("/sourceRevision"));
+            }
+            let inputs = match &captured {
+                CapturedExplanation::Validation { .. } => [None, None],
+                CapturedExplanation::Infeasibility(source) => [Some(&source.input), None],
+                CapturedExplanation::Assignment { stored, .. }
+                | CapturedExplanation::Counterfactual { stored, .. } => {
+                    [Some(&stored.portable.run_input), None]
+                }
+                CapturedExplanation::SolutionDifference { base, candidate } => [
+                    Some(&base.portable.run_input),
+                    Some(&candidate.portable.run_input),
+                ],
+                CapturedExplanation::Repair { current, base } => [
+                    Some(&current.portable.run_input),
+                    Some(&base.portable.run_input),
+                ],
+                CapturedExplanation::OptimalityStatus(source) => [Some(&source.run_input), None],
+            };
+            for (handle, input) in ordinary.iter().zip(inputs) {
+                if let (Some(handle), Some(input)) = (handle, input) {
+                    handle.validate_input(input)?;
+                }
+            }
+            source_admitted = true;
+            for handle in ordinary.iter().flatten() {
+                handle.admit()?;
+            }
+            control.check().map_err(operation_interrupted)?;
+            self.guard_explanation_publication(&request, source_revision)
+                .await?;
+            let mut infeasibility_context = None;
+            let mut rendered_repair = None;
+            let (document, revisions, render_request, objective_context) = match captured {
+                CapturedExplanation::Validation {
+                    document,
+                    revision,
+                    issue_id,
+                } => {
+                    let registry = Arc::clone(&self.pack_registry);
+                    let validation_control = control.clone();
+                    let validation_slot = Arc::clone(&query_slot);
+                    let expected_issue_id = issue_id.clone();
+                    let (document, selected_issue) = tokio::task::spawn_blocking(move || {
+                        let _query_slot = validation_slot;
+                        let control = validation_control;
+                        control.check().map_err(operation_interrupted)?;
+                        let pack = available_pack(&document, &registry)
+                            .ok_or_else(|| unsupported_project_pack(&document.domain_pack))?;
+                        let validated =
+                            pack.validate_full(&document, &control).map_err(|error| {
+                                domain_interruption(&error)
+                                    .unwrap_or_else(|| explanation_render_error(&error))
+                            })?;
+                        control.check().map_err(operation_interrupted)?;
+                        let mut selected_issue = None;
+                        for issue in validated.issues {
+                            let actual_issue_id = validation_issue_identity(&issue)
+                                .map_err(|_| resource_limit_error())?;
+                            if actual_issue_id == expected_issue_id
+                                && selected_issue.replace(issue).is_some()
+                            {
+                                return Err(explanation_unavailable("validation"));
+                            }
+                        }
+                        let selected_issue =
+                            selected_issue.ok_or_else(|| explanation_unavailable("validation"))?;
+                        Ok::<_, AppError>((document, selected_issue))
+                    })
+                    .await
+                    .map_err(join_error)??;
+                    let document = *document;
+                    control.check().map_err(operation_interrupted)?;
+                    let (current_document, current_revision) =
+                        self.current_scenario_snapshot(request.scenario_id).await?;
+                    control.check().map_err(operation_interrupted)?;
+                    if current_revision != revision || current_document != document {
+                        return Err(explanation_unavailable("validation"));
+                    }
+                    let issue = validation_issue_evidence(&selected_issue, &issue_id)?;
+                    (
+                        document,
+                        vec![revision],
+                        explanation_render_request(ExplanationEvidencePayloadV2::Validation {
+                            issue,
+                        })?,
+                        None,
+                    )
+                }
+                CapturedExplanation::Infeasibility(source) => {
+                    let source = *source;
+                    let infeasibility = if let Some(evidence) = source.evidence {
+                        let conflict_id = eutheto_domain_ir::DomainEvidenceId::new(format!(
+                            "infeasibility.{}",
+                            evidence.checksum
+                        ))
+                        .map_err(|_| solution_contract_error())?;
+                        infeasibility_context = Some(InfeasibilityExplanationContextV1 {
+                            run_id: evidence.run_id,
+                            source_revision,
+                            run_manifest_checksum: evidence.run_manifest_checksum,
+                            evidence_checksum: evidence.checksum,
+                            conflict_id,
+                        });
+                        evidence.infeasibility
+                    } else {
+                        eutheto_domain_ir::InfeasibilityEvidenceV1::Unavailable {
+                            reason: eutheto_domain_ir::ConflictUnavailableReason::NotRecorded,
+                        }
+                    };
+                    (
+                        source.document,
+                        vec![source_revision],
+                        explanation_render_request(ExplanationEvidencePayloadV2::Infeasibility {
+                            infeasibility,
+                            condition: source.condition,
+                        })?,
+                        source.input.objective_context,
+                    )
+                }
+                CapturedExplanation::Assignment {
+                    stored,
+                    assignment_id,
+                } => {
+                    let stored = self
+                        .ensure_fresh_accepted_until(
+                            *stored,
+                            control.clone(),
+                            deadline,
+                            Some(Arc::clone(&query_slot)),
+                        )
+                        .await?;
+                    let revision = solution_revision(&stored)?;
+                    let assignment =
+                        assignment_evidence(&stored.portable.accepted_result, &assignment_id)?;
+                    (
+                        stored.document,
+                        vec![revision],
+                        explanation_render_request(ExplanationEvidencePayloadV2::Assignment {
+                            assignment,
+                        })?,
+                        stored.portable.run_input.objective_context,
+                    )
+                }
+                CapturedExplanation::Counterfactual {
+                    stored,
+                    result,
+                    alternative,
+                } => {
+                    let mut stored = stored;
+                    let fresh = async {
+                        *stored = self
+                            .ensure_fresh_accepted_until(
+                                *stored,
+                                control.clone(),
+                                deadline,
+                                Some(Arc::clone(&query_slot)),
+                            )
+                            .await?;
+                        Ok::<_, AppError>(stored)
+                    }
+                    .await;
+                    self.guard_explanation_publication(&request, source_revision)
+                        .await?;
+                    let stored = fresh?;
+                    if let Some(alternative) = alternative {
+                        let alternative = self
+                            .ensure_fresh_accepted_until(
+                                *alternative,
+                                control.clone(),
+                                deadline,
+                                Some(Arc::clone(&query_slot)),
+                            )
+                            .await
+                            .map(|_| ());
+                        self.guard_explanation_publication(&request, source_revision)
+                            .await?;
+                        alternative?;
+                    }
+                    let revision = solution_revision(&stored)?;
+                    (
+                        stored.document,
+                        vec![revision],
+                        explanation_render_request(ExplanationEvidencePayloadV2::Counterfactual {
+                            result,
+                        })?,
+                        stored.portable.run_input.objective_context,
+                    )
+                }
+                CapturedExplanation::SolutionDifference { base, candidate } => {
+                    // Reuse captured boxes so revalidated records do not inflate the read future.
+                    let mut base = base;
+                    *base = self
+                        .ensure_fresh_accepted_until(
+                            *base,
+                            control.clone(),
+                            deadline,
+                            Some(Arc::clone(&query_slot)),
+                        )
+                        .await?;
+                    let mut candidate = candidate;
+                    *candidate = self
+                        .ensure_fresh_accepted_until(
+                            *candidate,
+                            control.clone(),
+                            deadline,
+                            Some(Arc::clone(&query_slot)),
+                        )
+                        .await?;
+                    let base_revision = solution_revision(&base)?;
+                    let candidate_revision = solution_revision(&candidate)?;
+                    let (candidate, comparison) = self
+                        .compare_source_records(
+                            *base,
+                            *candidate,
+                            control.clone(),
+                            Arc::clone(&query_slot),
+                        )
+                        .await?;
+                    (
+                        candidate.document,
+                        vec![base_revision, candidate_revision],
+                        explanation_render_request(
+                            ExplanationEvidencePayloadV2::SolutionDifference {
+                                comparison: Box::new(comparison),
+                            },
+                        )?,
+                        candidate.portable.run_input.objective_context,
+                    )
+                }
+                CapturedExplanation::Repair { current, base } => {
+                    let mut current = current;
+                    *current = self
+                        .ensure_fresh_accepted_until(
+                            *current,
+                            control.clone(),
+                            deadline,
+                            Some(Arc::clone(&query_slot)),
+                        )
+                        .await?;
+                    let mut base = base;
+                    *base = self
+                        .ensure_fresh_accepted_until(
+                            *base,
+                            control.clone(),
+                            deadline,
+                            Some(Arc::clone(&query_slot)),
+                        )
+                        .await?;
+                    let current_revision = solution_revision(&current)?;
+                    let base_revision = solution_revision(&base)?;
+                    let (document, render_request, rendered) = self
+                        .render_repair_sources(
+                            base,
+                            current,
+                            control.clone(),
+                            Arc::clone(&query_slot),
+                        )
+                        .await?;
+                    rendered_repair = Some(rendered);
+                    (
+                        document,
+                        vec![current_revision, base_revision],
+                        render_request,
+                        None,
+                    )
+                }
+                CapturedExplanation::OptimalityStatus(captured) => {
+                    let mut captured = captured;
+                    if let Some(stored) = captured.stored.take() {
+                        self.ensure_fresh_accepted_until(
+                            *stored,
+                            control.clone(),
+                            deadline,
+                            Some(Arc::clone(&query_slot)),
+                        )
+                        .await?;
+                    }
+                    let CapturedOptimalityStatus {
+                        document,
+                        run_input,
+                        run_manifest,
+                        result,
+                        ..
+                    } = *captured;
+                    let revision = Revision::try_new(run_input.scenario_revision)
+                        .map_err(|_| solution_contract_error())?;
+                    (
+                        document,
+                        vec![revision],
+                        explanation_render_request(
+                            ExplanationEvidencePayloadV2::OptimalityStatus {
+                                status: Box::new(OptimalityStatusEvidence {
+                                    schema_version: Some(2),
+                                    run_input,
+                                    run_manifest,
+                                    result,
+                                }),
+                            },
+                        )?,
+                        None,
+                    )
+                }
+            };
+            let rendered = if let Some(rendered) = rendered_repair {
+                Ok((document, render_request, rendered))
+            } else {
+                let registry = Arc::clone(&self.pack_registry);
+                let render_control = control.clone();
+                let render_slot = Arc::clone(&query_slot);
+                tokio::task::spawn_blocking(move || {
+                    let _query_slot = render_slot;
+                    render_control.check().map_err(operation_interrupted)?;
+                    let pack = available_pack(&document, &registry)
+                        .ok_or_else(|| unsupported_project_pack(&document.domain_pack))?;
+                    let rendered = pack
+                        .render_evidence(
+                            &document,
+                            &render_request,
+                            match &render_request.evidence.evidence {
+                                ExplanationEvidencePayloadV2::OptimalityStatus { status } => {
+                                    status.run_input.objective_context.as_ref()
+                                }
+                                _ => objective_context.as_ref(),
+                            },
+                            &render_control,
+                        )
+                        .map_err(|error| {
+                            domain_interruption(&error)
+                                .unwrap_or_else(|| explanation_render_error(&error))
+                        })?;
+                    render_control.check().map_err(operation_interrupted)?;
+                    Ok::<_, AppError>((document, render_request, rendered))
+                })
+                .await
+                .map_err(join_error)
+                .and_then(std::convert::identity)
+            };
+            self.guard_explanation_publication(&request, source_revision)
+                .await?;
+            let (document, render_request, rendered) = rendered?;
+            control.check().map_err(operation_interrupted)?;
+            let explanation = ExplanationResultV2::new(render_request.evidence, rendered)
+                .map_err(|_| solution_contract_error())?;
+            let current_revision = if matches!(
+                &request.request.subject,
+                ExplanationRequestSubjectV1::Validation { issue_id: Some(_) }
+            ) {
+                control.check().map_err(operation_interrupted)?;
+                let (current_document, current_revision) =
+                    self.current_scenario_snapshot(request.scenario_id).await?;
+                let source_revision = revisions
+                    .first()
+                    .copied()
+                    .ok_or_else(solution_contract_error)?;
+                if current_revision != source_revision || current_document != document {
+                    return Err(explanation_unavailable("validation"));
+                }
+                control.check().map_err(operation_interrupted)?;
+                current_revision
+            } else {
+                let current_revision = self.current_scenario_revision(request.scenario_id).await;
+                self.guard_explanation_publication(&request, source_revision)
+                    .await?;
+                current_revision?
+            };
+            self.guard_explanation_publication(&request, source_revision)
+                .await?;
+            control.check().map_err(operation_interrupted)?;
+            Ok(AppQueryResult::SolutionExplanation(Box::new(
+                SolutionExplanationDtoV2 {
+                    schema_version: eutheto_domain_ir::EXPLANATION_RESULT_V2_SCHEMA_VERSION,
+                    scenario_id,
+                    current_revision,
+                    scenario_revisions: revisions,
+                    explanation,
+                    infeasibility_context,
+                },
+            )))
+        }
+        .await;
+        if source_admitted {
+            for handle in ordinary.iter().flatten() {
+                handle.admit()?;
+            }
+        }
+        result
+    }
+
+    async fn guard_explanation_publication(
+        &self,
+        request: &SolutionExplainRequestV1,
+        source_revision: Revision,
+    ) -> Result<(), AppError> {
+        match &request.request.subject {
+            ExplanationRequestSubjectV1::Counterfactual { job_id, base } => {
+                self.counterfactual
+                    .guard_job_explanation_publication(
+                        request.scenario_id,
+                        source_revision,
+                        *job_id,
+                        base,
+                    )
+                    .await
+            }
+            ExplanationRequestSubjectV1::Infeasibility { solve_run_id, .. }
+            | ExplanationRequestSubjectV1::OptimalityStatus { solve_run_id, .. } => {
+                self.counterfactual
+                    .guard_run_publication(request.scenario_id, *solve_run_id)
+                    .await
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn capture_accepted_source(
+        &self,
+        scenario_id: ScenarioId,
+        solution_id: SolutionId,
+        cancellation: &CancellationToken,
+        deadline: tokio::time::Instant,
+    ) -> Result<
+        (
+            AcceptedQuerySource,
+            Revision,
+            tokio::sync::OwnedSemaphorePermit,
+            Option<OrdinaryPublicationHandle>,
+        ),
+        AppError,
+    > {
+        let ordinary = self.ordinary_solution_handle(scenario_id, solution_id)?;
+        let slot =
+            Self::acquire_accepted_slot(&self.accepted_query_slots, cancellation, deadline).await;
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        let slot = slot?;
+        let app = self.clone();
+        let capture_cancellation = cancellation.clone();
+        let captured_ordinary = ordinary.clone();
+        let capture = tokio::spawn(async move {
+            let control = OperationControl::Cancellation(capture_cancellation.clone());
+            control.check().map_err(operation_interrupted)?;
+            let mutation = tokio::select! {
+                biased;
+                () = wait_for_cancellation(&capture_cancellation) =>
+                    return Err(operation_interrupted(OperationInterruption::Cancelled)),
+                result = tokio::time::timeout_at(deadline, app.scenario_lock(scenario_id)) =>
+                    result.map_err(|_| operation_interrupted(OperationInterruption::DeadlineExceeded))?,
+            };
+            let _guard = tokio::select! {
+                biased;
+                () = wait_for_cancellation(&capture_cancellation) =>
+                    return Err(operation_interrupted(OperationInterruption::Cancelled)),
+                result = tokio::time::timeout_at(deadline, mutation.lock()) =>
+                    result.map_err(|_| operation_interrupted(OperationInterruption::DeadlineExceeded))?,
+            };
+            control.check().map_err(operation_interrupted)?;
+            let terminal = app.load_solution(scenario_id, solution_id).await;
+            captured_ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+            let source = match terminal {
+                Ok(stored) => AcceptedQuerySource::Terminal(stored),
+                Err(AppError::NotFound(ResourceRef::Solution(_))) => {
+                    control.check().map_err(operation_interrupted)?;
+                    let (document, checkpoint) = app
+                        .store
+                        .load_verified_checkpoint_for_solution(solution_id)
+                        .await
+                        .map_err(store_error)?
+                        .ok_or(AppError::NotFound(ResourceRef::Solution(solution_id)))?;
+                    if document.scenario_id != scenario_id
+                        || checkpoint.run_input.scenario_id != scenario_id
+                    {
+                        return Err(AppError::NotFound(ResourceRef::Solution(solution_id)));
+                    }
+                    AcceptedQuerySource::Checkpoint(document, checkpoint)
+                }
+                Err(error) => return Err(error),
+            };
+            if let Some(handle) = &captured_ordinary {
+                let input = match &source {
+                    AcceptedQuerySource::Terminal(stored) => &stored.portable.run_input,
+                    AcceptedQuerySource::Checkpoint(_, checkpoint) => &checkpoint.run_input,
+                };
+                handle.admit_input(input)?;
+            }
+            let run_id = source.run_id();
+            app.counterfactual
+                .guard_run_publication(scenario_id, run_id)
+                .await?;
+            control.check().map_err(operation_interrupted)?;
+            let current_revision = app.current_scenario_revision(scenario_id).await;
+            app.counterfactual
+                .guard_run_publication(scenario_id, run_id)
+                .await?;
+            let current_revision = current_revision?;
+            control.check().map_err(operation_interrupted)?;
+            captured_ordinary
+                .as_ref()
+                .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+            Ok::<_, AppError>((source, current_revision, slot, captured_ordinary))
+        });
+        let result = tokio::select! {
+            biased;
+            () = wait_for_cancellation(cancellation) =>
+                Err(operation_interrupted(OperationInterruption::Cancelled)),
+            result = tokio::time::timeout_at(deadline, capture) =>
+                result
+                    .map_err(|_| operation_interrupted(OperationInterruption::DeadlineExceeded))
+                    .and_then(|captured| captured.map_err(join_error))
+                    .and_then(std::convert::identity),
+        };
+        ordinary
+            .as_ref()
+            .map_or(Ok(()), OrdinaryPublicationHandle::admit)?;
+        result
     }
 
     async fn current_scenario_revision(
@@ -2032,6 +4725,19 @@ impl EuthetoApp {
             .await
             .map(|project| project.summary.revision)
             .map_err(store_error)
+    }
+    async fn current_scenario_snapshot(
+        &self,
+        scenario_id: ScenarioId,
+    ) -> Result<(ScenarioDocument, Revision), AppError> {
+        let mutation = self.scenario_lock(scenario_id).await;
+        let _guard = mutation.lock().await;
+        let project = self
+            .store
+            .get_project(scenario_id)
+            .await
+            .map_err(store_error)?;
+        Ok((project.document, project.summary.revision))
     }
 
     async fn load_solution(
@@ -2062,7 +4768,308 @@ impl EuthetoApp {
         if stored.portable.accepted_result.checksum != reference.result_checksum {
             return Err(solution_reference_error("/request/subject"));
         }
+        self.counterfactual
+            .guard_run_publication(scenario_id, stored.portable.run_input.run_id)
+            .await?;
         Ok(stored)
+    }
+    async fn verify_accepted_off_lock(
+        &self,
+        stored: StoredAcceptedResultV2,
+        control: OperationControl,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: tokio::time::Instant,
+        query_slot: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    ) -> Result<(StoredAcceptedResultV2, VerificationReport), AppError> {
+        let scenario_id = stored.portable.run_input.scenario_id;
+        let run_id = stored.portable.run_input.run_id;
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        let cancellation = control.cancellation().clone();
+        let mut guard = CancelOnDrop::new(cancellation.clone());
+        control.check().map_err(operation_interrupted)?;
+        let registry = Arc::clone(&self.pack_registry);
+        let retain_admission = query_slot.is_some();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _query_slot = query_slot;
+            control.check().map_err(operation_interrupted)?;
+            let report = reverify_accepted_solution(&stored, &registry, &control)?;
+            control.check().map_err(operation_interrupted)?;
+            Ok((stored, report))
+        });
+        let result = tokio::select! {
+            joined = tokio::time::timeout_at(deadline, &mut worker) => if let Ok(result) = joined {
+                result.map_err(join_error).and_then(|result| result)
+            } else {
+                cancellation.cancel();
+                if retain_admission {
+                    let _ = worker.await;
+                }
+                Err(operation_interrupted(OperationInterruption::DeadlineExceeded))
+            },
+            () = wait_for_cancellation(&cancellation) => {
+                if retain_admission {
+                    let _ = worker.await;
+                }
+                Err(operation_interrupted(OperationInterruption::Cancelled))
+            }
+        };
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        guard.disarm();
+        result
+    }
+
+    async fn verify_checkpoint_off_lock(
+        &self,
+        document: ScenarioDocument,
+        checkpoint: VerifiedCheckpoint,
+        cancellation: CancellationToken,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: tokio::time::Instant,
+    ) -> Result<(VerifiedCheckpoint, VerificationReport), AppError> {
+        let scenario_id = checkpoint.run_input.scenario_id;
+        let run_id = checkpoint.run_input.run_id;
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        let verification_cancellation = cancellation.child();
+        let _cancel_on_drop = CancelOnDrop::new(verification_cancellation.clone());
+        let control = OperationControl::Cancellation(verification_cancellation.clone());
+        control.check().map_err(operation_interrupted)?;
+        let registry = Arc::clone(&self.pack_registry);
+        let worker = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            control.check().map_err(operation_interrupted)?;
+            let report = reverify_checkpoint_solution(&document, &checkpoint, &registry, &control)?;
+            control.check().map_err(operation_interrupted)?;
+            Ok((checkpoint, report))
+        });
+        let result = tokio::select! {
+            joined = tokio::time::timeout(
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+                worker,
+            ) => if let Ok(result) = joined {
+                result.map_err(join_error).and_then(|result| result)
+            } else {
+                verification_cancellation.cancel();
+                Err(operation_interrupted(OperationInterruption::DeadlineExceeded))
+            },
+            () = wait_for_cancellation(&cancellation) => {
+                verification_cancellation.cancel();
+                Err(operation_interrupted(OperationInterruption::Cancelled))
+            }
+        };
+        self.counterfactual
+            .guard_run_publication(scenario_id, run_id)
+            .await?;
+        result
+    }
+
+    async fn hash_accepted_off_executor(
+        &self,
+        stored: StoredAcceptedResultV2,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        control: OperationControl,
+        deadline: tokio::time::Instant,
+        query_slot: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    ) -> Result<
+        (
+            StoredAcceptedResultV2,
+            AcceptedContentHash,
+            tokio::sync::OwnedSemaphorePermit,
+        ),
+        AppError,
+    > {
+        let cancellation = control.cancellation().clone();
+        let mut guard = CancelOnDrop::new(cancellation.clone());
+        let retain_admission = query_slot.is_some();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            let _query_slot = query_slot;
+            let key = accepted_content_hash(&stored, &control, deadline)?;
+            Ok((stored, key, permit))
+        });
+        let result = tokio::select! {
+            joined = tokio::time::timeout_at(deadline, &mut worker) => if let Ok(result) = joined {
+                result.map_err(join_error).and_then(|result| result)
+            } else {
+                cancellation.cancel();
+                if retain_admission {
+                    let _ = worker.await;
+                }
+                Err(operation_interrupted(OperationInterruption::DeadlineExceeded))
+            },
+            () = wait_for_cancellation(&cancellation) => {
+                if retain_admission {
+                    let _ = worker.await;
+                }
+                Err(operation_interrupted(OperationInterruption::Cancelled))
+            }
+        };
+        guard.disarm();
+        result
+    }
+    async fn acquire_verification_slot(
+        &self,
+        control: &OperationControl,
+        deadline: tokio::time::Instant,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        controlled_wait(
+            Self::acquire_accepted_slot(
+                &self.accepted_verification.cache.slots,
+                control.cancellation(),
+                deadline,
+            ),
+            control,
+        )
+        .await?
+    }
+
+    async fn acquire_accepted_query_slot(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        Self::acquire_accepted_slot(
+            &self.accepted_query_slots,
+            cancellation,
+            tokio::time::Instant::now() + ACCEPTED_VERIFICATION_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn acquire_accepted_slot(
+        slots: &Arc<Semaphore>,
+        cancellation: &CancellationToken,
+        deadline: tokio::time::Instant,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(operation_interrupted(OperationInterruption::Cancelled));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(operation_interrupted(
+                    OperationInterruption::DeadlineExceeded,
+                ));
+            }
+            match Arc::clone(slots).try_acquire_owned() {
+                Ok(permit) => return Ok(permit),
+                Err(tokio::sync::TryAcquireError::Closed) => {
+                    return Err(solution_contract_error());
+                }
+                Err(tokio::sync::TryAcquireError::NoPermits) => {
+                    tokio::time::sleep(
+                        deadline
+                            .saturating_duration_since(tokio::time::Instant::now())
+                            .min(Duration::from_millis(25)),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    fn ensure_fresh_accepted(
+        &self,
+        stored: StoredAcceptedResultV2,
+        cancellation: CancellationToken,
+    ) -> impl Future<Output = Result<StoredAcceptedResultV2, AppError>> + '_ {
+        self.ensure_fresh_accepted_until(
+            stored,
+            OperationControl::Cancellation(cancellation),
+            tokio::time::Instant::now() + ACCEPTED_VERIFICATION_TIMEOUT,
+            None,
+        )
+    }
+
+    fn ensure_fresh_accepted_until(
+        &self,
+        stored: StoredAcceptedResultV2,
+        control: OperationControl,
+        deadline: tokio::time::Instant,
+        query_slot: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    ) -> impl Future<Output = Result<StoredAcceptedResultV2, AppError>> + '_ {
+        // Keep source-owning verification state from inflating every accepted-query caller.
+        Box::pin(async move {
+            let scenario_id = stored.portable.run_input.scenario_id;
+            let run_id = stored.portable.run_input.run_id;
+            self.counterfactual
+                .guard_run_publication(scenario_id, run_id)
+                .await?;
+            control.check().map_err(operation_interrupted)?;
+            let permit = self.acquire_verification_slot(&control, deadline).await?;
+            // The blocking hasher owns its slot if this read future is dropped mid-hash.
+            let hashed = self
+                .hash_accepted_off_executor(
+                    stored,
+                    permit,
+                    control.clone(),
+                    deadline,
+                    query_slot.clone(),
+                )
+                .await;
+            self.counterfactual
+                .guard_run_publication(scenario_id, run_id)
+                .await?;
+            let (stored, key, permit) = hashed?;
+            if let Err(interruption) = control.check() {
+                drop(permit);
+                return Err(operation_interrupted(interruption));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(operation_interrupted(
+                    OperationInterruption::DeadlineExceeded,
+                ));
+            }
+            let cached = self
+                .accepted_verification
+                .cache
+                .completed
+                .lock()
+                .await
+                .contains(&key);
+            if cached {
+                self.counterfactual
+                    .guard_run_publication(scenario_id, run_id)
+                    .await?;
+                drop(permit);
+                return Ok(stored);
+            }
+
+            let verified = self
+                .verify_accepted_off_lock(stored, control.clone(), permit, deadline, query_slot)
+                .await;
+            self.counterfactual
+                .guard_run_publication(scenario_id, run_id)
+                .await?;
+            let result = match verified {
+                Ok((stored, _report)) => {
+                    control.check().map_err(operation_interrupted)?;
+                    if tokio::time::Instant::now() >= deadline {
+                        Err(operation_interrupted(
+                            OperationInterruption::DeadlineExceeded,
+                        ))
+                    } else {
+                        Ok(stored)
+                    }
+                }
+                Err(error) => Err(error),
+            };
+            if result.is_ok() {
+                let mut completed = self.accepted_verification.cache.completed.lock().await;
+                completed.retain(|entry| entry != &key);
+                completed.push_back(key);
+                while completed.len() > ACCEPTED_VERIFICATION_CACHE_CAPACITY {
+                    completed.pop_front();
+                }
+            }
+            self.counterfactual
+                .guard_run_publication(scenario_id, run_id)
+                .await?;
+            result
+        })
     }
 
     async fn query_preview_import(
@@ -2193,7 +5200,11 @@ impl EuthetoApp {
         settings: ScenarioSettings,
     ) -> Result<AppCommandResult, AppError> {
         let pack = creation_pack(&title, &domain_pack, &self.pack_registry)?;
-        let library = self.store.library_snapshot().await.map_err(store_error)?;
+        let library = self
+            .store
+            .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+            .await
+            .map_err(store_error)?;
         let LibraryUuidClosure { occupied, .. } = library_uuid_closure(&library);
         let scenario_id = ScenarioId::from_uuid(allocate_unique_uuid(
             self.ids.as_ref(),
@@ -2245,6 +5256,7 @@ impl EuthetoApp {
         Arc::clone(locks.entry(id).or_insert_with(|| Arc::new(Mutex::new(()))))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn apply_scenario(
         &self,
         request_id: RequestId,
@@ -2258,6 +5270,29 @@ impl EuthetoApp {
         if cancellation.is_cancelled() {
             return Err(store_error(StoreError::OperationCancelled));
         }
+        let initial = self
+            .store
+            .get_project(scenario_id)
+            .await
+            .map_err(store_error)?;
+        if initial.summary.revision != envelope.expected_revision {
+            return Err(AppError::Conflict {
+                expected_revision: envelope.expected_revision,
+                actual_revision: initial.summary.revision,
+            });
+        }
+        let (captured, custody_stamp) = self
+            .store
+            .capture_scenario_custody(
+                scenario_id,
+                envelope.expected_revision,
+                initial.document,
+                OperationControl::Cancellation(cancellation.clone()),
+                None,
+            )
+            .await
+            .map_err(store_error)?;
+        let original = captured.document;
         let mutation_cancellation = cancellation.clone();
         let applied_at = self.clock.now();
         let pack_registry = Arc::clone(&self.pack_registry);
@@ -2271,7 +5306,8 @@ impl EuthetoApp {
                 } else {
                     RedoBranchPolicy::Reject
                 },
-                cancellation,
+                custody_stamp,
+                OperationControl::Cancellation(cancellation),
                 move |document| {
                     ensure_supported_document(document, &pack_registry)?;
                     let mut applied = apply_command_with_registry(
@@ -2283,28 +5319,65 @@ impl EuthetoApp {
                     )
                     .map_err(|error| command_store_error(&error, Some(&envelope.command)))?;
                     applied.document.metadata.updated_at = applied_at;
-                    let result = applied.result;
                     let command =
                         serde_json::to_value(&envelope.command).map_err(StoreError::Json)?;
-                    let inverse = result
+                    let inverse = applied
+                        .result
                         .inverse
                         .as_ref()
                         .map(serde_json::to_value)
                         .transpose()
                         .map_err(StoreError::Json)?;
+                    let operation_control =
+                        OperationControl::Cancellation(mutation_cancellation.clone());
+                    let protected = finalize_base_change(
+                        &original,
+                        &mut applied.document,
+                        &command,
+                        inverse.as_ref(),
+                        Some(&operation_control),
+                    )?;
+                    let mut output = applied.result;
+                    let (command_type, command, inverse, actor, summary) =
+                        if let Some(protected) = protected {
+                            output
+                                .change_set
+                                .changes
+                                .extend(protected.change_set.changes);
+                            output.validation_delta = validation_delta(
+                                &validate(&original, &pack_registry),
+                                &validate(&applied.document, &pack_registry),
+                            );
+                            output.inverse = None;
+                            (
+                                eutheto_store::NATIVE_PRIVATE_HISTORY_COMMAND_TYPE.to_owned(),
+                                protected.command,
+                                protected.inverse,
+                                private_actor(envelope.actor),
+                                "Updated private Workforce selection".to_owned(),
+                            )
+                        } else {
+                            (
+                                applied.command_type,
+                                command,
+                                inverse,
+                                envelope.actor,
+                                applied.summary,
+                            )
+                        };
                     Ok(CommandWrite {
                         document: applied.document,
                         journal: JournalWrite {
-                            command_type: applied.command_type,
+                            command_type,
                             command,
                             command_id: envelope.command_id,
                             inverse,
-                            actor: envelope.actor,
+                            actor,
                             source: envelope.source,
-                            summary: applied.summary,
+                            summary,
                             created_at: applied_at,
                         },
-                        output: result,
+                        output,
                     })
                 },
             )
@@ -2333,6 +5406,7 @@ impl EuthetoApp {
         };
         let pack_registry = Arc::clone(&self.pack_registry);
         let cancellation = self.cancellation.clone();
+        let control = OperationControl::Cancellation(cancellation.clone());
         let apply = move |history: HistoryCommand| {
             history_apply(
                 history,
@@ -2344,11 +5418,25 @@ impl EuthetoApp {
         };
         let committed = if undo {
             self.store
-                .undo(scenario_id, expected_revision, applied_at, apply)
+                .undo(
+                    scenario_id,
+                    expected_revision,
+                    applied_at,
+                    control.clone(),
+                    move |entry| related_replay_receipt_id(entry, scenario_id),
+                    apply,
+                )
                 .await
         } else {
             self.store
-                .redo(scenario_id, expected_revision, applied_at, apply)
+                .redo(
+                    scenario_id,
+                    expected_revision,
+                    applied_at,
+                    control,
+                    move |entry| related_replay_receipt_id(entry, scenario_id),
+                    apply,
+                )
                 .await
         }
         .map_err(store_error)?;
@@ -2595,7 +5683,11 @@ impl EuthetoApp {
     async fn local_library_snapshot(
         &self,
     ) -> Result<(LocalLibrarySnapshot, BTreeMap<String, AppSetting<Value>>), AppError> {
-        let snapshot = self.store.library_snapshot().await.map_err(store_error)?;
+        let snapshot = self
+            .store
+            .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+            .await
+            .map_err(store_error)?;
         let LibraryUuidClosure {
             mut owned_by_scenario,
             occupied,
@@ -2646,7 +5738,7 @@ impl EuthetoApp {
         cancellation: CancellationToken,
     ) -> Result<AppCommandResult, AppError> {
         let token = cancellation.child();
-        let _guard = CancelOnDrop(token.clone());
+        let _guard = CancelOnDrop::new(token.clone());
         let app = self.clone();
         tokio::spawn(async move {
             app.apply_portable_owned(request_id, preview_id, collision_plan, authorization, token)
@@ -2668,7 +5760,8 @@ impl EuthetoApp {
         let (pending, local) = self
             .take_pending_portable_preview(preview_id, &cancellation)
             .await?;
-        let staged = self.stage_portable_apply(&pending, local, &collision_plan)?;
+        let copy_control = OperationControl::Cancellation(cancellation.clone());
+        let staged = self.stage_portable_apply(&pending, local, &collision_plan, &copy_control)?;
         self.check_portable_cancelled(&cancellation)?;
         let committed = self
             .commit_staged_portable(
@@ -2744,13 +5837,16 @@ impl EuthetoApp {
         Ok((*pending, local))
     }
 
+    // Keep current/history normalization and validation together before preparing one transaction.
+    #[allow(clippy::too_many_lines)]
     fn stage_portable_apply(
         &self,
         pending: &PendingImportPreview,
         local: LocalLibrarySnapshot,
         collision_plan: &CollisionPlan,
+        control: &OperationControl,
     ) -> Result<StagedPortableApply, AppError> {
-        let import = eutheto_import::stage_import(
+        let mut import = eutheto_import::stage_import(
             &pending.inspected,
             &pending.preview,
             &pending.options,
@@ -2758,6 +5854,62 @@ impl EuthetoApp {
             collision_plan,
         )
         .map_err(|error| import_error(&error))?;
+        let reference_remap = std::mem::take(&mut import.reference_remap);
+        for staged in &mut import.scenarios {
+            if staged.scenario.document.domain_pack.id.as_str() != WORKFORCE_PACK_ID {
+                continue;
+            }
+            let original = pending
+                .inspected
+                .scenarios
+                .iter()
+                .find(|source| source.document.scenario_id == staged.original_id)
+                .ok_or_else(|| {
+                    import_error(&eutheto_import::ImportError::Remap(
+                        "Workforce import source scenario is missing".to_owned(),
+                    ))
+                })?;
+            normalize_workforce_manual_copy(
+                &original.document,
+                &mut staged.scenario.document,
+                &staged.id_remap,
+                &reference_remap,
+                Some(control),
+            )
+            .map_err(store_error)?;
+        }
+        let copied_scenarios = &import.scenarios;
+        for copied_revision in &mut import.scenario_revisions {
+            let Some(staged) = copied_scenarios.iter().find(|staged| {
+                staged.scenario.document.scenario_id == copied_revision.document.scenario_id
+                    && staged.scenario.document.domain_pack.id.as_str() == WORKFORCE_PACK_ID
+            }) else {
+                continue;
+            };
+            let original = pending
+                .inspected
+                .scenario_revisions
+                .iter()
+                .chain(&pending.inspected.scenarios)
+                .find(|source| {
+                    source.document.scenario_id == staged.original_id
+                        && source.revision == copied_revision.revision
+                })
+                .ok_or_else(|| {
+                    import_error(&eutheto_import::ImportError::Remap(
+                        "historical Workforce import source revision is missing".to_owned(),
+                    ))
+                })?;
+            normalize_workforce_manual_copy(
+                &original.document,
+                &mut copied_revision.document,
+                &staged.id_remap,
+                &reference_remap,
+                Some(control),
+            )
+            .map_err(store_error)?;
+        }
+        drop(reference_remap);
         validate_import_documents(
             import
                 .scenarios
@@ -3170,23 +6322,20 @@ impl EuthetoApp {
             let read_limit = expected_length.saturating_add(1);
             let mut published = Vec::with_capacity(read_limit);
             std::fs::File::open(destination)?
-                .take(u64::try_from(read_limit).map_err(std::io::Error::other)?)
+                .take(u64::try_from(read_limit).map_err(io::Error::other)?)
                 .read_to_end(&mut published)?;
             if verification_cancellation.is_cancelled() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
                     "Safety backup verification cancelled.",
                 ));
             }
             if published.len() != expected_length {
-                return Err(std::io::Error::other(
-                    "published safety backup length differs",
-                ));
+                return Err(io::Error::other("published safety backup length differs"));
             }
-            inspect_application_bundle(&published, &registry).map_err(|_| {
-                std::io::Error::other("published safety backup verification failed")
-            })?;
-            Ok::<_, std::io::Error>(eutheto_export::sha256_hex(&published))
+            inspect_application_bundle(&published, &registry)
+                .map_err(|_| io::Error::other("published safety backup verification failed"))?;
+            Ok::<_, io::Error>(eutheto_export::sha256_hex(&published))
         })
         .await
         .map_err(join_error)?;
@@ -3229,7 +6378,7 @@ impl EuthetoApp {
         let mut previews = self.previews.lock().await;
         if matches!(
             previews.get(&preview_id),
-            Some(PendingPortablePreview::PeopleCsv(_) | PendingPortablePreview::Settings(_))
+            Some(PendingPortablePreview::Csv(_) | PendingPortablePreview::Settings(_))
         ) {
             return Err(protocol_error(
                 "portable.preview_capability_mismatch",
@@ -3247,13 +6396,56 @@ impl EuthetoApp {
         Ok(AppCommandResult::PortablePreviewCancelled)
     }
 
+    /// Preserve imported opaque result data as inert backup payload; only canonical local
+    /// accepted results may be represented as freshly verified in an exported archive.
+    async fn verify_portable_result_sections(
+        &self,
+        sections: &BTreeMap<String, Value>,
+        canonical_result_ids: &BTreeSet<SolutionId>,
+        cancellation: &CancellationToken,
+    ) -> Result<(), AppError> {
+        for (key, value) in sections {
+            self.check_portable_cancelled(cancellation)?;
+            let result_id = Uuid::parse_str(key)
+                .map(SolutionId::from_uuid)
+                .map_err(|_| solution_verification_mismatch())?;
+            if !canonical_result_ids.contains(&result_id) {
+                continue;
+            }
+            let stored = self
+                .store
+                .load_accepted_result(result_id)
+                .await
+                .map_err(|error| match error {
+                    StoreError::AcceptedResultNotFound(_) => solution_verification_mismatch(),
+                    error => store_error(error),
+                })?;
+            let verified = self
+                .ensure_fresh_accepted(stored, cancellation.child())
+                .await?;
+            if serde_json::to_value(&verified.portable).map_err(|_| solution_contract_error())?
+                != *value
+            {
+                return Err(solution_verification_mismatch());
+            }
+        }
+        Ok(())
+    }
+
     async fn export_scenario(
         &self,
         scenario_id: ScenarioId,
         cancellation: &CancellationToken,
     ) -> Result<(Vec<u8>, Revision, Revision), AppError> {
         self.check_portable_cancelled(cancellation)?;
-        let library = self.store.library_snapshot().await.map_err(store_error)?;
+        let query_slot = self.acquire_accepted_query_slot(cancellation).await?;
+        let library = self
+            .store
+            .library_snapshot(eutheto_store::NativeArchivalSelection::Scenario(
+                scenario_id,
+            ))
+            .await
+            .map_err(store_error)?;
         self.check_portable_cancelled(cancellation)?;
         let project = library
             .projects
@@ -3264,6 +6456,12 @@ impl EuthetoApp {
         let library_revision = library.revision;
         let scenario = portable_scenario(project, false);
         let sections = scenario_export_sections(&library, &scenario)?;
+        self.verify_portable_result_sections(
+            &sections.results,
+            &library.canonical_result_ids,
+            cancellation,
+        )
+        .await?;
         let manifest_extensions = scenario_backup_selection_manifest_extensions(&sections)?;
         let snapshot = ScenarioExportSnapshot {
             bundle_id: BundleId::new(self.ids.as_ref()).map_err(id_error)?,
@@ -3283,6 +6481,7 @@ impl EuthetoApp {
         };
         let registry = Arc::clone(&self.pack_registry);
         let bytes = tokio::task::spawn_blocking(move || {
+            let _query_slot = query_slot;
             assemble_scenario_export(&snapshot, &|document| {
                 encode_portable_domain(document, &registry)
             })
@@ -3306,10 +6505,26 @@ impl EuthetoApp {
                 capability: "Portable backup audit history".to_owned(),
             }));
         }
-        let library = self.store.library_snapshot().await.map_err(store_error)?;
+        let query_slot = self.acquire_accepted_query_slot(cancellation).await?;
+        let native_archives = if selection.include_results {
+            eutheto_store::NativeArchivalSelection::All
+        } else {
+            eutheto_store::NativeArchivalSelection::Exclude
+        };
+        let library = self
+            .store
+            .library_snapshot(native_archives)
+            .await
+            .map_err(store_error)?;
         self.check_portable_cancelled(cancellation)?;
         let library_revision = library.revision;
         let (sections, summary) = backup_sections(&library, selection)?;
+        self.verify_portable_result_sections(
+            &sections.results,
+            &library.canonical_result_ids,
+            cancellation,
+        )
+        .await?;
         let scenarios = library
             .projects
             .iter()
@@ -3342,6 +6557,7 @@ impl EuthetoApp {
         };
         let registry = Arc::clone(&self.pack_registry);
         let bytes = tokio::task::spawn_blocking(move || {
+            let _query_slot = query_slot;
             assemble_full_backup(&snapshot, &|document| {
                 encode_portable_domain(document, &registry)
             })
@@ -4594,6 +7810,9 @@ fn history_apply(
     registry: &DomainPackRegistry,
     cancellation: &CancellationToken,
 ) -> Result<(ScenarioDocument, CommandResult), StoreError> {
+    if history.entry.command_type == eutheto_store::NATIVE_PRIVATE_HISTORY_COMMAND_TYPE {
+        return apply_private_history(history, current_revision, source, registry, cancellation);
+    }
     let envelope = CommandEnvelope {
         command_id: history.entry.id,
         scenario_id: history.document.scenario_id,
@@ -4743,17 +7962,110 @@ fn solution_detail(
 fn accepted_reference(accepted: &AcceptedResult) -> Result<AcceptedResultRefV1, AppError> {
     AcceptedResultRefV1::from_result(accepted).map_err(|_| solution_contract_error())
 }
+fn accepted_view_fingerprint(
+    accepted: &AcceptedResult,
+    query: &AcceptedDomainQueryV1,
+) -> Result<[u8; 32], AppError> {
+    const DOMAIN: &[u8] = b"eutheto/accepted-result-view/v1\0";
+    let canonical = eutheto_export::canonical_json(&(
+        accepted.checksum.as_str(),
+        query.view_id.as_str(),
+        &query.parameters,
+    ))
+    .map_err(|error| export_error(&error))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(DOMAIN);
+    hasher.update(&canonical);
+    Ok(*hasher.finalize().as_bytes())
+}
+fn ensure_counterfactual_schema(schema_version: u32) -> Result<(), AppError> {
+    if schema_version == COUNTERFACTUAL_API_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(unsupported_solution_schema())
+    }
+}
 
 fn ensure_solution_schema(schema_version: u32) -> Result<(), AppError> {
     if schema_version == SOLUTION_API_SCHEMA_VERSION {
         Ok(())
     } else {
-        Err(validation_error(
-            "solution.schema_version_unsupported",
-            "/schemaVersion",
-            "The solution request schema version is not supported.",
-        ))
+        Err(unsupported_solution_schema())
     }
+}
+fn ensure_adopt_base_schema(schema_version: u32) -> Result<(), AppError> {
+    if schema_version == SOLUTION_ADOPT_BASE_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(unsupported_solution_schema())
+    }
+}
+
+fn selected_workforce_assignments(
+    accepted: &AcceptedResult,
+) -> Result<Vec<AssignmentPair>, AppError> {
+    let mut decoded = BTreeSet::new();
+    let mut selected = BTreeSet::new();
+    for assignment in &accepted.solution.assignments {
+        let (pair, is_selected) = decode_workforce_assignment(assignment)
+            .map_err(|_| solution_verification_mismatch())?;
+        if !decoded.insert(pair) {
+            return Err(solution_verification_mismatch());
+        }
+        if is_selected {
+            selected.insert(pair);
+        }
+    }
+    Ok(selected.into_iter().collect())
+}
+
+fn workforce_base_schedule(document: &ScenarioDocument) -> Result<Option<BaseSchedule>, AppError> {
+    if document.domain_pack.id.as_str() != WORKFORCE_PACK_ID {
+        return Err(unsupported_project_pack(&document.domain_pack));
+    }
+    let mut base = None;
+    for (map_id, value) in &document.domain.entities {
+        if value.get("kind").and_then(Value::as_str) != Some("baseSchedule") {
+            continue;
+        }
+        let entity: WorkforceEntity = serde_json::from_value(value.clone()).map_err(|_| {
+            validation_error(
+                "solution.base_adoption_invalid",
+                "/domain/entities",
+                "The current Workforce base schedule is malformed.",
+            )
+        })?;
+        let WorkforceEntity::BaseSchedule(candidate) = entity else {
+            return Err(validation_error(
+                "solution.base_adoption_invalid",
+                "/domain/entities",
+                "The current Workforce base schedule has an invalid kind.",
+            ));
+        };
+        if candidate.id != *map_id {
+            return Err(validation_error(
+                "solution.base_adoption_invalid",
+                "/domain/entities",
+                "The current Workforce base schedule identity is inconsistent.",
+            ));
+        }
+        if base.replace(candidate).is_some() {
+            return Err(validation_error(
+                "solution.base_adoption_invalid",
+                "/domain/entities",
+                "The current Workforce document contains more than one base schedule.",
+            ));
+        }
+    }
+    Ok(base)
+}
+
+fn unsupported_solution_schema() -> AppError {
+    validation_error(
+        "solution.schema_version_unsupported",
+        "/schemaVersion",
+        "The solution request schema version is not supported.",
+    )
 }
 
 fn ensure_solution_scenario(
@@ -4804,37 +8116,232 @@ fn assignment_evidence(
         lock_state: None,
     })
 }
+fn validation_issue_evidence(
+    issue: &ValidationIssue,
+    expected_issue_id: &eutheto_domain_ir::VerificationIssueId,
+) -> Result<ValidationIssueEvidenceV1, AppError> {
+    let issue_id = validation_issue_identity(issue).map_err(|_| resource_limit_error())?;
+    if &issue_id != expected_issue_id {
+        return Err(explanation_unavailable("validation"));
+    }
+    let severity = match issue.severity {
+        ValidationSeverity::Error => ExplanationValidationSeverity::MustFix,
+        ValidationSeverity::Warning => ExplanationValidationSeverity::ReviewSuggested,
+        ValidationSeverity::Info => ExplanationValidationSeverity::Information,
+    };
+    Ok(ValidationIssueEvidenceV1 {
+        issue_id,
+        severity,
+        message_key: issue.code.clone(),
+        parameters: BTreeMap::new(),
+        // Native field/resource provenance stays with the pack renderer; do not invent typed IR
+        // facts from a generic native issue.
+        field_path: None,
+        entity: None,
+        rule_id: None,
+    })
+}
 
-fn solution_pack<'a>(
+struct Blake3Writer<'a> {
+    hasher: &'a mut blake3::Hasher,
+    control: &'a OperationControl,
+    deadline: tokio::time::Instant,
+    unchecked_bytes: usize,
+}
+
+impl Write for Blake3Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.unchecked_bytes = self.unchecked_bytes.saturating_add(bytes.len());
+        if self.unchecked_bytes >= 16 * 1024 {
+            self.unchecked_bytes = 0;
+            check_accepted_hash(self.control, self.deadline).map_err(|_| {
+                io::Error::new(io::ErrorKind::Interrupted, "accepted hash interrupted")
+            })?;
+        }
+        self.hasher.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn check_accepted_hash(
+    control: &OperationControl,
+    deadline: tokio::time::Instant,
+) -> Result<(), OperationInterruption> {
+    control.check()?;
+    if tokio::time::Instant::now() >= deadline {
+        Err(OperationInterruption::DeadlineExceeded)
+    } else {
+        Ok(())
+    }
+}
+
+/// Hashes the complete captured source tuple, not any persisted checksum field alone.
+fn accepted_content_hash(
     stored: &StoredAcceptedResultV2,
-    registry: &'a DomainPackRegistry,
-) -> Result<&'a dyn eutheto_domain_api::DomainPack, AppError> {
-    available_pack(&stored.document, registry)
-        .ok_or_else(|| unsupported_project_pack(&stored.document.domain_pack))
+    control: &OperationControl,
+    deadline: tokio::time::Instant,
+) -> Result<AcceptedContentHash, AppError> {
+    const DOMAIN: &[u8] = b"eutheto/accepted-source-tuple/v1\0";
+    check_accepted_hash(control, deadline).map_err(operation_interrupted)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(DOMAIN);
+    {
+        let mut writer = Blake3Writer {
+            hasher: &mut hasher,
+            control,
+            deadline,
+            unchecked_bytes: 0,
+        };
+        let source_tuple = (
+            &stored.document,
+            &stored.portable,
+            &stored.portable.scenario_id,
+            stored.portable.scenario_revision,
+        );
+        serde_json::to_writer(&mut writer, &source_tuple).map_err(|_| {
+            check_accepted_hash(control, deadline)
+                .err()
+                .map_or_else(solution_contract_error, operation_interrupted)
+        })?;
+    }
+    check_accepted_hash(control, deadline).map_err(operation_interrupted)?;
+    Ok(*hasher.finalize().as_bytes())
 }
 
 fn compare_stored_solutions(
     base: &StoredAcceptedResultV2,
     candidate: &StoredAcceptedResultV2,
-) -> Result<SolutionComparisonV1, AppError> {
-    compare_accepted_results(
-        &base.portable.accepted_result,
-        &candidate.portable.accepted_result,
-        Some(&ComparisonContext {
-            locks: &[],
-            manifests: Some(ComparisonRunManifests {
-                base: &base.portable.run_manifest,
-                candidate: &candidate.portable.run_manifest,
-            }),
-        }),
-    )
-    .map_err(|_| {
-        validation_error(
-            "solution.comparison_invalid",
-            "/request",
-            "The selected accepted solutions cannot be compared.",
+    registry: &DomainPackRegistry,
+    control: &OperationControl,
+) -> Result<SolutionComparisonV2, AppError> {
+    control.check().map_err(operation_interrupted)?;
+    let prepared = prepare_comparison_v2(&base.portable, &candidate.portable, Some(control))
+        .map_err(|error| comparison_error(&error))?;
+    let pack = available_pack(&base.document, registry)
+        .ok_or_else(|| unsupported_project_pack(&base.document.domain_pack))?;
+    let mut enrichment = pack
+        .comparison_enrichment(
+            &base.document,
+            &base.portable,
+            &candidate.document,
+            &candidate.portable,
+            &prepared,
+            Some(control),
         )
-    })
+        .map_err(|error| domain_interruption(&error).unwrap_or_else(comparison_invalid))?;
+    if enrichment.scoring_contexts.is_some() {
+        let base_policy = current_comparison_policy(base, pack, control)?;
+        let admitted = if let Some(base_policy) = base_policy.as_ref()
+            && base_policy == &base.portable.run_input.objective_policy_hash
+        {
+            if same_comparison_policy_source(base, candidate) {
+                base_policy == &candidate.portable.run_input.objective_policy_hash
+            } else {
+                current_comparison_policy(candidate, pack, control)?.as_deref()
+                    == Some(candidate.portable.run_input.objective_policy_hash.as_str())
+            }
+        } else {
+            false
+        };
+        if !admitted {
+            enrichment.scoring_contexts = None;
+        }
+    }
+    prepared
+        .finish(enrichment)
+        .map_err(|error| comparison_error(&error))
+}
+
+fn comparison_error(error: &eutheto_domain_ir::ComparisonError) -> AppError {
+    match error {
+        eutheto_domain_ir::ComparisonError::Interrupted(reason) => operation_interrupted(*reason),
+        eutheto_domain_ir::ComparisonError::InvalidComparison(
+            eutheto_domain_ir::DomainContractError::LimitExceeded(_),
+        )
+        | eutheto_domain_ir::ComparisonError::InvalidAcceptedResult {
+            source: eutheto_domain_ir::DomainContractError::LimitExceeded(_),
+            ..
+        } => resource_limit_error(),
+        _ => comparison_invalid(),
+    }
+}
+
+fn same_comparison_policy_source(
+    base: &StoredAcceptedResultV2,
+    candidate: &StoredAcceptedResultV2,
+) -> bool {
+    let before = &base.portable.run_input;
+    let after = &candidate.portable.run_input;
+    // Both hashes already bind freshly verified exact original documents.
+    before.snapshot_document_hash == after.snapshot_document_hash
+        && before.scenario_revision == after.scenario_revision
+        && before.objective_context == after.objective_context
+        && eutheto_planning_ir::PlanningIrLimitsV1::DEFAULT
+            .tightened_by(before.solve_options.resource_limits)
+            == eutheto_planning_ir::PlanningIrLimitsV1::DEFAULT
+                .tightened_by(after.solve_options.resource_limits)
+}
+
+fn current_comparison_policy(
+    source: &StoredAcceptedResultV2,
+    pack: &dyn eutheto_domain_api::DomainPack,
+    control: &OperationControl,
+) -> Result<Option<String>, AppError> {
+    control.check().map_err(operation_interrupted)?;
+    let input = &source.portable.run_input;
+    let Some(objective_context) = input.objective_context.as_ref() else {
+        return Ok(None);
+    };
+    let limits = eutheto_planning_ir::PlanningIrLimitsV1::DEFAULT
+        .tightened_by(input.solve_options.resource_limits);
+    let problem = match pack.compile(
+        &source.document,
+        &eutheto_domain_api::CompileContext {
+            objective_context: Some(objective_context.clone()),
+            scenario_revision: input.scenario_revision,
+            semantic_metadata: BTreeMap::new(),
+            control: control.clone(),
+            planning_limits: limits,
+        },
+    ) {
+        Ok(problem) => problem,
+        Err(error) => return domain_interruption(&error).map_or(Ok(None), Err),
+    };
+    control.check().map_err(operation_interrupted)?;
+    if problem.schema_version != input.planning_ir_schema_version
+        || problem.metadata.pack_id != input.pack_id
+        || problem.metadata.scenario_id != input.scenario_id
+        || problem.metadata.scenario_revision != input.scenario_revision
+        || problem.metadata.compiler_version != input.compiler_version
+        || problem.metadata.projection_version
+            != source.portable.accepted_result.solution.projection_version
+    {
+        return Ok(None);
+    }
+    // This is current per-source policy consistency, not historical worker authentication.
+    let policy = eutheto_planning_ir::canonical_objective_policy_hash(&problem, limits);
+    control.check().map_err(operation_interrupted)?;
+    match policy {
+        Ok(hash) => Ok(Some(hash)),
+        Err(eutheto_planning_ir::CanonicalError::Validation(error))
+            if error.code == eutheto_planning_ir::ValidationCode::LimitExceeded =>
+        {
+            Err(resource_limit_error())
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+fn comparison_invalid() -> AppError {
+    validation_error(
+        "solution.comparison_invalid",
+        "/request",
+        "The selected accepted solutions cannot be compared.",
+    )
 }
 
 fn reverify_accepted_solution(
@@ -4854,7 +8361,7 @@ fn reverify_accepted_solution(
 fn reverify_portable_solution(
     document: &ScenarioDocument,
     revision: u64,
-    portable: &PortableAcceptedResultV2,
+    portable: &PortableAcceptedResult,
     registry: &DomainPackRegistry,
     control: &OperationControl,
 ) -> Result<VerificationReport, AppError> {
@@ -4862,20 +8369,61 @@ fn reverify_portable_solution(
     portable
         .validate()
         .map_err(|_| solution_verification_mismatch())?;
-    let accepted = &portable.accepted_result;
+    crate::native_observations::validate_fingerprint(&portable.run_input, &portable.run_manifest)
+        .map_err(|_| solution_verification_mismatch())?;
+    reverify_original_domain_result(
+        document,
+        revision,
+        &portable.run_input,
+        &portable.accepted_result,
+        registry,
+        control,
+    )
+}
+
+fn reverify_checkpoint_solution(
+    document: &ScenarioDocument,
+    checkpoint: &VerifiedCheckpoint,
+    registry: &DomainPackRegistry,
+    control: &OperationControl,
+) -> Result<VerificationReport, AppError> {
+    control.check().map_err(operation_interrupted)?;
+    checkpoint
+        .validate()
+        .map_err(|_| solution_verification_mismatch())?;
+    reverify_original_domain_result(
+        document,
+        checkpoint.run_input.scenario_revision,
+        &checkpoint.run_input,
+        &checkpoint.accepted_result,
+        registry,
+        control,
+    )
+}
+
+fn reverify_original_domain_result(
+    document: &ScenarioDocument,
+    revision: u64,
+    input: &RunInput,
+    accepted: &AcceptedResult,
+    registry: &DomainPackRegistry,
+    control: &OperationControl,
+) -> Result<VerificationReport, AppError> {
+    control.check().map_err(operation_interrupted)?;
     let solution = &accepted.solution;
     let pack = available_pack(document, registry)
         .ok_or_else(|| unsupported_project_pack(&document.domain_pack))?;
     let document_hash = serde_json::to_vec(document)
         .map(|bytes| blake3_hex(&bytes))
         .map_err(|_| solution_contract_error())?;
-    if document_hash != portable.run_input.snapshot_document_hash
+    if document_hash != input.snapshot_document_hash
         || document_hash != accepted.verification.document_hash
         || solution.pack_id != document.domain_pack.id
-        || portable.run_input.pack_schema_version != document.domain_pack.schema_version
+        || input.pack_schema_version != document.domain_pack.schema_version
         || solution.scenario_id != document.scenario_id
         || solution.scenario_revision != revision
-        || portable.scenario_revision != revision
+        || input.scenario_id != document.scenario_id
+        || input.scenario_revision != revision
     {
         return Err(solution_verification_mismatch());
     }
@@ -4891,18 +8439,32 @@ fn reverify_portable_solution(
         solution.scenario_id,
         solution.scenario_revision,
         document_hash,
-        portable.run_input.model_hash.clone(),
+        input.model_hash.clone(),
         solution
             .canonical_hash()
             .map_err(|_| solution_verification_mismatch())?,
         scope.checksum,
     )
     .map_err(|_| solution_verification_mismatch())?;
-    let authoritative_score = pack.score(document, solution, control).map_err(|error| {
-        domain_interruption(&error).unwrap_or_else(solution_verification_failed)
-    })?;
+    let authoritative_score = pack
+        .score(
+            document,
+            solution,
+            input.objective_context.as_ref(),
+            control,
+        )
+        .map_err(|error| {
+            domain_interruption(&error).unwrap_or_else(solution_verification_failed)
+        })?;
     let report = pack
-        .verify(document, solution, &context, &authoritative_score, control)
+        .verify(
+            document,
+            solution,
+            input.objective_context.as_ref(),
+            &context,
+            &authoritative_score,
+            control,
+        )
         .map_err(|error| {
             domain_interruption(&error).unwrap_or_else(solution_verification_failed)
         })?;
@@ -4922,6 +8484,28 @@ fn reverify_portable_solution(
     Ok(report)
 }
 
+pub(super) fn same_accepted_original(
+    left: &RunBaselineOriginal,
+    right: &PortableAcceptedResult,
+) -> bool {
+    // Source provenance only: callers must separately bind any recorded carrier pair census.
+    // Embedded and run-only carrier entity IDs are not part of native source identity.
+    left.accepted_result.solution_id == right.result_id
+        && left.accepted_result.result_checksum == right.accepted_result.checksum
+        && left.source_scenario_id == right.scenario_id
+        && left.source_revision == right.scenario_revision
+        && left.source_document_hash == right.run_input.snapshot_document_hash
+        && left.source_run_id == right.run_input.run_id
+        && left.source_run_input_checksum == right.run_input.checksum
+        && left.source_run_manifest_checksum == right.run_manifest.checksum
+}
+
+async fn wait_for_cancellation(token: &CancellationToken) {
+    while !token.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 fn operation_interrupted(reason: OperationInterruption) -> AppError {
     match reason {
         OperationInterruption::Cancelled => {
@@ -4935,7 +8519,7 @@ fn operation_interrupted(reason: OperationInterruption) -> AppError {
     }
 }
 
-fn resource_limit_error() -> AppError {
+pub(crate) fn resource_limit_error() -> AppError {
     protocol_error(
         "operation.resource_limit",
         "The domain operation could not complete within its resource limit.",
@@ -4966,6 +8550,13 @@ fn solution_view_error(error: &DomainPackError) -> AppError {
             "The selected result view is unavailable for this accepted solution.",
         ),
     }
+}
+
+fn explanation_render_request(
+    payload: ExplanationEvidencePayloadV2,
+) -> Result<EvidenceRenderRequestV2, AppError> {
+    let evidence = ExplanationEvidenceV2::new(payload).map_err(|_| solution_contract_error())?;
+    EvidenceRenderRequestV2::new(evidence).map_err(|_| solution_contract_error())
 }
 
 fn explanation_render_error(error: &DomainPackError) -> AppError {
@@ -5000,7 +8591,7 @@ fn solution_reference_error(path: &str) -> AppError {
     )
 }
 
-fn solution_contract_error() -> AppError {
+pub(crate) fn solution_contract_error() -> AppError {
     protocol_error(
         "solution.authority_invalid",
         "The retained accepted-solution authority could not be used safely.",
@@ -5014,16 +8605,18 @@ fn solution_verification_failed() -> AppError {
         message: "Independent verification could not be completed safely.".to_owned(),
         retryable: false,
         diagnostic_id: None,
+        known_alarm: None,
     })
 }
 
-fn solution_verification_mismatch() -> AppError {
+pub(crate) fn solution_verification_mismatch() -> AppError {
     AppError::Verification(VerificationFailure {
         code: "solution.reverification_mismatch".to_owned(),
         message: "Fresh independent verification did not match the retained accepted result."
             .to_owned(),
         retryable: false,
         diagnostic_id: None,
+        known_alarm: None,
     })
 }
 
@@ -5038,6 +8631,36 @@ fn directory_availability(path: Option<&Path>) -> DirectoryAvailabilityLabel {
     match path.and_then(|path| std::fs::metadata(path).ok()) {
         Some(metadata) if metadata.is_dir() => DirectoryAvailabilityLabel::Available,
         _ => DirectoryAvailabilityLabel::Unavailable,
+    }
+}
+
+fn normalize_workforce_manual_copy(
+    original: &ScenarioDocument,
+    copied: &mut ScenarioDocument,
+    mapping: &BTreeMap<Uuid, Uuid>,
+    reference_remap: &BTreeMap<Uuid, Uuid>,
+    control: Option<&OperationControl>,
+) -> Result<(), StoreError> {
+    if original.domain_pack.id.as_str() == WORKFORCE_PACK_ID {
+        if copied.domain_pack.id.as_str() != WORKFORCE_PACK_ID {
+            return Err(StoreError::InvalidDuplicateMapping(
+                "copied domain pack does not match its source".to_owned(),
+            ));
+        }
+        eutheto_workforce::assignment_rules::normalize_workforce_manual_selection_copy(
+            original,
+            copied,
+            mapping,
+            reference_remap,
+            control,
+        )
+        .map_err(diagnostic_actions::pack_store_error)
+    } else if copied.domain_pack.id.as_str() == WORKFORCE_PACK_ID {
+        Err(StoreError::InvalidDuplicateMapping(
+            "copied domain pack does not match its source".to_owned(),
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -5073,10 +8696,21 @@ fn store_error(error: StoreError) -> AppError {
         }
         StoreError::ScenarioNotFound(id) => AppError::NotFound(ResourceRef::Scenario(id)),
         StoreError::AcceptedResultNotFound(id) => AppError::NotFound(ResourceRef::Solution(id)),
+        StoreError::AcceptedResultChanged(_) => solution_verification_mismatch(),
         StoreError::CounterfactualJobNotFound(_) => validation_error(
             "solution.counterfactual_not_found",
             "/request/subject/jobId",
             "The selected completed counterfactual was not found.",
+        ),
+        StoreError::CounterfactualJobListLimit { .. } => validation_error(
+            "solution.counterfactual_page_limit",
+            "/limit",
+            "Diagnostic history pages must contain between 1 and 32 jobs.",
+        ),
+        StoreError::InvalidCounterfactualCursor(_) => validation_error(
+            "solution.counterfactual_page_cursor",
+            "/before",
+            "The diagnostic history continuation is invalid for this scenario.",
         ),
         StoreError::Conflict { expected, actual }
         | StoreError::LibraryConflict { expected, actual } => AppError::Conflict {
@@ -5195,7 +8829,6 @@ fn validation_error(code: &str, path: &str, message: &str) -> AppError {
 fn unsupported(capability: DeferredCapability) -> AppError {
     let (code, name) = match capability {
         DeferredCapability::Solve => ("capability.solve_unavailable", "Solve services"),
-        DeferredCapability::Solution => ("capability.solution_unavailable", "Solution services"),
         DeferredCapability::ArtificialIntelligence => (
             "capability.ai_unavailable",
             "Artificial intelligence services",
@@ -5417,7 +9050,7 @@ fn import_error(error: &eutheto_import::ImportError) -> AppError {
     }
 }
 
-fn filesystem_error(_: std::io::Error) -> AppError {
+fn filesystem_error(_: io::Error) -> AppError {
     AppError::Storage(StorageFailure {
         code: "storage.directory_initialization_failed".to_owned(),
         message: "The application data directories could not be initialized.".to_owned(),
@@ -5431,6 +9064,9 @@ fn export_error(error: &ExportError) -> AppError {
         ExportError::ResourceLimitExceeded => resource_limit_error(),
         ExportError::Cancelled => {
             protocol_error("operation.cancelled", "The operation was cancelled.", false)
+        }
+        ExportError::DeadlineExceeded => {
+            operation_interrupted(OperationInterruption::DeadlineExceeded)
         }
         ExportError::DestinationExists(_) => AppError::Storage(StorageFailure {
             code: "portable.destination_exists".to_owned(),
@@ -5483,6 +9119,375 @@ fn join_error(_: tokio::task::JoinError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::error::Error;
+
+    async fn app_with_clock(
+        now: Rfc3339Timestamp,
+    ) -> Result<(EuthetoApp, tempfile::TempDir), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let directory_path = directory.path().canonicalize()?;
+        let app = EuthetoApp::open(AppDependencies {
+            paths: AppPaths {
+                database: directory_path.join("app.sqlite"),
+                safety_backups: directory_path.join("backups"),
+            },
+            clock: Arc::new(eutheto_types::FixedClock::new(now)),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
+            ids: Arc::new(eutheto_types::SystemIdGenerator),
+            cancellation: CancellationToken::new(),
+        })
+        .await
+        .map_err(|error| io::Error::other(format!("opening app fixture: {error:?}")))?;
+        Ok((app, directory))
+    }
+
+    #[tokio::test]
+    async fn native_verification_slot_preserves_parent_deadline_and_cancellation()
+    -> Result<(), Box<dyn Error>> {
+        let (app, _directory) = app_with_clock("2026-01-01T00:00:00Z".parse()?).await?;
+        let _occupied = Arc::clone(&app.accepted_verification.cache.slots)
+            .acquire_many_owned(u32::try_from(ACCEPTED_VERIFICATION_MAX_IN_FLIGHT)?)
+            .await?;
+        for cancel in [false, true] {
+            let clock = Arc::new(eutheto_types::FixedMonotonicClock::default());
+            let cancellation = CancellationToken::new();
+            let budget = eutheto_types::ParentSolveBudget::new(
+                eutheto_types::DurationMillis::new(1000)?,
+                clock.clone(),
+                cancellation.clone(),
+            )?;
+            let control = OperationControl::Solve(budget.phase_view());
+            let pending = app.acquire_verification_slot(
+                &control,
+                tokio::time::Instant::now() + Duration::from_secs(30),
+            );
+            tokio::pin!(pending);
+            std::future::poll_fn(|context| {
+                assert!(pending.as_mut().poll(context).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            let expected = if cancel {
+                cancellation.cancel();
+                "operation.cancelled"
+            } else {
+                clock.advance(Duration::from_secs(1))?;
+                "operation.deadline_exceeded"
+            };
+            let result = tokio::time::timeout(Duration::from_secs(1), pending).await?;
+            assert!(matches!(result, Err(AppError::Protocol(failure)) if failure.code == expected));
+        }
+        Ok(())
+    }
+
+    // One complete accepted-result/run binding fixture; splitting it hides checksum ancestry.
+    #[allow(clippy::too_many_lines)]
+    fn publication_fixture() -> Result<(NewSolveRunV1, RunInput, AcceptedResult), Box<dyn Error>> {
+        let run_id = "018f47f2-e880-7000-8000-000000000101".parse::<SolveRunId>()?;
+        let request_id = "018f47f2-e880-7000-8000-000000000102".parse::<RequestId>()?;
+        let scenario_id = "018f47f2-e880-7000-8000-000000000103".parse::<ScenarioId>()?;
+        let snapshot_id =
+            "018f47f2-e880-7000-8000-000000000104".parse::<eutheto_types::ScenarioSnapshotId>()?;
+        let solution_id = "018f47f2-e880-7000-8000-000000000105".parse::<SolutionId>()?;
+        let started_at = Rfc3339Timestamp::parse("2026-01-01T00:00:00Z")?;
+        let pack_id = PackId::new("official.synthetic")?;
+        let backend_id = BackendId::new("ortools.cp-sat")?;
+        let model_hash = blake3_hex(b"model");
+        let objective_policy_hash = blake3_hex(b"objective-policy");
+        let solve_options = eutheto_types::SolveOptions {
+            backend: eutheto_types::BackendSelection::Auto,
+            mode: eutheto_types::SolveMode::Balanced,
+            time_limit_milliseconds: eutheto_types::DurationMillis::new(30_000)?,
+            memory_limit_bytes: Some(64 * 1024 * 1024),
+            worker_threads: eutheto_types::WorkerThreadPolicy::Exact(1),
+            random_seed: 7,
+            solution_limit: Some(1),
+            stop_after_first_feasible: true,
+            collect_intermediate_solutions: false,
+            explanation_mode: eutheto_types::ExplanationMode::Standard,
+            preserve_existing: eutheto_types::PreservationPolicy::None,
+            reproducibility: eutheto_types::ReproducibilityMode::Deterministic,
+            resource_limits: eutheto_types::ResourceLimits {
+                max_entities: 1_000,
+                max_rules: 1_000,
+                max_variables: 10_000,
+                max_constraints: 10_000,
+            },
+        };
+        let input = RunInput::new(
+            run_id,
+            request_id,
+            scenario_id,
+            7,
+            snapshot_id,
+            blake3_hex(b"snapshot"),
+            started_at,
+            pack_id.clone(),
+            1,
+            1,
+            "compiler-1".to_owned(),
+            "app-1".to_owned(),
+            backend_id.clone(),
+            "backend-1".to_owned(),
+            "adapter-1".to_owned(),
+            "worker-1".to_owned(),
+            "solver-1".to_owned(),
+            1,
+            0,
+            model_hash.clone(),
+            objective_policy_hash.clone(),
+            solve_options.clone(),
+            "America/Chicago".parse()?,
+            None,
+            None,
+        )?;
+        let request = NewSolveRunV1 {
+            objective_context: None,
+            run_id,
+            request_id,
+            scenario_id,
+            expected_revision: Revision::new(7),
+            planning_ir_schema_version: 1,
+            compiler_version: "compiler-1".to_owned(),
+            application_version: "app-1".to_owned(),
+            backend_id,
+            backend_version: "backend-1".to_owned(),
+            adapter_version: "adapter-1".to_owned(),
+            worker_version: "worker-1".to_owned(),
+            solver_version: "solver-1".to_owned(),
+            protocol_major: 1,
+            protocol_minor: 0,
+            model_hash,
+            objective_policy_hash,
+            solve_options,
+            temporary_condition_hash: None,
+            started_at,
+        };
+        let solution = eutheto_domain_ir::NormalizedSolution {
+            schema_version: eutheto_domain_ir::NORMALIZED_SOLUTION_SCHEMA_VERSION,
+            pack_id,
+            scenario_id,
+            scenario_revision: 7,
+            projection_version: 1,
+            solution_id,
+            assignments: Vec::new(),
+        };
+        let context = VerificationContextV1::new(
+            scenario_id,
+            7,
+            blake3_hex(b"snapshot"),
+            blake3_hex(b"model"),
+            solution.canonical_hash()?,
+            blake3_hex(b"verification-scope"),
+        )?;
+        let report = VerificationReport::new(
+            &context,
+            Vec::new(),
+            ScoreVector {
+                feasibility: 0,
+                levels: Vec::new(),
+            },
+            Vec::new(),
+            BTreeMap::new(),
+        )?;
+        Ok((request, input, AcceptedResult::new(solution, report)?))
+    }
+
+    fn publication_state(
+        app: &EuthetoApp,
+        accepted_at: Rfc3339Timestamp,
+    ) -> Result<
+        (
+            OrdinarySolveLease,
+            OrdinaryCheckpointWork,
+            RunInput,
+            AcceptedResult,
+        ),
+        Box<dyn Error>,
+    > {
+        let (request, input, accepted) = publication_fixture()?;
+        let lease = app
+            .reserve_ordinary_solve_custody(&request)
+            .map_err(|error| io::Error::other(format!("reserving lease fixture: {error:?}")))?;
+        lease
+            .bind_started(&input, request.started_at)
+            .map_err(|error| io::Error::other(format!("binding lease fixture: {error:?}")))?;
+        lease
+            .record_first_accepted(
+                accepted.solution.solution_id,
+                &accepted.checksum,
+                accepted_at,
+            )
+            .map_err(|error| io::Error::other(format!("recording accepted fixture: {error:?}")))?;
+        let work = lease
+            .checkpoint_work()
+            .map_err(|error| io::Error::other(format!("claiming checkpoint fixture: {error:?}")))?;
+        Ok((lease, work, input, accepted))
+    }
+
+    #[test]
+    fn recipient_source_counts_captured_json_spare_capacity() -> Result<(), Box<dyn Error>> {
+        let (_, mut input, accepted) = publication_fixture()?;
+        let hash = input.snapshot_document_hash.clone();
+        input.objective_context = Some(serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2, "packId": input.pack_id,
+            "profileId": "eutheto.objective.authored", "semanticVersion": 1,
+            "operation": "repair",
+            "baseline": {
+                "original": {
+                    "entity": { "kind": "tests.baseline", "id": "tests.original" },
+                    "pairContentHash": hash,
+                    "acceptedResult": {
+                        "solutionId": accepted.solution.solution_id,
+                        "resultChecksum": accepted.checksum,
+                    },
+                    "sourceScenarioId": input.scenario_id, "sourceRevision": input.scenario_revision,
+                    "sourceDocumentHash": hash, "sourceRunId": input.run_id,
+                    "sourceRunInputChecksum": input.checksum, "sourceRunManifestChecksum": hash,
+                },
+                "selection": { "kind": "originalAccepted" }, "selectedPairContentHash": hash,
+                "capturedOriginal": { "label": "x", "pairs": [] },
+            },
+        }))?);
+        let control = OperationControl::Cancellation(CancellationToken::new());
+        let measure = |input: &RunInput| -> Result<usize, Box<dyn Error>> {
+            let mut bytes = recipient_memory::SourceBytes::new(&control)
+                .map_err(|error| format!("{error:?}"))?;
+            bytes.input(input).map_err(|error| format!("{error:?}"))?;
+            Ok(bytes.finish())
+        };
+        let before = measure(&input)?;
+        let context = input
+            .objective_context
+            .as_mut()
+            .ok_or("missing objective context")?;
+        let baseline = context
+            .baseline
+            .as_mut()
+            .ok_or("missing original baseline")?;
+        let original = Arc::get_mut(baseline.captured_original.as_mut().ok_or("missing JSON")?)
+            .ok_or("unexpected shared test JSON")?;
+        let object = original
+            .as_object_mut()
+            .ok_or("original is not an object")?;
+        let Some(Value::String(label)) = object.get_mut("label") else {
+            return Err("missing label".into());
+        };
+        let previous_label = label.capacity();
+        label.reserve(1024 * 1024);
+        let extra_label = label.capacity() - previous_label;
+        let pairs = object
+            .get_mut("pairs")
+            .and_then(Value::as_array_mut)
+            .ok_or("missing pairs")?;
+        let previous_pairs = pairs.capacity();
+        pairs.reserve(32_768);
+        let extra_pairs = (pairs.capacity() - previous_pairs) * size_of::<Value>();
+        // Logical/canonical content is unchanged; its allocated backing is not.
+        assert_eq!(measure(&input)?, before + extra_label + extra_pairs);
+        control.cancellation().cancel();
+        assert!(measure(&input).is_err());
+        Ok(())
+    }
+
+    fn checkpoint(
+        input: RunInput,
+        accepted: AcceptedResult,
+        accepted_at: Rfc3339Timestamp,
+    ) -> Result<VerifiedCheckpoint, Box<dyn Error>> {
+        Ok(VerifiedCheckpoint::new(
+            input,
+            eutheto_types::DurationMillis::new(100)?,
+            eutheto_types::DurationMillis::new(200)?,
+            accepted_at,
+            accepted,
+            BTreeMap::new(),
+        )?)
+    }
+
+    #[tokio::test]
+    async fn verified_publication_keeps_acceptance_time_separate_from_event_time()
+    -> Result<(), Box<dyn Error>> {
+        let accepted_at = Rfc3339Timestamp::parse("2026-01-01T00:00:01Z")?;
+        let published_at = Rfc3339Timestamp::parse("2026-01-01T00:00:02Z")?;
+        let (app, _directory) = app_with_clock(published_at).await?;
+        let mut events = app.events.subscribe();
+        let (lease, work, input, accepted) = publication_state(&app, accepted_at)?;
+        let checkpoint = checkpoint(input, accepted, accepted_at)?;
+        assert_eq!(checkpoint.accepted_at, accepted_at);
+
+        app.publish_solve_verified(&checkpoint, &work)
+            .map_err(|error| {
+                io::Error::other(format!("publishing checkpoint fixture: {error:?}"))
+            })?;
+
+        let event = events.try_recv()?;
+        assert_eq!(event.topic, EventTopic::SolveVerified);
+        assert!(matches!(
+            event.payload,
+            EventPayload::SolveVerified { context, .. }
+                if context.timestamp == published_at
+                    && context.timestamp != checkpoint.accepted_at
+        ));
+        let bounds = lease
+            .observation_bounds()
+            .map_err(|error| io::Error::other(format!("reading publication bounds: {error:?}")))?;
+        assert_eq!(bounds.latest_wall, Some(published_at));
+        lease.observe_wall(accepted_at);
+        let bounds = lease
+            .observation_bounds()
+            .map_err(|error| io::Error::other(format!("reading final bounds: {error:?}")))?;
+        assert!(bounds.unreliable);
+        assert_eq!(bounds.latest_wall, Some(published_at));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verified_publication_rejects_a_checkpoint_with_a_different_acceptance_time()
+    -> Result<(), Box<dyn Error>> {
+        let accepted_at = Rfc3339Timestamp::parse("2026-01-01T00:00:01Z")?;
+        let (app, _directory) =
+            app_with_clock(Rfc3339Timestamp::parse("2026-01-01T00:00:03Z")?).await?;
+        let mut events = app.events.subscribe();
+        let (_lease, work, input, accepted) = publication_state(&app, accepted_at)?;
+        let checkpoint = checkpoint(
+            input,
+            accepted,
+            Rfc3339Timestamp::parse("2026-01-01T00:00:02Z")?,
+        )?;
+
+        assert!(matches!(
+            app.publish_solve_verified(&checkpoint, &work),
+            Err(AppError::Protocol(failure)) if failure.code == "solution.authority_invalid"
+        ));
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verified_publication_rejects_a_regressed_publish_time_without_emitting()
+    -> Result<(), Box<dyn Error>> {
+        let accepted_at = Rfc3339Timestamp::parse("2026-01-01T00:00:02Z")?;
+        let (app, _directory) =
+            app_with_clock(Rfc3339Timestamp::parse("2026-01-01T00:00:01Z")?).await?;
+        let mut events = app.events.subscribe();
+        let (_lease, work, input, accepted) = publication_state(&app, accepted_at)?;
+        let checkpoint = checkpoint(input, accepted, accepted_at)?;
+
+        assert!(matches!(
+            app.publish_solve_verified(&checkpoint, &work),
+            Err(AppError::Protocol(failure)) if failure.code == "solve.clock_invalid"
+        ));
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn portable_error_mapping_is_typed_and_does_not_expose_internal_details() {
@@ -5542,12 +9547,12 @@ mod tests {
     #[test]
     fn safety_backup_failure_mapping_accepts_backup_paths_but_not_unrelated_storage() {
         let directory_failure =
-            filesystem_error(std::io::Error::other("blocked safety backup directory"));
+            filesystem_error(io::Error::other("blocked safety backup directory"));
         assert_eq!(
             safe_backup_failure_reason(&directory_failure).as_deref(),
             Some("The application data directories could not be initialized.")
         );
-        let unsafe_private_path = store_error(StoreError::PrivatePath(std::io::Error::other(
+        let unsafe_private_path = store_error(StoreError::PrivatePath(io::Error::other(
             "/home/operator/private unsafe path",
         )));
         assert_eq!(

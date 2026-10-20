@@ -19,7 +19,7 @@ Repository-wide policy remains in [AGENTS.md](../AGENTS.md), [CONTRIBUTING.md](.
 
 | Workflow | Contract |
 |---|---|
-| `pr.yml` | Canonical locked-Nix pull-request checks and sanitized reports. |
+| `pr.yml` | Mandatory sandboxed macOS arm64 browser components, canonical locked-Nix Linux checks, and sanitized reports. |
 | `portable.yml` | Shared exact pins, native prerequisite verification, source builds, and unbundled shell-launch smoke across supported Linux, macOS, and Windows runners. |
 | `security.yml` | Dependency, license, advisory, secret, SBOM, and Tauri-capability review without exposing secrets to pull requests. |
 | `benchmark.yml` | Scheduled and path-gated benchmark evidence only after an approved executable benchmark contract exists. |
@@ -29,7 +29,13 @@ Repository-wide policy remains in [AGENTS.md](../AGENTS.md), [CONTRIBUTING.md](.
 
 A workflow file or green placeholder job is not passing evidence. Unimplemented commands, unavailable runners, and later-phase product gates must be represented as `deferred` or `unavailable`, never silently skipped or reported as success.
 
+The Linux unsigned-package recipient/PDF journey in `ortools-worker.yml` runs the exact verified DEB application and Ubuntu's version-matched `webkit2gtk-driver` through private fixed-target launchers. Only those native children clear Nix library, graphics and GTK discovery paths and restore host executable/data lookup; pnpm, tauri-driver, Xvfb and the network/identity/capability isolation retain the existing Nix harness. Bounded loader-path diagnostics compare the same application under NixGL and the host runtime before the UI journey. Loader resolution alone does not establish that the recipient/PDF journey passes. The separate PR browser job runs the pinned Chromium component suite on `macos-15` arm64 with `chromiumSandbox: true`. The canonical Linux context runs even when that dependency fails or is skipped, and its first step requires browser-job success. Reports retain both the browser step outcome and job result with the configured target; missing output never becomes success. macOS Chromium component evidence does not establish Linux Chromium or native Tauri/PDF acceptance.
+
 Exact `phase/06-desktop` PRs use the bounded [Phase06 integration trial](../docs/contributors/git-workflow.md#temporary-phase06-integration): source/security/dependency checks on every package, explicitly deferred native/package policy gates only for the documented frontend/documentation allowance, and full risk/milestone matrices. Main context names/protections and non-phase event behavior remain unchanged. `just ci-policy-test` covers real selector and terminal-gate behavior; actual hosted runs remain required evidence.
+
+Dependency migration isolation distinguishes upstream inputs from explicitly listed project-owned files. The local Nix packaging definitions are `checks.nix`, `eutheto-cli.nix`, `packages.nix`, `pdf-worker.nix`, and `source-filter.nix`. Existing worker C++ sources/tests, the worker README, and the project-owned solver manifest/build/payload evidence schemas are also local feature surfaces. These edits do not create a migration family on their own, so they can accompany one genuine major dependency update. Worker, benchmark, security, and ownership gates still apply. OR-Tools source contracts, dependency pins, patches, CMake inputs, protocol migrations, Nix inputs, other Nix definitions, and unknown/new Nix or worker paths retain migration classification. Only `.proto` files in the worker `proto/` subtree use the separate schema migration family. Renames retain both deleted and added paths for classification. `just ci-policy-test` exercises these boundaries against real Git changes, including rejected mixed migrations.
+
+Lockfile inventory classification detects newly introduced majors for existing package names; pure pruning adds no migration family, and direct-manifest major crossings are checked independently.
 
 ## Automation invariants
 

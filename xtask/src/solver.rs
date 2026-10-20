@@ -369,7 +369,7 @@ fn validate_packaged_target(manifest: &SmokeManifest, executable: &Path) -> Resu
     );
     Ok(())
 }
-fn host_solver_target() -> Result<(&'static str, &'static str)> {
+pub(crate) fn host_solver_target() -> Result<(&'static str, &'static str)> {
     match (env::consts::OS, env::consts::ARCH) {
         ("windows", "x86_64") => Ok(("x86_64-pc-windows-msvc", "x86_64")),
         ("macos", "x86_64") => Ok(("x86_64-apple-darwin", "x86_64")),
@@ -381,7 +381,7 @@ fn host_solver_target() -> Result<(&'static str, &'static str)> {
     }
 }
 
-fn validate_executable_architecture(executable: &Path, target: &str) -> Result<()> {
+pub(crate) fn validate_executable_architecture(executable: &Path, target: &str) -> Result<()> {
     let mut file = open_regular_file_no_follow(executable)?;
     let mut header = [0u8; 64];
     file.read_exact(&mut header)
@@ -763,6 +763,7 @@ fn manifest_capabilities(capabilities: &[String]) -> Result<BTreeSet<Capability>
             "progress" => Capability::Progress,
             "solution-projection" => Capability::SolutionProjection,
             "solution-stats" => Capability::SolutionStats,
+            "sufficient-assumptions" => Capability::SufficientAssumptions,
             _ => bail!("packaged manifest contains an unknown worker capability"),
         };
         ensure!(
@@ -899,7 +900,7 @@ fn decode_sha256(value: &str) -> Result<[u8; 32]> {
     Ok(digest)
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     let file = open_regular_file_no_follow(path)?;
     let length = file
         .metadata()
@@ -1007,6 +1008,7 @@ pub(crate) fn build_desktop(repo_root: &Path) -> Result<()> {
     #[cfg(not(windows))]
     let artifact_root = build_pinned_nix_artifact(repo_root)?;
     let (manifest_sha256, mut sidecar_lease) = stage_solver_artifact(repo_root, &artifact_root)?;
+    let (pdf_manifest, pdf_manifest_sha256, mut pdf_lease) = crate::pdf::stage_desktop(repo_root)?;
     let mut command = Command::new(if cfg!(windows) { "pnpm.cmd" } else { "pnpm" });
     command
         .args([
@@ -1022,7 +1024,9 @@ pub(crate) fn build_desktop(repo_root: &Path) -> Result<()> {
         ])
         .arg("--no-sign")
         .current_dir(repo_root)
-        .env(SOLVER_MANIFEST_DIGEST_ENV, manifest_sha256);
+        .env(SOLVER_MANIFEST_DIGEST_ENV, manifest_sha256)
+        .env(crate::pdf::MANIFEST_PATH_ENV, &pdf_manifest)
+        .env(crate::pdf::MANIFEST_SHA_ENV, &pdf_manifest_sha256);
     #[cfg(target_os = "linux")]
     command.args(["--bundles", "deb,rpm"]);
     #[cfg(target_os = "macos")]
@@ -1033,6 +1037,7 @@ pub(crate) fn build_desktop(repo_root: &Path) -> Result<()> {
         .status()
         .context("failed to start the bundle-aware Tauri desktop build");
     sidecar_lease.commit();
+    pdf_lease.commit();
     #[cfg(windows)]
     native_lease.commit()?;
     let status = build_result?;
@@ -1040,6 +1045,8 @@ pub(crate) fn build_desktop(repo_root: &Path) -> Result<()> {
         status.success(),
         "bundle-aware Tauri desktop build failed with {status}"
     );
+    #[cfg(target_os = "macos")]
+    crate::pdf::verify_macos_bundle(repo_root, &pdf_manifest_sha256)?;
     Ok(())
 }
 
@@ -1489,7 +1496,7 @@ fn ensure_safe_relative_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_regular_file(
+pub(crate) fn copy_regular_file(
     source: &Path,
     destination_root: &Path,
     destination: &Path,
@@ -1626,7 +1633,7 @@ fn add_no_follow_flags(options: &mut OpenOptions) -> Result<()> {
     Ok(())
 }
 
-fn open_regular_file_no_follow(path: &Path) -> Result<File> {
+pub(crate) fn open_regular_file_no_follow(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     add_no_follow_flags(&mut options)?;
@@ -1645,7 +1652,7 @@ fn open_regular_file_no_follow(path: &Path) -> Result<File> {
 }
 
 #[derive(Debug)]
-struct PackageStageGuard {
+pub(crate) struct PackageStageGuard {
     parent: PathBuf,
     package_name: &'static str,
     lock: Option<File>,
@@ -1657,7 +1664,7 @@ impl PackageStageGuard {
         Self::acquire_package(repository, parent, "sidecar")
     }
 
-    fn acquire_package(
+    pub(crate) fn acquire_package(
         repository: &Path,
         parent: &Path,
         package_name: &'static str,
@@ -1692,22 +1699,22 @@ impl PackageStageGuard {
         })
     }
 
-    fn staging(&self) -> PathBuf {
+    pub(crate) fn staging(&self) -> PathBuf {
         self.parent.join(format!("{}.staging", self.package_name))
     }
 
-    fn previous(&self) -> PathBuf {
+    pub(crate) fn previous(&self) -> PathBuf {
         self.parent.join(format!("{}.previous", self.package_name))
     }
 
-    fn prepare(&self) -> Result<()> {
+    pub(crate) fn prepare(&self) -> Result<()> {
         let current = self.parent.join(self.package_name);
         let previous = self.previous();
         recover_publication(&current, &previous)?;
         remove_path_no_follow(&self.staging())
     }
 
-    fn commit(&mut self) {
+    pub(crate) fn commit(&mut self) {
         drop(self.lock.take());
         self.committed = true;
     }
@@ -1793,7 +1800,7 @@ impl Drop for NativeBuildGuard {
     }
 }
 
-fn create_private_directory_chain(repository: &Path, root: &Path) -> Result<()> {
+pub(crate) fn create_private_directory_chain(repository: &Path, root: &Path) -> Result<()> {
     let repository_metadata = fs::symlink_metadata(repository)
         .with_context(|| format!("failed to inspect repository root {}", repository.display()))?;
     ensure!(
@@ -1922,7 +1929,7 @@ fn publish_staging(staging: &Path, current: &Path) -> Result<()> {
     publish_directory(staging, current, &parent.join("previous"))
 }
 
-fn publish_directory(staging: &Path, current: &Path, previous: &Path) -> Result<()> {
+pub(crate) fn publish_directory(staging: &Path, current: &Path, previous: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(staging)
         .with_context(|| format!("staging directory is missing: {}", staging.display()))?;
     ensure!(

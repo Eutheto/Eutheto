@@ -3,8 +3,8 @@
 use super::{ApiError, boundary_error, map_app_error};
 use eutheto_core::{EuthetoApp, SetupQuerySource};
 use eutheto_types::{
-    ApiErrorDto, CancellationToken, Clock, IdGenerator, MonotonicClock, OperationId, RequestId,
-    Revision, Rfc3339Timestamp, ScenarioId,
+    ApiErrorDto, CancellationToken, Clock, DurationMillis, IdGenerator, MonotonicClock,
+    OperationId, ParentSolveBudget, RequestId, Revision, Rfc3339Timestamp, ScenarioId,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,6 +14,11 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Notify, Semaphore};
+
+#[path = "operations_alternatives.rs"]
+mod alternatives;
+pub(super) use alternatives::AlternativesGroupDtoV1;
+use alternatives::{AlternativesReservation, AlternativesRetention};
 
 const MAX_RESERVATIONS: usize = 16;
 const HEAVY_PERMITS: usize = 2;
@@ -34,6 +39,19 @@ pub(super) enum OperationPurposeV1 {
     CommandPreview { view_id: String },
     FullValidation,
     ApplyReviewedGeneration,
+    SolveStart,
+    SolveAlternatives,
+    SolveEstimate,
+    SolutionExplain,
+    SolutionDiagnosticCopy,
+    SolutionDiagnosticExport,
+    SharePreview,
+    ShareCreate,
+    ExportPreview,
+    ExportCreate,
+    ManualRepairRead,
+    ManualRepairReview,
+    ManualRepairApply,
     CsvSourceOpen,
     CsvDetect,
     CsvSample,
@@ -179,10 +197,12 @@ impl Signal {
 struct Reservation {
     window_label: String,
     purpose: Option<OperationPurposeV1>,
+    solve_request_id: Option<RequestId>,
     context: OperationContextV1,
     created: Duration,
     claimed: bool,
     signal: Arc<Signal>,
+    alternatives: Option<AlternativesReservation>,
 }
 
 pub(super) struct OperationRegistry {
@@ -195,6 +215,7 @@ pub(super) struct OperationRegistry {
     // through a late queued invoke, and arbitrary labels never allocate owner state.
     windows: BTreeMap<String, CancellationToken>,
     reservations: Mutex<BTreeMap<OperationId, Reservation>>,
+    alternatives: Mutex<AlternativesRetention>,
     heavy: Arc<Semaphore>,
 }
 
@@ -219,6 +240,7 @@ impl OperationRegistry {
             root,
             windows,
             reservations: Mutex::default(),
+            alternatives: Mutex::default(),
             heavy: Arc::new(Semaphore::new(HEAVY_PERMITS)),
         }
     }
@@ -345,6 +367,8 @@ impl OperationRegistry {
                 operation_id,
                 Reservation {
                     window_label: window_label.to_owned(),
+                    solve_request_id: None,
+                    alternatives: None,
                     purpose,
                     context,
                     created: self.monotonic_clock.now(),
@@ -377,11 +401,93 @@ impl OperationRegistry {
         window_label: &str,
         request: &OperationControlRequestV1,
     ) -> Result<OperationCancelledV1, ApiError> {
+        self.cancel_matching(window_label, request, |purpose| {
+            !matches!(
+                purpose,
+                Some(OperationPurposeV1::SolveStart | OperationPurposeV1::SolveAlternatives)
+            )
+        })
+    }
+
+    pub fn cancel_export(
+        &self,
+        window_label: &str,
+        request: &OperationControlRequestV1,
+    ) -> Result<OperationCancelledV1, ApiError> {
+        self.cancel_matching(window_label, request, |purpose| {
+            matches!(
+                purpose,
+                Some(OperationPurposeV1::ExportPreview | OperationPurposeV1::ExportCreate)
+            )
+        })
+    }
+
+    fn cancel_matching(
+        &self,
+        window_label: &str,
+        request: &OperationControlRequestV1,
+        accepts: impl FnOnce(Option<&OperationPurposeV1>) -> bool,
+    ) -> Result<OperationCancelledV1, ApiError> {
         require_version(request.schema_version)?;
         let entries = self.entries()?;
         let acknowledgement = entries
             .get(&request.operation_id)
-            .filter(|entry| entry.window_label == window_label)
+            .filter(|entry| entry.window_label == window_label && accepts(entry.purpose.as_ref()))
+            .map_or(CancellationAcknowledgementV1::NotActive, |entry| {
+                entry.signal.cancel();
+                CancellationAcknowledgementV1::CancellationRequested
+            });
+        Ok(OperationCancelledV1 {
+            schema_version: 1,
+            acknowledgement,
+        })
+    }
+
+    /// Returns a live solve handle only for its original request, scenario revision, and
+    /// native window. Durable job reads can reattach after the presentation observer leaves.
+    pub fn active_solve_operation(
+        &self,
+        window_label: &str,
+        request_id: RequestId,
+        context: &OperationContextV1,
+    ) -> Result<Option<OperationId>, ApiError> {
+        let entries = self.entries()?;
+        Ok(entries.iter().find_map(|(operation_id, entry)| {
+            (entry.window_label == window_label
+                && entry.claimed
+                && entry.solve_request_id == Some(request_id)
+                && entry.context == *context
+                && matches!(entry.purpose, Some(OperationPurposeV1::SolveStart))
+                && !entry.signal.cancellation.is_cancelled())
+            .then_some(*operation_id)
+        }))
+    }
+
+    /// Cancels only a live solve reservation owned by this exact window and
+    /// immutable scenario context.
+    // The native command boundary supplies this context by value; keep that
+    // boundary stable while comparing the immutable reservation context.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn cancel_solve(
+        &self,
+        window_label: &str,
+        request: &OperationControlRequestV1,
+        context: OperationContextV1,
+    ) -> Result<OperationCancelledV1, ApiError> {
+        require_version(request.schema_version)?;
+        let entries = self.entries()?;
+        let acknowledgement = entries
+            .get(&request.operation_id)
+            .filter(|entry| {
+                entry.window_label == window_label
+                    && entry.context == context
+                    && matches!(
+                        entry.purpose,
+                        Some(
+                            OperationPurposeV1::SolveStart | OperationPurposeV1::SolveAlternatives
+                        )
+                    )
+            })
             .map_or(CancellationAcknowledgementV1::NotActive, |entry| {
                 entry.signal.cancel();
                 CancellationAcknowledgementV1::CancellationRequested
@@ -405,8 +511,24 @@ impl OperationRegistry {
         {
             None => ReleaseAcknowledgementV1::NotActive,
             Some(entry) if entry.claimed => {
-                entry.signal.cancel();
-                ReleaseAcknowledgementV1::CancellationRequested
+                if matches!(
+                    entry.purpose,
+                    Some(
+                        OperationPurposeV1::SolveStart
+                            | OperationPurposeV1::SolveAlternatives
+                            | OperationPurposeV1::SharePreview
+                            | OperationPurposeV1::ShareCreate
+                            | OperationPurposeV1::ExportPreview
+                            | OperationPurposeV1::ExportCreate
+                    )
+                ) {
+                    // Detaching observation never cancels these owned operations.
+                    // Explicit cancellation remains reachable until settlement.
+                    ReleaseAcknowledgementV1::Released
+                } else {
+                    entry.signal.cancel();
+                    ReleaseAcknowledgementV1::CancellationRequested
+                }
             }
             Some(_) => {
                 entries.remove(&request.operation_id);
@@ -431,6 +553,7 @@ impl OperationRegistry {
                 entry.signal.cancel();
             }
         }
+        self.forget_alternatives_window(window_label);
     }
 
     pub fn shutdown(&self) {
@@ -473,7 +596,20 @@ impl OperationRegistry {
             entries.remove(&claim.operation_id);
             return Err(cancelled().into());
         }
+        if matches!(entry.purpose, Some(OperationPurposeV1::SolveAlternatives))
+            && (entry.alternatives.is_none() || entry.solve_request_id != Some(claim.request_id))
+        {
+            return Err(boundary_error(
+                "operation.claim_mismatch",
+                "The Alternatives group was not registered for this native request.",
+                Some("/requestId"),
+            )
+            .into());
+        }
         entry.claimed = true;
+        if matches!(entry.purpose, Some(OperationPurposeV1::SolveStart)) {
+            entry.solve_request_id = Some(claim.request_id);
+        }
         Ok(ActiveReservation {
             registry: Arc::clone(self),
             operation_id: claim.operation_id,
@@ -496,10 +632,171 @@ impl OperationRegistry {
         F: FnOnce(T, OperationExecution) -> Fut + Send + 'static,
         Fut: Future<Output = Result<R, ApiError>> + Send + 'static,
     {
+        self.run_inner(
+            window_label,
+            claim,
+            progress,
+            phase,
+            (input, preflight),
+            None,
+            true,
+            CompletionPolicy::AwaitSettlement,
+            work,
+        )
+        .await
+    }
+
+    /// Runs a bounded ordinary operation whose parent deadline starts before heavy admission.
+    /// Unlike a durable solve, caller abandonment, release, and generic cancellation all cancel
+    /// the live work.
+    // Keep the established native operation call shape; callers construct these
+    // values at the IPC boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_bounded_budget<T, R, F, Fut>(
+        self: &Arc<Self>,
+        window_label: &str,
+        claim: OperationClaim,
+        progress: Option<ProgressSink>,
+        phase: OperationPhaseV1,
+        (input, preflight): (T, Option<OperationPreflight<T>>),
+        time_limit: DurationMillis,
+        work: F,
+    ) -> Result<R, ApiError>
+    where
+        T: Send + 'static,
+        R: Send + 'static,
+        F: FnOnce(T, OperationExecution) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, ApiError>> + Send + 'static,
+    {
+        self.run_inner(
+            window_label,
+            claim,
+            progress,
+            phase,
+            (input, preflight),
+            Some(time_limit),
+            true,
+            CompletionPolicy::BoundedRead,
+            work,
+        )
+        .await
+    }
+
+    /// Runs a solve with its parent deadline created before heavy-permit
+    /// admission. Observer release remains separate from this live owner.
+    // Keep the established native operation call shape; callers construct these
+    // values at the IPC boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_solve_budget<T, R, F, Fut>(
+        self: &Arc<Self>,
+        window_label: &str,
+        claim: OperationClaim,
+        progress: Option<ProgressSink>,
+        phase: OperationPhaseV1,
+        (input, preflight): (T, Option<OperationPreflight<T>>),
+        time_limit: DurationMillis,
+        work: F,
+    ) -> Result<R, ApiError>
+    where
+        T: Send + 'static,
+        R: Send + 'static,
+        F: FnOnce(T, OperationExecution) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, ApiError>> + Send + 'static,
+    {
+        self.run_inner(
+            window_label,
+            claim,
+            progress,
+            phase,
+            (input, preflight),
+            Some(time_limit),
+            false,
+            CompletionPolicy::AwaitSettlement,
+            work,
+        )
+        .await
+    }
+
+    /// Bounds mutation admission and precommit work without discarding a committed receipt.
+    /// The caller must propagate the supplied budget through its final transaction check.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_mutation_budget<T, R, F, Fut>(
+        self: &Arc<Self>,
+        window_label: &str,
+        claim: OperationClaim,
+        progress: Option<ProgressSink>,
+        phase: OperationPhaseV1,
+        (input, preflight): (T, Option<OperationPreflight<T>>),
+        time_limit: DurationMillis,
+        work: F,
+    ) -> Result<R, ApiError>
+    where
+        T: Send + 'static,
+        R: Send + 'static,
+        F: FnOnce(T, OperationExecution) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, ApiError>> + Send + 'static,
+    {
+        self.run_inner(
+            window_label,
+            claim,
+            progress,
+            phase,
+            (input, preflight),
+            Some(time_limit),
+            true,
+            CompletionPolicy::AwaitSettlement,
+            work,
+        )
+        .await
+    }
+
+    // Admission, cancellation, and deadline sequencing are intentionally kept
+    // together so the native scope invariant remains auditable.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn run_inner<T, R, F, Fut>(
+        self: &Arc<Self>,
+        window_label: &str,
+        claim: OperationClaim,
+        progress: Option<ProgressSink>,
+        phase: OperationPhaseV1,
+        (input, preflight): (T, Option<OperationPreflight<T>>),
+        solve_limit: Option<DurationMillis>,
+        cancel_on_drop: bool,
+        completion_policy: CompletionPolicy,
+        work: F,
+    ) -> Result<R, ApiError>
+    where
+        T: Send + 'static,
+        R: Send + 'static,
+        F: FnOnce(T, OperationExecution) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, ApiError>> + Send + 'static,
+    {
         let active = self.claim(window_label, &claim)?;
-        let _cancel_caller_drop = CancelCallerDrop(Arc::clone(&active.signal));
+        // Ordinary callers, including bounded model estimates, cancel on abandonment; a durable
+        // solve is cancelled only by explicit cancel, window destroy, or application shutdown.
+        let _cancel_caller_drop =
+            cancel_on_drop.then(|| CancelCallerDrop(Arc::clone(&active.signal)));
+        let solve_admission = solve_limit
+            .map(|time_limit| {
+                let cancellation = active.signal.cancellation.child();
+                let budget = ParentSolveBudget::new(
+                    time_limit,
+                    Arc::clone(&self.monotonic_clock),
+                    cancellation,
+                )
+                .map_err(|_| {
+                    boundary_error(
+                        "solve.budget_invalid",
+                        "The solve deadline could not be created safely.",
+                        Some("/timeLimitMilliseconds"),
+                    )
+                })?;
+                Ok::<_, ApiError>((budget, self.clock.now()))
+            })
+            .transpose()?;
         let mut execution = OperationExecution {
             signal: Arc::clone(&active.signal),
+            solve_admission,
             progress: progress.map(|sink| Progress {
                 sink,
                 clock: Arc::clone(&self.clock),
@@ -515,51 +812,87 @@ impl OperationRegistry {
                 },
             }),
         };
+        let bounded = if matches!(completion_policy, CompletionPolicy::BoundedRead) {
+            execution
+                .solve_admission
+                .as_ref()
+                .map(|(budget, _)| (budget.clone(), Arc::clone(&execution.signal)))
+        } else {
+            None
+        };
         let heavy = Arc::clone(&self.heavy);
-        // Dropping the caller's JoinHandle detaches this finite owner; it does not abort it.
-        // The reservation and permit stay here until the awaited core/store work really exits.
-        tauri::async_runtime::spawn(async move {
-            let input = if let Some(preflight) = preflight {
-                let registry = Arc::clone(&active.registry);
-                let cancellation = execution.cancellation();
-                tauri::async_runtime::spawn_blocking(move || {
-                    preflight(&registry.app, &input, &cancellation)?;
-                    Ok::<T, ApiError>(input)
-                })
-                .await
-                .map_err(|_| {
-                    boundary_error(
-                        "operation.execution_failed",
-                        "The native operation could not finish safely.",
-                        None,
-                    )
-                })??
-            } else {
-                input
+        let job = tauri::async_runtime::spawn(async move {
+            let job = async move {
+                check_solve_admission(&execution)?;
+                let input = if let Some(preflight) = preflight {
+                    let registry = Arc::clone(&active.registry);
+                    let cancellation = execution.cancellation();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        preflight(&registry.app, &input, &cancellation)?;
+                        Ok::<T, ApiError>(input)
+                    })
+                    .await
+                    .map_err(|_| {
+                        boundary_error(
+                            "operation.execution_failed",
+                            "The native operation could not finish safely.",
+                            None,
+                        )
+                    })??
+                } else {
+                    input
+                };
+                check_solve_admission(&execution)?;
+                // These guards live in the owned task, not in the invoke caller. A deadline
+                // response must not release the reservation or heavy permit before `work`
+                // returns and all retained capture/render/serialization state is dropped.
+                let _active = active;
+                execution.report(OperationPhaseV1::WaitingForAdmission);
+                let _permit = {
+                    let notified = execution.signal.wake.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    check_solve_admission(&execution)?;
+                    if let Some((budget, _)) = execution.solve_admission.as_ref() {
+                        let deadline = tokio::time::sleep(budget.remaining_duration());
+                        tokio::pin!(deadline);
+                        tokio::select! {
+                            biased;
+                            () = &mut notified => return Err(cancelled().into()),
+                            () = &mut deadline => return Err(deadline_exceeded().into()),
+                            permit = heavy.acquire_owned() => permit.map_err(|_| resource_limit())?,
+                        }
+                    } else {
+                        tokio::select! {
+                            biased;
+                            () = &mut notified => return Err(cancelled().into()),
+                            permit = heavy.acquire_owned() => permit.map_err(|_| resource_limit())?,
+                        }
+                    }
+                };
+                check_solve_admission(&execution)?;
+                execution.report(phase);
+                work(input, execution).await
             };
-            let _active = active;
-            execution.report(OperationPhaseV1::WaitingForAdmission);
-            let _permit = {
-                let notified = execution.signal.wake.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-                if execution.signal.cancellation.is_cancelled() {
-                    return Err(cancelled().into());
-                }
-                tokio::select! {
-                    biased;
-                    () = &mut notified => return Err(cancelled().into()),
-                    permit = heavy.acquire_owned() => permit.map_err(|_| resource_limit())?,
-                }
-            };
-            if execution.signal.cancellation.is_cancelled() {
-                return Err(cancelled().into());
+            job.await
+        });
+        // Timing out the join detaches the owned job; its reservation and heavy permit remain
+        // charged until cooperative native work has actually released its retained resources.
+        let completion = if let Some((budget, signal)) = bounded {
+            let result = tokio::time::timeout(budget.remaining_duration(), job).await;
+            if budget.is_expired() {
+                signal.cancel();
+                return Err(deadline_exceeded().into());
             }
-            execution.report(phase);
-            work(input, execution).await
-        })
-        .await
-        .map_err(|_| {
+            let Ok(result) = result else {
+                signal.cancel();
+                return Err(deadline_exceeded().into());
+            };
+            result
+        } else {
+            job.await
+        };
+        completion.map_err(|_| {
             boundary_error(
                 "operation.execution_failed",
                 "The native operation could not finish safely.",
@@ -567,6 +900,25 @@ impl OperationRegistry {
             )
         })?
     }
+}
+
+enum CompletionPolicy {
+    AwaitSettlement,
+    BoundedRead,
+}
+
+fn check_solve_admission(execution: &OperationExecution) -> Result<(), ApiError> {
+    if execution.signal.cancellation.is_cancelled() {
+        return Err(cancelled().into());
+    }
+    if execution
+        .solve_admission
+        .as_ref()
+        .is_some_and(|(budget, _)| budget.is_expired())
+    {
+        return Err(deadline_exceeded().into());
+    }
+    Ok(())
 }
 
 struct ActiveReservation {
@@ -577,8 +929,10 @@ struct ActiveReservation {
 
 impl Drop for ActiveReservation {
     fn drop(&mut self) {
-        if let Ok(mut entries) = self.registry.entries() {
-            entries.remove(&self.operation_id);
+        if let Ok(mut entries) = self.registry.entries()
+            && let Some(entry) = entries.remove(&self.operation_id)
+        {
+            self.registry.retain_alternatives_terminal(entry);
         }
     }
 }
@@ -598,12 +952,19 @@ struct Progress {
 
 pub(super) struct OperationExecution {
     signal: Arc<Signal>,
+    solve_admission: Option<(ParentSolveBudget, Rfc3339Timestamp)>,
     progress: Option<Progress>,
 }
 
 impl OperationExecution {
     pub fn cancellation(&self) -> CancellationToken {
         self.signal.cancellation.child()
+    }
+
+    /// Takes the solve budget exactly once; it remains owned by the live solve
+    /// even when the UI releases its observation.
+    pub(super) fn take_solve_admission(&mut self) -> Option<(ParentSolveBudget, Rfc3339Timestamp)> {
+        self.solve_admission.take()
     }
 
     pub fn preparing_response(&mut self) {
@@ -644,6 +1005,14 @@ fn not_active() -> ApiErrorDto {
 }
 pub(super) fn cancelled() -> ApiErrorDto {
     boundary_error("operation.cancelled", "The operation was cancelled.", None)
+}
+
+pub(super) fn deadline_exceeded() -> ApiErrorDto {
+    boundary_error(
+        "operation.deadline_exceeded",
+        "The operation deadline was reached.",
+        None,
+    )
 }
 fn resource_limit() -> ApiErrorDto {
     boundary_error(

@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use crate::cp_sat::{
     BoolArgumentProto, ConstraintProto, CpModelProto, CpObjectiveProto, IntegerVariableProto,
-    LinearConstraintProto, constraint_proto,
+    LinearArgumentProto, LinearConstraintProto, LinearExpressionProto, constraint_proto,
 };
 const BOOLEAN_DOMAIN: [i64; 2] = [0, 1];
 
@@ -154,8 +154,8 @@ impl TranslatedCpSatModel {
 
     /// Returns the planning assumption represented by one submitted native literal.
     ///
-    /// Assumptions remain disabled for the pinned OR-Tools 9.15 worker, so successful
-    /// translations currently return `None` for every literal.
+    /// The key is the exact signed CP-SAT literal (`index` for positive literals and
+    /// `!index` for negative literals), never an assumption position.
     #[must_use]
     pub fn assumption(&self, native_literal: i32) -> Option<&Assumption> {
         self.maps.assumptions_by_literal.get(&native_literal)
@@ -264,9 +264,11 @@ fn supports_capability(capability: Capability) -> bool {
             | Capability::AtMostOne
             | Capability::ExactlyOne
             | Capability::CardinalityRange
+            | Capability::AbsDifference
             | Capability::LinearComparison
             | Capability::ObjectivePenalty
             | Capability::ObjectiveReward
+            | Capability::Assumptions
             | Capability::BooleanProjection
             | Capability::IntegerProjection
             | Capability::AbsentProjection
@@ -366,14 +368,16 @@ fn translate_variable_domains_validated(
 ///
 /// At this stage the accepted model surface is Boolean and integer scalar variables plus Boolean
 /// clauses, conjunctions, implications, equivalences, one-of constraints, cardinality ranges,
-/// integer linear comparisons, and bounded objective terms. Exact lexicographic objectives are
+/// absolute differences as exact two-branch `lin_max` constraints, integer linear comparisons,
+/// checked signed assumptions, and bounded objective terms. Exact lexicographic objectives are
 /// scalarized with their proven planning-IR weights; maximize levels are sign-normalized into
-/// CP-SAT's minimization objective. Unsupported primitives are rejected rather than omitted.
-/// Positive literals use their scalar variable index; negative literals use CP-SAT's exact
-/// `-index - 1` encoding. Common enforcement literals are copied onto every native constraint
-/// generated for their planning record. Empty clauses and exactly-one constraints remain empty and
-/// therefore false; empty conjunctions, at-most-one constraints, and the sole valid empty
-/// cardinality range `0..=0` remain true.
+/// CP-SAT's minimization objective.
+/// Unsupported primitives are rejected rather than omitted. Positive literals use their scalar
+/// variable index; negative literals use CP-SAT's exact `-index - 1` encoding, including the exact
+/// native-literal assumption map retained for terminal-core translation. Common enforcement
+/// literals are copied onto every native constraint generated for their planning record. Empty
+/// clauses and exactly-one constraints remain empty and therefore false; empty conjunctions,
+/// at-most-one constraints, and the sole valid empty cardinality range `0..=0` remain true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -413,7 +417,8 @@ pub fn translate_supported_model(
         boolean_indices,
         integer_indices,
     } = translate_variable_domains_validated(problem, needs_constant_one)?;
-    let (worker_projection_requests, candidate_projection_variables) =
+    let assumptions_by_literal = translate_assumptions(problem, &boolean_indices, &mut model)?;
+    let candidate_assignments =
         translate_candidate_assignments(&boolean_indices, &integer_indices)?;
     let constraint_indices =
         translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
@@ -429,9 +434,9 @@ pub fn translate_supported_model(
         objective_weights,
         boolean_indices,
         integer_indices,
+        assumptions_by_literal,
         constraint_indices,
-        worker_projection_requests,
-        candidate_projection_variables,
+        candidate_assignments,
     );
     Ok(TranslatedCpSatModel {
         cp_model_proto: model.encode_to_vec(),
@@ -482,10 +487,14 @@ fn retain_translation_maps(
     weights: Vec<i64>,
     boolean_indices: BTreeMap<BoolVariableId, i32>,
     integer_indices: BTreeMap<IntVariableId, i32>,
+    assumptions_by_literal: BTreeMap<i32, Assumption>,
     constraint_indices: BTreeMap<PlanningConstraintId, Vec<i32>>,
-    worker_projection_requests: Vec<WorkerProjectionRequest>,
-    candidate_projection_variables: BTreeMap<u64, CandidateProjectionVariable>,
+    candidate_assignments: (
+        Vec<WorkerProjectionRequest>,
+        BTreeMap<u64, CandidateProjectionVariable>,
+    ),
 ) -> TranslationMaps {
+    let (worker_projection_requests, candidate_projection_variables) = candidate_assignments;
     let objective_weights = problem
         .objectives
         .levels
@@ -519,7 +528,7 @@ fn retain_translation_maps(
         constraint_indices,
         objective_plan: problem.objectives.clone(),
         objective_weights,
-        assumptions_by_literal: BTreeMap::new(),
+        assumptions_by_literal,
         projection_requests: problem
             .projections
             .iter()
@@ -543,6 +552,21 @@ fn retain_translation_maps(
             .map(|record| (record.id.clone(), record.provenance.clone()))
             .collect(),
     }
+}
+
+fn translate_assumptions(
+    problem: &PlanningProblem,
+    boolean_indices: &BTreeMap<BoolVariableId, i32>,
+    model: &mut CpModelProto,
+) -> Result<BTreeMap<i32, Assumption>, TranslationError> {
+    model.assumptions.reserve(problem.assumptions.len());
+    let mut assumptions_by_literal = BTreeMap::new();
+    for assumption in &problem.assumptions {
+        let native_literal = translate_literal(&assumption.literal, boolean_indices)?;
+        model.assumptions.push(native_literal);
+        assumptions_by_literal.insert(native_literal, assumption.clone());
+    }
+    Ok(assumptions_by_literal)
 }
 
 fn translate_constraints(
@@ -656,6 +680,19 @@ fn translate_constraint_body(
                 *min,
                 *max,
                 boolean_indices,
+            )?);
+        }
+        Constraint::AbsDifference {
+            target,
+            left,
+            right,
+        } => {
+            model.constraints.push(abs_difference_constraint(
+                target,
+                left,
+                right,
+                integer_indices,
+                &model.variables,
             )?);
         }
         Constraint::LinearComparison(comparison) => {
@@ -777,6 +814,77 @@ fn linear_comparison_constraint(
             },
         )),
     })
+}
+
+/// Translates `target == abs(left - right)` to CP-SAT's exact two-branch `lin_max`.
+///
+/// The planning IR validator has already checked the referenced integer variables and that the
+/// endpoint subtraction/absolute-value operations fit in `i64`. Each native expression is still
+/// checked against CP-SAT's conservative `[-i64::MAX / 2, i64::MAX / 2]` affine-expression
+/// bound before it enters the protobuf.
+fn abs_difference_constraint(
+    target: &IntVariableId,
+    left: &IntVariableId,
+    right: &IntVariableId,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+    variables: &[IntegerVariableProto],
+) -> Result<ConstraintProto, TranslationError> {
+    let target_index = integer_indices
+        .get(target)
+        .copied()
+        .ok_or(TranslationError::MissingIntegerIndex)?;
+    let left_index = integer_indices
+        .get(left)
+        .copied()
+        .ok_or(TranslationError::MissingIntegerIndex)?;
+    let right_index = integer_indices
+        .get(right)
+        .copied()
+        .ok_or(TranslationError::MissingIntegerIndex)?;
+
+    let target_expression = LinearExpressionProto {
+        vars: vec![target_index],
+        coeffs: vec![1],
+        offset: 0,
+    };
+    let left_minus_right = difference_expression(left_index, right_index);
+    let right_minus_left = difference_expression(right_index, left_index);
+
+    ensure_native_linear_safe(
+        &target_expression.vars,
+        &target_expression.coeffs,
+        variables,
+    )?;
+    for expression in [&left_minus_right, &right_minus_left] {
+        ensure_native_linear_safe(&expression.vars, &expression.coeffs, variables)?;
+    }
+
+    Ok(ConstraintProto {
+        name: String::new(),
+        enforcement_literal: Vec::new(),
+        constraint: Some(constraint_proto::Constraint::LinMax(LinearArgumentProto {
+            target: Some(target_expression),
+            exprs: vec![left_minus_right, right_minus_left],
+        })),
+    })
+}
+
+fn difference_expression(positive: i32, negative: i32) -> LinearExpressionProto {
+    if positive == negative {
+        // When both IR references are the same variable, cancel the two terms rather than
+        // relying on a duplicate-variable affine expression in the worker protobuf.
+        LinearExpressionProto {
+            vars: Vec::new(),
+            coeffs: Vec::new(),
+            offset: 0,
+        }
+    } else {
+        LinearExpressionProto {
+            vars: vec![positive, negative],
+            coeffs: vec![1, -1],
+            offset: 0,
+        }
+    }
 }
 
 fn ensure_native_domain(domain: &IntDomain) -> Result<(), TranslationError> {
@@ -1488,6 +1596,54 @@ mod tests {
     }
 
     #[test]
+    fn absolute_difference_translates_to_exact_lin_max_and_preserves_enforcement()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let bool_a = BoolVariableId::new("translation.a_bool")?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        let end = IntVariableId::new("translation.d_end")?;
+        problem.constraints = vec![constraint_record(
+            "constraint.absolute_difference",
+            Constraint::AbsDifference {
+                target: end,
+                left: start,
+                right: duration,
+            },
+            vec![Literal::positive(bool_a)],
+        )?];
+        problem
+            .declared_capabilities
+            .insert(Capability::AbsDifference);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        assert_eq!(model.constraints.len(), 1);
+        let constraint = &model.constraints[0];
+        assert_eq!(constraint.enforcement_literal, [0]);
+        let Some(constraint_proto::Constraint::LinMax(argument)) = constraint.constraint.as_ref()
+        else {
+            return Err("missing absolute-difference lin_max".into());
+        };
+
+        let target = argument
+            .target
+            .as_ref()
+            .ok_or("absolute-difference lin_max has no target")?;
+        assert_eq!(target.vars, [3]);
+        assert_eq!(target.coeffs, [1]);
+        assert_eq!(target.offset, 0);
+        assert_eq!(argument.exprs.len(), 2);
+        assert_eq!(argument.exprs[0].vars, [1, 2]);
+        assert_eq!(argument.exprs[0].coeffs, [1, -1]);
+        assert_eq!(argument.exprs[0].offset, 0);
+        assert_eq!(argument.exprs[1].vars, [2, 1]);
+        assert_eq!(argument.exprs[1].coeffs, [1, -1]);
+        assert_eq!(argument.exprs[1].offset, 0);
+        Ok(())
+    }
+
+    #[test]
     fn bounded_objective_terms_preserve_coefficients_constants_and_kinds()
     -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
@@ -1976,7 +2132,14 @@ mod tests {
     #[test]
     fn interval_variables_are_rejected_during_translation_preflight() -> Result<(), Box<dyn Error>>
     {
-        let problem = planning_problem()?;
+        let mut problem = planning_problem()?;
+        problem.projections.push(solution_projection(
+            "interval",
+            ProjectionExpression::Interval(IntervalVariableId::new("translation.interval")?),
+        )?);
+        problem
+            .declared_capabilities
+            .insert(Capability::IntervalProjection);
 
         assert!(matches!(
             translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
@@ -1986,93 +2149,172 @@ mod tests {
     }
 
     #[test]
-    fn assumptions_are_reported_as_unsupported_during_preflight() -> Result<(), Box<dyn Error>> {
+    fn unsupported_interval_primitives_are_rejected_during_translation_preflight()
+    -> Result<(), Box<dyn Error>> {
+        let interval = IntervalVariableId::new("translation.interval")?;
+        for (capability, body) in [
+            (
+                Capability::NoOverlap,
+                Constraint::no_overlap(vec![interval.clone()]),
+            ),
+            (
+                Capability::Cumulative,
+                Constraint::cumulative(vec![interval.clone()], vec![1], 1)?,
+            ),
+        ] {
+            let mut problem = planning_problem()?;
+            problem.constraints.push(constraint_record(
+                "constraint.unsupported.interval",
+                body,
+                Vec::new(),
+            )?);
+            problem.declared_capabilities.insert(capability);
+            assert!(matches!(
+                translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+                Err(TranslationError::UnsupportedIntervalVariable)
+            ));
+        }
+
+        let mut optional = planning_problem()?;
+        for variable in &mut optional.variables {
+            if let Variable::Interval(interval_variable) = variable {
+                interval_variable.presence = Some(Literal::positive(BoolVariableId::new(
+                    "translation.a_bool",
+                )?));
+            }
+        }
+        optional
+            .declared_capabilities
+            .insert(Capability::OptionalIntervals);
+        assert!(matches!(
+            translate_supported_model(&optional, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::UnsupportedIntervalVariable)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn assumptions_translate_signed_literals_with_source_map() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         problem.provenance[0].source_kind = ProvenanceSourceKind::RequiredRule;
-        problem.assumptions.push(Assumption {
-            id: AssumptionGroupId::new("translation.assumption")?,
-            literal: Literal::positive(BoolVariableId::new("translation.a_bool")?),
-            required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f01".parse()?],
-            provenance: ProvenanceId::new("translation.variable")?,
-        });
+        problem.assumptions = vec![
+            Assumption {
+                id: AssumptionGroupId::new("translation.assumption.a")?,
+                literal: Literal::positive(BoolVariableId::new("translation.a_bool")?),
+                required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f01".parse()?],
+                provenance: ProvenanceId::new("translation.variable")?,
+            },
+            Assumption {
+                id: AssumptionGroupId::new("translation.assumption.z")?,
+                literal: Literal::negative(BoolVariableId::new("translation.z_bool")?),
+                required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f02".parse()?],
+                provenance: ProvenanceId::new("translation.variable")?,
+            },
+        ];
         problem
             .declared_capabilities
             .insert(Capability::Assumptions);
 
-        assert!(matches!(
-            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
-            Err(TranslationError::UnsupportedCapabilities(capabilities))
-                if capabilities == vec![Capability::Assumptions]
-        ));
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        assert_eq!(model.assumptions, [0, -5]);
+        assert_eq!(
+            translated
+                .assumption(0)
+                .map(|assumption| &assumption.literal),
+            Some(&problem.assumptions[0].literal)
+        );
+        assert_eq!(
+            translated
+                .assumption(-5)
+                .map(|assumption| &assumption.literal),
+            Some(&problem.assumptions[1].literal)
+        );
+        assert_eq!(
+            translated
+                .assumption(-5)
+                .map(|assumption| assumption.provenance.clone()),
+            Some(ProvenanceId::new("translation.variable")?)
+        );
+        assert!(translated.assumption(1).is_none());
         Ok(())
     }
 
     #[test]
-    fn unsupported_constraint_semantics_are_rejected_not_omitted() -> Result<(), Box<dyn Error>> {
-        let mut problem = scalar_problem()?;
-        problem.constraints.push(constraint_record(
-            "constraint.unsupported",
-            Constraint::all_different(Vec::new()),
-            Vec::new(),
-        )?);
-        problem
-            .declared_capabilities
-            .insert(Capability::AllDifferent);
-
-        assert!(matches!(
-            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
-            Err(TranslationError::UnsupportedCapabilities(capabilities))
-                if capabilities == vec![Capability::AllDifferent]
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn matrix_primitive_claims_match_translation_preflight_gate() -> Result<(), Box<dyn Error>> {
-        let descriptor = crate::ortools_descriptor()?;
-        let cases = [
-            (Capability::AbsDifference, "ir.absolute-difference"),
-            (Capability::AllDifferent, "ir.all-different"),
-            (Capability::AllowedTable, "ir.allowed-table"),
-            (Capability::Assumptions, "ir.assumptions"),
-            (Capability::AtMostOne, "ir.at-most-one"),
-            (Capability::BoolAnd, "ir.bool-and"),
-            (Capability::BoolOr, "ir.bool-or"),
-            (Capability::CardinalityRange, "ir.cardinality-range"),
-            (Capability::Cumulative, "ir.cumulative"),
-            (Capability::Element, "ir.element"),
-            (Capability::Equality, "ir.equality"),
-            (Capability::Equivalence, "ir.equivalence"),
-            (Capability::ExactlyOne, "ir.exactly-one"),
-            (Capability::ForbiddenTable, "ir.forbidden-table"),
-            (Capability::Implication, "ir.implication"),
-            (Capability::LinearComparison, "ir.integer-linear"),
-            (Capability::Max, "ir.maximum"),
-            (Capability::Min, "ir.minimum"),
-            (Capability::NoOverlap, "ir.no-overlap"),
-            (Capability::ObjectivePenalty, "ir.objective-penalty"),
-            (Capability::ObjectiveReward, "ir.objective-reward"),
-            (Capability::OptionalIntervals, "ir.optional-interval"),
+    fn unsupported_scalar_primitives_are_rejected_before_translation() -> Result<(), Box<dyn Error>>
+    {
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        let end = IntVariableId::new("translation.d_end")?;
+        let bool_a = BoolVariableId::new("translation.a_bool")?;
+        let cases = vec![
+            (
+                Capability::AllDifferent,
+                Constraint::all_different(vec![start.clone(), duration.clone()]),
+            ),
+            (
+                Capability::AllowedTable,
+                Constraint::allowed_table(vec![start.clone()], vec![vec![0]])?,
+            ),
+            (
+                Capability::ForbiddenTable,
+                Constraint::forbidden_table(vec![start.clone()], vec![vec![0]])?,
+            ),
+            (
+                Capability::Element,
+                Constraint::Element {
+                    index: start.clone(),
+                    values: vec![1, 2, 3],
+                    target: duration.clone(),
+                },
+            ),
+            (
+                Capability::Min,
+                Constraint::min(end.clone(), vec![start.clone(), duration.clone()])?,
+            ),
+            (
+                Capability::Max,
+                Constraint::max(end, vec![start.clone(), duration.clone()])?,
+            ),
+            (
+                Capability::Equality,
+                Constraint::Equality {
+                    left: start.clone(),
+                    right: duration.clone(),
+                },
+            ),
             (
                 Capability::ReifiedLinearComparison,
-                "ir.reified-linear-comparison",
+                Constraint::ReifiedLinearComparison {
+                    literal: Literal::positive(bool_a),
+                    comparison: LinearComparison {
+                        expression: LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: start,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        op: ComparisonOp::LessOrEqual,
+                        rhs: 3,
+                    },
+                },
             ),
-            (Capability::AbsentProjection, "projection.absent"),
-            (Capability::BooleanProjection, "projection.boolean"),
-            (Capability::IntegerProjection, "projection.integer"),
-            (Capability::IntervalProjection, "projection.interval"),
         ];
 
-        for (capability, feature_id) in cases {
-            assert_eq!(
-                supports_capability(capability),
-                descriptor
-                    .capabilities
-                    .supported
-                    .iter()
-                    .any(|claimed| claimed.as_str() == feature_id),
-                "translation preflight and matrix disagree for {feature_id}"
-            );
+        for (capability, body) in cases {
+            let mut problem = scalar_problem()?;
+            problem.constraints.push(constraint_record(
+                "constraint.unsupported",
+                body,
+                Vec::new(),
+            )?);
+            problem.declared_capabilities.insert(capability);
+            assert!(matches!(
+                translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+                Err(TranslationError::UnsupportedCapabilities(capabilities))
+                    if capabilities == vec![capability]
+            ));
         }
         Ok(())
     }

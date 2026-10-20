@@ -85,59 +85,7 @@
       "type": "integer"
     },
     "schemaVersion": {
-      "const": 1
-    },
-    "score": {
-      "additionalProperties": false,
-      "properties": {
-        "feasibility": {
-          "const": 0
-        },
-        "levels": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "categoryBreakdown": {
-                "additionalProperties": false,
-                "properties": {
-                  "official.workforce.score.assignment.rank": {
-                    "maximum": 1000000000000000,
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "type": "object"
-              },
-              "direction": {
-                "const": "minimize"
-              },
-              "levelId": {
-                "const": "official.workforce.objective.assignment.rank"
-              },
-              "value": {
-                "maximum": 1000000000000000,
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "levelId",
-              "value",
-              "direction",
-              "categoryBreakdown"
-            ],
-            "type": "object"
-          },
-          "maxItems": 1,
-          "minItems": 1,
-          "type": "array"
-        }
-      },
-      "required": [
-        "feasibility",
-        "levels"
-      ],
-      "type": "object"
+      "const": 2
     },
     "solutionId": {
       "format": "uuid",
@@ -156,8 +104,7 @@
     "status",
     "provenance",
     "privacy",
-    "assignments",
-    "score"
+    "assignments"
   ],
   "type": "object"
 }

@@ -114,7 +114,7 @@ async fn core_preview(
     }))?;
     Ok(custody
         .app
-        .preview_people_csv(request, source.reader(), custody.app.people_csv_operation())
+        .preview_people_csv(request, source.reader(), custody.app.csv_operation())
         .await
         .map_err(boxed)?
         .preview_id)
@@ -351,7 +351,7 @@ async fn reports_survive_source_close_but_apply_requires_exact_binding_and_disca
     assert_eq!(
         custody
             .app
-            .people_csv_rejected_rows(report_use.preview_id())
+            .csv_report(report_use.preview_id())
             .await
             .map_err(boxed)?
             .preview_id,
@@ -383,16 +383,12 @@ async fn reports_survive_source_close_but_apply_requires_exact_binding_and_disca
     );
     drop(report_use);
     assert!(
-        custody
-            .app
-            .people_csv_rejected_rows(active.preview_id())
-            .await
-            .is_ok(),
+        custody.app.csv_report(active.preview_id()).await.is_ok(),
         "active receipt guard defers core discard"
     );
     drop(active);
     tokio::time::timeout(Duration::from_secs(5), async {
-        while custody.app.people_csv_rejected_rows(preview).await.is_ok() {
+        while custody.app.csv_report(preview).await.is_ok() {
             tokio::task::yield_now().await;
         }
     })
@@ -429,16 +425,10 @@ async fn unavailable_core_report_and_active_discard_cannot_exhaust_native_previe
     ];
     custody
         .app
-        .discard_people_csv_preview(preview)
+        .discard_csv_preview(preview)
         .await
         .map_err(boxed)?;
-    assert!(
-        custody
-            .app
-            .people_csv_rejected_rows(active.preview_id())
-            .await
-            .is_err()
-    );
+    assert!(custody.app.csv_report(active.preview_id()).await.is_err());
     custody.discard_preview(
         "main",
         scenario,
@@ -506,15 +496,9 @@ async fn late_cancelled_preview_publication_is_finalized_and_creator_pair_stays_
     let active = custody
         .preview_for_report("main", scenario, next_preview)
         .map_err(boxed)?;
-    assert!(
-        custody
-            .app
-            .people_csv_rejected_rows(active.preview_id())
-            .await
-            .is_ok()
-    );
+    assert!(custody.app.csv_report(active.preview_id()).await.is_ok());
     tokio::time::timeout(Duration::from_secs(5), async {
-        while custody.app.people_csv_rejected_rows(preview).await.is_ok() {
+        while custody.app.csv_report(preview).await.is_ok() {
             tokio::task::yield_now().await;
         }
     })
@@ -586,7 +570,7 @@ async fn wrong_kind_core_discard_retires_native_slot_without_removing_portable_a
     let replacement = wait_for_preview_slot(&custody, &source).await?;
     let error = custody
         .app
-        .people_csv_rejected_rows(preview_id)
+        .csv_report(preview_id)
         .await
         .err()
         .ok_or("portable preview treated as CSV")?;

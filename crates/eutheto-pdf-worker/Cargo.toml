@@ -1,0 +1,18 @@
+[package]
+name = "eutheto-pdf-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+eutheto-types = { path = "../eutheto-types" }
+hex = "=0.4.3"
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+typst = "=0.15.1"
+typst-pdf = "=0.15.1"

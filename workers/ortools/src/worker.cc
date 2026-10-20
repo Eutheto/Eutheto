@@ -44,13 +44,14 @@ constexpr std::string_view kAdapterVersion = "0.1.0";
 constexpr std::string_view kBackendId = "ortools-cp-sat";
 constexpr std::string_view kOrtoolsVersion = "9.15.6755";
 
-constexpr std::array<protocol::Capability, 7> kCapabilities = {
+constexpr std::array<protocol::Capability, 8> kCapabilities = {
     protocol::CAPABILITY_CP_SAT,
     protocol::CAPABILITY_INTERMEDIATE_SOLUTIONS,
     protocol::CAPABILITY_PROGRESS,
     protocol::CAPABILITY_SOLUTION_PROJECTION,
     protocol::CAPABILITY_OBJECTIVE_BOUNDS,
     protocol::CAPABILITY_SOLUTION_STATS,
+    protocol::CAPABILITY_SUFFICIENT_ASSUMPTIONS,
     protocol::CAPABILITY_DETERMINISTIC_TIME};
 
 void StoreBe64(std::uint64_t value, std::uint8_t* output) {
@@ -240,6 +241,70 @@ bool HasObjective(const sat::CpModelProto& model) {
   return model.has_objective() || model.has_floating_point_objective();
 }
 
+struct AssumptionProfile {
+  bool enabled = false;
+  // Sorted submitted literals make duplicate and exact signed-membership
+  // checks non-quadratic. This buffer is retained across model validation and
+  // terminal admission.
+  std::vector<std::int32_t> sorted_submitted;
+};
+
+bool IsValidLiteral(std::int32_t literal, int variable_count) {
+  const std::int64_t value = literal;
+  const std::int64_t variable = value >= 0 ? value : -value - 1;
+  return variable >= 0 && variable < variable_count;
+}
+
+std::optional<protocol::WorkerFrame> ValidateAssumptionProfile(
+    const protocol::SolveRequest& request, const sat::CpModelProto& model,
+    const AppliedParameters& applied, AssumptionProfile* profile) {
+  profile->enabled = false;
+  profile->sorted_submitted.clear();
+  if (model.assumptions_size() == 0) return std::nullopt;
+
+  if (static_cast<std::size_t>(model.assumptions_size()) >
+      policy::kMaxRepeatedFieldItems) {
+    return WorkerFailure(
+        request.request_id(), protocol::WORKER_ERROR_CODE_INVALID_MODEL,
+        "model assumption count exceeds the protocol bound");
+  }
+  if (HasObjective(model)) {
+    return WorkerFailure(
+        request.request_id(), protocol::WORKER_ERROR_CODE_UNSUPPORTED_MODEL,
+        "nonempty assumptions require a satisfaction model");
+  }
+  if (applied.worker_threads != 1) {
+    return WorkerFailure(
+        request.request_id(), protocol::WORKER_ERROR_CODE_INVALID_PARAMETERS,
+        "nonempty assumptions require exactly one worker");
+  }
+
+  profile->enabled = true;
+  profile->sorted_submitted.reserve(
+      static_cast<std::size_t>(model.assumptions_size()));
+  for (const std::int32_t literal : model.assumptions()) {
+    if (!IsValidLiteral(literal, model.variables_size())) {
+      profile->enabled = false;
+      profile->sorted_submitted.clear();
+      return WorkerFailure(
+          request.request_id(), protocol::WORKER_ERROR_CODE_INVALID_MODEL,
+          "model assumptions contain an out-of-range literal");
+    }
+    profile->sorted_submitted.push_back(literal);
+  }
+  std::sort(profile->sorted_submitted.begin(), profile->sorted_submitted.end());
+  if (std::adjacent_find(profile->sorted_submitted.begin(),
+                         profile->sorted_submitted.end()) !=
+      profile->sorted_submitted.end()) {
+    profile->enabled = false;
+    profile->sorted_submitted.clear();
+    return WorkerFailure(
+        request.request_id(), protocol::WORKER_ERROR_CODE_INVALID_MODEL,
+        "model assumptions contain a duplicate literal");
+  }
+  return std::nullopt;
+}
+
 bool ContainsModelText(const sat::CpModelProto& model) {
   if (!model.name().empty()) return true;
   for (const auto& variable : model.variables()) {
@@ -309,15 +374,46 @@ class EventWriter final {
   EventWriter(const EventWriter&) = delete;
   EventWriter& operator=(const EventWriter&) = delete;
 
+  bool WantsFirstIncumbent() const noexcept {
+    return !failed_.load(std::memory_order_relaxed) &&
+           !first_seen_.load(std::memory_order_acquire);
+  }
+
   void Offer(protocol::WorkerFrame frame, bool incumbent) {
     if (failed_.load()) return;
-    std::unique_lock lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock() || closing_ || emitted_ >= policy::kEventsPerSession)
+
+    if (incumbent) {
+      // Only the first projected incumbent is consumed by the adapter. Later
+      // solutions remain the worker's private optimization state until Finished.
+      if (first_seen_.load(std::memory_order_acquire) ||
+          !frame.has_incumbent() || !frame.incumbent().has_candidate())
+        return;
+      // The writer never performs I/O under this mutex. Briefly acquiring it
+      // makes the first projected solution reliable without a wakeup race.
+      std::lock_guard lock(mutex_);
+      if (closing_ || first_seen_.load(std::memory_order_relaxed) ||
+          admitted_ >= policy::kEventsPerSession)
+        return;
+      first_incumbent_ = std::move(frame);
+      first_seen_.store(true, std::memory_order_release);
+      ++admitted_;
+      condition_.notify_one();
       return;
-    if (incumbent)
-      incumbent_ = std::move(frame);
-    else
-      progress_ = std::move(frame);
+    }
+
+    // Reserve one event for the first solution until it arrives. Progress is
+    // still lossy and coalesced, so a busy solver never blocks in this callback.
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock() || closing_) return;
+    const std::size_t limit =
+        first_seen_.load(std::memory_order_relaxed)
+            ? policy::kEventsPerSession
+            : policy::kEventsPerSession - 1;
+    if (!progress_) {
+      if (admitted_ >= limit) return;
+      ++admitted_;
+    }
+    progress_ = std::move(frame);
     condition_.notify_one();
   }
 
@@ -349,11 +445,12 @@ class EventWriter final {
       {
         std::unique_lock lock(mutex_);
         condition_.wait(lock, [this] {
-          return closing_ || incumbent_.has_value() || progress_.has_value();
+          return first_incumbent_.has_value() || progress_.has_value() ||
+                 closing_;
         });
-        if (incumbent_) {
-          frame = std::move(incumbent_);
-          incumbent_.reset();
+        if (first_incumbent_) {
+          frame = std::move(first_incumbent_);
+          first_incumbent_.reset();
         } else if (progress_) {
           frame = std::move(progress_);
           progress_.reset();
@@ -367,18 +464,11 @@ class EventWriter final {
       if (!WriteSessionFrame(output_, *frame, output_bytes_)) {
         failed_.store(true);
         std::lock_guard lock(mutex_);
-        incumbent_.reset();
         progress_.reset();
         closing_ = true;
         break;
       }
-      ++emitted_;
       next_write = std::chrono::steady_clock::now() + interval;
-      if (emitted_ >= policy::kEventsPerSession) {
-        std::lock_guard lock(mutex_);
-        incumbent_.reset();
-        progress_.reset();
-      }
     }
   }
 
@@ -386,10 +476,11 @@ class EventWriter final {
   std::uint64_t* output_bytes_;
   std::mutex mutex_;
   std::condition_variable condition_;
-  std::optional<protocol::WorkerFrame> incumbent_;
+  std::optional<protocol::WorkerFrame> first_incumbent_;
   std::optional<protocol::WorkerFrame> progress_;
+  std::atomic<bool> first_seen_{false};
+  std::size_t admitted_ = 0;
   bool closing_ = false;
-  std::atomic<std::size_t> emitted_{0};
   std::atomic<bool> failed_{false};
   std::thread thread_;
 };
@@ -459,11 +550,49 @@ void SetStatus(const AppliedParameters& parameters,
   }
 }
 
+enum class AssumptionCoreResult { kNotPresent, kValid, kInvalid };
+
+AssumptionCoreResult AdmitAssumptionCore(
+    sat::CpSolverResponse* response, const AssumptionProfile& profile,
+    protocol::Finished* finished) {
+  if (!profile.enabled || response->status() != sat::INFEASIBLE)
+    return AssumptionCoreResult::kNotPresent;
+  auto* core = response->mutable_sufficient_assumptions_for_infeasibility();
+  if (core->empty()) return AssumptionCoreResult::kNotPresent;
+  if (static_cast<std::size_t>(core->size()) >
+          policy::kFinishedSufficientAssumptionsMaxCount ||
+      static_cast<std::size_t>(core->size()) >
+          profile.sorted_submitted.size()) {
+    return AssumptionCoreResult::kInvalid;
+  }
+
+  // Canonicalize the solver-owned response field in place. Whole-core
+  // duplicate and exact signed-membership checks remain bounded and
+  // non-quadratic without mapping literals to positions or allocating a
+  // second core buffer.
+  std::sort(core->begin(), core->end());
+  if (std::adjacent_find(core->begin(), core->end()) != core->end())
+    return AssumptionCoreResult::kInvalid;
+  for (const std::int32_t literal : *core) {
+    if (!std::binary_search(profile.sorted_submitted.begin(),
+                            profile.sorted_submitted.end(), literal)) {
+      return AssumptionCoreResult::kInvalid;
+    }
+  }
+  for (const std::int32_t literal : *core)
+    finished->add_sufficient_assumptions(literal);
+  return AssumptionCoreResult::kValid;
+}
+
 protocol::WorkerFrame MakeFinished(const protocol::SolveRequest& request,
                                    const sat::CpModelProto& model,
                                    const AppliedParameters& parameters,
                                    const Sha256Digest& applied_hash,
-                                   const sat::CpSolverResponse& response) {
+                                   sat::CpSolverResponse& response,
+                                   AssumptionProfile* assumption_profile,
+                                   bool* invalid_assumption_core) {
+
+  *invalid_assumption_core = false;
   protocol::WorkerFrame frame;
   auto* finished = frame.mutable_finished();
   finished->set_request_id(request.request_id());
@@ -473,6 +602,11 @@ protocol::WorkerFrame MakeFinished(const protocol::SolveRequest& request,
       finished->clear_final_candidate();
     AddObjectiveEvidence(model, response, finished->mutable_objective_values(),
                          finished->mutable_best_bound_values());
+  }
+  if (response.status() == sat::INFEASIBLE) {
+    *invalid_assumption_core =
+        AdmitAssumptionCore(&response, *assumption_profile, finished) ==
+        AssumptionCoreResult::kInvalid;
   }
   if (IsFiniteNonnegative(response.wall_time()))
     finished->set_wall_time_seconds(response.wall_time());
@@ -496,7 +630,8 @@ protocol::WorkerFrame MakeFinished(const protocol::SolveRequest& request,
   return frame;
 }
 
-sat::SatParameters BuildSatParameters(const AppliedParameters& applied) {
+sat::SatParameters BuildSatParameters(const AppliedParameters& applied,
+                                      bool assumption_profile) {
   sat::SatParameters parameters;
   parameters.set_max_time_in_seconds(
       static_cast<double>(applied.wall_time_millis) / 1000.0);
@@ -506,13 +641,15 @@ sat::SatParameters BuildSatParameters(const AppliedParameters& applied) {
   parameters.set_enumerate_all_solutions(false);
   parameters.set_log_search_progress(false);
   parameters.set_log_to_stdout(false);
+  if (assumption_profile) parameters.set_cp_model_presolve(false);
   return parameters;
 }
 
 std::optional<protocol::WorkerFrame> ValidateSolve(
     const protocol::ParentFrame& parent, protocol::SolveRequest const** request,
     sat::CpModelProto* model, AppliedParameters* applied,
-    Sha256Digest* applied_hash) {
+    Sha256Digest* applied_hash, AssumptionProfile* assumption_profile,
+    sat::SatParameters* final_parameters) {
   if (!parent.has_solve_request()) {
     return WorkerFailure("", protocol::WORKER_ERROR_CODE_PROTOCOL_VIOLATION,
                          "expected exactly one solve request");
@@ -594,13 +731,18 @@ std::optional<protocol::WorkerFrame> ValidateSolve(
     }
   }
 
-  const sat::SatParameters final_parameters = BuildSatParameters(*applied);
-  if (!sat::ValidateParameters(final_parameters).empty()) {
+  if (auto failure =
+          ValidateAssumptionProfile(solve, *model, *applied, assumption_profile))
+    return failure;
+
+  *final_parameters =
+      BuildSatParameters(*applied, assumption_profile->enabled);
+  if (!sat::ValidateParameters(*final_parameters).empty()) {
     return WorkerFailure(solve.request_id(),
                          protocol::WORKER_ERROR_CODE_INVALID_PARAMETERS,
                          "normalized CP-SAT parameters are invalid");
   }
-  if (!sat::ValidateInputCpModel(final_parameters, *model).empty()) {
+  if (!sat::ValidateInputCpModel(*final_parameters, *model).empty()) {
     return WorkerFailure(solve.request_id(),
                          protocol::WORKER_ERROR_CODE_INVALID_MODEL,
                          "CP-SAT model validation failed");
@@ -695,24 +837,28 @@ int RunSession(std::istream& input, std::ostream& output,
     sat::CpModelProto model;
     AppliedParameters applied;
     Sha256Digest applied_hash{};
-    if (auto failure = ValidateSolve(solve_parent, &request, &model, &applied,
-                                     &applied_hash)) {
+    AssumptionProfile assumption_profile;
+    sat::SatParameters final_parameters;
+    if (auto failure =
+            ValidateSolve(solve_parent, &request, &model, &applied,
+                          &applied_hash, &assumption_profile, &final_parameters)) {
       return WriteSessionFrame(output, *failure, &output_bytes) ? 0
                                                                 : kExitOutput;
     }
 
-
     std::atomic<bool> callback_failed{false};
     EventWriter events(output, &output_bytes);
     sat::Model solver_model;
-    const sat::SatParameters final_parameters = BuildSatParameters(applied);
     solver_model.Add(sat::NewSatParameters(final_parameters));
+
+
     if (applied.emit_intermediate_solutions) {
       solver_model.Add(sat::NewFeasibleSolutionObserver(
           [&events, &callback_failed, request,
            &model](const sat::CpSolverResponse& response) {
             try {
-              events.Offer(MakeIncumbent(*request, model, response), true);
+              if (events.WantsFirstIncumbent())
+                events.Offer(MakeIncumbent(*request, model, response), true);
             } catch (...) {
               callback_failed.store(true);
             }
@@ -732,7 +878,7 @@ int RunSession(std::istream& input, std::ostream& output,
           }));
     }
 
-    const sat::CpSolverResponse response = sat::SolveCpModel(model, &solver_model);
+    sat::CpSolverResponse response = sat::SolveCpModel(model, &solver_model);
     if (!events.Close()) return kExitOutput;
     if (callback_failed.load()) {
       const protocol::WorkerFrame error = WorkerFailure(
@@ -740,8 +886,16 @@ int RunSession(std::istream& input, std::ostream& output,
           "callback event construction failed");
       return WriteSessionFrame(output, error, &output_bytes) ? 0 : kExitOutput;
     }
-    const protocol::WorkerFrame finished =
-        MakeFinished(*request, model, applied, applied_hash, response);
+    bool invalid_assumption_core = false;
+    const protocol::WorkerFrame finished = MakeFinished(
+        *request, model, applied, applied_hash, response, &assumption_profile,
+        &invalid_assumption_core);
+    if (invalid_assumption_core) {
+      const protocol::WorkerFrame error = WorkerFailure(
+          request->request_id(), protocol::WORKER_ERROR_CODE_INTERNAL,
+          "native assumption core failed whole-core validation");
+      return WriteSessionFrame(output, error, &output_bytes) ? 0 : kExitOutput;
+    }
     return WriteSessionFrame(output, finished, &output_bytes) ? 0 : kExitOutput;
   } catch (const std::bad_alloc&) {
     if (started_written) {

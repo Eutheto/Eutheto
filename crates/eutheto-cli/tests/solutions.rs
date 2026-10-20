@@ -56,6 +56,25 @@ fn create_project(data_dir: &Path) -> Result<String, Box<dyn Error>> {
         .to_owned())
 }
 
+fn create_workforce_scenario(data_dir: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
+    let output_path = output.to_str().ok_or("non-UTF-8 scenario path")?;
+    let (command, envelope) = run_json(
+        data_dir,
+        &[
+            "projects",
+            "create",
+            "--pack",
+            "official.workforce",
+            "--title",
+            "ICS export fixture",
+            "--output",
+            output_path,
+        ],
+    )?;
+    assert!(command.status.success(), "{envelope}");
+    Ok(())
+}
+
 #[test]
 fn solution_list_is_a_real_versioned_core_query() -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
@@ -198,5 +217,183 @@ fn json_export_requires_destination_before_input_or_database_access() -> Result<
     assert!(!missing_scenario_path.exists());
     assert!(!missing_solution_path.exists());
     assert!(fs::read_dir(directory.path())?.next().is_none());
+    Ok(())
+}
+
+#[test]
+fn ics_person_filter_is_restricted_to_ics_without_touching_inputs() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = directory.path().join("not-read-scenario");
+    let solution = directory.path().join("not-read-solution");
+    let (output, envelope) = run_json(
+        directory.path(),
+        &[
+            "solutions",
+            "export",
+            scenario.to_str().ok_or("non-UTF-8 path")?,
+            solution.to_str().ok_or("non-UTF-8 path")?,
+            "--format",
+            "csv",
+            "--person-id",
+            "not-a-person",
+        ],
+    )?;
+    assert_eq!(output.status.code(), Some(2), "{envelope}");
+    assert_eq!(envelope["error"]["code"], "solution.person_filter_invalid");
+    assert!(!scenario.exists());
+    assert!(!solution.exists());
+    Ok(())
+}
+
+#[test]
+fn ics_person_filter_rejects_non_uuidv7_without_touching_inputs() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = directory.path().join("not-read-scenario");
+    let solution = directory.path().join("not-read-solution");
+    let (output, envelope) = run_json(
+        directory.path(),
+        &[
+            "solutions",
+            "export",
+            scenario.to_str().ok_or("non-UTF-8 path")?,
+            solution.to_str().ok_or("non-UTF-8 path")?,
+            "--format",
+            "ics",
+            "--person-id",
+            "not-a-person",
+        ],
+    )?;
+    assert_eq!(output.status.code(), Some(3), "{envelope}");
+    assert_eq!(envelope["error"]["code"], "solution.person_id_invalid");
+    assert!(!scenario.exists());
+    assert!(!solution.exists());
+    Ok(())
+}
+
+#[test]
+fn ics_export_rejects_unverified_result_before_publishing() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = directory.path().join("scenario.json");
+    let solution = directory.path().join("unverified-result.json");
+    let output_path = directory.path().join("schedule.ics");
+    create_workforce_scenario(directory.path(), &scenario)?;
+    fs::write(&solution, b"{}")?;
+    let (output, envelope) = run_json(
+        directory.path(),
+        &[
+            "solutions",
+            "export",
+            scenario.to_str().ok_or("non-UTF-8 scenario path")?,
+            solution.to_str().ok_or("non-UTF-8 solution path")?,
+            "--format",
+            "ics",
+            "--output",
+            output_path.to_str().ok_or("non-UTF-8 output path")?,
+        ],
+    )?;
+    assert_eq!(output.status.code(), Some(8), "{envelope}");
+    assert_eq!(envelope["error"]["code"], "solution.portable_invalid");
+    assert!(!output_path.exists());
+    Ok(())
+}
+
+#[test]
+fn recipient_export_requires_a_destination_before_reading_sources() -> Result<(), Box<dyn Error>> {
+    for format in ["html", "pdf"] {
+        let directory = private_tempdir()?;
+        let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
+            .args(["--data-dir"])
+            .arg(directory.path())
+            .args(["solutions", "export"])
+            .arg(directory.path().join("missing-scenario.json"))
+            .arg(directory.path().join("missing-result.json"))
+            .args([
+                "--format",
+                format,
+                "--include-person-names",
+                "--include-authored-labels",
+                "--include-staffing",
+                "--include-changes",
+                "--include-fairness-actuals",
+            ])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(std::str::from_utf8(&output.stderr)?.contains("solution.export_output_required"));
+        assert_eq!(fs::read_dir(directory.path())?.count(), 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn report_disclosures_cannot_silently_affect_other_formats() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = directory.path().join("missing-scenario.json");
+    let result = directory.path().join("missing-result.json");
+    let destination = directory.path().join("output.json");
+    for option in [
+        "--include-person-names",
+        "--include-authored-labels",
+        "--include-staffing",
+        "--include-changes",
+        "--include-fairness-actuals",
+    ] {
+        let (output, envelope) = run_json(
+            directory.path(),
+            &[
+                "solutions",
+                "export",
+                scenario.to_str().ok_or("non-UTF-8 path")?,
+                result.to_str().ok_or("non-UTF-8 path")?,
+                "--format",
+                "json",
+                "--output",
+                destination.to_str().ok_or("non-UTF-8 path")?,
+                option,
+            ],
+        )?;
+        assert_eq!(output.status.code(), Some(2), "{envelope}");
+        assert_eq!(envelope["error"]["code"], "solution.report_options_invalid");
+    }
+    assert_eq!(fs::read_dir(directory.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn recipient_export_rejects_unverified_file_without_a_database_or_output()
+-> Result<(), Box<dyn Error>> {
+    for format in ["html", "pdf"] {
+        let directory = private_tempdir()?;
+        let scenario = directory.path().join("scenario.json");
+        let solution = directory.path().join("unverified.json");
+        let destination = directory.path().join("report.html");
+        create_workforce_scenario(directory.path(), &scenario)?;
+        fs::write(&solution, b"{}")?;
+        let (output, envelope) = run_json(
+            directory.path(),
+            &[
+                "solutions",
+                "export",
+                scenario.to_str().ok_or("non-UTF-8 path")?,
+                solution.to_str().ok_or("non-UTF-8 path")?,
+                "--format",
+                format,
+                "--output",
+                destination.to_str().ok_or("non-UTF-8 path")?,
+            ],
+        )?;
+        assert_eq!(output.status.code(), Some(8), "{envelope}");
+        assert_eq!(envelope["error"]["code"], "solution.portable_invalid");
+        assert!(!destination.exists());
+        let entries = fs::read_dir(directory.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        assert_eq!(
+            entries,
+            ["scenario.json", "unverified.json"]
+                .map(std::ffi::OsString::from)
+                .into()
+        );
+    }
     Ok(())
 }

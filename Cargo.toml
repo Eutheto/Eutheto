@@ -1,7 +1,9 @@
 [workspace]
 resolver = "3"
+exclude = ["vendor/citationberg"]
 members = [
   "crates/eutheto-types",
+  "crates/eutheto-pdf-worker",
   "crates/eutheto-domain-ir",
   "crates/eutheto-planning-ir",
   "crates/eutheto-domain-api",
@@ -49,3 +51,6 @@ todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
 wildcard_dependencies = "deny"
+
+[patch.crates-io]
+citationberg = { path = "vendor/citationberg" }

@@ -1,22 +1,41 @@
 import { onScopeDispose, shallowReactive, watch } from "vue";
 import {
   newUuidV7,
-  PeopleCsvFlow,
+  CsvImportFlow,
   SetupOperationScope,
   type ActorRef,
   type OperationProgressV1,
-  type PeopleCsvApplyV1,
+  type CsvApplyV1,
+  type CsvDetectionV1,
+  type CsvReadFormat,
+  type CsvReportV1,
+  type CsvSampleV1,
+  type CsvSourceOpenedV1,
+  type AssignmentCsvDetectionV1,
+  type AssignmentCsvMapping,
+  type AssignmentCsvPreviewV1,
+  type AssignmentCsvReadFormat,
+  type AssignmentCsvTarget,
+  type EligibilityCsvMapping,
+  type EligibilityCsvPreviewV1,
+  type EligibilityMatrixCellAddress,
+  type EligibilityMatrixDetection,
+  type EligibilityMatrixMapping,
+  type EligibilityMatrixPreviewV1,
+  type ShiftCsvMapping,
+  type ShiftCsvPreviewV1,
+  type ShiftCsvRowDecision,
+  type AvailabilityCsvMapping,
+  type AvailabilityCsvPreviewV1,
+  type AvailabilityCsvRowDecision,
   type PeopleCsvDecision,
   type PeopleCsvDetectionV1,
-  type PeopleCsvDialect,
+  type CsvDialect,
   type PeopleCsvMapping,
   type PeopleCsvPreviewV1,
-  type PeopleCsvRejectedRowsV1,
-  type PeopleCsvSourceOpenedV1,
   type SetupOperation,
 } from "./api/generated";
 import type { WorkforcePerson } from "./api/generated-domain-pack-contracts";
-import type { CsvRecordSampleState } from "./components/planner/people-csv-decisions";
 import { messages } from "./messages";
 import {
   isRedoBranchTruncation,
@@ -45,6 +64,13 @@ interface CsvApproval extends CsvContext {
   readonly commandId: string;
   readonly actor: ActorRef;
 }
+
+/** Source/format/scope/request correlation is established before publishing a sample. */
+export type CsvRecordSampleState =
+  | { readonly status: "idle" }
+  | { readonly status: "loading"; readonly record: number }
+  | { readonly status: "error"; readonly record: number; readonly message: string }
+  | { readonly status: "ready"; readonly sample: CsvSampleV1 };
 export interface CsvProposedPerson {
   readonly record: number;
   readonly status: "added" | "updated";
@@ -78,17 +104,214 @@ function proposedPeople(value: PeopleCsvPreviewV1): readonly CsvProposedPerson[]
   return result;
 }
 
-/** One native source/report owner. Mapping and identity decisions remain explicit parent drafts. */
 export function usePeopleCsvImport(home: ProjectHomeController, project: () => ProjectSummary) {
+  const importer = useCsvImport(home, project, {
+    family: "people",
+    detection: (value: CsvDetectionV1): PeopleCsvDetectionV1 => {
+      if (value.family !== "people") throw new Error(messages.csvImport.proposalMismatch);
+      return value.data;
+    },
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: { mapping: PeopleCsvMapping; decisions: readonly PeopleCsvDecision[] },
+      report: (event: OperationProgressV1) => void,
+    ) => owner.previewPeople(scope, sourceId, input, report),
+    proposed: proposedPeople,
+  });
+  return {
+    ...importer,
+    inspect: (dialect: CsvDialect, record: number) =>
+      importer.inspect({ family: "people", dialect }, record),
+    preview: (mapping: PeopleCsvMapping, decisions: readonly PeopleCsvDecision[]) =>
+      importer.preview({ mapping, decisions }),
+  };
+}
+
+export function useAssignmentCsvImport(home: ProjectHomeController, project: () => ProjectSummary) {
+  const importer = useCsvImport(home, project, {
+    family: "assignments",
+    detection: (value: CsvDetectionV1): AssignmentCsvDetectionV1 => {
+      if (value.family !== "assignments") throw new Error(messages.csvImport.proposalMismatch);
+      return value.data;
+    },
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: {
+        mapping: AssignmentCsvMapping;
+        target: AssignmentCsvTarget;
+        skippedRecords: readonly number[];
+        allowEmpty: boolean;
+      },
+      report: (event: OperationProgressV1) => void,
+    ) => owner.previewAssignments(scope, sourceId, input, report),
+  });
+  return {
+    ...importer,
+    inspect: (format: AssignmentCsvReadFormat, record: number) =>
+      importer.inspect({ family: "assignments", format }, record),
+    preview: (
+      mapping: AssignmentCsvMapping,
+      target: AssignmentCsvTarget,
+      skippedRecords: readonly number[],
+      allowEmpty: boolean,
+    ) => importer.preview({ mapping, target, skippedRecords, allowEmpty }),
+  };
+}
+
+export function useEligibilityCsvImport(
+  home: ProjectHomeController,
+  project: () => ProjectSummary,
+) {
+  const importer = useCsvImport(home, project, {
+    family: "eligibility",
+    detection: (value: CsvDetectionV1): PeopleCsvDetectionV1 => {
+      if (value.family !== "eligibility") throw new Error(messages.csvImport.proposalMismatch);
+      return value.data;
+    },
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: { mapping: EligibilityCsvMapping; skippedRecords: readonly number[] },
+      report: (event: OperationProgressV1) => void,
+    ) => owner.previewEligibility(scope, sourceId, input, report),
+  });
+  return {
+    ...importer,
+    inspect: (dialect: CsvDialect, record: number) =>
+      importer.inspect({ family: "eligibility", dialect }, record),
+    preview: (mapping: EligibilityCsvMapping, skippedRecords: readonly number[]) =>
+      importer.preview({ mapping, skippedRecords }),
+  };
+}
+
+export function useEligibilityMatrixImport(
+  home: ProjectHomeController,
+  project: () => ProjectSummary,
+) {
+  const importer = useCsvImport(home, project, {
+    family: "eligibilityMatrix",
+    sourceLabels: messages.eligibilityMatrix,
+    detection: (value: CsvDetectionV1): EligibilityMatrixDetection => {
+      if (value.family !== "eligibilityMatrix")
+        throw new Error(messages.csvImport.proposalMismatch);
+      return value.data;
+    },
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: {
+        mapping: EligibilityMatrixMapping;
+        skippedCells: readonly EligibilityMatrixCellAddress[];
+      },
+      report: (event: OperationProgressV1) => void,
+    ) => owner.previewEligibilityMatrix(scope, sourceId, input, report),
+  });
+  return {
+    ...importer,
+    paste: (text: string) =>
+      importer.choose((owner, scope, report) => owner.openEligibilityMatrix(scope, text, report)),
+    inspect: (record: number) => importer.inspect({ family: "eligibilityMatrix" }, record),
+    preview: (
+      mapping: EligibilityMatrixMapping,
+      skippedCells: readonly EligibilityMatrixCellAddress[],
+    ) => importer.preview({ mapping, skippedCells }),
+  };
+}
+
+export function useShiftCsvImport(home: ProjectHomeController, project: () => ProjectSummary) {
+  const importer = useCsvImport(home, project, {
+    family: "shifts",
+    detection: (value: CsvDetectionV1): PeopleCsvDetectionV1 => {
+      if (value.family !== "shifts") throw new Error(messages.csvImport.proposalMismatch);
+      return value.data;
+    },
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: { mapping: ShiftCsvMapping; decisions: readonly ShiftCsvRowDecision[] },
+      report: (event: OperationProgressV1) => void,
+    ) => owner.previewShifts(scope, sourceId, input, report),
+  });
+  return {
+    ...importer,
+    inspect: (dialect: CsvDialect, record: number) =>
+      importer.inspect({ family: "shifts", dialect }, record),
+    preview: (mapping: ShiftCsvMapping, decisions: readonly ShiftCsvRowDecision[]) =>
+      importer.preview({ mapping, decisions }),
+  };
+}
+
+export function useAvailabilityCsvImport(
+  home: ProjectHomeController,
+  project: () => ProjectSummary,
+) {
+  const importer = useCsvImport(home, project, {
+    family: "availability",
+    detection: (value: CsvDetectionV1): PeopleCsvDetectionV1 => {
+      if (value.family !== "availability") throw new Error(messages.csvImport.proposalMismatch);
+      return value.data;
+    },
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: { mapping: AvailabilityCsvMapping; decisions: readonly AvailabilityCsvRowDecision[] },
+      report: (event: OperationProgressV1) => void,
+    ) => owner.previewAvailability(scope, sourceId, input, report),
+  });
+  return {
+    ...importer,
+    inspect: (dialect: CsvDialect, record: number) =>
+      importer.inspect({ family: "availability", dialect }, record),
+    preview: (mapping: AvailabilityCsvMapping, decisions: readonly AvailabilityCsvRowDecision[]) =>
+      importer.preview({ mapping, decisions }),
+  };
+}
+
+/** One native source/report owner; every family retains the same immutable review lifecycle. */
+function useCsvImport<
+  Detection,
+  Preview extends
+    | PeopleCsvPreviewV1
+    | AssignmentCsvPreviewV1
+    | EligibilityCsvPreviewV1
+    | EligibilityMatrixPreviewV1
+    | ShiftCsvPreviewV1
+    | AvailabilityCsvPreviewV1,
+  Input,
+>(
+  home: ProjectHomeController,
+  project: () => ProjectSummary,
+  family: {
+    family: CsvDetectionV1["family"];
+    sourceLabels?: { opening: string; opened: string; detecting: string; detected: string };
+    detection: (value: CsvDetectionV1) => Detection;
+    preview: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      sourceId: string,
+      input: Input,
+      report: (event: OperationProgressV1) => void,
+    ) => SetupOperation<Preview>;
+    proposed?: (value: Preview) => readonly CsvProposedPerson[];
+  },
+) {
   const state = shallowReactive<{
-    source: PeopleCsvSourceOpenedV1 | null;
+    source: CsvSourceOpenedV1 | null;
     sourceState: "ready" | "consumed" | "uncertain";
-    detection: PeopleCsvDetectionV1 | null;
-    preview: PeopleCsvPreviewV1 | null;
+    detection: Detection | null;
+    preview: Preview | null;
     proposed: readonly CsvProposedPerson[];
     approval: CsvApproval | null;
     reportId: string | null;
-    report: PeopleCsvRejectedRowsV1 | null;
+    report: CsvReportV1 | null;
     sample: CsvRecordSampleState;
     pending: boolean;
     applying: boolean;
@@ -114,7 +337,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     failure: null,
   });
   let alive = true;
-  let flow: PeopleCsvFlow | null = null;
+  let flow: CsvImportFlow | null = null;
   let generation = 0;
   let sampleGeneration = 0;
   let previewScope: SetupOperationScope | null = null;
@@ -162,25 +385,50 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     state.sample = { status: "idle" };
   }
 
-  async function choose(): Promise<boolean> {
-    if (!available() || home.state.reviewCleanupError !== null) return false;
-    const scenarioId = project().scenarioId;
+  function detachSource(): CsvImportFlow | null {
+    const previous = flow;
+    flow = null;
     invalidate();
     invalidateSample();
-    state.pending = true;
     state.source = null;
     state.detection = null;
     state.reportId = null;
     state.report = null;
     state.stale = false;
-    let operation: SetupOperation<PeopleCsvSourceOpenedV1> | null = null;
+    return previous;
+  }
+
+  async function discardSource(): Promise<boolean> {
+    if (!available() || outcomeUnknown()) return false;
+    const previous = detachSource();
+    state.pending = true;
+    try {
+      return previous === null || (await home.retireReviewOwner(previous));
+    } finally {
+      state.pending = false;
+    }
+  }
+
+  async function choose(
+    open: (
+      owner: CsvImportFlow,
+      scope: SetupOperationScope,
+      report: (event: OperationProgressV1) => void,
+    ) => SetupOperation<CsvSourceOpenedV1> = (owner, scope, report) => owner.open(scope, report),
+  ): Promise<boolean> {
+    if (!available() || outcomeUnknown() || home.state.reviewCleanupError !== null) return false;
+    const scenarioId = project().scenarioId;
+    const previous = detachSource();
+    state.pending = true;
+    const retirement = previous === null ? true : home.retireReviewOwner(previous);
+    let operation: SetupOperation<CsvSourceOpenedV1> | null = null;
     const owned: { scope: SetupOperationScope | null } = { scope: null };
     let cancelled = false;
     const wasCancelled = (): boolean => cancelled;
     try {
       const response = await home.runOperation({
-        action: "people-csv-open",
-        label: messages.csvImport.selecting,
+        action: `${family.family}-csv-open`,
+        label: family.sourceLabels?.opening ?? messages.csvImport.selecting,
         refreshLibrary: false,
         cancel: async () => {
           cancelled = true;
@@ -189,20 +437,19 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
           await cancellation;
         },
         execute: async (report) => {
-          if (flow !== null && !(await home.retireReviewOwner(flow)))
-            throw new Error(messages.csvImport.sourceResetFailed);
+          if (!(await retirement)) throw new Error(messages.csvImport.sourceResetFailed);
           if (!alive || wasCancelled() || scenarioId !== project().scenarioId)
             throw cancelledRead();
-          const next = new PeopleCsvFlow(scenarioId);
+          const next = new CsvImportFlow(scenarioId, family.family);
           home.registerReviewOwner(next);
           flow = next;
           owned.scope = new SetupOperationScope(scenarioId, project().revision);
-          operation = next.open(owned.scope, report);
+          operation = open(next, owned.scope, report);
           return operation.result;
         },
         success: () =>
           alive && !wasCancelled() && scenarioId === project().scenarioId
-            ? messages.csvImport.selected
+            ? (family.sourceLabels?.opened ?? messages.csvImport.selected)
             : "",
       });
       if (!alive || wasCancelled() || scenarioId !== project().scenarioId) return false;
@@ -213,6 +460,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
       fail(error);
       return false;
     } finally {
+      await retirement;
       owned.scope?.dispose();
       state.pending = false;
     }
@@ -224,7 +472,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     if (!available() || !sourceReady() || owner === null || source === null) return false;
     const captured = context();
     const scope = new SetupOperationScope(captured.scenarioId, captured.revision);
-    let operation: SetupOperation<PeopleCsvDetectionV1> | null = null;
+    let operation: SetupOperation<CsvDetectionV1> | null = null;
     state.pending = true;
     state.error = null;
     state.failure = null;
@@ -232,8 +480,8 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     const wasCancelled = (): boolean => cancelled;
     try {
       const response = await home.runOperation({
-        action: "people-csv-detect",
-        label: messages.csvImport.detecting,
+        action: `${family.family}-csv-detect`,
+        label: family.sourceLabels?.detecting ?? messages.csvImport.detecting,
         refreshLibrary: false,
         cancel: async () => {
           cancelled = true;
@@ -246,11 +494,13 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
           return operation.result;
         },
         success: () =>
-          alive && owner === flow && !wasCancelled() ? messages.csvImport.detected : "",
+          alive && owner === flow && !wasCancelled()
+            ? (family.sourceLabels?.detected ?? messages.csvImport.detected)
+            : "",
       });
       // Detection is source-only; it does not claim a current stored revision.
       if (!alive || owner !== flow || wasCancelled()) return false;
-      state.detection = response.result;
+      state.detection = family.detection(response.result);
       return true;
     } catch (error) {
       fail(error);
@@ -261,7 +511,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     }
   }
 
-  async function inspect(dialect: PeopleCsvDialect, record: number): Promise<void> {
+  async function inspect(readFormat: CsvReadFormat, record: number): Promise<void> {
     const owner = flow;
     const source = state.source;
     if (!available() || !sourceReady() || owner === null || source === null) return;
@@ -272,7 +522,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     sampleScope = scope;
     state.sample = { status: "loading", record };
     try {
-      const response = await owner.sample(scope, source.sourceId, { dialect, record }).result;
+      const response = await owner.sample(scope, source.sourceId, { readFormat, record }).result;
       if (selected !== sampleGeneration || owner !== flow || !current(captured)) return;
       state.sample = { status: "ready", sample: response.result };
     } catch (error) {
@@ -284,26 +534,23 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     }
   }
 
-  async function preview(
-    mapping: PeopleCsvMapping,
-    decisions: readonly PeopleCsvDecision[],
-  ): Promise<boolean> {
+  async function preview(rawInput: Input): Promise<boolean> {
     const owner = flow;
     const source = state.source;
     if (!available() || !sourceReady() || owner === null || source === null) return false;
     invalidate();
     const selected = generation;
     const captured = context();
-    const input = structuredClone({ mapping, decisions });
+    const input = structuredClone(rawInput);
     const scope = new SetupOperationScope(captured.scenarioId, captured.revision);
     previewScope = scope;
     state.pending = true;
-    let operation: SetupOperation<PeopleCsvPreviewV1> | null = null;
+    let operation: SetupOperation<Preview> | null = null;
     let cancelled = false;
     const wasCancelled = (): boolean => cancelled;
     try {
       const response = await home.runOperation({
-        action: "people-csv-preview",
+        action: `${family.family}-csv-preview`,
         label: messages.csvImport.previewing,
         refreshLibrary: false,
         cancel: async () => {
@@ -323,12 +570,12 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
           }
           if (selected !== generation || !current(captured) || wasCancelled())
             throw cancelledRead();
-          operation = owner.preview(scope, source.sourceId, input, report);
+          operation = family.preview(owner, scope, source.sourceId, input, report);
           const result = await operation.result;
           if (selected === generation && current(captured) && !wasCancelled()) {
             state.reportId = result.result.previewId;
             // Correlation failures cannot create an approval or a success announcement.
-            state.proposed = proposedPeople(result.result);
+            state.proposed = family.proposed?.(result.result) ?? [];
           }
           return result;
         },
@@ -362,7 +609,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     }
   }
 
-  async function apply(truncateRedo = false): Promise<PeopleCsvApplyV1 | null> {
+  async function apply(truncateRedo = false): Promise<CsvApplyV1 | null> {
     const owner = flow;
     const approved = state.approval;
     if (
@@ -383,16 +630,16 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     state.applying = true;
     state.error = null;
     state.failure = null;
-    let operation: SetupOperation<PeopleCsvApplyV1> | null = null;
+    let operation: SetupOperation<CsvApplyV1> | null = null;
     try {
       const response = await home.runOperation({
-        action: "people-csv-apply",
+        action: `${family.family}-csv-apply`,
         label: messages.csvImport.applying,
         mutation: {
           scenarioId: approved.scenarioId,
           expectedRevision: approved.revision,
           commandId: approved.commandId,
-          receipt: (value: PeopleCsvApplyV1) => value.outcome,
+          receipt: (value: CsvApplyV1) => value.outcome,
         },
         cancel: async () => {
           await operation?.cancel();
@@ -456,10 +703,10 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     state.failure = null;
     try {
       const result = await home.runOperation({
-        action: "people-csv-report",
+        action: `${family.family}-csv-report`,
         label: messages.csvImport.readingReport,
         refreshLibrary: false,
-        execute: () => owner.rejectedRows(id),
+        execute: () => owner.report(id),
         success: () => messages.csvImport.reportReady,
       });
       if (!alive || owner !== flow || id !== state.reportId) return false;
@@ -485,14 +732,14 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
     state.failure = null;
     try {
       await home.runOperation({
-        action: "people-csv-report-save",
+        action: `${family.family}-csv-report-save`,
         label: messages.csvImport.savingReport,
         refreshLibrary: false,
         cancel: async () => {
           await operation?.cancel();
         },
         execute: (report: (event: OperationProgressV1) => void) => {
-          const saving = owner.saveRejectedRows(scope, id, report);
+          const saving = owner.saveReport(scope, id, report);
           operation = saving;
           return saving.result;
         },
@@ -512,15 +759,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
   watch(
     () => project().scenarioId,
     () => {
-      const previous = flow;
-      flow = null;
-      invalidate();
-      invalidateSample();
-      state.source = null;
-      state.detection = null;
-      state.reportId = null;
-      state.report = null;
-      state.stale = false;
+      const previous = detachSource();
       if (previous !== null) void home.retireReviewOwner(previous);
     },
     { flush: "sync" },
@@ -544,6 +783,7 @@ export function usePeopleCsvImport(home: ProjectHomeController, project: () => P
   return {
     state,
     choose,
+    discardSource,
     detect,
     inspect,
     preview,

@@ -13,6 +13,7 @@ use eutheto_types::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// External verification decision. The router never manufactures this evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -140,7 +141,7 @@ pub struct RouterObservations {
     pub started_after: Duration,
     /// Elapsed parent time at router completion, including no-dispatch terminal paths.
     pub finished_after: Duration,
-    /// Sum of backend invocation spans only; independent review is excluded.
+    /// Exclusive backend time; live independent-review spans are charged to verification.
     pub backend_elapsed: Duration,
     /// First retained candidate offset from router entry, not a backend-supplied timestamp.
     pub first_candidate_after: Option<Duration>,
@@ -154,16 +155,22 @@ pub struct RouterExecution {
     /// Absent on a regressing or unrepresentable parent-clock observation.
     /// Such an execution cannot supply authoritative timing for accepted persistence.
     pub observations: Option<RouterObservations>,
+    /// Last actual representable non-regressing elapsed observation, even when timings are tainted.
+    /// This bound is not a measured phase duration or proof of a reliable final clock.
+    pub last_trusted_elapsed: Option<Duration>,
 }
 
 struct ObservationState {
     observations: Option<RouterObservations>,
-    last_elapsed: Duration,
+    last_elapsed: Option<Duration>,
+    review_elapsed: Option<Duration>,
 }
 
 impl ObservationState {
     fn new(parent: &ParentSolveBudget) -> Self {
-        let start = parent.checked_elapsed();
+        let start = parent
+            .checked_elapsed()
+            .filter(|time| representable_elapsed(*time));
         Self {
             observations: start.map(|started_after| RouterObservations {
                 started_after,
@@ -172,24 +179,38 @@ impl ObservationState {
                 first_candidate_after: None,
                 first_verified_feasible_after: None,
             }),
-            last_elapsed: start.unwrap_or(Duration::ZERO),
+            last_elapsed: start,
+            review_elapsed: Some(Duration::ZERO),
         }
     }
 
     fn sample(&mut self, parent: &ParentSolveBudget) -> Option<Duration> {
         let elapsed = parent
             .checked_elapsed()
-            .filter(|time| *time >= self.last_elapsed);
+            .filter(|time| representable_elapsed(*time))
+            .filter(|time| self.last_elapsed.is_none_or(|previous| *time >= previous));
         if let Some(elapsed) = elapsed {
-            self.last_elapsed = elapsed;
+            self.last_elapsed = Some(elapsed);
         } else {
             self.observations = None;
         }
         elapsed
     }
 
-    fn retain_candidate(&mut self, parent: &ParentSolveBudget) {
-        let elapsed = self.sample(parent);
+    fn retain_candidate_at(
+        &mut self,
+        parent: &ParentSolveBudget,
+        captured_elapsed: Option<Duration>,
+    ) {
+        let elapsed = captured_elapsed.or_else(|| parent.checked_elapsed());
+        let elapsed = elapsed
+            .filter(|time| representable_elapsed(*time))
+            .filter(|time| self.last_elapsed.is_none_or(|previous| *time >= previous));
+        if let Some(elapsed) = elapsed {
+            self.last_elapsed = Some(elapsed);
+        } else {
+            self.observations = None;
+        }
         if let Some(observations) = &mut self.observations
             && observations.first_candidate_after.is_none()
         {
@@ -198,16 +219,45 @@ impl ObservationState {
         }
     }
 
+    fn mark_verified(&mut self, parent: &ParentSolveBudget) {
+        let elapsed = self.sample(parent);
+        if let Some(observations) = &mut self.observations
+            && observations.first_verified_feasible_after.is_none()
+        {
+            observations.first_verified_feasible_after =
+                elapsed.and_then(|time| time.checked_sub(observations.started_after));
+        }
+    }
+
+    fn exclude_review(&mut self, parent: &ParentSolveBudget, start: Option<Duration>) {
+        let end = self.sample(parent);
+        self.review_elapsed = self.review_elapsed.and_then(|total| {
+            start
+                .zip(end)
+                .and_then(|(start, end)| end.checked_sub(start))
+                .and_then(|elapsed| total.checked_add(elapsed))
+        });
+    }
+
     fn finish_backend(&mut self, parent: &ParentSolveBudget, start: Option<Duration>) {
         let end = self.sample(parent);
+        let review_elapsed = self.review_elapsed.replace(Duration::ZERO);
         let elapsed = start
             .zip(end)
-            .and_then(|(start, end)| end.checked_sub(start));
+            .and_then(|(start, end)| end.checked_sub(start))
+            .and_then(|elapsed| elapsed.checked_sub(review_elapsed?));
         self.observations = self.observations.take().and_then(|mut observations| {
             observations.backend_elapsed = observations.backend_elapsed.checked_add(elapsed?)?;
             Some(observations)
         });
     }
+}
+
+fn representable_elapsed(elapsed: Duration) -> bool {
+    u64::try_from(elapsed.as_millis())
+        .ok()
+        .and_then(|milliseconds| DurationMillis::new(milliseconds).ok())
+        .is_some()
 }
 
 pub struct SolverRouter<'a> {
@@ -255,6 +305,7 @@ impl ExecutionState {
         }
         RouterExecution {
             observations: self.observation.observations,
+            last_trusted_elapsed: self.observation.last_elapsed,
             record: RouterExecutionRecord {
                 decision: self.decision,
                 solve_options: self.solve_options,
@@ -331,7 +382,7 @@ impl AttemptInputs<'_> {
             Arc::clone(self.problem),
             self.summary.clone(),
             attempt_options,
-            self.parent_budget,
+            self.parent_budget.phase_view(),
             profile.map(super::profile::RoutingProfile::backend_cap),
             self.acceptance_reserve,
         )
@@ -450,6 +501,11 @@ enum BackendCompletion {
     TimedOut,
 }
 
+struct EarlyCandidateReview {
+    candidate: BackendCandidate,
+    review: CandidateReview,
+}
+
 struct BackendRun {
     completion: BackendCompletion,
     stop_reason: Option<BackendStopReason>,
@@ -457,6 +513,8 @@ struct BackendRun {
     candidate_assignments_used: u32,
     progress_used: u32,
     diagnostic_used: u32,
+    output_error: Option<OutputError>,
+    early_review: Option<EarlyCandidateReview>,
 }
 
 struct CandidateDisposition {
@@ -525,7 +583,12 @@ impl<'a> SolverRouter<'a> {
             );
         };
         let order = backend_order(&state.decision);
-        let mut remaining_output = RemainingOutput::new(self.limits);
+        let output_limits = if state.solve_options.collect_intermediate_solutions {
+            self.limits.with_intermediate_candidate_reserve()
+        } else {
+            self.limits
+        };
+        let mut remaining_output = RemainingOutput::new(output_limits);
 
         for (position, backend_id) in order.iter().enumerate() {
             let inputs = AttemptInputs {
@@ -545,14 +608,30 @@ impl<'a> SolverRouter<'a> {
                 AttemptControl::Continue => {}
                 AttemptControl::Finish(terminal) => {
                     let verified = terminal.reason == ExecutionTerminalReason::CandidateVerified;
-                    let elapsed = state.observation.sample(parent_budget).and_then(|time| {
-                        time.checked_sub(state.observation.observations.as_ref()?.started_after)
-                    });
+                    let elapsed = (verified
+                        && state
+                            .observation
+                            .observations
+                            .as_ref()
+                            .and_then(|observations| observations.first_verified_feasible_after)
+                            .is_none())
+                    .then(|| {
+                        state.observation.sample(parent_budget).and_then(|time| {
+                            time.checked_sub(state.observation.observations.as_ref()?.started_after)
+                        })
+                    })
+                    .flatten();
                     let mut execution = state.finish(self.policy, terminal, parent_budget);
                     if verified {
-                        if let Some(observations) = &mut execution.observations {
+                        if let Some(observations) = &mut execution.observations
+                            && observations.first_verified_feasible_after.is_none()
+                        {
                             observations.first_verified_feasible_after = elapsed;
                         }
+                        let elapsed = execution
+                            .observations
+                            .as_ref()
+                            .and_then(|observations| observations.first_verified_feasible_after);
                         execution.record.first_verified_feasible_milliseconds = elapsed
                             .and_then(|time| u64::try_from(time.as_millis()).ok())
                             .and_then(|time| DurationMillis::new(time).ok());
@@ -579,7 +658,7 @@ impl<'a> SolverRouter<'a> {
         backend_id: &BackendId,
         state: &mut ExecutionState,
         remaining_output: &mut RemainingOutput,
-        inputs: AttemptInputs<'_>,
+        mut inputs: AttemptInputs<'_>,
     ) -> AttemptControl {
         if let Some(terminal) = pre_attempt_terminal(inputs.parent_budget, *remaining_output) {
             return AttemptControl::Finish(terminal);
@@ -630,24 +709,29 @@ impl<'a> SolverRouter<'a> {
             return AttemptControl::Finish(terminal);
         }
         let invocation_index = state.counter.mark_invocation();
-        let attempt_limits = remaining_output.limits(self.limits);
+        let collect_intermediate = state.solve_options.collect_intermediate_solutions;
+        let configured_limits = if collect_intermediate {
+            self.limits.with_intermediate_candidate_reserve()
+        } else {
+            self.limits
+        };
+        let attempt_limits = remaining_output.limits(configured_limits);
         let attempt = AttemptBase::new(backend_id, &request, invocation_index, preflight_report);
         let backend_started = state.observation.sample(inputs.parent_budget);
         let backend_run = run_backend(
             backend.as_ref(),
+            backend_id,
             &request,
-            inputs.problem,
-            &mut *inputs.progress,
             attempt_limits,
-            inputs.parent_budget,
             &mut state.observation,
+            &mut inputs,
         )
         .await;
         state
             .observation
             .finish_backend(inputs.parent_budget, backend_started);
         let output_error = backend_run.as_ref().err().map(ToString::to_string);
-        let Ok(backend_run) = backend_run else {
+        let Ok(mut backend_run) = backend_run else {
             let Some(error_code) = output_error else {
                 unreachable!("failed backend run must contain an output error");
             };
@@ -665,6 +749,40 @@ impl<'a> SolverRouter<'a> {
                 fallback_taken: false,
             }));
             return AttemptControl::Finish(terminal);
+        }
+        if let Some(error) = backend_run.output_error.take() {
+            if !collect_intermediate || backend_run.candidates.is_empty() {
+                return record_output_rejection(state, attempt, error.to_string());
+            }
+            let error_code = if matches!(
+                error,
+                OutputError::CandidateLimitExceeded
+                    | OutputError::CandidateAssignmentLimitExceeded
+                    | OutputError::ProgressLimitExceeded
+                    | OutputError::DiagnosticLimitExceeded
+                    | OutputError::EvidenceLimitExceeded
+            ) {
+                "solver.output_limits"
+            } else {
+                "solver.output_contract"
+            };
+            state
+                .diagnostics
+                .push(RouterDiagnostic::backend_code(error_code));
+            state.attempts.push(attempt.finish(AttemptConclusion {
+                candidate_count: candidate_count(&backend_run.candidates),
+                termination: AttemptTermination::BackendError {
+                    code: error_code.to_owned(),
+                },
+                backend_failure_code: Some(error_code.to_owned()),
+                outcome: None,
+                fallback_eligible: false,
+                fallback_taken: false,
+            }));
+            return AttemptControl::Finish(Terminal::new(
+                SolveStatus::BackendFailed,
+                ExecutionTerminalReason::BackendFailure,
+            ));
         }
         if backend_run.candidates.is_empty() {
             finish_empty_attempt(
@@ -836,48 +954,127 @@ fn record_output_rejection(
     ))
 }
 
+// A single session owns timeout, bounded output and early-review delivery together.
+#[allow(clippy::too_many_lines)]
 async fn run_backend(
     backend: &dyn SolverBackend,
+    backend_id: &BackendId,
     request: &SolveRequest,
-    problem: &PlanningProblem,
-    progress: &mut dyn ProgressSink,
     limits: SolverApiLimits,
-    parent: &ParentSolveBudget,
     observation: &mut ObservationState,
+    inputs: &mut AttemptInputs<'_>,
 ) -> Result<BackendRun, OutputError> {
-    let mut counting_progress = CountingProgress::new(progress);
+    let parent = inputs.parent_budget;
+    let reviewer = &mut *inputs.reviewer;
+    let collect_intermediate = request.options().collect_intermediate_solutions;
+    let mut counting_progress = CountingProgress::new(&mut *inputs.progress);
     let mut output = BoundedBackendOutput::new(
-        problem,
+        inputs.problem,
         &mut counting_progress,
         request.dispatch_budget(),
         limits,
     )?;
+    let (first_candidate_sender, mut first_candidate_receiver) = mpsc::channel(1);
     let mut observed_output = ObservedOutput {
         output: &mut output,
         parent,
-        observation,
+        first_candidate_sender: collect_intermediate.then_some(first_candidate_sender),
+        first_candidate_seen: false,
+        first_candidate_elapsed: None,
+        candidate_rejection: None,
+        track_candidate_rejection: collect_intermediate,
     };
-    let completion = match tokio::time::timeout(
-        request.dispatch_budget().remaining_backend_duration(),
-        backend.solve(request, &mut observed_output),
-    )
-    .await
-    {
-        Ok(result) => BackendCompletion::Returned(result.map(Box::new)),
-        Err(_) => BackendCompletion::TimedOut,
+    let (completion, early_review) = if collect_intermediate {
+        let mut early_review = None;
+        let mut receiver_open = true;
+        let mut backend_future = Box::pin(backend.solve(request, &mut observed_output));
+        let mut deadline = Box::pin(tokio::time::sleep(
+            request.dispatch_budget().remaining_backend_duration(),
+        ));
+        let completion = loop {
+            tokio::select! {
+                biased;
+                candidate = first_candidate_receiver.recv(),
+                    if receiver_open && early_review.is_none() =>
+                {
+                    match candidate {
+                        Some(notification) => {
+                            let candidate = notification.candidate;
+                            observation.retain_candidate_at(parent, notification.admitted_after);
+                            let review_started = observation.sample(parent);
+                            let review = review_intermediate_candidate(
+                                backend_id,
+                                &candidate,
+                                reviewer,
+                                parent,
+                                observation,
+                            );
+                            observation.exclude_review(parent, review_started);
+                            early_review = Some(EarlyCandidateReview { candidate, review });
+                        }
+                        None => receiver_open = false,
+                    }
+                }
+                result = &mut backend_future => {
+                    break BackendCompletion::Returned(result.map(Box::new));
+                }
+                () = &mut deadline => {
+                    break BackendCompletion::TimedOut;
+                }
+            }
+        };
+        drop(backend_future);
+        if early_review.is_none()
+            && let Ok(notification) = first_candidate_receiver.try_recv()
+        {
+            let candidate = notification.candidate;
+            observation.retain_candidate_at(parent, notification.admitted_after);
+            let review_started = observation.sample(parent);
+            let review = review_intermediate_candidate(
+                backend_id,
+                &candidate,
+                reviewer,
+                parent,
+                observation,
+            );
+            observation.exclude_review(parent, review_started);
+            early_review = Some(EarlyCandidateReview { candidate, review });
+        }
+        (completion, early_review)
+    } else {
+        let completion = match tokio::time::timeout(
+            request.dispatch_budget().remaining_backend_duration(),
+            backend.solve(request, &mut observed_output),
+        )
+        .await
+        {
+            Ok(result) => BackendCompletion::Returned(result.map(Box::new)),
+            Err(_) => BackendCompletion::TimedOut,
+        };
+        (completion, None)
     };
-    let rejection = output.contract_rejection().cloned();
+    let first_candidate_elapsed = observed_output.first_candidate_elapsed;
+    let candidate_rejection = observed_output.candidate_rejection.clone();
+    drop(observed_output);
+    let rejection = output.contract_rejection().cloned().or(candidate_rejection);
     let candidate_assignments_used = output.candidate_assignment_count();
     let progress_used = output.progress_event_count();
     let candidates = output.into_candidates();
-    let rejection_stop = match rejection {
-        Some(OutputError::Cancelled) => Some(BackendStopReason::Cancelled),
-        Some(OutputError::ParentDeadlineExceeded) => Some(BackendStopReason::DeadlineExceeded),
-        Some(OutputError::BackendLimitExceeded) => Some(BackendStopReason::BackendLimitExceeded),
-        Some(error) => return Err(error),
-        None => None,
+    if !collect_intermediate && !candidates.is_empty() {
+        observation.retain_candidate_at(parent, first_candidate_elapsed);
+    }
+    let (stop_reason, output_error) = match rejection {
+        Some(OutputError::Cancelled) => (Some(BackendStopReason::Cancelled), None),
+        Some(OutputError::ParentDeadlineExceeded) => {
+            (Some(BackendStopReason::DeadlineExceeded), None)
+        }
+        Some(OutputError::BackendLimitExceeded) => {
+            (Some(BackendStopReason::BackendLimitExceeded), None)
+        }
+        Some(error) => (None, Some(error)),
+        None => (None, None),
     };
-    let stop_reason = rejection_stop
+    let stop_reason = stop_reason
         .or_else(|| request.dispatch_budget().stop_reason())
         .or_else(|| {
             matches!(&completion, BackendCompletion::TimedOut)
@@ -890,13 +1087,24 @@ async fn run_backend(
         candidate_assignments_used,
         progress_used,
         diagnostic_used: counting_progress.diagnostic_count,
+        output_error,
+        early_review,
     })
+}
+
+struct CandidateNotification {
+    candidate: BackendCandidate,
+    admitted_after: Option<Duration>,
 }
 
 struct ObservedOutput<'a, 'b> {
     output: &'a mut BoundedBackendOutput<'b>,
     parent: &'a ParentSolveBudget,
-    observation: &'a mut ObservationState,
+    first_candidate_sender: Option<mpsc::Sender<CandidateNotification>>,
+    first_candidate_seen: bool,
+    first_candidate_elapsed: Option<Duration>,
+    candidate_rejection: Option<OutputError>,
+    track_candidate_rejection: bool,
 }
 
 impl BackendOutputSink for ObservedOutput<'_, '_> {
@@ -908,8 +1116,26 @@ impl BackendOutputSink for ObservedOutput<'_, '_> {
         &mut self,
         candidate: CandidateSubmission,
     ) -> Result<BackendCandidate, OutputError> {
-        let retained = self.output.submit_candidate(candidate)?;
-        self.observation.retain_candidate(self.parent);
+        let retained = match self.output.submit_candidate(candidate) {
+            Ok(retained) => retained,
+            Err(error) => {
+                if self.track_candidate_rejection {
+                    self.candidate_rejection = Some(error.clone());
+                }
+                return Err(error);
+            }
+        };
+        let admitted_after = self.parent.checked_elapsed();
+        if !self.first_candidate_seen {
+            self.first_candidate_seen = true;
+            self.first_candidate_elapsed = admitted_after;
+        }
+        if let Some(sender) = self.first_candidate_sender.take() {
+            let _ = sender.try_send(CandidateNotification {
+                candidate: retained.clone(),
+                admitted_after,
+            });
+        }
         Ok(retained)
     }
 }
@@ -927,51 +1153,67 @@ fn finish_candidate_attempt(
         BackendCompletion::Returned(Err(error)) => Some(safe_backend_code(error)),
         BackendCompletion::Returned(Ok(_)) | BackendCompletion::TimedOut => None,
     };
-    let mut validated_outcome = None;
-    let candidate_disposition = if run.stop_reason == Some(BackendStopReason::BackendLimitExceeded)
-    {
-        review_candidates(
-            &attempt.backend_id,
-            &run.candidates,
-            reviewer,
-            parent_budget,
-            None,
-        )
-    } else {
-        match &run.completion {
-            BackendCompletion::Returned(Err(_)) | BackendCompletion::TimedOut => review_candidates(
+    let (candidate_disposition, validated_outcome) =
+        if request.options().collect_intermediate_solutions {
+            finish_intermediate_candidate(
                 &attempt.backend_id,
-                &run.candidates,
+                run,
+                request,
+                limits,
                 reviewer,
                 parent_budget,
-                None,
-            ),
-            BackendCompletion::Returned(Ok(outcome)) => {
-                if let Err(error) =
-                    validate_outcome(request, outcome.as_ref(), &run.candidates, limits)
-                {
-                    CandidateDisposition {
-                        termination: AttemptTermination::OutcomeContractFailure {
-                            code: outcome_error_code(error).to_owned(),
-                        },
-                        status: SolveStatus::BackendFailed,
-                        reason: ExecutionTerminalReason::BackendFailure,
-                        selected_candidate: None,
-                        diagnostic: None,
-                    }
-                } else {
-                    validated_outcome = Some(outcome.as_ref().clone());
+                &mut state.observation,
+            )
+        } else {
+            let mut validated_outcome = None;
+            let candidate_disposition =
+                if run.stop_reason == Some(BackendStopReason::BackendLimitExceeded) {
                     review_candidates(
                         &attempt.backend_id,
                         &run.candidates,
                         reviewer,
                         parent_budget,
-                        Some(outcome.as_ref()),
+                        None,
                     )
-                }
-            }
-        }
-    };
+                } else {
+                    match &run.completion {
+                        BackendCompletion::Returned(Err(_)) | BackendCompletion::TimedOut => {
+                            review_candidates(
+                                &attempt.backend_id,
+                                &run.candidates,
+                                reviewer,
+                                parent_budget,
+                                None,
+                            )
+                        }
+                        BackendCompletion::Returned(Ok(outcome)) => {
+                            if let Err(error) =
+                                validate_outcome(request, outcome.as_ref(), &run.candidates, limits)
+                            {
+                                CandidateDisposition {
+                                    termination: AttemptTermination::OutcomeContractFailure {
+                                        code: outcome_error_code(error).to_owned(),
+                                    },
+                                    status: SolveStatus::BackendFailed,
+                                    reason: ExecutionTerminalReason::BackendFailure,
+                                    selected_candidate: None,
+                                    diagnostic: None,
+                                }
+                            } else {
+                                validated_outcome = Some(outcome.as_ref().clone());
+                                review_candidates(
+                                    &attempt.backend_id,
+                                    &run.candidates,
+                                    reviewer,
+                                    parent_budget,
+                                    Some(outcome.as_ref()),
+                                )
+                            }
+                        }
+                    }
+                };
+            (candidate_disposition, validated_outcome)
+        };
     if let Some(diagnostic) = candidate_disposition.diagnostic {
         state.diagnostics.push(diagnostic);
     }
@@ -989,6 +1231,217 @@ fn finish_candidate_attempt(
         fallback_taken: false,
     }));
     terminal
+}
+
+fn finish_intermediate_candidate(
+    backend_id: &BackendId,
+    run: &BackendRun,
+    request: &SolveRequest,
+    limits: SolverApiLimits,
+    reviewer: &mut dyn CandidateReviewer,
+    parent_budget: &ParentSolveBudget,
+    observation: &mut ObservationState,
+) -> (CandidateDisposition, Option<BackendSolveOutcome>) {
+    let mut validated_outcome = None;
+    if run.stop_reason != Some(BackendStopReason::BackendLimitExceeded) {
+        match &run.completion {
+            BackendCompletion::Returned(Err(error)) if error.code() == "solver.output_contract" => {
+                return (
+                    CandidateDisposition {
+                        termination: AttemptTermination::BackendError {
+                            code: error.code().to_owned(),
+                        },
+                        status: SolveStatus::BackendFailed,
+                        reason: ExecutionTerminalReason::BackendFailure,
+                        selected_candidate: None,
+                        diagnostic: None,
+                    },
+                    None,
+                );
+            }
+            BackendCompletion::Returned(Ok(outcome)) => {
+                if let Err(error) =
+                    validate_outcome(request, outcome.as_ref(), &run.candidates, limits)
+                {
+                    return (
+                        CandidateDisposition {
+                            termination: AttemptTermination::OutcomeContractFailure {
+                                code: outcome_error_code(error).to_owned(),
+                            },
+                            status: SolveStatus::BackendFailed,
+                            reason: ExecutionTerminalReason::BackendFailure,
+                            selected_candidate: None,
+                            diagnostic: None,
+                        },
+                        None,
+                    );
+                }
+                validated_outcome = Some(outcome.as_ref().clone());
+            }
+            BackendCompletion::Returned(Err(_)) | BackendCompletion::TimedOut => {}
+        }
+    }
+
+    let Some(terminal) = run.candidates.last() else {
+        return (
+            CandidateDisposition {
+                termination: AttemptTermination::OutcomeContractFailure {
+                    code: "solver.output_contract".to_owned(),
+                },
+                status: SolveStatus::BackendFailed,
+                reason: ExecutionTerminalReason::BackendFailure,
+                selected_candidate: None,
+                diagnostic: None,
+            },
+            None,
+        );
+    };
+    let terminal_review = if let Some(early) = run
+        .early_review
+        .as_ref()
+        .filter(|early| matches!(&early.review, CandidateReview::VerificationFailed { .. }))
+    {
+        early.review.clone()
+    } else if let Some(early) = run
+        .early_review
+        .as_ref()
+        .filter(|review| review.candidate.sequence == terminal.sequence)
+    {
+        early.review.clone()
+    } else {
+        review_terminal_candidate(backend_id, terminal, reviewer, parent_budget, observation)
+    };
+    let disposition = terminal_disposition(
+        terminal,
+        &run.candidates,
+        terminal_review,
+        run.early_review.as_ref(),
+        validated_outcome.as_ref(),
+    );
+    (disposition, validated_outcome)
+}
+
+fn review_intermediate_candidate(
+    backend_id: &BackendId,
+    candidate: &BackendCandidate,
+    reviewer: &mut dyn CandidateReviewer,
+    parent_budget: &ParentSolveBudget,
+    observation: &mut ObservationState,
+) -> CandidateReview {
+    if let Some(reason) = stopped_interruption(parent_budget) {
+        return CandidateReview::Interrupted(reason);
+    }
+    let review = review_without_executor_starvation(reviewer, backend_id, candidate);
+    if matches!(&review, CandidateReview::Verified { .. }) {
+        observation.mark_verified(parent_budget);
+    }
+    review
+}
+
+fn review_terminal_candidate(
+    backend_id: &BackendId,
+    candidate: &BackendCandidate,
+    reviewer: &mut dyn CandidateReviewer,
+    parent_budget: &ParentSolveBudget,
+    observation: &mut ObservationState,
+) -> CandidateReview {
+    if let Some(reason) = stopped_interruption(parent_budget) {
+        return CandidateReview::Interrupted(reason);
+    }
+    let review = review_without_executor_starvation(reviewer, backend_id, candidate);
+    if matches!(&review, CandidateReview::Verified { .. }) {
+        observation.mark_verified(parent_budget);
+    }
+    if let Some(reason) = stopped_interruption(parent_budget) {
+        return CandidateReview::Interrupted(reason);
+    }
+    review
+}
+
+// Verification is synchronous and can be CPU-heavy. Tokio moves the surrounding task's
+// executor work to another worker while the verifier uses this thread. Current-thread test
+// runtimes and callers outside Tokio retain the ordinary synchronous reviewer contract.
+fn review_without_executor_starvation(
+    reviewer: &mut dyn CandidateReviewer,
+    backend_id: &BackendId,
+    candidate: &BackendCandidate,
+) -> CandidateReview {
+    if tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+    {
+        tokio::task::block_in_place(|| reviewer.review(backend_id, candidate))
+    } else {
+        reviewer.review(backend_id, candidate)
+    }
+}
+
+fn terminal_disposition(
+    terminal: &BackendCandidate,
+    candidates: &[BackendCandidate],
+    review: CandidateReview,
+    early_review: Option<&EarlyCandidateReview>,
+    outcome: Option<&BackendSolveOutcome>,
+) -> CandidateDisposition {
+    match review {
+        CandidateReview::VerificationFailed { diagnostic_code } => {
+            let diagnostic = RouterDiagnostic::backend_code(&diagnostic_code);
+            CandidateDisposition {
+                termination: AttemptTermination::VerificationQuarantined { diagnostic_code },
+                status: SolveStatus::BackendFailed,
+                reason: ExecutionTerminalReason::VerificationQuarantined,
+                selected_candidate: None,
+                diagnostic: Some(diagnostic),
+            }
+        }
+        CandidateReview::Interrupted(reason) => interrupted_review(reason),
+        CandidateReview::ResourceLimitExceeded => CandidateDisposition {
+            termination: AttemptTermination::ReviewResourceLimitExceeded,
+            status: SolveStatus::NoSolutionWithinLimit,
+            reason: ExecutionTerminalReason::ReviewResourceLimitExceeded,
+            selected_candidate: None,
+            diagnostic: Some(RouterDiagnostic {
+                code: "verification.resource_limit".to_owned(),
+                message: "Independent verification could not complete within its resource limit."
+                    .to_owned(),
+            }),
+        },
+        CandidateReview::Verified { objective_matches } => CandidateDisposition {
+            termination: AttemptTermination::CandidateVerified,
+            status: if objective_matches
+                && selected_optimal_candidate(terminal, candidates, outcome)
+            {
+                SolveStatus::Optimal
+            } else {
+                SolveStatus::Feasible
+            },
+            reason: ExecutionTerminalReason::CandidateVerified,
+            selected_candidate: Some(terminal.clone()),
+            diagnostic: None,
+        },
+        CandidateReview::AwaitingIndependentVerification => {
+            if let Some(EarlyCandidateReview {
+                candidate,
+                review: CandidateReview::Verified { .. },
+            }) = early_review
+            {
+                CandidateDisposition {
+                    termination: AttemptTermination::CandidateVerified,
+                    status: SolveStatus::Feasible,
+                    reason: ExecutionTerminalReason::CandidateVerified,
+                    selected_candidate: Some(candidate.clone()),
+                    diagnostic: None,
+                }
+            } else {
+                CandidateDisposition {
+                    termination: AttemptTermination::CandidateAwaitingVerification,
+                    status: SolveStatus::NoSolutionWithinLimit,
+                    reason: ExecutionTerminalReason::CandidateAwaitingVerification,
+                    selected_candidate: None,
+                    diagnostic: None,
+                }
+            }
+        }
+    }
 }
 
 fn finish_empty_attempt(
@@ -1165,15 +1618,19 @@ fn review_candidates(
     }
 }
 
-fn stopped_review(parent_budget: &ParentSolveBudget) -> Option<CandidateDisposition> {
+fn stopped_interruption(parent_budget: &ParentSolveBudget) -> Option<OperationInterruption> {
     let snapshot = parent_budget.snapshot();
     if snapshot.cancelled {
-        Some(interrupted_review(OperationInterruption::Cancelled))
+        Some(OperationInterruption::Cancelled)
     } else if snapshot.expired || snapshot.remaining_milliseconds == DurationMillis::ZERO {
-        Some(interrupted_review(OperationInterruption::DeadlineExceeded))
+        Some(OperationInterruption::DeadlineExceeded)
     } else {
         None
     }
+}
+
+fn stopped_review(parent_budget: &ParentSolveBudget) -> Option<CandidateDisposition> {
+    stopped_interruption(parent_budget).map(interrupted_review)
 }
 
 fn interrupted_review(reason: OperationInterruption) -> CandidateDisposition {
@@ -1217,7 +1674,7 @@ fn selected_optimal_candidate(
         return false;
     };
     selected_objective.objective_values == final_objective.objective_values
-        && final_objective.best_bound_values.as_ref() == Some(&final_objective.objective_values)
+        && outcome.evidence.best_bound_values.as_ref() == Some(&final_objective.objective_values)
 }
 
 fn terminal_from_outcome(
@@ -1323,6 +1780,8 @@ fn outcome_error_code(error: OutcomeError) -> &'static str {
             "solver.outcome.candidate_assignment_limit"
         }
         OutcomeError::InvalidObjectiveDimension => "solver.outcome.objective_dimension",
+        OutcomeError::BestBoundOutsideDeclaredRange => "solver.outcome.best_bound_range",
+        OutcomeError::BestBoundContradictsObjective => "solver.outcome.best_bound_contradiction",
         OutcomeError::NonMonotonicCandidateTime => "solver.outcome.candidate_time_order",
         OutcomeError::CandidateSequenceMismatch => "solver.outcome.candidate_sequence",
         OutcomeError::CandidateAfterTermination => "solver.outcome.candidate_after_termination",
@@ -1336,6 +1795,7 @@ fn outcome_error_code(error: OutcomeError) -> &'static str {
         OutcomeError::ExecutionOptionsMismatch => "solver.outcome.execution_options",
         OutcomeError::ExecutionModelCountMismatch => "solver.outcome.execution_model_counts",
         OutcomeError::InvalidExecutionEvidence => "solver.outcome.execution_evidence",
+        OutcomeError::InvalidAssumptionCoreEvidence => "solver.outcome.assumption_core_evidence",
     }
 }
 

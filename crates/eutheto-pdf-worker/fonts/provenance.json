@@ -1,0 +1,32 @@
+{
+  "source": "https://static.crates.io/crates/typst-assets/typst-assets-0.15.1.crate",
+  "version": "0.15.1",
+  "crateSha256": "bcee505dac6702dd1c5e65aa2e94a6179d19ee09e2e5637d7313db91765dc4e0",
+  "files": [
+    {
+      "path": "LibertinusSerif-Regular.otf",
+      "sha256": "fcf06307a77367394fcb0ccb241e59eea70dba3d732be309647611224679c733",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "LibertinusSerif-Bold.otf",
+      "sha256": "0264914210ed51b3231ebc92ce529e9f2e166ba9eebf0cd4a579558690a27b64",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "LibertinusSerif-Italic.otf",
+      "sha256": "9a393d63d6e05f620d3dc0190dfd35a8ede58c0808cf0fc9de7fcb9c723e4c24",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "LibertinusSerif-BoldItalic.otf",
+      "sha256": "47a665259f09f554f5d133d7718cdad43ff462c6a6b2328f38023465e62d57ce",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "DejaVuSansMono.ttf",
+      "sha256": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582",
+      "license": "Bitstream-Vera"
+    }
+  ]
+}
