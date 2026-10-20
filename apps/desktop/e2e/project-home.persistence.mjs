@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { isWorkforceResultScheduleViewData } from "../src/api/generated-domain-pack-contracts.ts";
+import { nativePdfCancellationAcceptance } from "./recipient-pdf-lifecycle.mjs";
 
 const driverHost = "127.0.0.1";
 const driverPort = 4_444;
@@ -268,7 +269,14 @@ async function navigate(sessionId, path) {
 }
 
 async function selectValue(sessionId, selector, value) {
-  await waitForElement(sessionId, selector);
+  await waitFor(
+    sessionId,
+    `const field = document.querySelector(arguments[0]);
+    return field instanceof HTMLSelectElement && !field.matches(':disabled') &&
+      [...field.options].some(option => option.value === arguments[1] && !option.disabled);`,
+    [selector, value],
+  );
+  // Callers await the result: native-backed change handlers may retain the old value meanwhile.
   await evaluate(
     sessionId,
     "const field = document.querySelector(arguments[0]); field.value = arguments[1]; field.dispatchEvent(new Event('change', {bubbles:true}));",
@@ -398,16 +406,19 @@ function package10FixtureShape(fixture, expected) {
   };
 }
 
-async function package10FixtureEvidence() {
-  const manifestUrl = new URL("../../../benchmarks/corpus/workforce/v1.json", import.meta.url);
+async function package10FixtureEvidence(corpusVersion = 1, fixtureIds = package10FixtureIds) {
+  const manifestUrl = new URL(
+    `../../../benchmarks/corpus/workforce/v${corpusVersion}.json`,
+    import.meta.url,
+  );
   const manifestBytes = await readFile(manifestUrl);
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   const expectedBytes = await readFile(
-    new URL("../../../benchmarks/expected/workforce/v1.json", import.meta.url),
+    new URL(`../../../benchmarks/expected/workforce/v${corpusVersion}.json`, import.meta.url),
   );
   const expected = JSON.parse(expectedBytes.toString("utf8"));
   const cases = [];
-  for (const id of package10FixtureIds) {
+  for (const id of fixtureIds) {
     const binding = manifest.cases.find((entry) => entry.id === id);
     assert(binding, `The corpus manifest must contain ${id}`);
     const fixtureUrl = new URL(`../../../${binding.input.path}`, import.meta.url);
@@ -429,7 +440,7 @@ async function package10FixtureEvidence() {
         bytes: bytes.byteLength,
       },
       expected: {
-        path: "benchmarks/expected/workforce/v1.json",
+        path: `benchmarks/expected/workforce/v${corpusVersion}.json`,
         sha256: package10Sha256(expectedBytes),
       },
       shape: package10FixtureShape(fixture, expectedCase),
@@ -438,7 +449,7 @@ async function package10FixtureEvidence() {
   }
   return {
     manifest: {
-      path: "benchmarks/corpus/workforce/v1.json",
+      path: `benchmarks/corpus/workforce/v${corpusVersion}.json`,
       sha256: package10Sha256(manifestBytes),
       corpusVersion: manifest.corpusVersion,
       schemaVersion: manifest.schemaVersion,
@@ -612,9 +623,15 @@ async function package10CreateFixture(sessionId, source) {
       type: "applyDomainCommand",
       payload: { commandType: "official.workforce.add_rule", payload: { rule } },
     })),
+    ...package10Records(fixture.domain.payload.preferences).map((preference) => ({
+      type: "applyDomainCommand",
+      payload: { commandType: "official.workforce.add_preference", payload: { preference } },
+    })),
+    ...package10Records(fixture.domain.payload.lockedAssignments).map((lock) => ({
+      type: "applyDomainCommand",
+      payload: { commandType: "official.workforce.add_lock", payload: { lock } },
+    })),
   ];
-  assert.equal(package10Records(fixture.domain.payload.preferences).length, 0);
-  assert.equal(package10Records(fixture.domain.payload.lockedAssignments).length, 0);
   assert.equal(package10Records(fixture.domain.payload.extensions).length, 0);
   const started = Date.now();
   await nativeRequest(
@@ -808,8 +825,9 @@ async function package10StartPageInstrumentation(sessionId) {
     });
     let longTaskObserver = null;
     try {
-      if (typeof PerformanceObserver !== 'function')
-        throw new Error('PerformanceObserver unavailable');
+      if (typeof PerformanceObserver !== 'function' ||
+          !PerformanceObserver.supportedEntryTypes?.includes('longtask'))
+        throw new Error('PerformanceObserver longtask entries unavailable');
       longTaskObserver = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
           if (state.longTaskEntries.length < maxLongTasks) {
@@ -820,7 +838,7 @@ async function package10StartPageInstrumentation(sessionId) {
           } else state.longTaskEntryOverflow = true;
         }
       });
-      longTaskObserver.observe({ entryTypes: ['longtask'], buffered: true });
+      longTaskObserver.observe({ type: 'longtask', buffered: true });
       state.longTaskSupported = true;
     } catch {
       state.longTaskUnsupportedReason = 'WebKit did not expose PerformanceObserver longtask entries';
@@ -2696,21 +2714,40 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
       index < maximumTabs,
       `Keyboard Tab did not reach ${selector} within ${maximumTabs} steps`,
     );
-    const previous = await evaluate(sessionId, "return document.activeElement;");
+    const previous = await evaluate(
+      sessionId,
+      `const trace = [];
+      const listener = event => {
+        const target = event.target;
+        trace.push({active: target === document.activeElement, tag: target?.tagName,
+          id: target?.id, timestamp: event.timeStamp});
+      };
+      document.addEventListener('focusin', listener, {once: true});
+      window.__euthetoFocusStep = {trace, listener};
+      return document.activeElement;`,
+    );
     await keyboardKey(sessionId, "\uE004", reverse);
     const focus = await evaluate(
       sessionId,
       `const node = document.activeElement;
       const rect = node?.getBoundingClientRect();
+      const step = window.__euthetoFocusStep;
+      document.removeEventListener('focusin', step.listener);
+      delete window.__euthetoFocusStep;
       return {matches: node?.matches(arguments[0]) ?? false, changed: node !== arguments[1],
+        focusVisible: node?.matches(':focus-visible'), focus: node?.matches(':focus'), trace: step.trace,
         segmented: node instanceof HTMLInputElement && ['date', 'time', 'datetime-local'].includes(node.type),
         visible: !!rect && rect.width > 0 && rect.height > 0 &&
-          rect.bottom > 0 && rect.top < innerHeight, tag: node?.tagName ?? null};`,
+          rect.bottom > 0 && rect.top < innerHeight, tag: node?.tagName ?? null,
+        active: node?.outerHTML.slice(0, 512), rect: rect?.toJSON(), scrollY, innerHeight};`,
       [selector, previous],
     );
     // Native date/time segments can receive Tab without changing the enclosing input.
     assert(focus.changed || focus.segmented, `Tab did not move focus while seeking ${selector}`);
-    assert(focus.visible, `Tab focus was not visible while seeking ${selector}`);
+    assert(
+      focus.visible,
+      `Tab focus was not visible while seeking ${selector}: ${JSON.stringify(focus)}`,
+    );
     if (focus.matches) return index + 1;
   }
   assert.fail(`Keyboard Tab did not reach ${selector}`);
@@ -2945,6 +2982,13 @@ async function packagedKeyboardWorkflowAcceptance(sessionId) {
     sessionId,
     "return document.querySelector('#eligibility-review-heading') === null;",
   );
+
+  for (let cycle = 0; cycle < 4; cycle += 1) {
+    await keyboardReach(sessionId, "#inspection-start-date", 64);
+    await keyboardReach(sessionId, "#inspection-end-date", 16);
+    await keyboardReach(sessionId, "details.setup-more > summary", 32);
+    await keyboardReach(sessionId, "#inspection-start-date", 32, true);
+  }
 
   await keyboardWorkflowRoute(sessionId, "/rules");
   await waitForElement(sessionId, "#rules-heading");
@@ -10991,9 +11035,11 @@ async function packagedExternalPlanAcceptance(sessionId) {
   }
 }
 
-async function packagedRecipientExportAcceptance(sessionId, directory) {
-  const source = (await package10FixtureEvidence()).cases.find(
-    (entry) => entry.id === "clinic-tiny",
+async function packagedRecipientExportAcceptance(sessionId, directory, practitioner = false) {
+  const checkpointSource = process.env.EUTHETO_E2E_PDF_CANCELLATION_ONLY === "1";
+  const fixtureId = practitioner ? "practitioner-workflow" : "clinic-tiny";
+  const source = (await package10FixtureEvidence(practitioner ? 2 : 1, [fixtureId])).cases.find(
+    (entry) => entry.id === fixtureId,
   );
   assert(source);
   const { scenarioId } = await package10CreateFixture(sessionId, source);
@@ -11011,34 +11057,91 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
   try {
     await navigate(sessionId, "/projects");
     await command("POST", `/session/${encodeURIComponent(sessionId)}/refresh`, {});
-    await activate(sessionId, '[aria-label="Open project Synthetic profile clinic-tiny"]');
+    await activate(sessionId, `[aria-label="Open project Synthetic profile ${fixtureId}"]`);
     await navigate(sessionId, `/project/${scenarioId}/validation`);
     await waitForElement(sessionId, "#validation-heading");
     await activateButton(sessionId, "Run full validation");
     await waitForElement(sessionId, '[data-full-validation-state="completed"]', 60_000);
     await navigate(sessionId, `/project/${scenarioId}/setup`);
     await waitForElement(sessionId, '[data-optimize-state="ready"]');
+    if (checkpointSource)
+      await activate(sessionId, '[data-optimize-panel] input[name="optimize-mode"][value="deep"]');
     await activateButton(sessionId, "Start optimization", "[data-optimize-panel]");
-    await waitForElement(sessionId, "#setup-results-details .result-summary-list > li", 60_000);
-    await activateButton(sessionId, "Inspect schedule", "#setup-results-details");
+    let accepted;
+    if (checkpointSource) {
+      // Cancel Deep after its first durable checkpoint; this is explicitly not terminal acceptance.
+      const deadline = Date.now() + 60_000;
+      let run;
+      while (Date.now() < deadline) {
+        [run] = (
+          await nativeRequest(sessionId, "solve_list_runs", {
+            schemaVersion: 2,
+            scenarioId,
+            revision: 1,
+            limit: 8,
+          })
+        ).result.runs;
+        if (run?.checkpoint || (run && run.status !== "running")) break;
+        await sleep(100);
+      }
+      assert(
+        run?.status === "running" && run.checkpoint,
+        "The explicit checkpoint lifecycle source must be durably verified",
+      );
+      accepted = { result: run.checkpoint.result };
+      const checkpoint = run.checkpoint;
+      await activateButton(sessionId, "Cancel optimization", "[data-optimize-panel]");
+      while (Date.now() < deadline) {
+        [run] = (
+          await nativeRequest(sessionId, "solve_list_runs", {
+            schemaVersion: 2,
+            scenarioId,
+            revision: 1,
+            limit: 8,
+          })
+        ).result.runs;
+        if (run.status !== "running") break;
+        await sleep(100);
+      }
+      assert.equal(run.status, "cancelled");
+      assert.deepEqual(
+        run.checkpoint,
+        checkpoint,
+        "Cancellation must preserve the exact verified source",
+      );
+      console.log("Explicit practitioner checkpoint source", JSON.stringify(run));
+    } else {
+      await waitForElement(sessionId, "#setup-results-details .result-summary-list > li", 60_000);
+      await activateButton(sessionId, "Inspect schedule", "#setup-results-details");
+      [accepted] = (
+        await nativeRequest(sessionId, "solution_list", {
+          schemaVersion: 1,
+          scenarioId,
+        })
+      ).result.solutions;
+      assert(accepted && ["optimal", "feasible"].includes(accepted.status));
+    }
     await waitForElement(sessionId, "[data-accepted-schedule] table tbody tr");
-    const [accepted] = (
-      await nativeRequest(sessionId, "solution_list", { schemaVersion: 1, scenarioId })
-    ).result.solutions;
-    assert(accepted && ["optimal", "feasible"].includes(accepted.status));
     const originalRevision = (await projects(sessionId)).find(
       (project) => project.scenarioId === scenarioId,
     ).revision;
-    const timeline = (
-      await nativeRequest(sessionId, "solution_get_view", {
-        schemaVersion: 1,
-        scenarioId,
-        solutionId: accepted.result.solutionId,
-        viewId: "official.workforce.result.schedule",
-        parameters: { kind: "timeline", limit: 50 },
-        continuation: null,
-      })
-    ).result.view.data.result;
+    const timeline = { items: [] };
+    let continuation = null;
+    do {
+      const page = (
+        await nativeRequest(sessionId, "solution_get_view", {
+          schemaVersion: 1,
+          scenarioId,
+          solutionId: accepted.result.solutionId,
+          viewId: "official.workforce.result.schedule",
+          parameters: { kind: "timeline", limit: 50 },
+          continuation,
+        })
+      ).result.view.data.result;
+      timeline.items.push(...page.items);
+      continuation = page.continuation;
+    } while (continuation !== null);
+    if (practitioner) assert.equal(timeline.items.length, 68);
     const people = package10Records(source.fixture.domain.payload.entities).filter(
       (entity) => entity.kind === "person",
     );
@@ -11172,6 +11275,7 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
     assert.equal(report.source.solutionId, accepted.result.solutionId);
     assert.equal(report.source.acceptedResultChecksum, accepted.result.resultChecksum);
     assert.equal(report.source.scenarioRevision, originalRevision);
+    assert.equal(report.source.origin, checkpointSource ? "storedCheckpoint" : "storedTerminal");
     assert.deepEqual(
       report.content.schedule.assignments
         .map(({ personId, shiftId }) => `${personId}/${shiftId}`)
@@ -11282,7 +11386,10 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
       assert.equal(preview.report.source.acceptedResultChecksum, accepted.result.resultChecksum);
       assert.equal(preview.report.source.scenarioRevision, originalRevision);
       assert.equal(preview.report.source.observedCurrentRevision, originalRevision);
-      assert.equal(preview.report.source.origin, "storedTerminal");
+      assert.equal(
+        preview.report.source.origin,
+        checkpointSource ? "storedCheckpoint" : "storedTerminal",
+      );
       assert.equal(
         preview.report.source.verificationReportChecksum,
         report.source.verificationReportChecksum,
@@ -11373,6 +11480,38 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
 
     await keyboardActivateButton(sessionId, "Share result", "[data-accepted-schedule]");
     await waitForElement(sessionId, ".recipient-share-dialog");
+    if (checkpointSource) {
+      const context = {
+        sessionId,
+        scenarioId,
+        revision: originalRevision,
+        solutionId: accepted.result.solutionId,
+        application,
+        publicationDirectory: directory,
+        requestId,
+        nativeRequest,
+        evaluate,
+        waitFor,
+      };
+      const cancellation = await nativePdfCancellationAcceptance(context);
+      const gracefulApplicationClose = {
+        status: "unverified",
+        reason:
+          "WebKitGTK 2.52.4 last-context CloseWindow can force-terminate the app; genuine GTK application-close cleanup remains a maintainer/manual gate.",
+      };
+      await writeFile(
+        new URL("../../../.cache/e2e/recipient-pdf-cancellation.json", import.meta.url),
+        JSON.stringify({ cancellation, gracefulApplicationClose }, null, 2),
+      );
+      console.log(
+        "PASS: explicit verified practitioner checkpoint privacy/picker/no-clobber and active native PDF cancellation; terminal acceptance remains separate",
+      );
+      console.log(
+        "UNVERIFIED: graceful native application-close cleanup",
+        JSON.stringify(gracefulApplicationClose),
+      );
+      return;
+    }
     const beforeEditPreview = await prepareRecipientReview();
     assert.equal(beforeEditPreview.format, "pdf");
     assert.equal(beforeEditPreview.report.source.scenarioRevision, originalRevision);
@@ -11542,6 +11681,101 @@ async function packagedRecipientExportAcceptance(sessionId, directory) {
     console.log(
       "PASS: real-worker accepted result → keyboard CSV/HTML/PDF review and focus restore → exact native CSV/ICS/HTML/PDF publication, private defaults/all disclosures, format retirement, picker cancellation, PDF no-clobber and immutable stale-source consent with review reset",
     );
+  } catch (failure) {
+    await screenshot(sessionId, "recipient-export-failure.png").catch(() => undefined);
+    const revision =
+      (await projects(sessionId)).find((project) => project.scenarioId === scenarioId)?.revision ??
+      null;
+    const runs = await nativeRequest(sessionId, "solve_list_runs", {
+      schemaVersion: 2,
+      scenarioId,
+      revision,
+      limit: 8,
+    })
+      .then((response) => response.result)
+      .catch((error) => ({ captureError: String(error) }));
+    const diagnostics = [];
+    for (const run of runs.runs ?? []) {
+      diagnostics.push(
+        await nativeRequest(sessionId, "solve_get_diagnostics_summary", {
+          schemaVersion: 2,
+          scenarioId,
+          runId: run.runId,
+        })
+          .then((response) => response.result)
+          .catch((error) => ({ runId: run.runId, captureError: String(error) })),
+      );
+    }
+    const terminalEvidence = [];
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.job?.status !== "backendFailed" || diagnostic.manifestChecksum === null)
+        continue;
+      let operationId = null;
+      try {
+        const prepared = await nativeRequest(sessionId, "operation_prepare", {
+          schemaVersion: 1,
+          purpose: { kind: "solutionExplain" },
+          context: {
+            kind: "scenario",
+            scenarioId,
+            expectedRevision: diagnostic.job.scenarioRevision,
+          },
+        });
+        operationId = prepared.result.operationId;
+        const explanation = await nativeRequest(
+          sessionId,
+          "solution_explain",
+          {
+            schemaVersion: 2,
+            requestId: requestId(),
+            operationId,
+            scenarioId,
+            sourceRevision: diagnostic.job.scenarioRevision,
+            request: {
+              schemaVersion: 1,
+              subject: {
+                kind: "optimalityStatus",
+                solveRunId: diagnostic.job.runId,
+                runManifestChecksum: diagnostic.manifestChecksum,
+                result: null,
+              },
+            },
+          },
+          timeout,
+          true,
+        );
+        terminalEvidence.push(explanation.result);
+      } catch (error) {
+        terminalEvidence.push({ runId: diagnostic.job.runId, captureError: String(error) });
+      } finally {
+        if (operationId !== null)
+          await nativeRequest(sessionId, "operation_release", {
+            schemaVersion: 1,
+            operationId,
+          }).catch((error) => {
+            terminalEvidence.push({ operationId, releaseCaptureError: String(error) });
+          });
+      }
+    }
+    const evidence = {
+      fixtureId,
+      scenarioId,
+      error: String(failure),
+      runs,
+      diagnostics,
+      terminalEvidence,
+      text: await evaluate(sessionId, "return document.body.innerText.slice(0, 24000);").catch(
+        (error) => ({ captureError: String(error) }),
+      ),
+    };
+    const artifacts = new URL("../../../.cache/e2e/", import.meta.url);
+    await mkdir(artifacts, { recursive: true });
+    await writeFile(
+      new URL("recipient-export-failure.json", artifacts),
+      JSON.stringify(evidence, null, 2),
+    );
+    console.error("Recipient native run before fixture cleanup", JSON.stringify(evidence));
+    throw failure;
   } finally {
     await evaluate(
       sessionId,
@@ -14678,30 +14912,26 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
     };
     document.addEventListener('input', captureInput, true);`,
   );
-  await activateButton(sessionId, "Run full validation");
-  await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
-    actions: [
-      {
-        type: "key",
-        id: "validation-palette",
-        actions: [
-          { type: "keyDown", value: "\uE009" },
-          { type: "keyDown", value: "k" },
-          { type: "keyUp", value: "k" },
-          { type: "keyUp", value: "\uE009" },
-        ],
-      },
-    ],
-  });
-  await waitFor(sessionId, "return document.activeElement?.id === 'command-search';");
-  // The displayed phase may not appear before the request settles.
-  // Capture the first WebDriver keystroke while the UI still reports a pending run.
+  // Prepare focus before starting: no driver round trips between Run and the input.
+  await evaluate(
+    sessionId,
+    `const button = [...document.querySelectorAll('[aria-labelledby="validation-heading"] button')]
+      .find(button => button.textContent.trim() === 'Run full validation' && !button.disabled);
+    if (!button) throw new Error('Full validation action unavailable');
+    button.focus();`,
+  );
   await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
     actions: [
       {
         type: "key",
         id: "validation-input",
         actions: [
+          { type: "keyDown", value: "\uE007" },
+          { type: "keyUp", value: "\uE007" },
+          { type: "keyDown", value: "\uE009" },
+          { type: "keyDown", value: "k" },
+          { type: "keyUp", value: "k" },
+          { type: "keyUp", value: "\uE009" },
           { type: "keyDown", value: "o" },
           { type: "keyUp", value: "o" },
           { type: "keyDown", value: "k" },
@@ -14742,11 +14972,65 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
     [],
     120_000,
   );
+  assert(
+    (await getText(sessionId, '[aria-labelledby="validation-heading"]')).includes(
+      "The domain operation could not complete within its resource limit.",
+    ),
+    "The unattended dense validation must expose its resource-limit failure before cancellation is tested separately",
+  );
   await screenshot(sessionId, "package8-native-validation-limit.png");
   await idle(sessionId);
-  await activateButton(sessionId, "Run full validation");
+  await evaluate(
+    sessionId,
+    `const section = document.querySelector('[aria-labelledby="validation-heading"]');
+    const run = [...section.querySelectorAll('button')]
+      .find(button => button.textContent.trim() === 'Run full validation' && !button.disabled);
+    if (!run) throw new Error('Full validation action unavailable');
+    window.__validationCancelEvidence = null;
+    const observer = new MutationObserver(() => {
+      const cancel = [...section.querySelectorAll('button')]
+        .find(button => button.textContent.trim() === 'Request cancellation' && !button.disabled);
+      if (!cancel) return;
+      observer.disconnect();
+      cancel.focus();
+    });
+    observer.observe(section, {childList: true, subtree: true});
+    const captureCancel = (event) => {
+      if (event.key !== 'Enter' || event.target.textContent.trim() !== 'Request cancellation') return;
+      window.__validationCancelEvidence = {
+        focused: document.activeElement === event.target,
+        running: !!section.querySelector('[data-full-validation-state="running"]')
+      };
+      document.removeEventListener('keydown', captureCancel, true);
+    };
+    document.addEventListener('keydown', captureCancel, true);
+    window.__validationCancelCleanup = () => {
+      observer.disconnect();
+      document.removeEventListener('keydown', captureCancel, true);
+    };
+    run.focus();`,
+  );
   const cancelStarted = Date.now();
-  await activateButton(sessionId, "Request cancellation", '[aria-labelledby="validation-heading"]');
+  // Focus follows the actual rendered Cancel control, then WebDriver activates it.
+  await command("POST", `/session/${encodeURIComponent(sessionId)}/actions`, {
+    actions: [
+      {
+        type: "key",
+        id: "validation-cancel",
+        actions: [
+          { type: "keyDown", value: "\uE007" },
+          { type: "keyUp", value: "\uE007" },
+          { type: "keyDown", value: "\uE007" },
+          { type: "keyUp", value: "\uE007" },
+        ],
+      },
+    ],
+  });
+  const cancelEvidence = await evaluate(
+    sessionId,
+    `window.__validationCancelCleanup(); return window.__validationCancelEvidence;`,
+  );
+  assert.deepEqual(cancelEvidence, { focused: true, running: true });
   await waitFor(
     sessionId,
     "return document.querySelector('[data-full-validation-state=\"cancelled\"]');",
@@ -14768,7 +15052,7 @@ async function package8CancellationAcceptance(sessionId, scenarioId, assignmentT
   await waitForOutcome(sessionId, "Scenario undo committed", 120_000);
   console.log(
     "PASS: pending full-validation UI retained WebDriver keyboard input/focus; native cancellation stayed distinct from completion",
-    JSON.stringify({ inputEvidence, cancelMilliseconds }),
+    JSON.stringify({ inputEvidence, cancelEvidence, cancelMilliseconds }),
   );
 }
 
@@ -15679,7 +15963,20 @@ async function stopDriver() {
   }
 }
 
+function assertRecipientModeSelection(environment) {
+  const selected = [
+    "EUTHETO_E2E_RECIPIENT_EXPORT_ONLY",
+    "EUTHETO_E2E_PRACTITIONER_EXPORT_ONLY",
+    "EUTHETO_E2E_PDF_CANCELLATION_ONLY",
+  ].filter((name) => environment[name] === "1");
+  assert(
+    selected.length <= 1,
+    `Recipient test modes are mutually exclusive: ${selected.join(", ")}`,
+  );
+}
+
 async function run() {
+  assertRecipientModeSelection(process.env);
   const dataHome = process.env.XDG_DATA_HOME;
   assert.equal(typeof dataHome, "string");
   assert(isAbsolute(dataHome), "Native E2E requires its isolated XDG data directory");
@@ -15711,9 +16008,18 @@ async function run() {
       await packagedLargeResultPerformanceAcceptance(firstSessionId);
       return;
     }
-    if (process.env.EUTHETO_E2E_RECIPIENT_EXPORT_ONLY === "1") {
+    if (
+      process.env.EUTHETO_E2E_RECIPIENT_EXPORT_ONLY === "1" ||
+      process.env.EUTHETO_E2E_PRACTITIONER_EXPORT_ONLY === "1" ||
+      process.env.EUTHETO_E2E_PDF_CANCELLATION_ONLY === "1"
+    ) {
       assert.equal(process.env.EUTHETO_E2E_PACKAGED_SOLVE, "1");
-      await packagedRecipientExportAcceptance(firstSessionId, directory);
+      await packagedRecipientExportAcceptance(
+        firstSessionId,
+        directory,
+        process.env.EUTHETO_E2E_PRACTITIONER_EXPORT_ONLY === "1" ||
+          process.env.EUTHETO_E2E_PDF_CANCELLATION_ONLY === "1",
+      );
       return;
     }
     if (process.env.EUTHETO_E2E_KEYBOARD_WORKFLOW_ONLY === "1") {
@@ -15864,14 +16170,19 @@ async function run() {
       locationId: people.locationId,
       workloadPolicyId: scorePolicy.workloadPolicyId,
     });
-    // The bundled run covers real setup → solve → diagnostics → accepted schedule.
-    // The ordinary debug run continues through the independent cancellation/restart suite.
+    // Both builds exercise the same pending-validation input/cancellation case.
+    // The ordinary debug run continues through the independent restart suite.
     if (process.env.EUTHETO_E2E_PACKAGED_SOLVE === "1") {
       await packagedBasePreferenceAcceptance(firstSessionId, scenarioId);
       await package8CoverageAcceptance(
         firstSessionId,
         scenarioId,
         package7Expected.shiftInstanceId,
+      );
+      await package8CancellationAcceptance(
+        firstSessionId,
+        scenarioId,
+        package7Expected.shiftTypeId,
       );
       await package8TemporalAcceptance(firstSessionId, scenarioId);
       await packagedInfeasibilityAcceptance(firstSessionId, directory, dataHome);

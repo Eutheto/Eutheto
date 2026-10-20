@@ -720,7 +720,9 @@ it("opens a usable current chosen C diagnostic after original A becomes historic
   };
   let assignmentPage = 0;
   let incumbentBeyondLimit = false;
-  vi.mocked(api.getSolutionView).mockImplementation((input) => {
+  let holdPeople = true;
+  const peopleReady = Promise.withResolvers<undefined>();
+  vi.mocked(api.getSolutionView).mockImplementation(async (input) => {
     let result: api.JsonValue;
     switch (input.parameters?.kind) {
       case "decision":
@@ -787,6 +789,7 @@ it("opens a usable current chosen C diagnostic after original A becomes historic
         break;
       }
       case "people":
+        if (holdPeople) await peopleReady.promise;
         result = {
           kind: "people",
           continuation: null,
@@ -871,7 +874,15 @@ it("opens a usable current chosen C diagnostic after original A becomes historic
       }),
     )
     .toBeVisible();
+  await expect.element(screen.getByRole("combobox", { name: "Another person" })).toBeDisabled();
+  expect(screen.queryByRole("option", { name: "Sam" })).toBeNull();
+  await expect
+    .element(screen.getByRole("button", { name: "Check replacement (up to 30 seconds)" }))
+    .toBeDisabled();
+  holdPeople = false;
+  peopleReady.resolve(undefined);
   await screen.findByRole("option", { name: "Sam" });
+  await expect.element(screen.getByRole("combobox", { name: "Another person" })).toBeEnabled();
   await userEvent.selectOptions(screen.getByRole("combobox", { name: "Another person" }), targetId);
   await expect
     .element(screen.getByRole("button", { name: "Check replacement (up to 30 seconds)" }))

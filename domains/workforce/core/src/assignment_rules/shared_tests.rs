@@ -464,3 +464,58 @@ fn resource_bounded_validation_never_calls_the_document_malformed() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn dense_rest_full_validation_refuses_the_evaluation_record_limit() -> Result {
+    let mut document = support::fixture()?;
+    document.domain.entities.remove(&support::id(6).parse()?);
+    document.domain.locked_assignments.clear();
+    let person = document.domain.entities[&support::id(1).parse()?].clone();
+    let shift = document.domain.entities[&support::id(8).parse()?].clone();
+    for index in 1_000..1_103 {
+        let mut record = person.clone();
+        record["id"] = json!(support::id(index));
+        record["externalId"] = json!(format!("dense-rest-{index}"));
+        document
+            .domain
+            .entities
+            .insert(support::id(index).parse()?, record);
+    }
+    for index in 2_000..2_199 {
+        let mut record = shift.clone();
+        record["id"] = json!(support::id(index));
+        document
+            .domain
+            .entities
+            .insert(support::id(index).parse()?, record);
+    }
+    document.domain.rules.insert(
+        support::id(24).parse()?,
+        json!({
+            "kind":"minimumRest", "id":support::id(24), "active":true, "strength":"required",
+            "scope":{"people":{"kind":"all"}}, "afterScope":{"people":{"kind":"all"}},
+            "beforeScope":{"people":{"kind":"all"}}, "minimumMinutes":600
+        }),
+    );
+    // The native UI fixture's 104 people and 200 coincident shifts exceed record custody,
+    // not a time budget. Its resource failure must never become readiness or cancellation.
+    let mut budget = OperationBudget::evaluation(None);
+    assert!(matches!(
+        super::analysis::analyze_source_with_budget(
+            &document,
+            &mut budget,
+            PlanningIrLimitsV1::DEFAULT,
+        ),
+        Err(AssignmentRuleError::LimitExceeded(
+            AssignmentRuleLimit::Records
+        ))
+    ));
+    assert_eq!(
+        super::evidence::validate_workforce_full(
+            &document,
+            &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+        ),
+        Err(DomainPackError::ResourceLimitExceeded)
+    );
+    Ok(())
+}
