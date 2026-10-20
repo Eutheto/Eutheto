@@ -21,8 +21,51 @@ const matrixHeading = ref<HTMLElement>(),
   reviewHeading = ref<HTMLElement>(),
   errorHeading = ref<HTMLElement>();
 const inspector = ref<InstanceType<typeof WorkforceAssignmentInspection>>();
+const root = ref<HTMLElement>();
 const warningPage = ref(0);
 const warnings = computed(() => review.state.review?.warnings.changes ?? []);
+watch(
+  () => state.window,
+  async (loaded) => {
+    const owner = root.value;
+    const target = document.activeElement;
+    if (loaded === null || !(target instanceof HTMLElement) || !owner?.contains(target)) return;
+    const before = target.getBoundingClientRect();
+    if (
+      before.width <= 0 ||
+      before.height <= 0 ||
+      before.bottom <= 0 ||
+      before.top >= innerHeight ||
+      before.right <= 0 ||
+      before.left >= innerWidth
+    )
+      return;
+    await nextTick();
+    if (
+      state.window !== loaded ||
+      root.value !== owner ||
+      !owner.isConnected ||
+      owner.ownerDocument !== document ||
+      !owner.contains(target) ||
+      !target.isConnected ||
+      document.activeElement !== target ||
+      loaded.context.scenarioId !== props.project.scenarioId ||
+      loaded.context.revision !== props.project.revision ||
+      loaded.context.epoch !== props.home.state.libraryEpoch
+    )
+      return;
+    // Restoring the matrix can displace an already-focused inspector without another focus event.
+    const bounds = target.getBoundingClientRect();
+    if (
+      bounds.top < 0 ||
+      bounds.bottom > innerHeight ||
+      bounds.left < 0 ||
+      bounds.right > innerWidth
+    )
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  },
+  { flush: "pre" },
+);
 watch(
   () => review.state.review,
   () => {
@@ -62,7 +105,7 @@ async function focusAfter(action: Promise<boolean>, target: "review" | "matrix")
 </script>
 
 <template>
-  <section class="page-stack" aria-labelledby="eligibility-setup-heading">
+  <section ref="root" class="page-stack" aria-labelledby="eligibility-setup-heading">
     <h2 id="eligibility-setup-heading" ref="matrixHeading" data-route-heading tabindex="-1">
       {{ messages.eligibilityUi.heading }}
     </h2>
