@@ -13110,13 +13110,13 @@
     {
       "ecosystem": "npm",
       "name": "vite",
-      "version": "8.2.2",
+      "version": "8.2.4",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/vite/-/vite-8.2.2.tgz",
+      "source": "https://registry.npmjs.org/vite/-/vite-8.2.4.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "70528b57f3d18005252119b95a332327cea3adfb73a6a7201fe52cf834bc988dc20cd887df45a1af3f2e1cbdfe30e2cf020a9b30102a59d00702984e00cfb3fd"
+        "value": "95f6ae5e7adfdb1d29f94a00fb05e1d1d8055a75230b21ba26cf79281920682c1453d9340c01c8e16e90d160b1fa1fb983e02571ed72e198b64238cad14bc607"
       }
     },
     {
