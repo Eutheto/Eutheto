@@ -14,7 +14,7 @@ blake3 = "=1.8.7"
 eutheto-domain-ir = { path = "../eutheto-domain-ir" }
 eutheto-types = { path = "../eutheto-types" }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 [dev-dependencies]
 proptest = "=1.11.0"
