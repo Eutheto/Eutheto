@@ -28,6 +28,29 @@ pub fn ortools_compatibility(
         .validate_descriptor(&descriptor)
         .map_err(|error| PreflightError::Matrix(error.to_string()))?;
     let mut report = compatibility_for(matrix, &descriptor.id, summary, options)?;
+    if summary.assumption_count > 0 {
+        if summary.objective_level_count > 0 {
+            report.unsupported_features.push(UnsupportedFeature {
+                feature_id: support_feature("ir.assumptions")?,
+                usage_count: summary.assumption_count,
+                path: "planningProblem.objectives".to_owned(),
+                reason: "The sufficient-assumption diagnostic profile is available only for satisfaction models; an objective level remains objective-bearing even when it has no terms.".to_owned(),
+                remediation: "Remove all objective levels or choose a backend that supports assumption diagnostics with objectives.".to_owned(),
+            });
+        }
+        if !matches!(
+            options.worker_threads,
+            eutheto_types::WorkerThreadPolicy::Exact(1)
+        ) {
+            report.unsupported_features.push(UnsupportedFeature {
+                feature_id: support_feature("solve.infeasibility-evidence")?,
+                usage_count: 1,
+                path: "solveOptions.workerThreads".to_owned(),
+                reason: "The sufficient-assumption diagnostic profile requires exactly one worker thread; automatic worker selection is not admitted.".to_owned(),
+                remediation: "Set workerThreads to exact count 1 or choose a backend with multi-worker assumption diagnostics.".to_owned(),
+            });
+        }
+    }
     if options.memory_limit_bytes.is_some() || options.solution_limit.is_some() {
         let feature_id = support_feature("solve.resource-limits")?;
         report
@@ -45,21 +68,6 @@ pub fn ortools_compatibility(
             reason: "The Phase 03 adapter does not enforce requested process-memory or candidate-count limits."
                 .to_owned(),
             remediation: "Remove the unsupported limit or choose a backend that enforces it."
-                .to_owned(),
-        });
-    }
-    if summary.objective_level_count > 1 {
-        let feature_id = support_feature("solve.proof-and-bounds")?;
-        report
-            .warnings
-            .retain(|warning| warning.feature_id != feature_id);
-        report.unsupported_features.push(UnsupportedFeature {
-            feature_id,
-            usage_count: summary.objective_level_count,
-            path: "planningProblem.objectives".to_owned(),
-            reason: "The Phase 03 adapter cannot reconstruct an exact multi-level bound vector from CP-SAT's scalar bound."
-                .to_owned(),
-            remediation: "Use one objective level or choose a backend with exact multi-level bound evidence."
                 .to_owned(),
         });
     }
@@ -266,7 +274,8 @@ mod tests {
     }
 
     #[test]
-    fn report_accepts_only_the_exact_advertised_phase03_surface() -> TestResult {
+    fn report_rejects_unsupported_features_and_admits_bounded_intermediate_solutions() -> TestResult
+    {
         let matrix = matrix()?;
         let baseline = ortools_compatibility(&matrix, &summary(), &options()?)?;
         assert_eq!(baseline.level, CompatibilityLevel::Degraded);
@@ -301,17 +310,16 @@ mod tests {
             weights: vec![2, 1],
         };
         let multi_level = ortools_compatibility(&matrix, &objective_summary, &options()?)?;
-        assert_eq!(multi_level.level, CompatibilityLevel::Unsupported);
-        assert_eq!(multi_level.warnings.len(), 1);
+        assert_eq!(multi_level.level, CompatibilityLevel::Degraded);
         assert_eq!(
-            multi_level.warnings[0].feature_id.as_str(),
-            "solve.resource-limits"
+            multi_level
+                .warnings
+                .iter()
+                .map(|warning| warning.feature_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["solve.proof-and-bounds", "solve.resource-limits"])
         );
-        assert_eq!(multi_level.unsupported_features.len(), 1);
-        assert_eq!(
-            multi_level.unsupported_features[0].feature_id.as_str(),
-            "solve.proof-and-bounds"
-        );
+        assert!(multi_level.unsupported_features.is_empty());
 
         objective_summary.objective_level_count = 1;
         objective_summary.lexicographic_strategy = LexicographicStrategy::Multipass;
@@ -340,18 +348,23 @@ mod tests {
 
         let mut optional_features = options()?;
         optional_features.collect_intermediate_solutions = true;
+        let production_matrix = CapabilityMatrix::generated()?;
+        let intermediate =
+            ortools_compatibility(&production_matrix, &summary(), &optional_features)?;
+        assert_eq!(intermediate.level, CompatibilityLevel::Degraded);
+        assert!(intermediate.unsupported_features.is_empty());
+        assert!(intermediate.warnings.iter().any(|warning| {
+            warning.feature_id.as_str() == "solve.intermediate-candidates"
+                && warning.restriction_id == "first-and-final-only"
+        }));
         optional_features.explanation_mode = ExplanationMode::Standard;
-        let unsupported = ortools_compatibility(&matrix, &summary(), &optional_features)?;
-        assert_eq!(
-            unsupported
+        let ordinary_explanation =
+            ortools_compatibility(&production_matrix, &summary(), &optional_features)?;
+        assert!(
+            !ordinary_explanation
                 .unsupported_features
                 .iter()
-                .map(|feature| feature.feature_id.as_str())
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                "solve.infeasibility-evidence",
-                "solve.intermediate-candidates",
-            ])
+                .any(|feature| feature.feature_id.as_str() == "solve.infeasibility-evidence")
         );
         let mut unsupported_memory = options()?;
         unsupported_memory.memory_limit_bytes = Some(1024);
@@ -363,6 +376,41 @@ mod tests {
             unsupported.unsupported_features[0].feature_id.as_str(),
             "solve.resource-limits"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn assumption_profile_rejects_objectives_and_non_single_worker_requests() -> TestResult {
+        let matrix = matrix()?;
+        let mut assumptions = summary();
+        assumptions.assumption_count = 1;
+        assumptions
+            .manifest
+            .capability_counts
+            .insert(Capability::Assumptions, 1);
+        let mut objective = assumptions.clone();
+        objective.objective_level_count = 1;
+        objective.lexicographic_strategy =
+            LexicographicStrategy::ExactScalarization { weights: vec![1] };
+        let report = ortools_compatibility(&matrix, &objective, &options()?)?;
+        assert!(report.unsupported_features.iter().any(|feature| {
+            feature.feature_id.as_str() == "ir.assumptions"
+                && feature.path == "planningProblem.objectives"
+        }));
+
+        let mut auto_options = options()?;
+        auto_options.worker_threads = WorkerThreadPolicy::Auto;
+        let report = ortools_compatibility(&matrix, &assumptions, &auto_options)?;
+        assert!(report.unsupported_features.iter().any(|feature| {
+            feature.feature_id.as_str() == "solve.infeasibility-evidence"
+                && feature.path == "solveOptions.workerThreads"
+        }));
+
+        let report = ortools_compatibility(&matrix, &assumptions, &options()?)?;
+        assert!(!report.unsupported_features.iter().any(|feature| {
+            feature.path == "planningProblem.objectives"
+                || feature.path == "solveOptions.workerThreads"
+        }));
         Ok(())
     }
 

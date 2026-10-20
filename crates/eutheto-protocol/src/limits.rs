@@ -8,8 +8,9 @@ use crate::ProtocolFault;
 pub const DESCRIPTOR_BYTES: &[u8] =
     include_bytes!("../../../protocol/generated/eutheto.worker.v1.descriptor.pb");
 pub const POLICY_JSON: &str = include_str!("../../../protocol/version.json");
-/// Security gate for OR-Tools assumption-core evidence (upstream issue #5141).
-pub const SUFFICIENT_ASSUMPTIONS_ENABLED: bool = false;
+/// Assumption-core evidence is admitted only through the verified single-worker satisfaction profile.
+/// The native worker disables presolve for nonempty assumptions (upstream issue #5141).
+pub const SUFFICIENT_ASSUMPTIONS_ENABLED: bool = true;
 /// Pinned OR-Tools 9.15 `num_workers` upper bound.
 pub const MAX_ORTOOLS_WORKER_THREADS: u32 = 10_000;
 pub(crate) const APPLIED_PARAMETERS_HASH_ALGORITHM: &str = "sha256";

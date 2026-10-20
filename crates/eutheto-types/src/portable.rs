@@ -808,58 +808,137 @@ fn collect_scenario_references(
 /// Returns an error when a declared scalar/list asset-reference field is malformed.
 pub fn extract_asset_references(value: &Value) -> Result<BTreeSet<String>, PortableReferenceError> {
     let mut references = BTreeSet::new();
-    collect_asset_references(value, &mut references)?;
+    visit_asset_references(value, &mut |reference| {
+        references.insert(reference.to_owned());
+        Ok::<AssetReferenceVisitControl, PortableReferenceError>(
+            AssetReferenceVisitControl::Continue,
+        )
+    })?;
     Ok(references)
 }
 
-fn collect_asset_references(
-    value: &Value,
-    references: &mut BTreeSet<String>,
-) -> Result<(), PortableReferenceError> {
+/// Controls whether [`visit_asset_references`] continues traversing a value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetReferenceVisitControl {
+    /// Continue visiting declared references.
+    Continue,
+    /// Stop before traversing the next value.
+    Stop,
+}
+
+/// Visits exact declared inert-asset references without cloning their keys.
+///
+/// The visitor receives references borrowed from `value`, in the same
+/// declaration order used by [`extract_asset_references`]. Returning
+/// [`AssetReferenceVisitControl::Stop`] ends traversal immediately, allowing
+/// bounded callers to reject a key before copying it.
+///
+/// # Errors
+///
+/// Returns an error when a declared scalar/list asset-reference field is malformed
+/// or when the visitor rejects a reference.
+pub fn visit_asset_references<'a, E, F>(value: &'a Value, visit: &mut F) -> Result<(), E>
+where
+    E: From<PortableReferenceError>,
+    F: FnMut(&'a str) -> Result<AssetReferenceVisitControl, E>,
+{
+    collect_asset_references(value, visit).map(|_| ())
+}
+/// Visits one JSON object represented by borrowed key/value entries using the
+/// same declared-reference authority as [`visit_asset_references`].
+///
+/// This form preserves declarations in dynamic-map keys without constructing a
+/// synthetic owned [`Value`].
+///
+/// # Errors
+///
+/// Returns an error for malformed declared references or a visitor refusal.
+pub fn visit_asset_reference_map<'a, E, I, F>(entries: I, visit: &mut F) -> Result<(), E>
+where
+    E: From<PortableReferenceError>,
+    I: IntoIterator<Item = (&'a str, &'a Value)>,
+    F: FnMut(&'a str) -> Result<AssetReferenceVisitControl, E>,
+{
+    collect_asset_reference_entries(entries.into_iter(), visit).map(|_| ())
+}
+
+fn collect_asset_reference_entries<'a, E, I, F>(
+    entries: I,
+    visit: &mut F,
+) -> Result<AssetReferenceVisitControl, E>
+where
+    E: From<PortableReferenceError>,
+    I: Iterator<Item = (&'a str, &'a Value)>,
+    F: FnMut(&'a str) -> Result<AssetReferenceVisitControl, E>,
+{
+    for (key, value) in entries {
+        let normalized = normalize_field(key);
+        if matches!(
+            normalized.as_str(),
+            "asset" | "assetid" | "assetkey" | "assetpath"
+        ) {
+            let reference = value.as_str().ok_or_else(|| {
+                E::from(PortableReferenceError(format!(
+                    "declared asset reference {key} must be a string"
+                )))
+            })?;
+            if visit(reference)? == AssetReferenceVisitControl::Stop {
+                return Ok(AssetReferenceVisitControl::Stop);
+            }
+        } else if matches!(
+            normalized.as_str(),
+            "assets" | "assetids" | "assetkeys" | "assetpaths"
+        ) {
+            let items = value.as_array().ok_or_else(|| {
+                E::from(PortableReferenceError(format!(
+                    "declared asset reference list {key} must be an array"
+                )))
+            })?;
+            for item in items {
+                let reference = item.as_str().ok_or_else(|| {
+                    E::from(PortableReferenceError(format!(
+                        "declared asset reference list {key} must contain strings"
+                    )))
+                })?;
+                if visit(reference)? == AssetReferenceVisitControl::Stop {
+                    return Ok(AssetReferenceVisitControl::Stop);
+                }
+            }
+        } else if collect_asset_references(value, visit)? == AssetReferenceVisitControl::Stop {
+            return Ok(AssetReferenceVisitControl::Stop);
+        }
+    }
+    Ok(AssetReferenceVisitControl::Continue)
+}
+
+fn collect_asset_references<'a, E, F>(
+    value: &'a Value,
+    visit: &mut F,
+) -> Result<AssetReferenceVisitControl, E>
+where
+    E: From<PortableReferenceError>,
+    F: FnMut(&'a str) -> Result<AssetReferenceVisitControl, E>,
+{
     match value {
         Value::Array(values) => {
             for value in values {
-                collect_asset_references(value, references)?;
+                if collect_asset_references(value, visit)? == AssetReferenceVisitControl::Stop {
+                    return Ok(AssetReferenceVisitControl::Stop);
+                }
             }
         }
         Value::Object(values) => {
-            for (key, value) in values {
-                let normalized = normalize_field(key);
-                if matches!(
-                    normalized.as_str(),
-                    "asset" | "assetid" | "assetkey" | "assetpath"
-                ) {
-                    let reference = value.as_str().ok_or_else(|| {
-                        PortableReferenceError(format!(
-                            "declared asset reference {key} must be a string"
-                        ))
-                    })?;
-                    references.insert(reference.to_owned());
-                } else if matches!(
-                    normalized.as_str(),
-                    "assets" | "assetids" | "assetkeys" | "assetpaths"
-                ) {
-                    let items = value.as_array().ok_or_else(|| {
-                        PortableReferenceError(format!(
-                            "declared asset reference list {key} must be an array"
-                        ))
-                    })?;
-                    for item in items {
-                        let reference = item.as_str().ok_or_else(|| {
-                            PortableReferenceError(format!(
-                                "declared asset reference list {key} must contain strings"
-                            ))
-                        })?;
-                        references.insert(reference.to_owned());
-                    }
-                } else {
-                    collect_asset_references(value, references)?;
-                }
+            if collect_asset_reference_entries(
+                values.iter().map(|(key, value)| (key.as_str(), value)),
+                visit,
+            )? == AssetReferenceVisitControl::Stop
+            {
+                return Ok(AssetReferenceVisitControl::Stop);
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
-    Ok(())
+    Ok(AssetReferenceVisitControl::Continue)
 }
 
 fn parse_scenario_id(value: &Value, field: &str) -> Result<ScenarioId, PortableReferenceError> {
@@ -875,6 +954,88 @@ fn parse_scenario_id(value: &Value, field: &str) -> Result<ScenarioId, PortableR
         )));
     }
     Ok(ScenarioId::from_uuid(id))
+}
+
+/// Host-owned inert projection of a native result without accepted custody.
+pub const ARCHIVAL_RESULT_FORMAT: &str = "eutheto/archival-result";
+/// Readers must preserve archival payloads rather than remap their original identities.
+pub const ARCHIVAL_RESULT_CAPABILITY: &str = "eutheto.portable.archival-result";
+
+/// Recognizes and validates the closed archival-result V1 envelope without copying its payload.
+/// Recursive content, byte budgets and asset closure remain the caller's responsibility.
+///
+/// # Errors
+///
+/// Rejects malformed or unsupported archival envelopes rather than treating them as generic results.
+pub fn is_archival_result(value: &Value) -> Result<bool, PortableReferenceError> {
+    if value.get("format").and_then(Value::as_str) != Some(ARCHIVAL_RESULT_FORMAT) {
+        return Ok(false);
+    }
+    let invalid = || PortableReferenceError("invalid archival-result V1 envelope".to_owned());
+    let root = value.as_object().ok_or_else(invalid)?;
+    let root_fields = [
+        "format",
+        "schemaVersion",
+        "resultId",
+        "scenarioId",
+        "scenarioRevision",
+        "archive",
+    ];
+    if root.len() != root_fields.len()
+        || root.keys().any(|key| !root_fields.contains(&key.as_str()))
+        || value["schemaVersion"].as_u64() != Some(1)
+        || value["scenarioRevision"].as_u64().is_none()
+    {
+        return Err(invalid());
+    }
+    for field in ["resultId", "scenarioId"] {
+        parse_scenario_id(&value[field], field)?;
+    }
+    let archive = value["archive"].as_object().ok_or_else(invalid)?;
+    let required = [
+        "resultId",
+        "scenarioId",
+        "scenarioRevision",
+        "solveRunId",
+        "status",
+        "accepted",
+        "createdAt",
+        "normalizedSolution",
+        "score",
+        "verificationReport",
+    ];
+    if required.iter().any(|field| !archive.contains_key(*field))
+        || archive.keys().any(|key| {
+            !required.contains(&key.as_str())
+                && !["explanationIndex", "evidence"].contains(&key.as_str())
+        })
+        || archive["scenarioRevision"].as_u64().is_none()
+        || archive["accepted"].as_bool().is_none()
+        || archive["status"].as_str().is_none_or(str::is_empty)
+    {
+        return Err(invalid());
+    }
+    for field in ["resultId", "scenarioId", "solveRunId"] {
+        parse_scenario_id(&archive[field], field)?;
+    }
+    Rfc3339Timestamp::parse(archive["createdAt"].as_str().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
+    Ok(true)
+}
+
+/// Returns live owned identities, excluding descriptive archival originals.
+///
+/// # Errors
+///
+/// Rejects malformed result identities or recognized archival envelopes.
+pub fn collect_result_owned_uuids(value: &Value) -> Result<BTreeSet<Uuid>, PortableReferenceError> {
+    let mut owned = if is_archival_result(value)? {
+        BTreeSet::new()
+    } else {
+        crate::collect_self_declared_uuids(value)
+    };
+    owned.insert(extract_result_id(value)?);
+    Ok(owned)
 }
 
 /// Extracts the required UUID `resultId` from a retained-result wrapper.
@@ -911,6 +1072,7 @@ pub fn extract_result_id(value: &Value) -> Result<Uuid, PortableReferenceError> 
 pub fn extract_result_dependency(
     value: &Value,
 ) -> Result<ScenarioRevisionReference, PortableReferenceError> {
+    is_archival_result(value)?;
     let object = value.as_object().ok_or_else(|| {
         PortableReferenceError("retained result must be a JSON object".to_owned())
     })?;

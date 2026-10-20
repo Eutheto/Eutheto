@@ -1,0 +1,202 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+.recipient-report {
+  color: #1b2823;
+  background: #fdfefb;
+  font-family: "Avenir Next", Avenir, "Trebuchet MS", sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  padding: clamp(1rem, 3vw, 3rem);
+  margin: 0 auto;
+  max-width: 100rem;
+  overflow-wrap: anywhere;
+  color-scheme: light;
+}
+.recipient-report *,
+.recipient-report *::before,
+.recipient-report *::after {
+  box-sizing: border-box;
+}
+.recipient-report h1,
+.recipient-report h2,
+.recipient-report h3 {
+  line-height: 1.2;
+  margin: 0 0 1rem;
+}
+.recipient-report h1 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+  font-size: clamp(1.75rem, 4vw, 3rem);
+}
+.recipient-report p {
+  margin: 0.75rem 0;
+}
+.recipient-heading {
+  border-bottom: 0.2rem solid #275c49;
+  padding-bottom: 1.5rem;
+}
+.recipient-eyebrow {
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.recipient-warning {
+  border: 0.125rem solid #1b2823;
+  padding: 1rem;
+  font-weight: 700;
+}
+.recipient-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 1rem;
+  padding: 1.5rem 0;
+  align-items: end;
+}
+.recipient-controls label {
+  display: grid;
+  gap: 0.375rem;
+  font-weight: 700;
+}
+.recipient-controls :is(input, select, button) {
+  font: inherit;
+  min-height: 2.75rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #768c7e;
+  border-radius: 0.375rem;
+  background: #fdfefb;
+  color: #1b2823;
+}
+.recipient-controls button {
+  background: #275c49;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+.recipient-controls :is(input, select, button):focus-visible {
+  outline: 0.2rem solid #a8540b;
+  outline-offset: 0.2rem;
+}
+.recipient-filter-note {
+  grid-column: 1 / -1;
+}
+.recipient-scope {
+  font-weight: 700;
+}
+.recipient-section {
+  margin: 2rem 0;
+}
+.recipient-report table {
+  table-layout: fixed;
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0 1.5rem;
+}
+.recipient-report caption {
+  text-align: start;
+  font-weight: 700;
+  padding: 0.75rem 0;
+}
+.recipient-report :is(th, td) {
+  padding: 0.75rem;
+  text-align: start;
+  vertical-align: top;
+  border: 1px solid #768c7e;
+}
+.recipient-report th {
+  background: #eef2ed;
+}
+.recipient-timeline {
+  list-style: none;
+  padding: 0 0 0 1rem;
+  border-inline-start: 0.2rem solid #275c49;
+}
+.recipient-timeline > li {
+  margin: 1.5rem 0;
+}
+.recipient-print-context {
+  display: none;
+}
+@media (max-width: 40rem) {
+  .recipient-report {
+    padding: 1rem;
+  }
+  .recipient-report :is(th, td) {
+    padding: 0.375rem;
+    font-size: 0.875rem;
+  }
+  .recipient-timeline {
+    padding-inline-start: 0.5rem;
+  }
+}
+@page eutheto-recipient {
+  size: A4;
+  margin: 22mm 12mm 16mm;
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font: 9pt sans-serif;
+  }
+}
+@media print {
+  .recipient-report {
+    page: eutheto-recipient;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: black;
+    font-size: 9pt;
+  }
+  .recipient-controls,
+  .recipient-scope {
+    display: none;
+  }
+  .recipient-print-layout {
+    display: table;
+    table-layout: fixed;
+    width: 100%;
+  }
+  .recipient-print-content {
+    display: table-row-group;
+  }
+  .recipient-report .recipient-print-context {
+    display: table-header-group;
+    margin: 0;
+    font-size: 9pt;
+    break-inside: avoid;
+  }
+  .recipient-heading {
+    border-color: black;
+    padding-bottom: 3mm;
+  }
+  .recipient-report h1 {
+    font-size: 20pt;
+  }
+  .recipient-report h2 {
+    font-size: 14pt;
+  }
+  .recipient-report h3 {
+    font-size: 11pt;
+  }
+  .recipient-report :is(h1, h2, h3, caption) {
+    break-after: avoid;
+  }
+  .recipient-report table {
+    font-size: 8pt;
+  }
+  .recipient-report thead {
+    display: table-header-group;
+  }
+  .recipient-report tr {
+    break-inside: avoid;
+  }
+  .recipient-report :is(th, td) {
+    border-color: black;
+    padding: 2mm;
+    background: white;
+    color: black;
+  }
+  .recipient-timeline {
+    border: 0;
+    padding: 0;
+  }
+}

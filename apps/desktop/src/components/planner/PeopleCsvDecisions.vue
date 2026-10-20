@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { newUuidV7, type PeopleCsvPreview } from "../../api/generated";
+import type { CsvRecordSampleState } from "../../csv-import";
 import type { ProjectSummary } from "../../project-home";
 import WorkforceEntityPicker from "./WorkforceEntityPicker.vue";
 import { plannerMessage, type PlannerMessageKey } from "./messages";
-import {
-  csvDecisionRecord,
-  type CsvDecisionDraft,
-  type CsvRecordSampleState,
-} from "./people-csv-decisions";
+import { csvDecisionRecord, type CsvDecisionDraft } from "./people-csv-decisions";
 
 const props = defineProps<{
   readonly modelValue: readonly CsvDecisionDraft[];

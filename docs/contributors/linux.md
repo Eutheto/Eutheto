@@ -74,7 +74,7 @@ DISPLAY=:99 xdotool getdisplaygeometry
 DISPLAY=:99 GDK_BACKEND=x11 just desktop-dev
 ```
 
-Stop `Xvfb` when the diagnostic is complete. The geometry probe proves only that a client can connect to the virtual X server. The development launch proves only the exercised development surface; it is not packaged desktop E2E evidence. The canonical packaged E2E recipe remains Phase-11-gated until its real application artifact and driver prerequisites exist.
+Stop `Xvfb` when the diagnostic is complete. The geometry probe proves only that a client can connect to the virtual X server. The development launch proves only the exercised development surface. The canonical `just e2e true` recipe tests the actual bundled application and requires its native drivers and a separate network namespace. See the [Phase 07 PDF validation handoff](phase07-pdf-validation.md) for prerequisites, coverage, and recorded limitations.
 
 ## WebKitGTK failure report
 

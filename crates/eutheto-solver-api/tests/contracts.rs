@@ -1,15 +1,16 @@
 use eutheto_planning_ir::{
-    BoolVariable, BoolVariableId, CandidateValues, Capability, CompilerId, InclusiveRange,
-    IntDomain, IntVariable, IntVariableId, LexicographicStrategy, ObjectiveLevel, ObjectiveLevelId,
-    ObjectivePlan, PLANNING_IR_SCHEMA_VERSION, PlanningIrLimitsV1, PlanningMetadata,
-    PlanningProblem, PlanningProblemSummary, ProvenanceId, ProvenanceRecord, ProvenanceSourceKind,
-    Variable, summarize,
+    Assumption, BoolVariable, BoolVariableId, CandidateValues, Capability, CompilerId,
+    InclusiveRange, IntDomain, IntVariable, IntVariableId, LexicographicStrategy, Literal,
+    ObjectiveLevel, ObjectiveLevelId, ObjectivePlan, PLANNING_IR_SCHEMA_VERSION,
+    PlanningIrLimitsV1, PlanningMetadata, PlanningProblem, PlanningProblemSummary, ProvenanceId,
+    ProvenanceRecord, ProvenanceSourceKind, Variable, summarize,
 };
 use eutheto_solver_api::*;
 use eutheto_types::{
     BackendId, BackendSelection, CancellationToken, DurationMillis, ExplanationMode,
     FixedMonotonicClock, MonotonicClock, PackId, ParentSolveBudget, PreservationPolicy,
-    ReproducibilityMode, ResourceLimits, ScenarioId, SolveMode, SolveOptions, WorkerThreadPolicy,
+    ReproducibilityMode, ResourceLimits, RuleId, ScenarioId, SolveMode, SolveOptions,
+    WorkerThreadPolicy,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -218,7 +219,14 @@ fn parent_budget(
 fn request(
     backend: BackendId,
 ) -> Result<(SolveRequest, FixedMonotonicClock, CancellationToken), Box<dyn Error>> {
-    let problem = Arc::new(problem()?);
+    request_with_problem(backend, problem()?)
+}
+
+fn request_with_problem(
+    backend: BackendId,
+    problem: PlanningProblem,
+) -> Result<(SolveRequest, FixedMonotonicClock, CancellationToken), Box<dyn Error>> {
+    let problem = Arc::new(problem);
     let options = solve_options(backend.clone())?;
     let summary = summarize(
         &problem,
@@ -233,13 +241,52 @@ fn request(
             problem,
             summary,
             options,
-            &parent,
+            parent.phase_view(),
             Some(DurationMillis::new(800)?),
             DurationMillis::ZERO,
         )?,
         clock,
         cancellation,
     ))
+}
+
+fn one_level_problem(direction: &str) -> Result<PlanningProblem, Box<dyn Error>> {
+    let mut value = problem()?;
+    let provenance = value.provenance[0].id.clone();
+    value.objectives.levels.push(ObjectiveLevel {
+        id: ObjectiveLevelId::new("tests.optimization")?,
+        direction: serde_json::from_str(&format!("\"{direction}\""))?,
+        lower_bound: 0,
+        upper_bound: 0,
+        terms: Vec::new(),
+        provenance,
+    });
+    value.canonicalize()?;
+    Ok(value)
+}
+
+fn terminal_outcome(
+    request: &SolveRequest,
+    objective: Option<BackendObjectiveEvidence>,
+    best_bound_values: Option<Vec<i64>>,
+) -> Result<BackendSolveOutcome, Box<dyn Error>> {
+    Ok(BackendSolveOutcome {
+        backend_id: request.backend_id().clone(),
+        model_hash: request.model_hash().to_owned(),
+        solve_fingerprint: request.solve_fingerprint().to_owned(),
+        termination: BackendTerminationReason::SolutionLimit,
+        evidence: BackendTerminationEvidence {
+            remaining_at_dispatch_milliseconds: request.dispatch_budget().remaining_at_dispatch(),
+            backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+            elapsed_milliseconds: DurationMillis::new(3)?,
+            first_incumbent_milliseconds: None,
+            objective,
+            best_bound_values,
+            assumption_core: None,
+            evidence_refs: Vec::new(),
+            execution: None,
+        },
+    })
 }
 
 fn valid_candidate() -> Result<CandidateValues, Box<dyn Error>> {
@@ -272,6 +319,10 @@ impl SolverBackend for SequenceBackend {
 
     fn runtime_identity(&self) -> &BackendRuntimeIdentity {
         &self.runtime_identity
+    }
+
+    fn verified_worker_manifest_sha256(&self) -> Option<&[u8; 32]> {
+        None
     }
 
     fn compatibility(
@@ -324,6 +375,8 @@ impl SolverBackend for SequenceBackend {
                             .map_err(|_| BackendError::from(OutputError::UnsafeDiagnosticLine))?,
                     ),
                     objective: None,
+                    best_bound_values: None,
+                    assumption_core: None,
                     evidence_refs: Vec::new(),
                     execution: None,
                 },
@@ -573,7 +626,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         Arc::clone(original.problem()),
         original.summary().clone(),
         options,
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -590,7 +643,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         Arc::clone(original.problem()),
         original.summary().clone(),
         solve_options(other)?,
-        &other_parent,
+        other_parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -606,7 +659,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         Arc::clone(original.problem()),
         original.summary().clone(),
         solve_options(descriptor.id.clone())?,
-        &version_parent,
+        version_parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -622,7 +675,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         Arc::clone(original.problem()),
         original.summary().clone(),
         solve_options(descriptor.id.clone())?,
-        &adapter_parent,
+        adapter_parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -665,7 +718,7 @@ fn preflight_maps_shared_invalid_solve_options() -> TestResult {
             Arc::clone(&problem),
             summary.clone(),
             options,
-            &parent,
+            parent.phase_view(),
             None,
             DurationMillis::ZERO,
         )?;
@@ -691,7 +744,7 @@ fn cancellation_and_timeout_remain_distinct() -> TestResult {
         Arc::clone(&problem),
         summary.clone(),
         options.clone(),
-        &cancel_parent,
+        cancel_parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -709,7 +762,7 @@ fn cancellation_and_timeout_remain_distinct() -> TestResult {
         problem,
         summary,
         options,
-        &timeout_parent,
+        timeout_parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -736,7 +789,7 @@ fn child_budget_inherits_the_absolute_parent_deadline() -> TestResult {
         problem,
         summary,
         options,
-        &parent,
+        parent.phase_view(),
         Some(DurationMillis::new(500)?),
         DurationMillis::ZERO,
     )?;
@@ -754,6 +807,45 @@ fn child_budget_inherits_the_absolute_parent_deadline() -> TestResult {
             .remaining_milliseconds
             .value(),
         400
+    );
+    Ok(())
+}
+#[test]
+fn capped_request_budget_survives_delayed_dispatch_and_child_view() -> TestResult {
+    let (parent, clock, _) = parent_budget(1_000)?;
+    clock.advance(Duration::from_millis(400))?;
+    let capped = parent
+        .phase_view()
+        .capped_phase_view(Duration::from_millis(500));
+    clock.advance(Duration::from_millis(100))?;
+    let problem = Arc::new(problem()?);
+    let backend = BackendId::new(FAKE_BACKEND_ID)?;
+    let options = solve_options(backend.clone())?;
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let request = SolveRequest::new(
+        backend,
+        "1.0.0",
+        "1.0.0",
+        problem,
+        summary,
+        options,
+        capped,
+        None,
+        DurationMillis::ZERO,
+    )?;
+    assert_eq!(
+        request.dispatch_budget().remaining_at_dispatch().value(),
+        400
+    );
+    clock.advance(Duration::from_millis(200))?;
+    assert_eq!(
+        request
+            .dispatch_budget()
+            .child_view()
+            .snapshot()
+            .remaining_milliseconds
+            .value(),
+        200
     );
     Ok(())
 }
@@ -839,7 +931,7 @@ fn candidate_crossing_backend_cap_during_validation_is_not_retained() -> TestRes
         problem,
         summary,
         options,
-        &parent,
+        parent.phase_view(),
         Some(DurationMillis::new(800)?),
         DurationMillis::ZERO,
     )?;
@@ -951,6 +1043,35 @@ fn candidate_assignment_limit_is_cumulative_at_boundary() -> TestResult {
         Some(&OutputError::CandidateAssignmentLimitExceeded)
     );
     Ok(())
+}
+
+#[test]
+fn intermediate_collection_uses_explicit_bounded_preview_reserve() {
+    let ordinary = SolverApiLimits {
+        max_candidates: 1,
+        max_candidate_assignments: 2,
+        max_progress_events: 1,
+        max_diagnostic_lines: 1,
+        max_evidence_refs_per_candidate: 1,
+    };
+    let reserved = ordinary.with_intermediate_candidate_reserve();
+    assert_eq!(reserved.max_candidates, 2);
+    assert_eq!(reserved.max_candidate_assignments, 4);
+    assert_eq!(reserved.max_progress_events, ordinary.max_progress_events);
+    assert_eq!(reserved.max_diagnostic_lines, ordinary.max_diagnostic_lines);
+    assert_eq!(
+        reserved.max_evidence_refs_per_candidate,
+        ordinary.max_evidence_refs_per_candidate
+    );
+
+    let saturated = SolverApiLimits {
+        max_candidates: u32::MAX,
+        max_candidate_assignments: u32::MAX,
+        ..ordinary
+    }
+    .with_intermediate_candidate_reserve();
+    assert_eq!(saturated.max_candidates, u32::MAX);
+    assert_eq!(saturated.max_candidate_assignments, u32::MAX);
 }
 
 #[test]
@@ -1115,7 +1236,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         Arc::clone(&base_problem),
         base_summary.clone(),
         base_options.clone(),
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1126,7 +1247,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         Arc::clone(&base_problem),
         base_summary.clone(),
         base_options.clone(),
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1140,7 +1261,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         Arc::clone(&base_problem),
         base_summary.clone(),
         base_options.clone(),
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1157,7 +1278,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         Arc::clone(&base_problem),
         base_summary.clone(),
         base_options.clone(),
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1176,7 +1297,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         Arc::clone(&base_problem),
         base_summary.clone(),
         changed_options,
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1196,7 +1317,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         Arc::clone(&base_problem),
         base_summary,
         other_options,
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1214,7 +1335,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         recompiled,
         recompiled_summary,
         base_options,
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1310,7 +1431,6 @@ fn backend_output_rejects_application_progress_and_bad_vector_or_time_shapes() -
         observed_after_milliseconds: DurationMillis::new(1)?,
         objective: Some(BackendObjectiveEvidence {
             objective_values: vec![0],
-            best_bound_values: Some(vec![0, 0]),
         }),
         evidence_refs: Vec::new(),
     };
@@ -1323,7 +1443,6 @@ fn backend_output_rejects_application_progress_and_bad_vector_or_time_shapes() -
         observed_after_milliseconds: DurationMillis::new(2)?,
         objective: Some(BackendObjectiveEvidence {
             objective_values: vec![0, 0],
-            best_bound_values: Some(vec![0, 0]),
         }),
         evidence_refs: Vec::new(),
     })?;
@@ -1333,7 +1452,6 @@ fn backend_output_rejects_application_progress_and_bad_vector_or_time_shapes() -
             observed_after_milliseconds: DurationMillis::new(1)?,
             objective: Some(BackendObjectiveEvidence {
                 objective_values: vec![0, 0],
-                best_bound_values: Some(vec![0, 0]),
             }),
             evidence_refs: Vec::new(),
         }),
@@ -1363,6 +1481,8 @@ fn outcome_requires_both_fingerprints_and_exact_first_incumbent() -> TestResult 
             elapsed_milliseconds: DurationMillis::new(3)?,
             first_incumbent_milliseconds: Some(DurationMillis::new(1)?),
             objective: None,
+            best_bound_values: None,
+            assumption_core: None,
             evidence_refs: Vec::new(),
             execution: None,
         },
@@ -1412,6 +1532,8 @@ fn execution_evidence_round_trips_and_is_bound_to_the_request() -> TestResult {
             elapsed_milliseconds: DurationMillis::new(10)?,
             first_incumbent_milliseconds: Some(DurationMillis::new(2)?),
             objective: None,
+            best_bound_values: None,
+            assumption_core: None,
             evidence_refs: Vec::new(),
             execution: Some(BackendExecutionEvidence {
                 timings: BackendTimingEvidence {
@@ -1549,7 +1671,7 @@ fn final_backend_evidence_matches_objective_dimension() -> TestResult {
         problem,
         summary,
         options,
-        &parent,
+        parent.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -1564,9 +1686,10 @@ fn final_backend_evidence_matches_objective_dimension() -> TestResult {
             elapsed_milliseconds: DurationMillis::new(1)?,
             first_incumbent_milliseconds: None,
             objective: Some(BackendObjectiveEvidence {
-                objective_values: vec![0],
-                best_bound_values: Some(vec![0, 0]),
+                objective_values: vec![0, 0],
             }),
+            best_bound_values: Some(vec![0]),
+            assumption_core: None,
             evidence_refs: Vec::new(),
             execution: None,
         },
@@ -1577,6 +1700,168 @@ fn final_backend_evidence_matches_objective_dimension() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn terminal_bound_presence_is_independent_of_native_objectives_and_candidates() -> TestResult {
+    let backend = BackendId::new(FAKE_BACKEND_ID)?;
+    let (satisfaction_request, _, _) = request(backend.clone())?;
+    let neither = terminal_outcome(&satisfaction_request, None, None)?;
+    assert_eq!(
+        validate_outcome(
+            &satisfaction_request,
+            &neither,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Ok(())
+    );
+    let satisfaction_with_bound = terminal_outcome(&satisfaction_request, None, Some(vec![0]))?;
+    assert_eq!(
+        validate_outcome(
+            &satisfaction_request,
+            &satisfaction_with_bound,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::InvalidObjectiveDimension)
+    );
+
+    let (minimize_request, _, _) =
+        request_with_problem(backend.clone(), one_level_problem("minimize")?)?;
+    let bound_only = terminal_outcome(&minimize_request, None, Some(vec![0]))?;
+    assert_eq!(
+        validate_outcome(
+            &minimize_request,
+            &bound_only,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Ok(())
+    );
+
+    let mut candidate_only = terminal_outcome(&minimize_request, None, None)?;
+    candidate_only.termination = BackendTerminationReason::CandidateFound;
+    candidate_only.evidence.first_incumbent_milliseconds = Some(DurationMillis::new(2)?);
+    let candidate = BackendCandidate {
+        sequence: 1,
+        values: valid_candidate()?,
+        observed_after_milliseconds: DurationMillis::new(2)?,
+        objective: Some(BackendObjectiveEvidence {
+            objective_values: vec![5],
+        }),
+        evidence_refs: Vec::new(),
+    };
+    assert_eq!(
+        validate_outcome(
+            &minimize_request,
+            &candidate_only,
+            std::slice::from_ref(&candidate),
+            SolverApiLimits::DEFAULT,
+        ),
+        Ok(())
+    );
+
+    let empty = terminal_outcome(&minimize_request, None, Some(Vec::new()))?;
+    assert_eq!(
+        validate_outcome(&minimize_request, &empty, &[], SolverApiLimits::DEFAULT),
+        Err(OutcomeError::InvalidObjectiveDimension)
+    );
+    Ok(())
+}
+
+#[test]
+fn terminal_bounds_enforce_declared_range_and_directional_consistency() -> TestResult {
+    let backend = BackendId::new(FAKE_BACKEND_ID)?;
+    let (minimize_request, _, _) =
+        request_with_problem(backend.clone(), one_level_problem("minimize")?)?;
+    let out_of_range = terminal_outcome(&minimize_request, None, Some(vec![1]))?;
+    assert_eq!(
+        validate_outcome(
+            &minimize_request,
+            &out_of_range,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::BestBoundOutsideDeclaredRange)
+    );
+    let contradictory_minimum = terminal_outcome(
+        &minimize_request,
+        Some(BackendObjectiveEvidence {
+            objective_values: vec![-1],
+        }),
+        Some(vec![0]),
+    )?;
+    assert_eq!(
+        validate_outcome(
+            &minimize_request,
+            &contradictory_minimum,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::BestBoundContradictsObjective)
+    );
+    let mut bound_against_candidate = terminal_outcome(&minimize_request, None, Some(vec![0]))?;
+    bound_against_candidate.termination = BackendTerminationReason::CandidateFound;
+    bound_against_candidate
+        .evidence
+        .first_incumbent_milliseconds = Some(DurationMillis::new(2)?);
+    let contradictory_candidate = BackendCandidate {
+        sequence: 1,
+        values: valid_candidate()?,
+        observed_after_milliseconds: DurationMillis::new(2)?,
+        objective: Some(BackendObjectiveEvidence {
+            objective_values: vec![-1],
+        }),
+        evidence_refs: Vec::new(),
+    };
+    assert_eq!(
+        validate_outcome(
+            &minimize_request,
+            &bound_against_candidate,
+            std::slice::from_ref(&contradictory_candidate),
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::BestBoundContradictsObjective)
+    );
+
+    let (maximize_request, _, _) =
+        request_with_problem(backend.clone(), one_level_problem("maximize")?)?;
+    let contradictory_maximum = terminal_outcome(
+        &maximize_request,
+        Some(BackendObjectiveEvidence {
+            objective_values: vec![1],
+        }),
+        Some(vec![0]),
+    )?;
+    assert_eq!(
+        validate_outcome(
+            &maximize_request,
+            &contradictory_maximum,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::BestBoundContradictsObjective)
+    );
+
+    let raw_native_objective = terminal_outcome(
+        &minimize_request,
+        Some(BackendObjectiveEvidence {
+            objective_values: vec![999],
+        }),
+        Some(vec![0]),
+    )?;
+    assert_eq!(
+        validate_outcome(
+            &minimize_request,
+            &raw_native_objective,
+            &[],
+            SolverApiLimits::DEFAULT,
+        ),
+        Ok(())
+    );
+    Ok(())
+}
+
 #[test]
 fn production_registry_contains_no_fake_or_test_identifier() -> TestResult {
     let registry = SolverRegistry::production()?;
@@ -1584,5 +1869,210 @@ fn production_registry_contains_no_fake_or_test_identifier() -> TestResult {
     assert!(PRODUCTION_BACKENDS.iter().all(|(id, _, _)| {
         !id.contains("fake") && !id.starts_with("test.") && !id.starts_with("tests.")
     }));
+    Ok(())
+}
+
+fn assumption_problem() -> Result<PlanningProblem, Box<dyn Error>> {
+    let mut value = problem()?;
+    let provenance = value.provenance[0].id.clone();
+    value.provenance[0].source_kind = ProvenanceSourceKind::RequiredRule;
+    value.variables.push(Variable::Boolean(BoolVariable {
+        id: BoolVariableId::new("tests.aaa")?,
+        provenance: provenance.clone(),
+    }));
+    value.assumptions = vec![
+        Assumption {
+            id: "tests.a".parse()?,
+            literal: Literal::positive(BoolVariableId::new("tests.enabled")?),
+            required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f81".parse::<RuleId>()?],
+            provenance: provenance.clone(),
+        },
+        Assumption {
+            id: "tests.z".parse()?,
+            literal: Literal::negative(BoolVariableId::new("tests.aaa")?),
+            required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f82".parse::<RuleId>()?],
+            provenance,
+        },
+    ];
+    value.canonicalize()?;
+    Ok(value)
+}
+
+fn assumption_contract_request(
+    mut problem: PlanningProblem,
+    threads: WorkerThreadPolicy,
+    explanation_mode: ExplanationMode,
+) -> Result<(SolveRequest, CancellationToken), Box<dyn Error>> {
+    problem.canonicalize()?;
+    let backend = BackendId::new(FAKE_BACKEND_ID)?;
+    let mut options = solve_options(backend.clone())?;
+    options.worker_threads = threads;
+    options.explanation_mode = explanation_mode;
+    let problem = Arc::new(problem);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let (parent, _, cancellation) = parent_budget(1_000)?;
+    Ok((
+        SolveRequest::new(
+            backend,
+            "1.0.0",
+            "1.0.0",
+            problem,
+            summary,
+            options,
+            parent.phase_view(),
+            None,
+            DurationMillis::ZERO,
+        )?,
+        cancellation,
+    ))
+}
+
+fn assumption_contract_outcome(request: &SolveRequest) -> BackendSolveOutcome {
+    BackendSolveOutcome {
+        backend_id: request.backend_id().clone(),
+        model_hash: request.model_hash().to_owned(),
+        solve_fingerprint: request.solve_fingerprint().to_owned(),
+        termination: BackendTerminationReason::InfeasibilityClaimed,
+        evidence: BackendTerminationEvidence {
+            remaining_at_dispatch_milliseconds: request.dispatch_budget().remaining_at_dispatch(),
+            backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+            elapsed_milliseconds: DurationMillis::ZERO,
+            first_incumbent_milliseconds: None,
+            objective: None,
+            best_bound_values: None,
+            assumption_core: None,
+            evidence_refs: Vec::new(),
+            execution: None,
+        },
+    }
+}
+
+#[test]
+fn outcome_rejects_missing_or_mismapped_assumption_core_evidence() -> TestResult {
+    let (request, _) = assumption_contract_request(
+        assumption_problem()?,
+        WorkerThreadPolicy::Exact(1),
+        ExplanationMode::None,
+    )?;
+    let positive = Literal::positive(BoolVariableId::new("tests.enabled")?);
+    let negative = Literal::negative(BoolVariableId::new("tests.aaa")?);
+    let unknown = Literal::positive(BoolVariableId::new("tests.unknown")?);
+    let mut outcome = assumption_contract_outcome(&request);
+    assert_eq!(
+        validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+        Err(OutcomeError::InvalidAssumptionCoreEvidence),
+    );
+    for literals in [
+        vec![],
+        vec![positive.negated()],
+        vec![negative.negated()],
+        vec![unknown.clone()],
+        vec![negative.clone(), negative.clone()],
+        vec![positive.clone(), negative.clone()],
+        vec![negative.clone(), unknown.clone()],
+        vec![negative.clone(), positive.clone(), unknown],
+    ] {
+        outcome.evidence.assumption_core =
+            Some(BackendAssumptionCoreEvidence::Sufficient { literals });
+        assert_eq!(
+            validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+            Err(OutcomeError::InvalidAssumptionCoreEvidence),
+        );
+    }
+    // Literal order deliberately differs from the submitted group-ID order.
+    outcome.evidence.assumption_core = Some(BackendAssumptionCoreEvidence::Sufficient {
+        literals: vec![negative, positive],
+    });
+    validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+    for reason in [
+        BackendAssumptionCoreUnavailableReason::NotReturned,
+        BackendAssumptionCoreUnavailableReason::InvalidCore,
+    ] {
+        outcome.evidence.assumption_core =
+            Some(BackendAssumptionCoreEvidence::Unavailable { reason });
+        validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn outcome_assumption_evidence_requires_exact_profile_and_infeasible_status() -> TestResult {
+    for mode in [ExplanationMode::None, ExplanationMode::Standard] {
+        let (request, cancellation) =
+            assumption_contract_request(assumption_problem()?, WorkerThreadPolicy::Exact(1), mode)?;
+        let mut outcome = assumption_contract_outcome(&request);
+        let core = BackendAssumptionCoreEvidence::Unavailable {
+            reason: BackendAssumptionCoreUnavailableReason::NotReturned,
+        };
+        outcome.evidence.assumption_core = Some(core.clone());
+        validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+        for termination in [
+            BackendTerminationReason::TimeLimit,
+            BackendTerminationReason::Cancelled,
+            BackendTerminationReason::Failed,
+        ] {
+            outcome.termination = termination;
+            outcome.evidence.elapsed_milliseconds =
+                if termination == BackendTerminationReason::TimeLimit {
+                    outcome.evidence.backend_limit_milliseconds
+                } else {
+                    DurationMillis::ZERO
+                };
+            if termination == BackendTerminationReason::Cancelled {
+                cancellation.cancel();
+            }
+            assert_eq!(
+                validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+                Err(OutcomeError::InvalidAssumptionCoreEvidence),
+            );
+            outcome.evidence.assumption_core = None;
+            validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+            outcome.evidence.assumption_core = Some(core.clone());
+        }
+        let mut values = valid_candidate()?;
+        values
+            .booleans
+            .insert(BoolVariableId::new("tests.aaa")?, false);
+        let candidate = BackendCandidate {
+            sequence: 1,
+            values,
+            observed_after_milliseconds: DurationMillis::ZERO,
+            objective: None,
+            evidence_refs: Vec::new(),
+        };
+        outcome.termination = BackendTerminationReason::CandidateFound;
+        outcome.evidence.first_incumbent_milliseconds = Some(DurationMillis::ZERO);
+        assert_eq!(
+            validate_outcome(
+                &request,
+                &outcome,
+                std::slice::from_ref(&candidate),
+                SolverApiLimits::DEFAULT
+            ),
+            Err(OutcomeError::InvalidAssumptionCoreEvidence),
+        );
+        outcome.evidence.assumption_core = None;
+        validate_outcome(&request, &outcome, &[candidate], SolverApiLimits::DEFAULT)?;
+    }
+    let mut optimized = assumption_problem()?;
+    optimized.objectives = two_level_problem()?.objectives;
+    for (problem, threads) in [
+        (problem()?, WorkerThreadPolicy::Exact(1)),
+        (optimized, WorkerThreadPolicy::Exact(1)),
+        (assumption_problem()?, WorkerThreadPolicy::Auto),
+        (assumption_problem()?, WorkerThreadPolicy::Exact(2)),
+    ] {
+        let (request, _) =
+            assumption_contract_request(problem, threads, ExplanationMode::Standard)?;
+        let mut outcome = assumption_contract_outcome(&request);
+        validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+        outcome.evidence.assumption_core = Some(BackendAssumptionCoreEvidence::Unavailable {
+            reason: BackendAssumptionCoreUnavailableReason::NotReturned,
+        });
+        assert_eq!(
+            validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+            Err(OutcomeError::InvalidAssumptionCoreEvidence),
+        );
+    }
     Ok(())
 }

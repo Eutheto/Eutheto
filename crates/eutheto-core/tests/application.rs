@@ -5,16 +5,21 @@ mod portable_encode;
 #[path = "support/setup_control.rs"]
 mod setup_control;
 
+#[path = "../../../domains/workforce/core/tests/support/mod.rs"]
+mod workforce_fixture;
+
 use eutheto_command::official_registry;
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     BackupAssetSelection, BackupSelection, COUNTERFACTUAL_API_SCHEMA_VERSION, DeferredCapability,
-    EuthetoApp, EventSubscription, ProjectScope, SOLUTION_API_SCHEMA_VERSION, SafetyBackupOutcome,
+    EuthetoApp, EventSubscription, ManualSelectionAdmissionRequestV1, ProjectScope,
+    SOLUTION_ADOPT_BASE_SCHEMA_VERSION, SOLUTION_API_SCHEMA_VERSION,
+    SOLUTION_COMPARE_SCHEMA_VERSION, SafetyBackupOutcome, SolutionAdoptBaseRequestV1,
     SolutionCancelCounterfactualDtoV1, SolutionCancelCounterfactualRequestV1,
-    SolutionCompareRequestV1, SolutionExplainRequestV1, SolutionExplanationDtoV1,
-    SolutionListRequestV1, SolutionSelectRequestV1, SolutionStartCounterfactualDtoV1,
-    SolutionStartCounterfactualRequestV1, SolutionSummaryRequestV1, SolutionVerifyRequestV1,
-    SolutionViewRequestV1,
+    SolutionCompareRequestV3, SolutionExplainRequestV1, SolutionExplanationDtoV2,
+    SolutionGetCounterfactualRequestV1, SolutionListRequestV1, SolutionSelectRequestV1,
+    SolutionStartCounterfactualDtoV1, SolutionStartCounterfactualRequestV1,
+    SolutionSummaryRequestV1, SolutionVerifyRequestV1, SolutionViewRequestV1,
 };
 use eutheto_domain_api::CompileContext;
 use eutheto_domain_ir::{
@@ -22,9 +27,10 @@ use eutheto_domain_ir::{
     COUNTERFACTUAL_REQUEST_SEMANTICS_SCHEMA_VERSION, CounterfactualConditionPayloadV1,
     CounterfactualConditionV1, CounterfactualFailureKind, CounterfactualJobRecordV1,
     CounterfactualJobRequestV1, CounterfactualJobState, CounterfactualRequestSemanticsV1,
-    DomainAssignmentId, ExplanationKind, ExplanationRequestSubjectV1, ExplanationRequestV1,
-    RunManifestV1, RunPhaseTimingsV1, RunTerminalOutcomeV1, VerificationContextV1,
-    VerificationValue, blake3_hex,
+    CounterfactualResult, DomainAssignmentId, ExplanationEvidencePayloadV2, ExplanationKind,
+    ExplanationRequestSubjectV1, ExplanationRequestV1, PortableAcceptedResult, RunManifest,
+    RunPhaseTimingsV1, RunTerminalOutcomeV1, ScoreComparisonUnavailableReasonV1, ScoreComparisonV2,
+    VerificationContextV1, VerificationIssueId, VerificationReport, VerificationValue, blake3_hex,
 };
 use eutheto_export::{
     BackupSections, CHECKSUMS_PATH, CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, FullBackupSnapshot,
@@ -46,20 +52,23 @@ use eutheto_store::{
     CommandCommitTestHook, CommandCommitTestPhase, Failpoint, OpenOptions, SnapshotPolicy,
 };
 use eutheto_store::{
-    NewSolveRunV1, SqliteScenarioStore, StagedLibraryApply, StoredAcceptedResultV2,
+    NewProject, NewSolveRunV1, SqliteScenarioStore, StagedLibraryApply, StoredAcceptedResultV2,
 };
 use eutheto_types::{
     ActorRef, AddEntity, AppError, BackendId, BackendSelection, Clock, CommandBatch,
     CommandEnvelope, CommandId, CommandSource, CounterfactualJobId, DirectoryAvailabilityLabel,
-    DomainPackRef, DurationMillis, EntityId, EventPayload, EventTopic, ExplanationMode, FixedClock,
-    FixedIdGenerator, GapPolicy, Horizon, IanaTimeZone, IdGenerationError, IdGenerator, LocaleTag,
-    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PortableProjectMetadata,
-    PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
-    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioId,
-    ScenarioSettings, SemanticCapability, SolutionId, SolveMode, SolveOptions, SolveRunId,
-    SolveStatus, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, WorkerThreadPolicy,
-    collect_scenario_owned_uuids,
+    DomainCommandEnvelope, DomainPackRef, DurationMillis, EntityId, EventPayload, EventTopic,
+    ExplanationMode, FixedClock, FixedIdGenerator, GapPolicy, Horizon, IanaTimeZone,
+    IdGenerationError, IdGenerator, LocaleTag, OperationId, OverlapPolicy,
+    PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PortableProjectMetadata, PreservationPolicy,
+    ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
+    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioDocument,
+    ScenarioId, ScenarioSettings, SemanticCapability, SolutionId, SolveMode, SolveOptions,
+    SolveRunId, SolveStatus, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem,
+    WorkerThreadPolicy, collect_scenario_owned_uuids,
 };
+#[cfg(debug_assertions)]
+use rusqlite::Connection;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -223,7 +232,7 @@ fn with_newer_unknown_semantics(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>
         let mut entry = archive.by_index(index)?;
         let mut content = Vec::new();
         entry.read_to_end(&mut content)?;
-        entries.insert(entry.name().to_owned(), content);
+        entries.insert(entry.name()?.into_owned(), content);
     }
     let mut manifest: serde_json::Value = serde_json::from_slice(
         entries
@@ -275,7 +284,7 @@ fn with_unknown_pack_and_invalid_domain(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn
         let mut entry = archive.by_index(index)?;
         let mut content = Vec::new();
         entry.read_to_end(&mut content)?;
-        entries.insert(entry.name().to_owned(), content);
+        entries.insert(entry.name()?.into_owned(), content);
     }
     let scenario_path = entries
         .keys()
@@ -367,6 +376,32 @@ fn add_entity_envelope(
     })
 }
 
+fn invalid_add_entity_envelope(
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+) -> Result<CommandEnvelope, Box<dyn Error>> {
+    let ids = SystemIdGenerator;
+    let entity_id = EntityId::new(&ids)?;
+    Ok(CommandEnvelope {
+        command_id: CommandId::new(&ids)?,
+        scenario_id,
+        expected_revision,
+        actor: ActorRef {
+            actor_id: Some("test.actor".to_owned()),
+            display_name: "Integration Test".to_owned(),
+        },
+        source: CommandSource::System,
+        command: ScenarioCommand::AddEntity(AddEntity {
+            entity_id,
+            value: json!({
+                "id": entity_id.to_string(),
+                "enabled": false,
+                "target": 1
+            }),
+        }),
+    })
+}
+
 async fn scenario_view(
     app: &EuthetoApp,
     scenario_id: ScenarioId,
@@ -385,6 +420,46 @@ fn solution_test_id(prefix: u16, suffix: u16) -> Result<Uuid, Box<dyn Error>> {
     Ok(Uuid::parse_str(&format!(
         "018f47f2-e880-7000-{prefix:04x}-{suffix:012x}"
     ))?)
+}
+fn workforce_adoption_document() -> Result<ScenarioDocument, Box<dyn Error>> {
+    let mut value = serde_json::to_value(workforce_fixture::fixture()?)?;
+    value["settings"]["timeZone"] = json!("UTC");
+    value["settings"]["horizon"] =
+        json!({"start":"2026-11-01T00:00:00Z","end":"2026-11-02T00:00:00Z"});
+    value["domain"]["lockedAssignments"] = json!({});
+    value["domain"]["entities"]
+        .as_object_mut()
+        .ok_or("missing Workforce fixture entities")?
+        .remove(&workforce_fixture::id(6));
+    let mut alternate_person = value["domain"]["entities"][workforce_fixture::id(1)].clone();
+    alternate_person["id"] = json!(workforce_fixture::id(12));
+    alternate_person["name"] = json!("Another clinician");
+    alternate_person["externalId"] = json!("staff-02");
+    value["domain"]["entities"][workforce_fixture::id(12)] = alternate_person;
+    let shift = &mut value["domain"]["entities"][workforce_fixture::id(8)];
+    shift["startsAt"] = json!({
+        "instant":"2026-11-01T08:00:00Z","local":"2026-11-01T08:00:00","offsetSeconds":0
+    });
+    shift["endsAt"] = json!({
+        "instant":"2026-11-01T10:00:00Z","local":"2026-11-01T10:00:00","offsetSeconds":0
+    });
+    value["domain"]["rules"] = json!({});
+    for (index, kind) in [
+        (30, "eligibility"),
+        (31, "availability"),
+        (32, "coverage"),
+        (33, "noOverlap"),
+    ] {
+        let mut rule = json!({
+            "id":workforce_fixture::id(index),"kind":kind,"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}}
+        });
+        if kind == "noOverlap" {
+            rule["compatibleCategoryPairs"] = json!([]);
+        }
+        value["domain"]["rules"][workforce_fixture::id(index)] = rule;
+    }
+    Ok(serde_json::from_value(value)?)
 }
 
 fn solution_test_options() -> Result<SolveOptions, Box<dyn Error>> {
@@ -426,6 +501,10 @@ impl SolverBackend for CounterfactualTestBackend {
 
     fn runtime_identity(&self) -> &BackendRuntimeIdentity {
         &self.runtime_identity
+    }
+
+    fn verified_worker_manifest_sha256(&self) -> Option<&[u8; 32]> {
+        None
     }
 
     fn compatibility(
@@ -515,6 +594,8 @@ fn counterfactual_backend_outcome(
             elapsed_milliseconds: DurationMillis::ZERO,
             first_incumbent_milliseconds: candidate_found.then_some(DurationMillis::ZERO),
             objective: None,
+            best_bound_values: None,
+            assumption_core: None,
             evidence_refs: Vec::new(),
             execution: Some(BackendExecutionEvidence {
                 timings: BackendTimingEvidence {
@@ -653,18 +734,44 @@ fn counterfactual_solver_registry(
     Ok((SolverRegistry::new(matrix, registered)?, backend))
 }
 
+async fn start_solve_with_capture(
+    store: &SqliteScenarioStore,
+    document: ScenarioDocument,
+    request: NewSolveRunV1,
+) -> Result<eutheto_store::StartedSolveRunV1, Box<dyn Error>> {
+    let control =
+        eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new());
+    let (capture, _) = store
+        .capture_solve_snapshot(
+            request.scenario_id,
+            request.expected_revision,
+            document,
+            request.started_at,
+            None,
+            control.clone(),
+            None,
+        )
+        .await?;
+    store
+        .start_solve_run(request, capture.stamp, Some(capture.snapshot_id), control)
+        .await
+        .map_err(Into::into)
+}
 #[allow(clippy::too_many_lines)]
-async fn persist_application_accepted_result(
+async fn persist_application_accepted_result_with_status(
     store: &SqliteScenarioStore,
     scenario_id: ScenarioId,
     revision: Revision,
     suffix: u16,
+    objective_policy: &[u8],
+    status: SolveStatus,
 ) -> Result<StoredAcceptedResultV2, Box<dyn Error>> {
     let registry = official_registry()?;
     let pack_id = "official.test".parse()?;
     let pack = registry.require(&pack_id)?;
     let project = store.get_project(scenario_id).await?;
     let compile_context = CompileContext {
+        objective_context: None,
         scenario_revision: revision.value(),
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(
@@ -680,8 +787,11 @@ async fn persist_application_accepted_result(
             .as_timestamp()
             .checked_add(std::time::Duration::from_secs(1))?,
     );
-    let started = store
-        .start_solve_run(NewSolveRunV1 {
+    let started = start_solve_with_capture(
+        store,
+        project.document.clone(),
+        NewSolveRunV1 {
+            objective_context: None,
             run_id: SolveRunId::from_uuid(solution_test_id(0x8100, suffix)?),
             request_id: RequestId::from_uuid(solution_test_id(0x8200, suffix)?),
             scenario_id,
@@ -697,12 +807,13 @@ async fn persist_application_accepted_result(
             protocol_major: 1,
             protocol_minor: 0,
             model_hash: model_hash.clone(),
-            objective_policy_hash: blake3_hex(b"solution-api-objective-policy"),
+            objective_policy_hash: blake3_hex(objective_policy),
             solve_options: solution_test_options()?,
             temporary_condition_hash: None,
             started_at,
-        })
-        .await?;
+        },
+    )
+    .await?;
     let mut candidate = CandidateValues::default();
     for variable in &problem.variables {
         match variable {
@@ -738,17 +849,287 @@ async fn persist_application_accepted_result(
     let authoritative_score = pack.score(
         &project.document,
         &solution,
+        started.input.objective_context.as_ref(),
         &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
     )?;
     let verification = pack.verify(
         &project.document,
         &solution,
+        started.input.objective_context.as_ref(),
         &context,
         &authoritative_score,
         &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
     )?;
     let accepted = AcceptedResult::new(solution, verification)?;
-    let manifest = RunManifestV1::new(
+    let manifest = RunManifest::new(
+        started.input.run_id,
+        started.input.checksum,
+        RunTerminalOutcomeV1::Accepted {
+            status,
+            solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+        started.started_at,
+        finished_at,
+        Some(DurationMillis::new(1_000)?),
+        Some(DurationMillis::new(100)?),
+        Some(DurationMillis::new(500)?),
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    let evidence = accepted
+        .solution
+        .assignments
+        .iter()
+        .flat_map(|assignment| assignment.evidence.iter())
+        .chain(
+            accepted
+                .verification
+                .required_rule_results
+                .iter()
+                .flat_map(|rule| rule.evidence.iter()),
+        )
+        .cloned()
+        .map(|id| (id, VerificationValue::Boolean(true)))
+        .collect();
+    store
+        .finalize_accepted_run(accepted, manifest, evidence)
+        .await?;
+    Ok(store.load_accepted_result(solution_id).await?)
+}
+async fn persist_application_accepted_result(
+    store: &SqliteScenarioStore,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    suffix: u16,
+    objective_policy: &[u8],
+) -> Result<StoredAcceptedResultV2, Box<dyn Error>> {
+    persist_application_accepted_result_with_status(
+        store,
+        scenario_id,
+        revision,
+        suffix,
+        objective_policy,
+        SolveStatus::Optimal,
+    )
+    .await
+}
+
+async fn persist_application_feasible_result(
+    store: &SqliteScenarioStore,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    suffix: u16,
+    objective_policy: &[u8],
+) -> Result<StoredAcceptedResultV2, Box<dyn Error>> {
+    persist_application_accepted_result_with_status(
+        store,
+        scenario_id,
+        revision,
+        suffix,
+        objective_policy,
+        SolveStatus::Feasible,
+    )
+    .await
+}
+async fn persist_application_no_result_run(
+    store: &SqliteScenarioStore,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    suffix: u16,
+    status: SolveStatus,
+) -> Result<RunManifest, Box<dyn Error>> {
+    let registry = official_registry()?;
+    let pack_id = "official.test".parse()?;
+    let pack = registry.require(&pack_id)?;
+    let project = store.get_project(scenario_id).await?;
+    let problem = pack.compile(
+        &project.document,
+        &CompileContext {
+            objective_context: None,
+            scenario_revision: revision.value(),
+            semantic_metadata: BTreeMap::new(),
+            control: eutheto_types::OperationControl::Cancellation(
+                eutheto_types::CancellationToken::new(),
+            ),
+            planning_limits: PlanningIrLimitsV1::DEFAULT,
+        },
+    )?;
+    let started_at = SystemClock.now();
+    let finished_at = Rfc3339Timestamp::from_timestamp(
+        started_at
+            .as_timestamp()
+            .checked_add(std::time::Duration::from_secs(1))?,
+    );
+    let started = start_solve_with_capture(
+        store,
+        project.document.clone(),
+        NewSolveRunV1 {
+            objective_context: None,
+            run_id: SolveRunId::from_uuid(solution_test_id(0x8500, suffix)?),
+            request_id: RequestId::from_uuid(solution_test_id(0x8600, suffix)?),
+            scenario_id,
+            expected_revision: revision,
+            planning_ir_schema_version: PLANNING_IR_SCHEMA_VERSION,
+            compiler_version: problem.metadata.compiler_version.clone(),
+            application_version: env!("CARGO_PKG_VERSION").to_owned(),
+            backend_id: BackendId::new("synthetic.test")?,
+            backend_version: "1.0.0".to_owned(),
+            adapter_version: "1.0.0".to_owned(),
+            worker_version: "1.0.0".to_owned(),
+            solver_version: "1.0.0".to_owned(),
+            protocol_major: 1,
+            protocol_minor: 0,
+            model_hash: canonical_ir_hash(&problem, PlanningIrLimitsV1::DEFAULT)?,
+            objective_policy_hash: blake3_hex(b"status-objective-policy"),
+            solve_options: solution_test_options()?,
+            temporary_condition_hash: None,
+            started_at,
+        },
+    )
+    .await?;
+    let manifest = RunManifest::new(
+        started.input.run_id,
+        started.input.checksum.clone(),
+        RunTerminalOutcomeV1::NoResult { status },
+        started.started_at,
+        finished_at,
+        Some(DurationMillis::new(1_000)?),
+        None,
+        None,
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    store.finalize_terminal_run(manifest.clone(), None).await?;
+    Ok(manifest)
+}
+
+// Keep the actual compile, projection, independent verification and store finalization together.
+#[allow(clippy::too_many_lines)]
+async fn persist_workforce_accepted_result(
+    store: &SqliteScenarioStore,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    suffix: u16,
+) -> Result<StoredAcceptedResultV2, Box<dyn Error>> {
+    let registry = eutheto_domain_api::DomainPackRegistry::builder()
+        .register(eutheto_workforce::WorkforcePack)
+        .build()?;
+    let pack_id = "official.workforce".parse()?;
+    let pack = registry.require(&pack_id)?;
+    let project = store.get_project(scenario_id).await?;
+    let compile_context = CompileContext {
+        objective_context: None,
+        scenario_revision: revision.value(),
+        semantic_metadata: BTreeMap::new(),
+        control: eutheto_types::OperationControl::Cancellation(
+            eutheto_types::CancellationToken::new(),
+        ),
+        planning_limits: PlanningIrLimitsV1::DEFAULT,
+    };
+    let problem = pack.compile(&project.document, &compile_context)?;
+    let mut candidate = CandidateValues::default();
+    for variable in &problem.variables {
+        match variable {
+            Variable::Boolean(variable) => {
+                candidate.booleans.insert(variable.id.clone(), false);
+            }
+            Variable::Integer(variable) => {
+                candidate.integers.insert(variable.id.clone(), 0);
+            }
+            Variable::Interval(_) => {}
+        }
+    }
+    let selected_pair = format!(
+        "{}.{}",
+        workforce_fixture::id(if suffix == 2 { 12 } else { 1 }),
+        workforce_fixture::id(8)
+    );
+    let mut selected = false;
+    for projection in &problem.projections {
+        if projection.entity.id.as_str() != selected_pair {
+            continue;
+        }
+        let ProjectionExpression::Boolean(variable) = &projection.expression else {
+            return Err("Workforce fixture assignment projection is not Boolean".into());
+        };
+        candidate.booleans.insert(variable.clone(), true);
+        selected = true;
+    }
+    if !selected {
+        return Err("Workforce fixture assignment projection is missing".into());
+    }
+    let model_hash = canonical_ir_hash(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let started_at = SystemClock.now();
+    let finished_at = Rfc3339Timestamp::from_timestamp(
+        started_at
+            .as_timestamp()
+            .checked_add(std::time::Duration::from_secs(1))?,
+    );
+    let started = start_solve_with_capture(
+        store,
+        project.document.clone(),
+        NewSolveRunV1 {
+            objective_context: None,
+            run_id: SolveRunId::from_uuid(solution_test_id(0x9100, suffix)?),
+            request_id: RequestId::from_uuid(solution_test_id(0x9200, suffix)?),
+            scenario_id,
+            expected_revision: revision,
+            planning_ir_schema_version: PLANNING_IR_SCHEMA_VERSION,
+            compiler_version: problem.metadata.compiler_version.clone(),
+            application_version: env!("CARGO_PKG_VERSION").to_owned(),
+            backend_id: BackendId::new("synthetic.test")?,
+            backend_version: "1.0.0".to_owned(),
+            adapter_version: "1.0.0".to_owned(),
+            worker_version: "1.0.0".to_owned(),
+            solver_version: "1.0.0".to_owned(),
+            protocol_major: 1,
+            protocol_minor: 0,
+            model_hash: model_hash.clone(),
+            objective_policy_hash: blake3_hex(b"workforce-adoption-objective-policy"),
+            solve_options: solution_test_options()?,
+            temporary_condition_hash: None,
+            started_at,
+        },
+    )
+    .await?;
+    let solution_id = SolutionId::from_uuid(solution_test_id(0x9300, suffix)?);
+    let solution = pack.project(
+        &problem,
+        &candidate,
+        solution_id,
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
+    let scope = pack.verification_scope(
+        &project.document,
+        revision.value(),
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
+    let context = VerificationContextV1::new(
+        scenario_id,
+        revision.value(),
+        started.input.snapshot_document_hash.clone(),
+        model_hash,
+        solution.canonical_hash()?,
+        scope.checksum,
+    )?;
+    let verified_score = pack.score(
+        &project.document,
+        &solution,
+        started.input.objective_context.as_ref(),
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
+    let verification = pack.verify(
+        &project.document,
+        &solution,
+        started.input.objective_context.as_ref(),
+        &context,
+        &verified_score,
+        &eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+    )?;
+    let accepted = AcceptedResult::new(solution, verification)?;
+    let manifest = RunManifest::new(
         started.input.run_id,
         started.input.checksum,
         RunTerminalOutcomeV1::Accepted {
@@ -786,6 +1167,389 @@ async fn persist_application_accepted_result(
     Ok(store.load_accepted_result(solution_id).await?)
 }
 
+fn adoption_request(
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    result: AcceptedResultRefV1,
+    truncate_redo: bool,
+) -> Result<SolutionAdoptBaseRequestV1, Box<dyn Error>> {
+    let ids = SystemIdGenerator;
+    Ok(SolutionAdoptBaseRequestV1 {
+        schema_version: SOLUTION_ADOPT_BASE_SCHEMA_VERSION,
+        request_id: RequestId::new(&ids)?,
+        command_id: CommandId::new(&ids)?,
+        scenario_id,
+        expected_revision,
+        result,
+        actor: ActorRef {
+            actor_id: Some("test.adopter".to_owned()),
+            display_name: "Base adoption test".to_owned(),
+        },
+        truncate_redo,
+    })
+}
+
+fn manual_admission_request(
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    original: AcceptedResultRefV1,
+    assignments: Vec<eutheto_workforce::model::AssignmentPair>,
+) -> Result<ManualSelectionAdmissionRequestV1, Box<dyn Error>> {
+    Ok(ManualSelectionAdmissionRequestV1 {
+        schema_version: eutheto_core::MANUAL_SELECTION_ADMISSION_SCHEMA_VERSION,
+        request_id: request_id()?,
+        command_id: CommandId::new(&SystemIdGenerator)?,
+        scenario_id,
+        expected_revision,
+        actor: ActorRef {
+            actor_id: Some("test.manual".to_owned()),
+            display_name: "Manual selection test".to_owned(),
+        },
+        original,
+        assignments,
+        lock_changes: Vec::new(),
+        truncate_redo: false,
+    })
+}
+
+fn stored_workforce_manual(
+    document: &ScenarioDocument,
+) -> Result<(EntityId, eutheto_workforce::model::ManualSelection), Box<dyn Error>> {
+    let (id, value) = document
+        .domain
+        .entities
+        .iter()
+        .find(|(_, value)| {
+            value.get("kind").and_then(serde_json::Value::as_str) == Some("manualSelection")
+        })
+        .ok_or("Workforce manual selection is missing")?;
+    let eutheto_workforce::model::WorkforceEntity::ManualSelection(manual) =
+        serde_json::from_value(value.clone())?
+    else {
+        return Err("Workforce manual entity has an unexpected kind".into());
+    };
+    Ok((*id, manual))
+}
+
+fn stored_workforce_base(
+    document: &ScenarioDocument,
+) -> Result<eutheto_workforce::model::BaseSchedule, Box<dyn Error>> {
+    let (_, value) = document
+        .domain
+        .entities
+        .iter()
+        .find(|(_, value)| {
+            value.get("kind").and_then(serde_json::Value::as_str) == Some("baseSchedule")
+        })
+        .ok_or("Workforce base schedule is missing")?;
+    let eutheto_workforce::model::WorkforceEntity::BaseSchedule(base) =
+        serde_json::from_value(value.clone())?
+    else {
+        return Err("Workforce base entity has an unexpected kind".into());
+    };
+    Ok(base)
+}
+
+// The saved source, replacement, CAS/no-op, journal, and restart form one durable behavior.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn workforce_base_adoption_replacement_undo_redo_and_restart_preserve_identity()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let generated_base_id = Uuid::parse_str("018f7b40-a000-7000-8000-000000000200")?;
+    let first_dependencies = dependencies_with_fixed_ids(&directory, [generated_base_id])?;
+    let (store, initialization) =
+        SqliteScenarioStore::open(&first_dependencies.paths.database).await?;
+    let store = Arc::new(store);
+    let document = workforce_adoption_document()?;
+    let scenario_id = document.scenario_id;
+    store.create_project(NewProject { document }).await?;
+    let app =
+        EuthetoApp::from_initialized_store(Arc::clone(&store), initialization, first_dependencies)
+            .boxed()?;
+
+    let first =
+        persist_workforce_accepted_result(&store, scenario_id, Revision::INITIAL, 1).await?;
+    let first_ref = AcceptedResultRefV1::from_result(&first.portable.accepted_result)?;
+    let selected = app
+        .execute(AppCommand::SolutionSelect(SolutionSelectRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            request_id: request_id()?,
+            scenario_id,
+            expected_revision: Revision::INITIAL,
+            solution_id: first_ref.solution_id,
+        }))
+        .await
+        .boxed()?;
+    assert!(matches!(selected, AppCommandResult::SolutionSelected(_)));
+    assert!(
+        stored_workforce_base(&store.get_project(scenario_id).await?.document).is_err(),
+        "view selection must not adopt the base schedule"
+    );
+
+    let adopted = app
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            Revision::INITIAL,
+            first_ref.clone(),
+            false,
+        )?))
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(first_receipt) = adopted else {
+        return Err("first base adoption did not return a scenario receipt".into());
+    };
+    assert_eq!(first_receipt.new_revision, Revision::new(1));
+    assert!(first_receipt.inverse.is_some());
+    let first_project = store.get_project(scenario_id).await?;
+    let first_base = stored_workforce_base(&first_project.document)?;
+    assert_eq!(first_base.source_solution_id, first_ref.solution_id);
+    assert_eq!(first_base.source_revision, Revision::INITIAL);
+    assert_eq!(first_base.assignments.len(), 1);
+    let base_id = first_base.id;
+
+    let second =
+        persist_workforce_accepted_result(&store, scenario_id, first_receipt.new_revision, 2)
+            .await?;
+    let second_ref = AcceptedResultRefV1::from_result(&second.portable.accepted_result)?;
+    let replaced = app
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            first_receipt.new_revision,
+            second_ref.clone(),
+            false,
+        )?))
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(second_receipt) = replaced else {
+        return Err("base replacement did not return a scenario receipt".into());
+    };
+    assert_eq!(second_receipt.new_revision, Revision::new(2));
+    let replaced_project = store.get_project(scenario_id).await?;
+    let replaced_base = stored_workforce_base(&replaced_project.document)?;
+    assert_eq!(replaced_base.id, base_id);
+    assert_eq!(replaced_base.source_solution_id, second_ref.solution_id);
+    assert_eq!(replaced_base.source_revision, Revision::new(1));
+    assert_ne!(replaced_base.assignments, first_base.assignments);
+
+    assert!(matches!(
+        app.execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            first_receipt.new_revision,
+            second_ref.clone(),
+            false,
+        )?))
+        .await,
+        Err(AppError::Conflict {
+            expected_revision,
+            actual_revision,
+        }) if expected_revision == Revision::new(1) && actual_revision == Revision::new(2)
+    ));
+    let no_op = app
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            second_receipt.new_revision,
+            second_ref.clone(),
+            false,
+        )?))
+        .await;
+    assert!(matches!(no_op, Err(AppError::Validation(_))));
+    assert_eq!(
+        store.get_project(scenario_id).await?.summary.revision,
+        second_receipt.new_revision
+    );
+
+    let undone = app
+        .execute(AppCommand::Undo {
+            request_id: request_id()?,
+            scenario_id,
+            expected_revision: second_receipt.new_revision,
+        })
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(undo_receipt) = undone else {
+        return Err("base replacement undo did not return a scenario receipt".into());
+    };
+    let undone_base = stored_workforce_base(&store.get_project(scenario_id).await?.document)?;
+    assert_eq!(undone_base, first_base);
+    let redone = app
+        .execute(AppCommand::Redo {
+            request_id: request_id()?,
+            scenario_id,
+            expected_revision: undo_receipt.new_revision,
+        })
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(redo_receipt) = redone else {
+        return Err("base replacement redo did not return a scenario receipt".into());
+    };
+    assert_eq!(redo_receipt.new_revision, Revision::new(4));
+    let redone_base = stored_workforce_base(&store.get_project(scenario_id).await?.document)?;
+    assert_eq!(redone_base.id, base_id);
+    assert_eq!(redone_base, replaced_base);
+
+    drop(app);
+    drop(store);
+    let dependencies = dependencies(&directory)?;
+    let (reopened_store, initialization) =
+        SqliteScenarioStore::open(&dependencies.paths.database).await?;
+    let reopened_store = Arc::new(reopened_store);
+    let reopened = EuthetoApp::from_initialized_store(
+        Arc::clone(&reopened_store),
+        initialization,
+        dependencies,
+    )
+    .boxed()?;
+    let restarted_base =
+        stored_workforce_base(&reopened_store.get_project(scenario_id).await?.document)?;
+    assert_eq!(restarted_base.id, base_id);
+    assert_eq!(restarted_base.source_solution_id, second_ref.solution_id);
+    assert_eq!(
+        reopened_store
+            .get_project(scenario_id)
+            .await?
+            .summary
+            .revision,
+        redo_receipt.new_revision
+    );
+    drop(reopened);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workforce_manual_admission_rejects_unapproved_worker_source() -> Result<(), Box<dyn Error>>
+{
+    let directory = private_tempdir()?;
+    let dependencies = dependencies(&directory)?;
+    let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database).await?;
+    let store = Arc::new(store);
+    let document = workforce_adoption_document()?;
+    let scenario_id = document.scenario_id;
+    store.create_project(NewProject { document }).await?;
+    let app = EuthetoApp::from_initialized_store(Arc::clone(&store), initialization, dependencies)
+        .boxed()?;
+
+    let accepted =
+        persist_workforce_accepted_result(&store, scenario_id, Revision::INITIAL, 1).await?;
+    let original_ref = AcceptedResultRefV1::from_result(&accepted.portable.accepted_result)?;
+    let adopted = app
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            Revision::INITIAL,
+            original_ref.clone(),
+            false,
+        )?))
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(adoption_receipt) = adopted else {
+        return Err("Workforce base adoption did not return a scenario receipt".into());
+    };
+    let source_base = stored_workforce_base(&store.get_project(scenario_id).await?.document)?;
+    let Err(error) = app
+        .admit_manual_selection(
+            manual_admission_request(
+                scenario_id,
+                adoption_receipt.new_revision,
+                original_ref,
+                source_base.assignments,
+            )?,
+            eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+        )
+        .await
+    else {
+        return Err("a synthetic backend was admitted without approved worker observations".into());
+    };
+    assert!(matches!(
+        error,
+        AppError::Verification(failure) if failure.code == "solution.reverification_mismatch"
+    ));
+    let current = store.get_project(scenario_id).await?;
+    assert_eq!(current.summary.revision, adoption_receipt.new_revision);
+    assert!(stored_workforce_manual(&current.document).is_err());
+    assert_eq!(store.history(scenario_id).await?.len(), 1);
+    let Err(error) = app
+        .manual_edit(
+            eutheto_core::ManualEditRequestV1::Read {
+                schema_version: 1,
+                request_id: RequestId::new(&SystemIdGenerator)?,
+                scenario_id,
+                expected_revision: adoption_receipt.new_revision,
+                offset: 0,
+                limit: 10,
+            },
+            eutheto_types::OperationControl::Cancellation(eutheto_types::CancellationToken::new()),
+        )
+        .await
+    else {
+        return Err("guided read authenticated a synthetic worker source".into());
+    };
+    assert!(matches!(error, AppError::Verification(failure)
+        if failure.code == "solution.reverification_mismatch"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workforce_base_adoption_rejects_stale_current_entity_without_history()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let dependencies = dependencies(&directory)?;
+    let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database).await?;
+    let store = Arc::new(store);
+    let document = workforce_adoption_document()?;
+    let scenario_id = document.scenario_id;
+    store.create_project(NewProject { document }).await?;
+    let app = EuthetoApp::from_initialized_store(Arc::clone(&store), initialization, dependencies)
+        .boxed()?;
+    let accepted =
+        persist_workforce_accepted_result(&store, scenario_id, Revision::INITIAL, 3).await?;
+    let accepted_ref = AcceptedResultRefV1::from_result(&accepted.portable.accepted_result)?;
+    let remove = app
+        .execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: CommandEnvelope {
+                command_id: CommandId::new(&SystemIdGenerator)?,
+                scenario_id,
+                expected_revision: Revision::INITIAL,
+                actor: ActorRef {
+                    actor_id: Some("test.stale".to_owned()),
+                    display_name: "Stale base test".to_owned(),
+                },
+                source: CommandSource::System,
+                command: ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+                    command_type: eutheto_workforce::commands::REMOVE_ENTITY.to_owned(),
+                    payload: json!({"entityId": workforce_fixture::id(1)}),
+                }),
+            },
+            truncate_redo: false,
+        })
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(remove_receipt) = remove else {
+        return Err("stale-base setup did not return a scenario receipt".into());
+    };
+    assert_eq!(remove_receipt.new_revision, Revision::new(1));
+
+    let rejected = app
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            remove_receipt.new_revision,
+            accepted_ref,
+            false,
+        )?))
+        .await;
+    assert!(matches!(rejected, Err(AppError::Validation(_))));
+    assert_eq!(
+        store.get_project(scenario_id).await?.summary.revision,
+        remove_receipt.new_revision
+    );
+    let history = app.query(AppQuery::History(scenario_id)).await.boxed()?;
+    let AppQueryResult::History(history) = history else {
+        return Err("stale-base history query returned an unexpected result".into());
+    };
+    assert_eq!(history.len(), 1);
+    Ok(())
+}
+
 struct SolutionApplicationFixture {
     app: EuthetoApp,
     store: Arc<SqliteScenarioStore>,
@@ -814,8 +1578,14 @@ async fn solution_application_fixture(
     let AppCommandResult::ScenarioCommand(first) = first else {
         return Err("expected first scenario command result".into());
     };
-    let stale =
-        persist_application_accepted_result(&store, scenario_id, first.new_revision, 1).await?;
+    let stale = persist_application_accepted_result(
+        &store,
+        scenario_id,
+        first.new_revision,
+        1,
+        b"solution-api-objective-policy",
+    )
+    .await?;
     let second = app
         .execute(AppCommand::ApplyScenario {
             request_id: request_id()?,
@@ -827,8 +1597,14 @@ async fn solution_application_fixture(
     let AppCommandResult::ScenarioCommand(second) = second else {
         return Err("expected second scenario command result".into());
     };
-    let current =
-        persist_application_accepted_result(&store, scenario_id, second.new_revision, 2).await?;
+    let current = persist_application_accepted_result(
+        &store,
+        scenario_id,
+        second.new_revision,
+        2,
+        b"solution-api-objective-policy",
+    )
+    .await?;
     Ok(SolutionApplicationFixture {
         app,
         store,
@@ -836,6 +1612,225 @@ async fn solution_application_fixture(
         stale,
         current,
     })
+}
+
+#[cfg(debug_assertions)]
+fn reseal_application_forged_score(
+    path: &std::path::Path,
+    portable: &PortableAcceptedResult,
+) -> Result<(), Box<dyn Error>> {
+    let original = &portable.accepted_result;
+    let original_report = &original.verification;
+    let context = VerificationContextV1::new(
+        original_report.scenario_id,
+        original_report.evaluated_revision,
+        original_report.document_hash.clone(),
+        original_report.planning_model_hash.clone(),
+        original.solution.canonical_hash()?,
+        original_report.verification_scope_checksum.clone(),
+    )?;
+    let mut score = original_report.score.clone();
+    let level = score.levels.first_mut().ok_or("missing score level")?;
+    level.value = level.value.checked_add(1).ok_or("score overflow")?;
+    let report = VerificationReport::new(
+        &context,
+        original_report.required_rule_results.clone(),
+        score,
+        original_report.warnings.clone(),
+        original_report.metrics.clone(),
+    )?;
+    let accepted = AcceptedResult::new(original.solution.clone(), report)?;
+    let RunTerminalOutcomeV1::Accepted { status, .. } = &portable.run_manifest.outcome else {
+        return Err("accepted fixture has no accepted terminal outcome".into());
+    };
+    let manifest = RunManifest::new(
+        portable.run_manifest.run_id,
+        portable.run_manifest.run_input_checksum.clone(),
+        RunTerminalOutcomeV1::Accepted {
+            status: *status,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+        portable.run_manifest.started_at,
+        portable.run_manifest.finished_at,
+        portable.run_manifest.elapsed_milliseconds,
+        portable.run_manifest.first_incumbent_milliseconds,
+        portable.run_manifest.first_verified_feasible_milliseconds,
+        portable.run_manifest.phase_timings,
+        portable.run_manifest.verification_warnings.clone(),
+    )?;
+    let forged = PortableAcceptedResult::new(
+        portable.run_input.clone(),
+        manifest,
+        accepted,
+        portable.evidence.clone(),
+    )?;
+    let connection = Connection::open(path)?;
+    connection.execute(
+        "UPDATE solutions SET normalized_solution_json = ?1, score_json = ?2, verification_report_json = ?3 WHERE id = ?4",
+        rusqlite::params![
+            serde_json::to_string(&forged.accepted_result.solution)?,
+            serde_json::to_string(&forged.accepted_result.verification.score)?,
+            serde_json::to_string(&forged.accepted_result.verification)?,
+            forged.accepted_result.solution.solution_id.to_string(),
+        ],
+    )?;
+    connection.execute(
+        "UPDATE solve_runs SET run_manifest_json = ?1 WHERE id = ?2",
+        rusqlite::params![
+            serde_json::to_string(&forged.run_manifest)?,
+            forged.run_manifest.run_id.to_string(),
+        ],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn accepted_snapshot_fresh_gate_rejects_coherent_reseal_after_cache()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let solution_id = fixture
+        .current
+        .portable
+        .accepted_result
+        .solution
+        .solution_id;
+    let summary = fixture
+        .app
+        .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id,
+        }))
+        .await
+        .boxed()?;
+    assert!(matches!(summary, AppQueryResult::SolutionSummary(_)));
+    let view = fixture
+        .app
+        .query(AppQuery::SolutionGetView(SolutionViewRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id,
+            view_id: "official.test.result.summary".to_owned(),
+            parameters: json!({}),
+            continuation: None,
+        }))
+        .await
+        .boxed()?;
+    assert!(matches!(view, AppQueryResult::SolutionView(_)));
+
+    reseal_application_forged_score(
+        &directory.path().join("eutheto.sqlite"),
+        &fixture.current.portable,
+    )?;
+    let AppQueryResult::SolutionList(list) = fixture
+        .app
+        .query(AppQuery::SolutionList(SolutionListRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+        }))
+        .await
+        .boxed()?
+    else {
+        return Err("expected saved result metadata list".into());
+    };
+    assert!(!list.freshly_verified);
+    assert_ne!(
+        list.solutions
+            .iter()
+            .find(|entry| entry.result.solution_id == solution_id)
+            .ok_or("missing saved result metadata")?
+            .score,
+        fixture.current.portable.accepted_result.verification.score
+    );
+
+    let Err(detail_error) = fixture
+        .app
+        .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id,
+        }))
+        .await
+    else {
+        return Err("coherent forged detail must fail fresh verification".into());
+    };
+    assert!(matches!(
+        detail_error,
+        AppError::Verification(failure) if failure.code == "solution.reverification_mismatch"
+    ));
+    let Err(view_error) = fixture
+        .app
+        .query(AppQuery::SolutionGetView(SolutionViewRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id,
+            view_id: "official.test.result.summary".to_owned(),
+            parameters: json!({}),
+            continuation: None,
+        }))
+        .await
+    else {
+        return Err("coherent forged view must fail fresh verification".into());
+    };
+    assert!(matches!(
+        view_error,
+        AppError::Verification(failure) if failure.code == "solution.reverification_mismatch"
+    ));
+    let Err(scenario_error) = fixture
+        .app
+        .query(AppQuery::ExportScenario {
+            scenario_id: fixture.scenario_id,
+            cancellation: fixture.app.setup_cancellation(),
+        })
+        .await
+    else {
+        return Err("scenario archive must not export a coherently forged local result".into());
+    };
+    assert!(matches!(
+        scenario_error,
+        AppError::Verification(failure) if failure.code == "solution.reverification_mismatch"
+    ));
+    let Err(backup_error) = fixture
+        .app
+        .query(AppQuery::ExportBackup {
+            cancellation: fixture.app.setup_cancellation(),
+            title: "Accepted result backup".to_owned(),
+            selection: BackupSelection {
+                include_results: true,
+                assets: BackupAssetSelection::IncludeAll,
+                include_audit: false,
+            },
+        })
+        .await
+    else {
+        return Err("result-inclusive backup must not export forged acceptance".into());
+    };
+    assert!(matches!(
+        backup_error,
+        AppError::Verification(failure) if failure.code == "solution.reverification_mismatch"
+    ));
+    assert!(matches!(
+        fixture
+            .app
+            .query(AppQuery::ExportBackup {
+                cancellation: fixture.app.setup_cancellation(),
+                title: "Editable backup without results".to_owned(),
+                selection: BackupSelection {
+                    include_results: false,
+                    assets: BackupAssetSelection::IncludeAll,
+                    include_audit: false,
+                },
+            })
+            .await
+            .boxed()?,
+        AppQueryResult::BackupBundle { .. }
+    ));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -879,6 +1874,8 @@ async fn accepted_view_releases_capture_lock_and_keeps_exact_result_document()
                 scenario_id,
                 solution_id: expected.solution_id,
                 view_id: "official.test.result.summary".to_owned(),
+                parameters: json!({}),
+                continuation: None,
             }))
             .await
         }
@@ -953,6 +1950,8 @@ async fn accepted_view_reports_cancellation_without_cancelling_sibling_reads()
             .solution
             .solution_id,
         view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
     };
     let cancellation = app.setup_cancellation();
     gate.armed.store(true, Ordering::SeqCst);
@@ -976,6 +1975,250 @@ async fn accepted_view_reports_cancellation_without_cancelling_sibling_reads()
         .await
         .boxed()?;
     assert_eq!(sibling.view.data["entityCount"], 2);
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_accepted_source_read_cancels_promptly_while_actor_finishes_unrelated_commit()
+-> Result<(), Box<dyn Error>> {
+    struct ReleaseHook(Option<CommandCommitTestHook>);
+    impl ReleaseHook {
+        fn release(&mut self) {
+            if let Some(hook) = self.0.take() {
+                hook.release();
+            }
+        }
+    }
+    impl Drop for ReleaseHook {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let other_scenario = create_project(&fixture.app, "Independent actor commit").await?;
+    let dependencies = dependencies(&directory)?;
+    let hook = CommandCommitTestHook::new(CommandCommitTestPhase::BeforeFinalCancellationCheck);
+    let (store, initialization) = SqliteScenarioStore::open_with_options(
+        &dependencies.paths.database,
+        OpenOptions::new(SnapshotPolicy::default()).with_command_commit_test_hook(hook.clone()),
+    )
+    .await?;
+    let store = Arc::new(store);
+    let app = EuthetoApp::from_initialized_store(Arc::clone(&store), initialization, dependencies)
+        .boxed()?;
+    let request = SolutionViewRequestV1 {
+        schema_version: SOLUTION_API_SCHEMA_VERSION,
+        scenario_id: fixture.scenario_id,
+        solution_id: fixture
+            .current
+            .portable
+            .accepted_result
+            .solution
+            .solution_id,
+        view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
+    };
+    let command = AppCommand::ApplyScenario {
+        request_id: request_id()?,
+        envelope: add_entity_envelope(other_scenario, Revision::INITIAL, "pending")?,
+        truncate_redo: false,
+    };
+    let committing = tokio::spawn({
+        let app = app.clone();
+        async move { app.execute(command).await }
+    });
+    let reached = hook.clone();
+    tokio::task::spawn_blocking(move || reached.wait_until_reached()).await?;
+    let mut release = ReleaseHook(Some(hook));
+    let cancellation = app.setup_cancellation();
+    let mut reading = tokio::spawn({
+        let app = app.clone();
+        let request = request.clone();
+        let cancellation = cancellation.clone();
+        async move {
+            app.solution_view_with_cancellation(request, cancellation)
+                .await
+        }
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut reading)
+            .await
+            .is_err(),
+        "accepted source read did not queue behind the paused actor"
+    );
+    cancellation.cancel();
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(2), reading).await??;
+    assert!(matches!(
+        cancelled,
+        Err(AppError::Protocol(error)) if error.code == "operation.cancelled"
+    ));
+    release.release();
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), committing)
+            .await??
+            .boxed()?,
+        AppCommandResult::ScenarioCommand(_)
+    ));
+    let sibling = app
+        .solution_view_with_cancellation(request, app.setup_cancellation())
+        .await
+        .boxed()?;
+    assert_eq!(sibling.view.data["entityCount"], 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_accepted_view_returns_before_blocked_verifier_and_does_not_cache_it()
+-> Result<(), Box<dyn Error>> {
+    use setup_control::{ControlledPack, PauseAt, PreparationGate, ReleaseOnDrop};
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let gate = Arc::new(PreparationGate::default());
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    gate.pause_at.store(PauseAt::Score as u8, Ordering::SeqCst);
+    let registry = eutheto_domain_api::DomainPackRegistry::builder()
+        .register(ControlledPack {
+            pack: eutheto_command::OfficialTestPack,
+            gate: Arc::clone(&gate),
+        })
+        .build()?;
+    let app = EuthetoApp::from_initialized_store_with_pack_registry(
+        Arc::clone(&fixture.store),
+        fixture.app.initialization().clone(),
+        dependencies(&directory)?,
+        registry,
+    )
+    .boxed()?;
+    let request = SolutionViewRequestV1 {
+        schema_version: SOLUTION_API_SCHEMA_VERSION,
+        scenario_id: fixture.scenario_id,
+        solution_id: fixture
+            .current
+            .portable
+            .accepted_result
+            .solution
+            .solution_id,
+        view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
+    };
+    let cancellation = app.setup_cancellation();
+    gate.armed.store(true, Ordering::SeqCst);
+    let reading = tokio::spawn({
+        let app = app.clone();
+        let request = request.clone();
+        let cancellation = cancellation.clone();
+        async move {
+            app.solution_view_with_cancellation(request, cancellation)
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified()).await?;
+    cancellation.cancel();
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(2), reading).await??;
+    assert!(matches!(
+        cancelled,
+        Err(AppError::Protocol(error)) if error.code == "operation.cancelled"
+    ));
+    gate.release();
+    let sibling = app
+        .solution_view_with_cancellation(request, app.setup_cancellation())
+        .await
+        .boxed()?;
+    assert_eq!(sibling.view.data["entityCount"], 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepted_views_bound_captured_results_through_blocked_projection()
+-> Result<(), Box<dyn Error>> {
+    use setup_control::{ControlledPack, PauseAt, PreparationGate, ReleaseOnDrop};
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let gate = Arc::new(PreparationGate::default());
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    gate.pause_at.store(PauseAt::View as u8, Ordering::SeqCst);
+    // The fifth pause detects an accidental admission past the four captured-result slots.
+    gate.remaining_pauses.store(5, Ordering::SeqCst);
+    let registry = eutheto_domain_api::DomainPackRegistry::builder()
+        .register(ControlledPack {
+            pack: eutheto_command::OfficialTestPack,
+            gate: Arc::clone(&gate),
+        })
+        .build()?;
+    let app = EuthetoApp::from_initialized_store_with_pack_registry(
+        Arc::clone(&fixture.store),
+        fixture.app.initialization().clone(),
+        dependencies(&directory)?,
+        registry,
+    )
+    .boxed()?;
+    let request = SolutionViewRequestV1 {
+        schema_version: SOLUTION_API_SCHEMA_VERSION,
+        scenario_id: fixture.scenario_id,
+        solution_id: fixture
+            .current
+            .portable
+            .accepted_result
+            .solution
+            .solution_id,
+        view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
+    };
+    let mut readers = Vec::new();
+    for _ in 0..4 {
+        let app = app.clone();
+        let request = request.clone();
+        readers.push(tokio::spawn(async move {
+            app.solution_view_with_cancellation(request, app.setup_cancellation())
+                .await
+        }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while gate.entered_count.load(Ordering::SeqCst) != 4 {
+            gate.entered.notified().await;
+        }
+    })
+    .await?;
+    let fifth_cancellation = app.setup_cancellation();
+    let fifth = tokio::spawn({
+        let app = app.clone();
+        let request = request.clone();
+        let cancellation = fifth_cancellation.clone();
+        async move {
+            app.solution_view_with_cancellation(request, cancellation)
+                .await
+        }
+    });
+    let fifth_entered = tokio::time::timeout(std::time::Duration::from_millis(300), async {
+        while gate.entered_count.load(Ordering::SeqCst) != 5 {
+            gate.entered.notified().await;
+        }
+    })
+    .await;
+    assert!(
+        fifth_entered.is_err(),
+        "a fifth captured view entered blocked projection"
+    );
+    fifth_cancellation.cancel();
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(2), fifth).await??;
+    assert!(matches!(
+        cancelled,
+        Err(AppError::Protocol(error)) if error.code == "operation.cancelled"
+    ));
+    gate.release();
+    for reader in readers {
+        assert_eq!(
+            reader.await?.boxed()?.view.data["entityCount"],
+            2,
+            "admitted views still return their verified original document"
+        );
+    }
     Ok(())
 }
 
@@ -1129,23 +2372,19 @@ async fn concurrent_mutations_serialize_per_scenario_without_a_global_lock()
     let same_scenario_serialized = same_scenario_result.is_none() && clock.calls_after_arm() == 1;
 
     let calls_before_independent = clock.calls_after_arm();
-    let mut independent = Box::pin(app.execute(AppCommand::ApplyScenario {
-        request_id: request_id()?,
-        envelope: independent_command,
-        truncate_redo: false,
-    }));
-    let mut independent_result = None;
-    poll_fn(|context| {
-        if let Poll::Ready(result) = independent.as_mut().poll(context) {
-            independent_result = Some(result);
-        }
-        Poll::Ready(())
-    })
+    // Custody reads may yield: prove completion before release, not progress in a single poll.
+    let independent_result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        app.execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: independent_command,
+            truncate_redo: false,
+        }),
+    )
     .await;
-    let independent_made_progress = clock.calls_after_arm() > calls_before_independent;
-    if independent_made_progress && independent_result.is_none() {
-        independent_result = Some(independent.await);
-    }
+    let independent_made_progress =
+        independent_result.is_ok() && clock.calls_after_arm() > calls_before_independent;
+    let independent_result = independent_result.ok();
 
     tokio::task::spawn_blocking(move || {
         release.wait();
@@ -1855,7 +3094,9 @@ async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_s
     drop(target);
     let (store, _) =
         SqliteScenarioStore::open(target_directory.path().join("eutheto.sqlite")).await?;
-    let snapshot = store.library_snapshot().await?;
+    let snapshot = store
+        .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+        .await?;
     assert_eq!(snapshot.revision, Revision::INITIAL);
     assert!(snapshot.projects.is_empty());
     assert!(snapshot.provenance.is_empty());
@@ -1918,7 +3159,9 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
     drop(target);
     let (store, _) =
         SqliteScenarioStore::open(target_directory.path().join("eutheto.sqlite")).await?;
-    let snapshot = store.library_snapshot().await?;
+    let snapshot = store
+        .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+        .await?;
     assert_eq!(snapshot.revision, Revision::INITIAL);
     assert!(snapshot.projects.is_empty());
     assert!(snapshot.provenance.is_empty());
@@ -2359,6 +3602,7 @@ async fn seed_local_identity_closure(
             id_remap: BTreeMap::new(),
         }],
         scenario_revisions: vec![historical],
+        reference_remap: BTreeMap::new(),
         results: BTreeMap::from([(result_id.to_owned(), result)]),
         shared_records: BTreeMap::new(),
         preferences: BTreeMap::new(),
@@ -2758,7 +4002,9 @@ async fn portable_preview_rejects_derived_titles_exceeding_retained_budget_witho
     drop(target);
     let (store, _) =
         SqliteScenarioStore::open(target_directory.path().join("eutheto.sqlite")).await?;
-    let snapshot = store.library_snapshot().await?;
+    let snapshot = store
+        .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+        .await?;
     assert_eq!(snapshot.revision, Revision::INITIAL);
     assert!(snapshot.projects.is_empty());
     assert!(snapshot.provenance.is_empty());
@@ -4422,8 +5668,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
 }
 
 #[tokio::test]
-async fn deferred_solve_solution_and_ai_calls_are_typed_unsupported() -> Result<(), Box<dyn Error>>
-{
+async fn deferred_solve_and_ai_calls_are_typed_unsupported() -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     for capability in [
@@ -4437,7 +5682,6 @@ async fn deferred_solve_solution_and_ai_calls_are_typed_unsupported() -> Result<
     }
     for capability in [
         DeferredCapability::Solve,
-        DeferredCapability::Solution,
         DeferredCapability::ArtificialIntelligence,
     ] {
         assert!(matches!(
@@ -4993,14 +6237,19 @@ async fn support_preview_is_deterministic_and_structurally_redacted() -> Result<
 async fn query_solution_explanation(
     app: &EuthetoApp,
     scenario_id: ScenarioId,
+    source_revision: Revision,
     subject: ExplanationRequestSubjectV1,
-) -> Result<SolutionExplanationDtoV1, Box<dyn Error>> {
+) -> Result<SolutionExplanationDtoV2, Box<dyn Error>> {
     match app
-        .query(AppQuery::SolutionExplain(SolutionExplainRequestV1 {
-            schema_version: SOLUTION_API_SCHEMA_VERSION,
-            scenario_id,
-            request: ExplanationRequestV1::new(subject)?,
-        }))
+        .query(AppQuery::SolutionExplain {
+            request: SolutionExplainRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                scenario_id,
+                request: ExplanationRequestV1::new(subject)?,
+            },
+            source_revision,
+            control: eutheto_types::OperationControl::Cancellation(app.setup_cancellation()),
+        })
         .await
         .boxed()?
     {
@@ -5072,6 +6321,8 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
             scenario_id: fixture.scenario_id,
             solution_id: current_ref.solution_id,
             view_id: "official.test.result.summary".to_owned(),
+            parameters: json!({}),
+            continuation: None,
         }))
         .await
         .boxed()?
@@ -5104,10 +6355,11 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
         fixture.current.portable.accepted_result.verification
     );
 
+    // Historical synthetic records have no admitted source scoring projection.
     let comparison = match fixture
         .app
-        .query(AppQuery::SolutionCompare(SolutionCompareRequestV1 {
-            schema_version: SOLUTION_API_SCHEMA_VERSION,
+        .query(AppQuery::SolutionCompareV3(SolutionCompareRequestV3 {
+            schema_version: SOLUTION_COMPARE_SCHEMA_VERSION,
             scenario_id: fixture.scenario_id,
             base_solution_id: stale_ref.solution_id,
             candidate_solution_id: current_ref.solution_id,
@@ -5115,14 +6367,32 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
         .await
         .boxed()?
     {
-        AppQueryResult::SolutionComparison(comparison) => comparison,
+        AppQueryResult::SolutionComparisonV3(comparison) => comparison,
         other => return Err(format!("unexpected solution comparison result: {other:?}").into()),
     };
-    assert_eq!(comparison.comparison.base.accepted_result, stale_ref);
-    assert_eq!(comparison.comparison.candidate.accepted_result, current_ref);
+    assert_eq!(
+        comparison.current_revision,
+        Revision::try_new(fixture.current.portable.scenario_revision)?
+    );
+    let difference = comparison.comparison;
+    assert!(matches!(
+        difference.score,
+        ScoreComparisonV2::Unavailable {
+            reason: ScoreComparisonUnavailableReasonV1::PolicyOrScopeMismatch
+        }
+    ));
+    difference.validate()?;
+    assert_eq!(difference.base.accepted_result, stale_ref);
+    assert_eq!(difference.candidate.accepted_result, current_ref);
     assert_ne!(
-        comparison.comparison.base.scenario_revision,
-        comparison.comparison.candidate.scenario_revision
+        difference.base.scenario_revision,
+        difference.candidate.scenario_revision
+    );
+    let runs = difference.runs;
+    assert_eq!(runs.base.run_id, fixture.stale.portable.run_input.run_id);
+    assert_eq!(
+        runs.candidate.run_id,
+        fixture.current.portable.run_input.run_id
     );
 
     let assignment_id = fixture
@@ -5142,20 +6412,6 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
             ExplanationKind::Assignment,
         ),
         (
-            ExplanationRequestSubjectV1::SolutionDifference {
-                left: stale_ref.clone(),
-                right: current_ref.clone(),
-            },
-            ExplanationKind::SolutionDifference,
-        ),
-        (
-            ExplanationRequestSubjectV1::Repair {
-                current: current_ref.clone(),
-                base: stale_ref.clone(),
-            },
-            ExplanationKind::Repair,
-        ),
-        (
             ExplanationRequestSubjectV1::OptimalityStatus {
                 solve_run_id: fixture.current.portable.run_input.run_id,
                 run_manifest_checksum: fixture.current.portable.run_manifest.checksum.clone(),
@@ -5165,13 +6421,78 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
         ),
     ];
     for (subject, expected_kind) in subjects {
-        let result = query_solution_explanation(&fixture.app, fixture.scenario_id, subject).await?;
+        let result = query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            Revision::try_new(fixture.current.portable.scenario_revision)?,
+            subject,
+        )
+        .await?;
         assert_eq!(result.explanation.evidence.kind(), expected_kind);
         assert_eq!(
             result.explanation.rendered.evidence_checksum,
             result.explanation.evidence.checksum
         );
         result.explanation.validate()?;
+    }
+    for subject in [
+        ExplanationRequestSubjectV1::SolutionDifference {
+            left: stale_ref.clone(),
+            right: current_ref.clone(),
+        },
+        ExplanationRequestSubjectV1::Repair {
+            current: current_ref.clone(),
+            base: stale_ref.clone(),
+        },
+    ] {
+        let repair = matches!(&subject, ExplanationRequestSubjectV1::Repair { .. });
+        let explanation = query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            Revision::try_new(fixture.current.portable.scenario_revision)?,
+            subject,
+        )
+        .await?;
+        explanation.explanation.validate()?;
+        let base_revision = Revision::try_new(fixture.stale.portable.scenario_revision)?;
+        let current_revision = Revision::try_new(fixture.current.portable.scenario_revision)?;
+        assert_eq!(
+            explanation.scenario_revisions,
+            if repair {
+                vec![current_revision, base_revision]
+            } else {
+                vec![base_revision, current_revision]
+            },
+        );
+        let comparison = match &explanation.explanation.evidence.evidence {
+            ExplanationEvidencePayloadV2::SolutionDifference { comparison } if !repair => {
+                comparison.as_ref()
+            }
+            ExplanationEvidencePayloadV2::Repair {
+                repair: repair_evidence,
+            } if repair => {
+                assert_eq!(
+                    repair_evidence.causality,
+                    eutheto_domain_ir::RepairCausalityV1::NotEstablished
+                );
+                &repair_evidence.comparison
+            }
+            _ => return Err("cross-revision explanation returned the wrong subject".into()),
+        };
+        assert_eq!(comparison.base.accepted_result, stale_ref);
+        assert_eq!(comparison.candidate.accepted_result, current_ref);
+        assert_eq!(
+            comparison.runs.base.run_id,
+            fixture.stale.portable.run_input.run_id
+        );
+        assert_eq!(
+            comparison.runs.candidate.run_id,
+            fixture.current.portable.run_input.run_id
+        );
+        assert!(matches!(
+            comparison.score,
+            ScoreComparisonV2::Unavailable { .. }
+        ));
     }
 
     assert!(matches!(
@@ -5202,6 +6523,7 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
         query_solution_explanation(
             &fixture.app,
             fixture.scenario_id,
+            Revision::try_new(fixture.current.portable.scenario_revision)?,
             ExplanationRequestSubjectV1::Assignment {
                 result: wrong_ref,
                 assignment_id: fixture
@@ -5218,24 +6540,384 @@ async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Resul
         .is_err()
     );
 
-    for subject in [
-        ExplanationRequestSubjectV1::Validation { issue_id: None },
-        ExplanationRequestSubjectV1::Infeasibility {
-            solve_run_id: fixture.current.portable.run_input.run_id,
-            run_manifest_checksum: fixture.current.portable.run_manifest.checksum.clone(),
-            conflict_id: None,
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn validation_explanation_binds_native_issue_identity_and_rejects_stale_or_forged_requests()
+-> Result<(), Box<dyn Error>> {
+    use setup_control::{ControlledPack, PauseAt, PreparationGate, ReleaseOnDrop};
+
+    let directory = private_tempdir()?;
+    let app_dependencies = dependencies(&directory)?;
+    let (store, initialization) =
+        SqliteScenarioStore::open(&app_dependencies.paths.database).await?;
+    let store = Arc::new(store);
+    let app =
+        EuthetoApp::from_initialized_store(Arc::clone(&store), initialization, app_dependencies)
+            .boxed()?;
+    let scenario_id = create_project(&app, "Validation explanation").await?;
+    app.execute(AppCommand::ApplyScenario {
+        request_id: request_id()?,
+        envelope: invalid_add_entity_envelope(scenario_id, Revision::INITIAL)?,
+        truncate_redo: false,
+    })
+    .await
+    .boxed()?;
+
+    let full = app
+        .full_validate_setup(
+            scenario_id,
+            Revision::new(1),
+            OperationId::new(&SystemIdGenerator)?,
+            app.setup_cancellation(),
+        )
+        .await
+        .boxed()?;
+    let native_issue = full.report.issues.first().ok_or("missing native issue")?;
+    let issue_id = full
+        .issue_ids
+        .first()
+        .cloned()
+        .ok_or("missing native issue ID")?;
+    assert_eq!(full.issue_ids.len(), full.report.issues.len());
+
+    let gate = Arc::new(PreparationGate::default());
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let registry = eutheto_domain_api::DomainPackRegistry::builder()
+        .register(ControlledPack {
+            pack: eutheto_command::OfficialTestPack,
+            gate: Arc::clone(&gate),
+        })
+        .build()?;
+    let controlled = EuthetoApp::from_initialized_store_with_pack_registry(
+        Arc::clone(&store),
+        app.initialization().clone(),
+        dependencies(&directory)?,
+        registry,
+    )
+    .boxed()?;
+
+    let explained = query_solution_explanation(
+        &controlled,
+        scenario_id,
+        Revision::new(1),
+        ExplanationRequestSubjectV1::Validation {
+            issue_id: Some(issue_id.clone()),
         },
-    ] {
+    )
+    .await?;
+    let ExplanationEvidencePayloadV2::Validation { issue } =
+        &explained.explanation.evidence.evidence
+    else {
+        return Err("validation explanation returned the wrong evidence kind".into());
+    };
+    assert_eq!(issue.issue_id, issue_id);
+    assert_eq!(issue.message_key, native_issue.code);
+    assert_eq!(explained.scenario_revisions, vec![Revision::new(1)]);
+    assert_eq!(explained.current_revision, Revision::new(1));
+
+    let forged_id = VerificationIssueId::new(format!("validation.issue.{}", "0".repeat(64)))?;
+    let forged = controlled
+        .query(AppQuery::SolutionExplain {
+            request: SolutionExplainRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                scenario_id,
+                request: ExplanationRequestV1::new(ExplanationRequestSubjectV1::Validation {
+                    issue_id: Some(forged_id),
+                })?,
+            },
+            source_revision: Revision::new(1),
+            control: eutheto_types::OperationControl::Cancellation(controlled.setup_cancellation()),
+        })
+        .await;
+    assert!(matches!(forged, Err(AppError::Unsupported(_))));
+
+    gate.pause_at
+        .store(PauseAt::FullValidation as u8, Ordering::SeqCst);
+    gate.armed.store(true, Ordering::SeqCst);
+    let stale_request = ExplanationRequestV1::new(ExplanationRequestSubjectV1::Validation {
+        issue_id: Some(issue_id.clone()),
+    })?;
+    let pending = tokio::spawn({
+        let controlled = controlled.clone();
+        async move {
+            controlled
+                .query(AppQuery::SolutionExplain {
+                    request: SolutionExplainRequestV1 {
+                        schema_version: SOLUTION_API_SCHEMA_VERSION,
+                        scenario_id,
+                        request: stale_request,
+                    },
+                    source_revision: Revision::new(1),
+                    control: eutheto_types::OperationControl::Cancellation(
+                        controlled.setup_cancellation(),
+                    ),
+                })
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified()).await?;
+    let committed = controlled
+        .execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: add_entity_envelope(scenario_id, Revision::new(1), "stale")?,
+            truncate_redo: false,
+        })
+        .await
+        .boxed();
+    gate.release();
+    committed?;
+    let stale = tokio::time::timeout(std::time::Duration::from_secs(10), pending).await??;
+    assert!(stale.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn optimality_status_explanation_binds_terminal_run_and_provenance()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let current_revision = Revision::new(fixture.current.portable.scenario_revision);
+    let stale_ref = AcceptedResultRefV1::from_result(&fixture.stale.portable.accepted_result)?;
+
+    // A retained accepted result from an older source stays bound to that historical snapshot.
+    let stale_status = query_solution_explanation(
+        &fixture.app,
+        fixture.scenario_id,
+        Revision::try_new(fixture.stale.portable.scenario_revision)?,
+        ExplanationRequestSubjectV1::OptimalityStatus {
+            solve_run_id: fixture.stale.portable.run_input.run_id,
+            run_manifest_checksum: fixture.stale.portable.run_manifest.checksum.clone(),
+            result: Some(stale_ref.clone()),
+        },
+    )
+    .await?;
+    assert_eq!(
+        stale_status.scenario_revisions,
+        vec![Revision::new(fixture.stale.portable.scenario_revision)]
+    );
+    assert_ne!(
+        stale_status.current_revision,
+        stale_status.scenario_revisions[0]
+    );
+    stale_status.explanation.validate()?;
+
+    // Feasible acceptance derives the weaker, independently-verified certainty.
+    let feasible = persist_application_feasible_result(
+        &fixture.store,
+        fixture.scenario_id,
+        current_revision,
+        9,
+        b"status-feasible-policy",
+    )
+    .await?;
+    let feasible_ref = AcceptedResultRefV1::from_result(&feasible.portable.accepted_result)?;
+    let feasible_status = query_solution_explanation(
+        &fixture.app,
+        fixture.scenario_id,
+        current_revision,
+        ExplanationRequestSubjectV1::OptimalityStatus {
+            solve_run_id: feasible.portable.run_input.run_id,
+            run_manifest_checksum: feasible.portable.run_manifest.checksum.clone(),
+            result: Some(feasible_ref.clone()),
+        },
+    )
+    .await?;
+    assert_eq!(
+        feasible_status.explanation.evidence.certainty,
+        eutheto_domain_ir::ExplanationCertainty::IndependentlyVerified
+    );
+    feasible_status.explanation.validate()?;
+
+    let no_result_manifest = persist_application_no_result_run(
+        &fixture.store,
+        fixture.scenario_id,
+        current_revision,
+        10,
+        SolveStatus::NoSolutionWithinLimit,
+    )
+    .await?;
+    let no_result_run = fixture
+        .store
+        .load_solve_run(fixture.scenario_id, no_result_manifest.run_id)
+        .await?
+        .ok_or("no-result run was not retained")?;
+    let no_result = query_solution_explanation(
+        &fixture.app,
+        fixture.scenario_id,
+        current_revision,
+        ExplanationRequestSubjectV1::OptimalityStatus {
+            solve_run_id: no_result_manifest.run_id,
+            run_manifest_checksum: no_result_manifest.checksum.clone(),
+            result: None,
+        },
+    )
+    .await?;
+    let ExplanationEvidencePayloadV2::OptimalityStatus { status } =
+        &no_result.explanation.evidence.evidence
+    else {
+        return Err("no-result status did not return status evidence".into());
+    };
+    assert!(status.result.is_none());
+    assert_eq!(&status.run_input, &no_result_run.input);
+    assert_eq!(&status.run_manifest, &no_result_manifest);
+    no_result.explanation.validate()?;
+
+    // A backend-only infeasible status has no independent feasibility or conflict proof.
+    let infeasible_manifest = persist_application_no_result_run(
+        &fixture.store,
+        fixture.scenario_id,
+        current_revision,
+        12,
+        SolveStatus::Infeasible,
+    )
+    .await?;
+    let infeasible_status = query_solution_explanation(
+        &fixture.app,
+        fixture.scenario_id,
+        current_revision,
+        ExplanationRequestSubjectV1::OptimalityStatus {
+            solve_run_id: infeasible_manifest.run_id,
+            run_manifest_checksum: infeasible_manifest.checksum,
+            result: None,
+        },
+    )
+    .await?;
+    assert_eq!(
+        infeasible_status.explanation.evidence.certainty,
+        eutheto_domain_ir::ExplanationCertainty::Deterministic
+    );
+    infeasible_status.explanation.validate()?;
+
+    // The run checksum is part of the exact historical authority.
+    assert!(
+        query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            current_revision,
+            ExplanationRequestSubjectV1::OptimalityStatus {
+                solve_run_id: no_result_manifest.run_id,
+                run_manifest_checksum: blake3_hex(b"wrong-manifest"),
+                result: None,
+            },
+        )
+        .await
+        .is_err()
+    );
+    // Non-accepted outcomes must not carry a result reference.
+    assert!(
+        query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            current_revision,
+            ExplanationRequestSubjectV1::OptimalityStatus {
+                solve_run_id: no_result_manifest.run_id,
+                run_manifest_checksum: no_result_manifest.checksum.clone(),
+                result: Some(feasible_ref.clone()),
+            },
+        )
+        .await
+        .is_err()
+    );
+    // An accepted run's result reference must match that run's terminal outcome exactly.
+    assert!(
+        query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            current_revision,
+            ExplanationRequestSubjectV1::OptimalityStatus {
+                solve_run_id: feasible.portable.run_input.run_id,
+                run_manifest_checksum: feasible.portable.run_manifest.checksum.clone(),
+                result: Some(stale_ref),
+            },
+        )
+        .await
+        .is_err()
+    );
+
+    // Scenario-scoped lookup does not disclose or reuse another scenario's retained run.
+    let other_scenario = create_project(&fixture.app, "Other status source").await?;
+    let other_manifest = persist_application_no_result_run(
+        &fixture.store,
+        other_scenario,
+        Revision::INITIAL,
+        11,
+        SolveStatus::Cancelled,
+    )
+    .await?;
+    assert!(
+        query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            Revision::INITIAL,
+            ExplanationRequestSubjectV1::OptimalityStatus {
+                solve_run_id: other_manifest.run_id,
+                run_manifest_checksum: other_manifest.checksum,
+                result: None,
+            },
+        )
+        .await
+        .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn comparison_declines_unestablished_scoring_meaning_and_legacy_versions()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let current = &fixture.current.portable;
+    let same_policy = persist_application_accepted_result(
+        &fixture.store,
+        fixture.scenario_id,
+        Revision::try_new(current.scenario_revision)?,
+        4,
+        b"solution-api-objective-policy",
+    )
+    .await?;
+    let request = SolutionCompareRequestV3 {
+        schema_version: SOLUTION_COMPARE_SCHEMA_VERSION,
+        scenario_id: fixture.scenario_id,
+        base_solution_id: current.accepted_result.solution.solution_id,
+        candidate_solution_id: same_policy.portable.accepted_result.solution.solution_id,
+    };
+    let comparison = fixture
+        .app
+        .query(AppQuery::SolutionCompareV3(request.clone()))
+        .await
+        .boxed()?;
+    let AppQueryResult::SolutionComparisonV3(comparison) = comparison else {
+        return Err("missing current comparison".into());
+    };
+    comparison.comparison.validate()?;
+    assert!(matches!(
+        comparison.comparison.score,
+        ScoreComparisonV2::Unavailable {
+            reason: ScoreComparisonUnavailableReasonV1::PolicyOrScopeMismatch
+        }
+    ));
+    assert_eq!(
+        comparison
+            .comparison
+            .candidate
+            .accepted_result
+            .result_checksum,
+        same_policy.portable.accepted_result.checksum
+    );
+    for schema_version in [1, 2] {
         assert!(matches!(
             fixture
                 .app
-                .query(AppQuery::SolutionExplain(SolutionExplainRequestV1 {
-                    schema_version: SOLUTION_API_SCHEMA_VERSION,
-                    scenario_id: fixture.scenario_id,
-                    request: ExplanationRequestV1::new(subject)?,
+                .query(AppQuery::SolutionCompareV3(SolutionCompareRequestV3 {
+                    schema_version,
+                    ..request.clone()
                 }))
                 .await,
-            Err(AppError::Unsupported(_))
+            Err(AppError::Validation(_))
         ));
     }
     Ok(())
@@ -5248,9 +6930,14 @@ async fn solution_selection_dispatches_typed_viewing_state_without_scenario_muta
     let directory = private_tempdir()?;
     let fixture = Box::pin(solution_application_fixture(&directory)).await?;
     let other_scenario = create_project(&fixture.app, "Other accepted solutions").await?;
-    let other =
-        persist_application_accepted_result(&fixture.store, other_scenario, Revision::INITIAL, 3)
-            .await?;
+    let other = persist_application_accepted_result(
+        &fixture.store,
+        other_scenario,
+        Revision::INITIAL,
+        3,
+        b"solution-api-objective-policy",
+    )
+    .await?;
     let current_id = fixture
         .current
         .portable
@@ -5572,6 +7259,7 @@ fn counterfactual_runtime_request(
     let problem = pack.compile(
         &base.document,
         &CompileContext {
+            objective_context: None,
             scenario_revision: base.portable.run_input.scenario_revision,
             semantic_metadata: BTreeMap::new(),
             control: eutheto_types::OperationControl::Cancellation(
@@ -5655,6 +7343,30 @@ async fn collect_counterfactual_progress(
             return Ok(observed);
         }
     }
+}
+#[cfg(debug_assertions)]
+fn reseal_native_solve_fingerprint(
+    manifest: &RunManifest,
+) -> Result<(RunManifest, String), Box<dyn Error>> {
+    let mut observations = manifest
+        .native_observations
+        .clone()
+        .ok_or("run manifest omitted native observations")?;
+    let attempt = observations
+        .attempt
+        .as_mut()
+        .ok_or("native observations omitted the actual backend attempt")?;
+    let replacement = if attempt.solve_fingerprint.starts_with('0') {
+        "1"
+    } else {
+        "0"
+    };
+    attempt.solve_fingerprint.replace_range(..1, replacement);
+    let changed_fingerprint = attempt.solve_fingerprint.clone();
+    let manifest = manifest
+        .clone()
+        .with_native_observations(Some(observations))?;
+    Ok((manifest, changed_fingerprint))
 }
 
 #[tokio::test]
@@ -5744,6 +7456,203 @@ async fn counterfactual_runtime_completes_once_through_compile_review_and_atomic
     Ok(())
 }
 
+#[cfg(debug_assertions)]
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn resealed_counterfactual_native_fingerprint_is_rejected_by_completed_replays()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let (registry, backend) = counterfactual_solver_registry(false)?;
+    let app = counterfactual_runtime_app(&directory, &fixture, registry)?;
+    let mut progress = app
+        .subscribe(EventTopic::CounterfactualProgress)
+        .await
+        .boxed()?;
+    let request = counterfactual_runtime_request(&fixture.current)?;
+    let AppCommandResult::CounterfactualStarted(started) = app
+        .execute(AppCommand::SolutionStartCounterfactual(request.clone()))
+        .await
+        .boxed()?
+    else {
+        return Err("expected counterfactual start response".into());
+    };
+    let _events = collect_counterfactual_progress(&mut progress).await?;
+    let completed =
+        wait_for_counterfactual_terminal(&fixture.store, started.job.request.job_id).await?;
+    assert_eq!(completed.state, CounterfactualJobState::Completed);
+    let original_result = completed
+        .result
+        .as_ref()
+        .ok_or("completed counterfactual omitted its result")?;
+    let (forged_manifest, forged_fingerprint) =
+        reseal_native_solve_fingerprint(&original_result.run_manifest)?;
+    assert_ne!(
+        forged_fingerprint,
+        original_result
+            .run_manifest
+            .native_observations
+            .as_ref()
+            .and_then(|observations| observations.attempt.as_ref())
+            .ok_or("completed run omitted its actual native attempt")?
+            .solve_fingerprint
+    );
+    let mut conclusion = original_result.conclusion.clone();
+    let eutheto_domain_ir::CounterfactualConclusionV1::VerifiedAlternative {
+        alternative,
+        comparison,
+        ..
+    } = &mut conclusion
+    else {
+        return Err("expected a verified alternative comparison".into());
+    };
+    let alternative = fixture
+        .store
+        .load_accepted_result(alternative.solution_id)
+        .await?;
+    **comparison = eutheto_domain_ir::compare_accepted_results(
+        &fixture.current.portable.accepted_result,
+        &alternative.portable.accepted_result,
+        Some(&eutheto_domain_ir::ComparisonContext {
+            locks: &[],
+            manifests: Some(eutheto_domain_ir::ComparisonRunManifests {
+                base: &original_result.base_run_manifest,
+                candidate: &forged_manifest,
+            }),
+        }),
+    )?;
+    let resealed_result = CounterfactualResult::new(
+        original_result.request.clone(),
+        original_result.base_run_input.clone(),
+        original_result.base_run_manifest.clone(),
+        original_result.compilation.clone(),
+        original_result.run_input.clone(),
+        forged_manifest.clone(),
+        conclusion,
+    )?;
+    assert_ne!(resealed_result.checksum, original_result.checksum);
+
+    assert_ne!(
+        forged_manifest.checksum,
+        original_result.run_manifest.checksum
+    );
+    let resealed_job = CounterfactualJobRecordV1::new(
+        completed.request.clone(),
+        completed.state,
+        completed.started_at,
+        completed.finished_at,
+        completed.cancel_request_id,
+        completed.cancel_requested_at,
+        Some(resealed_result),
+        completed.error,
+        completed.terminal_authority.clone(),
+    )?;
+    let connection = Connection::open(directory.path().join("eutheto.sqlite"))?;
+    assert_eq!(
+        connection.execute(
+            "UPDATE solve_runs SET run_manifest_json = ?1 WHERE id = ?2",
+            rusqlite::params![
+                serde_json::to_string(&forged_manifest)?,
+                original_result.run_input.run_id.to_string(),
+            ],
+        )?,
+        1
+    );
+    assert_eq!(
+        connection.execute(
+            "UPDATE counterfactual_jobs SET result_json = ?1 WHERE id = ?2",
+            rusqlite::params![
+                serde_json::to_string(
+                    resealed_job
+                        .result
+                        .as_ref()
+                        .ok_or("missing resealed result")?,
+                )?,
+                started.job.request.job_id.to_string(),
+            ],
+        )?,
+        1
+    );
+    drop(connection);
+
+    // The Store accepts the structurally valid descriptive carrier; Core must bind its route.
+    let stored_job = fixture
+        .store
+        .load_counterfactual_job(started.job.request.job_id)
+        .await?;
+    assert_eq!(stored_job, resealed_job);
+    let stored_run = fixture
+        .store
+        .load_solve_run(fixture.scenario_id, original_result.run_input.run_id)
+        .await?
+        .ok_or("resealed derived run was not retained")?;
+    assert_eq!(stored_run.manifest, Some(forged_manifest));
+    assert_eq!(
+        fixture
+            .store
+            .load_accepted_result(
+                fixture
+                    .current
+                    .portable
+                    .accepted_result
+                    .solution
+                    .solution_id,
+            )
+            .await?,
+        fixture.current
+    );
+
+    let job_id = started.job.request.job_id;
+    assert!(matches!(
+        app.execute(AppCommand::SolutionStartCounterfactual(request.clone()))
+            .await,
+        Err(AppError::Protocol(error)) if error.code == "solution.authority_invalid"
+    ));
+    assert!(matches!(
+        app.execute(AppCommand::SolutionCancelCounterfactual(
+            SolutionCancelCounterfactualRequestV1 {
+                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                cancel_request_id: request_id()?,
+                scenario_id: request.scenario_id,
+                expected_revision: request.expected_revision,
+                job_id,
+            },
+        ))
+        .await,
+        Err(AppError::Protocol(error)) if error.code == "solution.authority_invalid"
+    ));
+    assert!(matches!(
+        app.query(AppQuery::SolutionGetCounterfactual(
+            SolutionGetCounterfactualRequestV1 {
+                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                scenario_id: request.scenario_id,
+                job_id,
+            },
+        ))
+        .await,
+        Err(AppError::Protocol(error)) if error.code == "solution.authority_invalid"
+    ));
+    let base = AcceptedResultRefV1::from_result(&fixture.current.portable.accepted_result)?;
+    assert!(matches!(
+        app.query(AppQuery::SolutionExplain {
+            request: SolutionExplainRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                scenario_id: request.scenario_id,
+                request: ExplanationRequestV1::new(
+                    ExplanationRequestSubjectV1::Counterfactual { job_id, base },
+                )?,
+            },
+            source_revision: request.expected_revision,
+            control: eutheto_types::OperationControl::Cancellation(app.setup_cancellation()),
+        })
+        .await,
+        Err(AppError::Protocol(error)) if error.code == "solution.authority_invalid"
+    ));
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn counterfactual_runtime_cancels_after_derived_run_without_accepting_a_result()
 -> Result<(), Box<dyn Error>> {
@@ -5829,6 +7738,77 @@ async fn counterfactual_runtime_cancels_after_derived_run_without_accepting_a_re
         events.last().map(|(phase, _, _)| *phase),
         Some(eutheto_types::CounterfactualProgressPhase::Cancelled)
     );
+    #[cfg(debug_assertions)]
+    {
+        let retained = fixture
+            .store
+            .load_solve_run(fixture.scenario_id, derived_run_id)
+            .await?
+            .ok_or("cancelled derived run was not retained")?;
+        let manifest = retained
+            .manifest
+            .as_ref()
+            .ok_or("cancelled derived run omitted its terminal manifest")?;
+        assert_eq!(
+            manifest.outcome,
+            RunTerminalOutcomeV1::NoResult {
+                status: SolveStatus::Cancelled,
+            }
+        );
+        let (forged_manifest, _) = reseal_native_solve_fingerprint(manifest)?;
+        let connection = Connection::open(directory.path().join("eutheto.sqlite"))?;
+        assert_eq!(
+            connection.execute(
+                "UPDATE solve_runs SET run_manifest_json = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    serde_json::to_string(&forged_manifest)?,
+                    derived_run_id.to_string(),
+                ],
+            )?,
+            1
+        );
+        drop(connection);
+        let stored = fixture
+            .store
+            .load_solve_run(fixture.scenario_id, derived_run_id)
+            .await?
+            .ok_or("resealed cancelled run was not retained")?;
+        assert_eq!(stored.manifest, Some(forged_manifest.clone()));
+        assert_eq!(
+            fixture
+                .store
+                .load_accepted_result(
+                    fixture
+                        .current
+                        .portable
+                        .accepted_result
+                        .solution
+                        .solution_id,
+                )
+                .await?,
+            fixture.current
+        );
+        assert!(matches!(
+            app.query(AppQuery::SolutionExplain {
+                request: SolutionExplainRequestV1 {
+                    schema_version: SOLUTION_API_SCHEMA_VERSION,
+                    scenario_id: request.scenario_id,
+                    request: ExplanationRequestV1::new(
+                        ExplanationRequestSubjectV1::OptimalityStatus {
+                            solve_run_id: derived_run_id,
+                            run_manifest_checksum: forged_manifest.checksum,
+                            result: None,
+                        },
+                    )?,
+                },
+                source_revision: request.expected_revision,
+                control: eutheto_types::OperationControl::Cancellation(app.setup_cancellation()),
+            })
+            .await,
+            Err(AppError::Protocol(error)) if error.code == "solution.authority_invalid"
+        ));
+        assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    }
     Ok(())
 }
 
@@ -5860,13 +7840,16 @@ async fn queued_counterfactual_cancel_replay_does_not_republish_terminal_progres
     let job_id = CounterfactualJobId::new(&SystemIdGenerator)?;
     fixture
         .store
-        .start_counterfactual_job(CounterfactualJobRequestV1::new(
-            job_id,
-            request.request_id,
-            semantics,
-            condition,
-            timestamp("2026-01-10T12:00:00Z")?,
-        )?)
+        .start_counterfactual_job(
+            CounterfactualJobRequestV1::new(
+                job_id,
+                request.request_id,
+                semantics,
+                condition,
+                timestamp("2026-01-10T12:00:00Z")?,
+            )?,
+            fixture.current.clone(),
+        )
         .await?;
     let mut progress = fixture
         .app
@@ -5890,7 +7873,10 @@ async fn queued_counterfactual_cancel_replay_does_not_republish_terminal_progres
         return Err("expected first queued cancellation response".into());
     };
     assert_eq!(first.job.state, CounterfactualJobState::Cancelled);
-    let event = progress.recv().await.boxed()?;
+    let event = progress
+        .try_recv()
+        .boxed()?
+        .ok_or("first queued cancellation did not publish its terminal progress")?;
     assert!(matches!(
         event.payload,
         EventPayload::CounterfactualProgress {
@@ -6053,4 +8039,700 @@ async fn portable_abandoned_caller_before_final_check_rolls_back() -> Result<(),
 async fn portable_abandoned_caller_after_final_check_publishes_commit() -> Result<(), Box<dyn Error>>
 {
     portable_commit_boundary(CommandCommitTestPhase::AfterFinalCancellationCheck, true).await
+}
+
+// A bundle-wide result/source map must not rewrite foreign ancestry in an un-copied scenario.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn workforce_mixed_import_preserves_foreign_current_and_historical_ancestry()
+-> Result<(), Box<dyn Error>> {
+    let decode = |wire: &eutheto_export::PortableScenario| {
+        portable_decode::decode_fixture_domain_with_pack(wire, &eutheto_workforce::WorkforcePack)
+    };
+    let source_directory = private_tempdir()?;
+    let source_dependencies = dependencies(&source_directory)?;
+    let (source_store, initialization) =
+        SqliteScenarioStore::open(&source_dependencies.paths.database).await?;
+    let source_store = Arc::new(source_store);
+    let document = workforce_adoption_document()?;
+    let source_id = document.scenario_id;
+    source_store.create_project(NewProject { document }).await?;
+    let source = EuthetoApp::from_initialized_store(
+        Arc::clone(&source_store),
+        initialization,
+        source_dependencies,
+    )
+    .boxed()?;
+    let accepted =
+        persist_workforce_accepted_result(&source_store, source_id, Revision::INITIAL, 71).await?;
+    let accepted_ref = AcceptedResultRefV1::from_result(&accepted.portable.accepted_result)?;
+    source
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            source_id,
+            Revision::INITIAL,
+            accepted_ref.clone(),
+            false,
+        )?))
+        .await
+        .boxed()?;
+    let source_project = source_store.get_project(source_id).await?;
+    let source_base = stored_workforce_base(&source_project.document)?;
+    let foreign_id = match source
+        .execute(AppCommand::DuplicateProject {
+            request_id: request_id()?,
+            source_id,
+            expected_revision: source_project.summary.revision,
+            title: "Foreign ancestry".to_owned(),
+        })
+        .await
+        .boxed()?
+    {
+        AppCommandResult::Project(project) => project.scenario_id,
+        other => return Err(format!("unexpected duplicate: {other:?}").into()),
+    };
+    let bytes = match source
+        .query(AppQuery::ExportBackup {
+            cancellation: source.setup_cancellation(),
+            title: "Mixed Workforce ancestry".to_owned(),
+            selection: BackupSelection::default(),
+        })
+        .await
+        .boxed()?
+    {
+        AppQueryResult::BackupBundle { bytes, .. } => bytes,
+        other => return Err(format!("unexpected backup: {other:?}").into()),
+    };
+    let mut inspected = inspect_bundle(
+        &bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &decode,
+    )?;
+    let foreign = inspected
+        .scenarios
+        .iter_mut()
+        .find(|snapshot| snapshot.document.scenario_id == foreign_id)
+        .ok_or("foreign scenario missing")?;
+    let foreign_base = stored_workforce_base(&foreign.document)?;
+    // This imported foreign claim has no local admission receipt or native acceptance authority.
+    let mut manual = eutheto_workforce::model::ManualSelection {
+        schema_version: 1,
+        id: EntityId::from_uuid(Uuid::now_v7()),
+        original: eutheto_domain_ir::RunBaselineOriginal {
+            entity: eutheto_workforce::assignment_rules::workforce_baseline_reference(
+                foreign_base.id,
+                false,
+            )?,
+            pair_content_hash: eutheto_workforce::assignment_rules::workforce_pair_content_hash(
+                &source_base.assignments,
+                None,
+            )?,
+            accepted_result: accepted_ref.clone(),
+            source_scenario_id: source_id,
+            source_revision: accepted.portable.run_input.scenario_revision,
+            source_document_hash: accepted.portable.run_input.snapshot_document_hash.clone(),
+            source_run_id: accepted.portable.run_input.run_id,
+            source_run_input_checksum: accepted.portable.run_input.checksum.clone(),
+            source_run_manifest_checksum: accepted.portable.run_manifest.checksum.clone(),
+        },
+        admission_source_scenario_id: source_id,
+        admission_source_revision: Revision::INITIAL,
+        admission_source_document_hash: accepted.portable.run_input.snapshot_document_hash.clone(),
+        admission_command_id: CommandId::from_uuid(solution_test_id(0xaaaa, 79)?),
+        assignments: foreign_base.assignments.clone(),
+        checksum: String::new(),
+    };
+    // Inert historical endpoints may name another family's person, shift or result UUID.
+    let ancestral_pair = *source_base.assignments.first().ok_or("source base pair")?;
+    manual.assignments.extend([
+        ancestral_pair,
+        eutheto_workforce::model::AssignmentPair {
+            person_id: eutheto_types::PersonId::from_uuid(accepted_ref.solution_id.as_uuid()),
+            shift_id: ancestral_pair.shift_id,
+        },
+    ]);
+    manual.assignments.sort_unstable();
+    manual.checksum =
+        eutheto_workforce::assignment_rules::workforce_manual_selection_checksum(&manual, None)?;
+    let mut manual_raw = serde_json::to_value(
+        eutheto_workforce::model::WorkforceEntity::ManualSelection(manual.clone()),
+    )?;
+    manual_raw["admissionCommandId"] =
+        json!(manual.admission_command_id.to_string().to_uppercase());
+    foreign
+        .document
+        .domain
+        .entities
+        .insert(manual.id, manual_raw.clone());
+    let mut historical_foreign = foreign.clone();
+    historical_foreign.project = None;
+    foreign.revision = Revision::new(1);
+    foreign.document.metadata.title = "Current foreign ancestry".to_owned();
+    inspected.scenario_revisions.push(historical_foreign);
+    let mut sections = BackupSections {
+        results: inspected
+            .additional_entries
+            .iter()
+            .filter_map(|(path, bytes)| {
+                path.strip_prefix("results/")
+                    .and_then(|key| key.strip_suffix(".json"))
+                    .map(|key| serde_json::from_slice(bytes).map(|value| (key.to_owned(), value)))
+            })
+            .collect::<Result<_, serde_json::Error>>()?,
+        ..BackupSections::default()
+    };
+    // Existing opaque retained-result format supplies history dependency only, never acceptance.
+    let history_reference_id = Uuid::now_v7();
+    sections.results.insert(
+        history_reference_id.to_string(),
+        json!({
+            "resultId": history_reference_id,
+            "scenarioId": foreign_id,
+            "scenarioRevision": Revision::INITIAL,
+            "result": {},
+        }),
+    );
+    let bundle = assemble_full_backup(
+        &FullBackupSnapshot {
+            bundle_id: inspected.manifest.bundle_id,
+            created_at: inspected.manifest.created_at,
+            application: inspected.manifest.application,
+            title: "Mixed current/historical ancestry".to_owned(),
+            scenarios: inspected.scenarios,
+            scenario_revisions: inspected.scenario_revisions,
+            sections,
+            nonsemantic_extensions: inspected.manifest.nonsemantic_extensions,
+            manifest_extensions: complete_full_backup_extensions()?,
+        },
+        &|document| {
+            eutheto_domain_api::DomainPack::export_portable(
+                &eutheto_workforce::WorkforcePack,
+                document,
+            )
+            .map_err(|error| eutheto_export::ExportError::InvalidModel(error.to_string()))
+        },
+    )?;
+    let target_directory = private_tempdir()?;
+    let target_dependencies = dependencies(&target_directory)?;
+    let (target_store, initialization) =
+        SqliteScenarioStore::open(&target_dependencies.paths.database).await?;
+    let target_store = Arc::new(target_store);
+    target_store
+        .create_project(NewProject {
+            document: source_project.document,
+        })
+        .await?;
+    let target = EuthetoApp::from_initialized_store(
+        Arc::clone(&target_store),
+        initialization,
+        target_dependencies,
+    )
+    .boxed()?;
+    let (preview_id, _) = preview_add_backup(&target, bundle).await?;
+    apply_restore_with_authorization(
+        &target,
+        preview_id,
+        CollisionPlan {
+            scenarios: BTreeMap::from([(source_id, CollisionAction::CreateCopy)]),
+            ..CollisionPlan::default()
+        },
+        SafetyBackupEvidence::NotRequired,
+        None,
+    )
+    .await?
+    .boxed()?;
+    let current_foreign = target_store.get_project(foreign_id).await?;
+    assert_eq!(
+        stored_workforce_manual(&current_foreign.document)?.1,
+        manual
+    );
+    assert_eq!(
+        current_foreign.document.domain.entities.get(&manual.id),
+        Some(&manual_raw)
+    );
+    assert_eq!(
+        stored_workforce_base(&current_foreign.document)?.source_solution_id,
+        accepted_ref.solution_id,
+    );
+    let exported = match target
+        .query(AppQuery::ExportBackup {
+            cancellation: target.setup_cancellation(),
+            title: "Imported ancestry".to_owned(),
+            selection: BackupSelection::default(),
+        })
+        .await
+        .boxed()?
+    {
+        AppQueryResult::BackupBundle { bytes, .. } => bytes,
+        other => return Err(format!("unexpected imported backup: {other:?}").into()),
+    };
+    let reopened = inspect_bundle(
+        &exported,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &decode,
+    )?;
+    let historical = reopened
+        .scenario_revisions
+        .iter()
+        .find(|snapshot| {
+            snapshot.document.scenario_id == foreign_id && snapshot.revision == Revision::INITIAL
+        })
+        .ok_or("imported foreign historical revision missing")?;
+    assert_eq!(stored_workforce_manual(&historical.document)?.1, manual);
+    assert_eq!(
+        historical.document.domain.entities.get(&manual.id),
+        Some(&manual_raw)
+    );
+    assert_eq!(
+        stored_workforce_base(&historical.document)?.source_solution_id,
+        accepted_ref.solution_id,
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn workforce_fresh_restore_preserves_portable_sources_without_promoting_results()
+-> Result<(), Box<dyn Error>> {
+    let decode = |wire: &eutheto_export::PortableScenario| {
+        portable_decode::decode_fixture_domain_with_pack(wire, &eutheto_workforce::WorkforcePack)
+    };
+    let source_directory = private_tempdir()?;
+    let source_dependencies = dependencies(&source_directory)?;
+    let (source_store, initialization) =
+        SqliteScenarioStore::open(&source_dependencies.paths.database).await?;
+    let source_store = Arc::new(source_store);
+    let original = workforce_adoption_document()?;
+    let scenario_id = original.scenario_id;
+    source_store
+        .create_project(NewProject {
+            document: original.clone(),
+        })
+        .await?;
+    let source = EuthetoApp::from_initialized_store(
+        Arc::clone(&source_store),
+        initialization,
+        source_dependencies,
+    )
+    .boxed()?;
+    let accepted =
+        persist_workforce_accepted_result(&source_store, scenario_id, Revision::INITIAL, 81)
+            .await?;
+    let accepted_id = accepted.portable.accepted_result.solution.solution_id;
+    source
+        .execute(AppCommand::AdoptBaseSchedule(adoption_request(
+            scenario_id,
+            Revision::INITIAL,
+            AcceptedResultRefV1::from_result(&accepted.portable.accepted_result)?,
+            false,
+        )?))
+        .await
+        .boxed()?;
+    let external_id: EntityId = workforce_fixture::id(50).parse()?;
+    let external = json!({
+        "kind":"externalStartingPlan", "schemaVersion":1, "id":external_id,
+        "name":"Unverified imported plan",
+        "assignments":[{"personId":workforce_fixture::id(12),"shiftId":workforce_fixture::id(8)}],
+        "originalImport":{"sourceBlake3":"a".repeat(64),"pairContentHash":"b".repeat(64)}
+    });
+    source
+        .execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: CommandEnvelope {
+                command_id: CommandId::new(&SystemIdGenerator)?,
+                scenario_id,
+                expected_revision: Revision::new(1),
+                actor: ActorRef {
+                    actor_id: None,
+                    display_name: "Portable integration test".to_owned(),
+                },
+                source: CommandSource::System,
+                command: ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+                    command_type: eutheto_workforce::commands::ADD_ENTITY.to_owned(),
+                    payload: json!({"entity":external}),
+                }),
+            },
+            truncate_redo: false,
+        })
+        .await
+        .boxed()?;
+    let AppQueryResult::BackupBundle { bytes, .. } = source
+        .query(AppQuery::ExportBackup {
+            cancellation: source.setup_cancellation(),
+            title: "Workforce portable sources".to_owned(),
+            selection: BackupSelection::default(),
+        })
+        .await
+        .boxed()?
+    else {
+        return Err("expected Workforce backup".into());
+    };
+    let mut inspected = inspect_bundle(
+        &bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &decode,
+    )?;
+    let current = inspected
+        .scenarios
+        .first_mut()
+        .ok_or("missing current source")?;
+    assert_eq!(
+        current.document,
+        source_store.get_project(scenario_id).await?.document
+    );
+    current.extensions.insert(
+        "vendor.asset-reference".to_owned(),
+        json!({"assetKey":"portable-note.txt"}),
+    );
+    let expected_current = current.clone();
+    let accepted_value = serde_json::to_value(&accepted.portable)?;
+    let sections = BackupSections {
+        results: BTreeMap::from([(accepted_id.to_string(), accepted_value.clone())]),
+        assets: BTreeMap::from([(
+            "portable-note.txt".to_owned(),
+            PortableAsset {
+                bytes: b"Permitted portable attachment".to_vec(),
+                media_type: "text/plain".to_owned(),
+                redistribution_permitted: true,
+            },
+        )]),
+        ..BackupSections::default()
+    };
+    let bundle = assemble_full_backup(
+        &FullBackupSnapshot {
+            bundle_id: inspected.manifest.bundle_id,
+            created_at: inspected.manifest.created_at,
+            application: inspected.manifest.application,
+            title: "Workforce retained sources".to_owned(),
+            scenarios: inspected.scenarios,
+            scenario_revisions: inspected.scenario_revisions,
+            sections,
+            nonsemantic_extensions: inspected.manifest.nonsemantic_extensions,
+            manifest_extensions: complete_full_backup_extensions()?,
+        },
+        &|document| {
+            eutheto_domain_api::DomainPack::export_portable(
+                &eutheto_workforce::WorkforcePack,
+                document,
+            )
+            .map_err(|error| eutheto_export::ExportError::InvalidModel(error.to_string()))
+        },
+    )?;
+    let target_directory = private_tempdir()?;
+    let target = EuthetoApp::open(dependencies(&target_directory)?)
+        .await
+        .boxed()?;
+    let (preview_id, _) = preview_add_backup(&target, bundle).await?;
+    apply_restore_with_authorization(
+        &target,
+        preview_id,
+        CollisionPlan::default(),
+        SafetyBackupEvidence::NotRequired,
+        None,
+    )
+    .await?
+    .boxed()?;
+    drop(target);
+    let target = EuthetoApp::open(dependencies(&target_directory)?)
+        .await
+        .boxed()?;
+    let (reopened_store, _) =
+        SqliteScenarioStore::open(target_directory.path().join("eutheto.sqlite")).await?;
+    let restored = reopened_store
+        .library_snapshot(eutheto_store::NativeArchivalSelection::Exclude)
+        .await?;
+    assert!(restored.canonical_result_ids.is_empty());
+    assert!(matches!(
+        reopened_store.load_accepted_result(accepted_id).await,
+        Err(eutheto_store::StoreError::AcceptedResultNotFound(id)) if id == accepted_id
+    ));
+    for query in [
+        AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: target.setup_cancellation(),
+        },
+        AppQuery::ExportBackup {
+            cancellation: target.setup_cancellation(),
+            title: "Restored Workforce backup".to_owned(),
+            selection: BackupSelection::default(),
+        },
+    ] {
+        let bytes = match target.query(query).await.boxed()? {
+            AppQueryResult::Bundle { bytes, .. } | AppQueryResult::BackupBundle { bytes, .. } => {
+                bytes
+            }
+            other => return Err(format!("unexpected restored export: {other:?}").into()),
+        };
+        let roundtrip = inspect_bundle(
+            &bytes,
+            &InspectionPolicy::default(),
+            &MigrationRegistries::default(),
+            &decode,
+        )?;
+        let current = roundtrip
+            .scenarios
+            .first()
+            .ok_or("missing restored source")?;
+        assert_eq!(current.document, expected_current.document);
+        assert_eq!(current.revision, Revision::new(2));
+        assert_eq!(current.extensions, expected_current.extensions);
+        assert_eq!(
+            current.document.domain.entities.get(&external_id),
+            Some(&external)
+        );
+        assert_eq!(
+            stored_workforce_base(&current.document)?.source_solution_id,
+            accepted_id
+        );
+        let historical = roundtrip
+            .scenario_revisions
+            .iter()
+            .find(|snapshot| {
+                snapshot.document.scenario_id == scenario_id
+                    && snapshot.revision == Revision::INITIAL
+            })
+            .ok_or("missing original accepted source")?;
+        assert_eq!(historical.document, original);
+        let bytes = roundtrip
+            .additional_entries
+            .get(&format!("results/{accepted_id}.json"))
+            .ok_or("missing archived result")?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(bytes)?,
+            accepted_value
+        );
+        assert_eq!(
+            roundtrip.additional_entries.get("assets/portable-note.txt"),
+            Some(&b"Permitted portable attachment".to_vec())
+        );
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn migrated_workforce_unaccepted_result_is_preserved_in_backup() -> Result<(), Box<dyn Error>>
+{
+    let directory = private_tempdir()?;
+    let deps = dependencies(&directory)?;
+    std::fs::write(
+        &deps.paths.database,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+    let document = workforce_adoption_document()?;
+    let scenario_id = document.scenario_id;
+    let run_id = SolveRunId::new(&SystemIdGenerator)?;
+    let result_id = SolutionId::new(&SystemIdGenerator)?;
+    let created_at = "2026-08-28T23:00:00Z";
+    let raw_solution = json!({
+        "legacy":true,
+        "scenarioId":scenario_id,
+        "entityId":workforce_fixture::id(1),
+    });
+    let connection = Connection::open(&deps.paths.database)?;
+    connection.execute(
+        "INSERT INTO scenarios (id, domain_pack_id, domain_schema_version, title, description, revision, document_json, created_at, updated_at) VALUES (?1, ?2, 1, ?3, ?4, 0, ?5, ?6, ?6)",
+        rusqlite::params![
+            scenario_id.to_string(),
+            document.domain_pack.id.to_string(),
+            document.metadata.title,
+            document.metadata.description,
+            serde_json::to_string(&document)?,
+            created_at,
+        ],
+    )?;
+    connection.execute(
+        "INSERT INTO scenario_history_state (scenario_id, cursor_sequence, branch_generation) VALUES (?1, 0, 0)",
+        [scenario_id.to_string()],
+    )?;
+    connection.execute(
+        "INSERT INTO solve_runs (id, scenario_id, scenario_revision, input_hash, backend_id, backend_version, status, options_json, started_at) VALUES (?1, ?2, 0, 'legacy-hash', 'legacy.backend', '1', 'completed', '{\"legacy\":true}', ?3)",
+        rusqlite::params![run_id.to_string(), scenario_id.to_string(), created_at],
+    )?;
+    connection.execute(
+        "INSERT INTO solutions (id, solve_run_id, scenario_id, scenario_revision, status, accepted, normalized_solution_json, score_json, verification_report_json, explanation_index_json, created_at) VALUES (?1, ?2, ?3, 0, 'accepted', 1, ?4, '{\"legacy\":true}', '{\"legacy\":true}', 'null', ?5)",
+        rusqlite::params![
+            result_id.to_string(),
+            run_id.to_string(),
+            scenario_id.to_string(),
+            serde_json::to_string(&raw_solution)?,
+            created_at,
+        ],
+    )?;
+    drop(connection);
+    let app = EuthetoApp::open(deps).await.boxed()?;
+    let connection = Connection::open(directory.path().join("eutheto.sqlite"))?;
+    let recorded: (String, bool) = connection.query_row(
+        "SELECT status, accepted FROM solutions WHERE id = ?1",
+        [result_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(recorded, ("legacy_unverified".to_owned(), false));
+    drop(connection);
+    let AppQueryResult::BackupBundle { bytes, .. } = app
+        .query(AppQuery::ExportBackup {
+            cancellation: app.setup_cancellation(),
+            title: "Migrated Workforce result".to_owned(),
+            selection: BackupSelection::default(),
+        })
+        .await
+        .boxed()?
+    else {
+        return Err("expected migrated Workforce backup".into());
+    };
+    let inspected = inspect_bundle(
+        &bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &|wire| {
+            portable_decode::decode_fixture_domain_with_pack(
+                wire,
+                &eutheto_workforce::WorkforcePack,
+            )
+        },
+    )?;
+    let result_bytes = inspected
+        .additional_entries
+        .get(&format!("results/{result_id}.json"))
+        .ok_or("results-inclusive backup omitted the migrated unaccepted result")?;
+    let archived: serde_json::Value = serde_json::from_slice(result_bytes)?;
+    assert_eq!(archived["archive"]["status"], recorded.0);
+    assert_eq!(archived["archive"]["accepted"], recorded.1);
+    assert_eq!(archived["archive"]["normalizedSolution"], raw_solution);
+    assert!(
+        archived["archive"]
+            .as_object()
+            .ok_or("archive object")?
+            .contains_key("explanationIndex")
+    );
+    assert_eq!(
+        archived["archive"]["explanationIndex"],
+        serde_json::Value::Null
+    );
+    assert!(
+        !archived["archive"]
+            .as_object()
+            .ok_or("archive object")?
+            .contains_key("evidence")
+    );
+    for action in [
+        CollisionAction::Skip,
+        CollisionAction::Replace,
+        CollisionAction::CreateCopy,
+    ] {
+        let (preview_id, preview) = preview_add_backup(&app, bytes.clone()).await?;
+        let mut plan = CollisionPlan {
+            scenarios: BTreeMap::from([(scenario_id, action)]),
+            ..CollisionPlan::default()
+        };
+        for identity in preview.supplemental_collisions {
+            plan.supplemental.insert(
+                identity,
+                if action == CollisionAction::Skip {
+                    eutheto_import::SupplementalCollisionAction::Skip
+                } else {
+                    eutheto_import::SupplementalCollisionAction::Replace
+                },
+            );
+        }
+        apply_restore_with_authorization(
+            &app,
+            preview_id,
+            plan,
+            SafetyBackupEvidence::NotRequired,
+            None,
+        )
+        .await?
+        .map_err(|error| format!("{action:?}: {error:?}"))?;
+    }
+    let (source_store, _) =
+        SqliteScenarioStore::open(directory.path().join("eutheto.sqlite")).await?;
+    let same_library = source_store
+        .library_snapshot(eutheto_store::NativeArchivalSelection::All)
+        .await?;
+    assert_eq!(same_library.sections.results.len(), 2);
+    let mut copied = None;
+    for result in same_library.sections.results.values() {
+        let result: serde_json::Value = serde_json::from_slice(result)?;
+        assert_eq!(result["archive"], archived["archive"]);
+        if result["resultId"] != archived["resultId"] {
+            copied = Some(result);
+        }
+    }
+    let copied = copied.ok_or("same-library copy omitted archived result")?;
+    assert_ne!(copied["scenarioId"], archived["scenarioId"]);
+    let connection = Connection::open(directory.path().join("eutheto.sqlite"))?;
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM solutions", [], |row| row
+            .get::<_, i64>(0))?,
+        1
+    );
+    drop(connection);
+    let target_directory = private_tempdir()?;
+    let target = EuthetoApp::open(dependencies(&target_directory)?)
+        .await
+        .boxed()?;
+    let (preview_id, _) = preview_add_backup(&target, bytes).await?;
+    apply_restore_with_authorization(
+        &target,
+        preview_id,
+        CollisionPlan::default(),
+        SafetyBackupEvidence::NotRequired,
+        None,
+    )
+    .await?
+    .boxed()?;
+    drop(target);
+    let target = EuthetoApp::open(dependencies(&target_directory)?)
+        .await
+        .boxed()?;
+    let (store, _) =
+        SqliteScenarioStore::open(target_directory.path().join("eutheto.sqlite")).await?;
+    assert!(matches!(
+        store.load_accepted_result(result_id).await,
+        Err(eutheto_store::StoreError::AcceptedResultNotFound(id)) if id == result_id
+    ));
+    for query in [
+        AppQuery::ExportScenario {
+            scenario_id,
+            cancellation: target.setup_cancellation(),
+        },
+        AppQuery::ExportBackup {
+            title: "Restored legacy Workforce result".to_owned(),
+            selection: BackupSelection::default(),
+            cancellation: target.setup_cancellation(),
+        },
+    ] {
+        let bytes = match target.query(query).await.boxed()? {
+            AppQueryResult::Bundle { bytes, .. } | AppQueryResult::BackupBundle { bytes, .. } => {
+                bytes
+            }
+            other => return Err(format!("unexpected restored export: {other:?}").into()),
+        };
+        let roundtrip = inspect_bundle(
+            &bytes,
+            &InspectionPolicy::default(),
+            &MigrationRegistries::default(),
+            &|wire| {
+                portable_decode::decode_fixture_domain_with_pack(
+                    wire,
+                    &eutheto_workforce::WorkforcePack,
+                )
+            },
+        )?;
+        assert_eq!(roundtrip.scenarios[0].document, document);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                roundtrip
+                    .additional_entries
+                    .get(&format!("results/{result_id}.json"))
+                    .ok_or("restored legacy result omitted")?
+            )?,
+            archived,
+        );
+    }
+    Ok(())
 }

@@ -1,5 +1,5 @@
 use super::{AssignmentConstructionIssue, AssignmentRuleError, AssignmentRuleLimit};
-use crate::temporal::ResolutionStep;
+use crate::temporal::{CalendarStep, ResolutionStep};
 use eutheto_planning_ir::PlanningIrLimitsV1;
 use eutheto_types::{OperationControl, OperationInterruption};
 use serde::Serialize;
@@ -7,23 +7,28 @@ use std::io::{self, Write};
 
 pub const MAX_INSPECTED_PAIRS: u64 = 1_000_000;
 pub const MAX_WORK_STEPS: u64 = 20_000_000;
+// Projection repeats generic model validation before decoding the candidate. The reviewed
+// rolling-hours model exceeds the compilation allowance in this distinct, bounded phase.
+const MAX_PROJECTION_WORK_STEPS: u64 = 30_000_000;
 pub const MAX_EXPANDED_INTERVALS: u64 = 32_768;
 pub const MAX_SELECTED_PAIRS: u64 = 100_000;
 const MAX_EVALUATION_RECORDS: u64 = 100_000;
 const MAX_EVALUATION_ITEMS: u64 = 1_000_000;
 const MAX_EVALUATION_BYTES: u64 = 16 * 1024 * 1024;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Usage {
     records: u64,
     items: u64,
     bytes: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct OperationBudget<'a> {
     control: Option<&'a OperationControl>,
     limits: PlanningIrLimitsV1,
     steps: u64,
+    max_work_steps: u64,
     expanded_intervals: u64,
     retained: Usage,
     ir: Usage,
@@ -40,6 +45,7 @@ impl<'a> OperationBudget<'a> {
             control,
             limits,
             steps: 0,
+            max_work_steps: MAX_WORK_STEPS,
             expanded_intervals: 0,
             retained: Usage::default(),
             ir: Usage::default(),
@@ -55,6 +61,12 @@ impl<'a> OperationBudget<'a> {
             #[cfg(test)]
             cancel_at_step: None,
         }
+    }
+
+    pub fn projection(control: Option<&'a OperationControl>, limits: PlanningIrLimitsV1) -> Self {
+        let mut budget = Self::analysis(control, limits);
+        budget.max_work_steps = MAX_PROJECTION_WORK_STEPS;
+        budget
     }
 
     pub fn evaluation(control: Option<&'a OperationControl>) -> Self {
@@ -88,7 +100,7 @@ impl<'a> OperationBudget<'a> {
             }
             self.check()?;
         }
-        within(next, MAX_WORK_STEPS, AssignmentRuleLimit::WorkSteps)?;
+        within(next, self.max_work_steps, AssignmentRuleLimit::WorkSteps)?;
         self.steps = next;
         Ok(())
     }
@@ -255,6 +267,206 @@ impl<'a> OperationBudget<'a> {
             ResolutionStep::RetainOwner | ResolutionStep::RetainSpec => self.reserve(1, 2, 128),
             ResolutionStep::RetainShift => self.reserve(1, 3, 512),
         }
+    }
+
+    pub fn calendar_step(&mut self, event: CalendarStep) -> Result<(), AssignmentRuleError> {
+        self.step()?;
+        match event {
+            CalendarStep::Inspect => Ok(()),
+            CalendarStep::RetainWindow => self.reserve(1, 1, 512),
+        }
+    }
+}
+
+/// One cumulative native preparation allowance; neither integrity hashes nor this budget admit data.
+pub struct WorkforceAdmissionBudget<'a> {
+    inner: OperationBudget<'a>,
+}
+
+impl<'a> WorkforceAdmissionBudget<'a> {
+    /// Starts the existing bounded evaluation profile, retaining the caller's interruption control.
+    #[must_use]
+    pub fn new(control: Option<&'a OperationControl>) -> Self {
+        Self {
+            inner: OperationBudget::evaluation(control),
+        }
+    }
+
+    /// Checks borrowed JSON shape/size while charging every traversal to this operation.
+    /// # Errors
+    /// Rejects malformed, oversized or interrupted input and exhausted work.
+    pub fn preflight<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> Result<(), eutheto_domain_api::DomainPackError> {
+        super::boundary::preflight(
+            value,
+            &mut self.inner,
+            eutheto_domain_api::ContractJsonLimits::DEFAULT,
+        )
+        .map(|_| ())
+        .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Reserves measured JSON scratch before native cloning/serialization.
+    /// # Errors
+    /// Rejects bounds, interrupted input or exhausted cumulative retention/work.
+    pub fn reserve_json<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+        copies: u64,
+    ) -> Result<(), eutheto_domain_api::DomainPackError> {
+        let measured = super::boundary::preflight(
+            value,
+            &mut self.inner,
+            eutheto_domain_api::ContractJsonLimits::DEFAULT,
+        )
+        .map_err(|error| super::authority::operation_error(&error))?;
+        measured
+            .reserve_json(&mut self.inner, copies)
+            .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Reserves native records/items/bytes before retaining them; release does not refill usage.
+    /// # Errors
+    /// Rejects checked arithmetic, exhausted retention or interruption.
+    pub fn reserve(
+        &mut self,
+        records: u64,
+        items: u64,
+        bytes: u64,
+    ) -> Result<(), eutheto_domain_api::DomainPackError> {
+        self.inner
+            .reserve(records, items, bytes)
+            .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Charges one native source/command visit.
+    /// # Errors
+    /// Rejects exhausted cumulative work or interruption.
+    pub fn step(&mut self) -> Result<(), eutheto_domain_api::DomainPackError> {
+        self.inner
+            .step()
+            .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Charges a bounded native traversal.
+    /// # Errors
+    /// Rejects exhausted cumulative work or interruption.
+    pub fn steps(&mut self, amount: u64) -> Result<(), eutheto_domain_api::DomainPackError> {
+        self.inner
+            .steps(amount)
+            .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Charges canonical ordering before native sorting.
+    /// # Errors
+    /// Rejects checked arithmetic, exhausted cumulative work or interruption.
+    pub fn sort_work(&mut self, length: usize) -> Result<(), eutheto_domain_api::DomainPackError> {
+        self.inner
+            .sort_work(length)
+            .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Checks the retained caller control without creating another allowance.
+    /// # Errors
+    /// Rejects cancellation or an expired deadline.
+    pub fn check(&self) -> Result<(), eutheto_domain_api::DomainPackError> {
+        self.inner
+            .check()
+            .map_err(|error| super::authority::operation_error(&error))
+    }
+
+    /// Hashes complete canonical pair content using the remaining allowance.
+    /// # Errors
+    /// Rejects duplicates, input/resource bounds or interruption.
+    pub fn pair_content_hash(
+        &mut self,
+        pairs: &[crate::model::AssignmentPair],
+    ) -> Result<String, eutheto_domain_api::DomainPackError> {
+        super::baseline::pair_content_hash(pairs, &mut self.inner)
+    }
+
+    /// Compares effective `BaseSchedule` identity, accepted source and complete pair content.
+    /// # Errors
+    /// Rejects malformed/multiple bases, input/resource bounds or interruption.
+    pub fn effective_base_changed(
+        &mut self,
+        original: &eutheto_types::ScenarioDocument,
+        prospective: &eutheto_types::ScenarioDocument,
+    ) -> Result<bool, eutheto_domain_api::DomainPackError> {
+        super::baseline::effective_base_changed(original, prospective, &mut self.inner)
+    }
+
+    /// Computes integrity only, never a local admission receipt.
+    /// # Errors
+    /// Rejects input/resource bounds or interruption.
+    pub fn manual_selection_checksum(
+        &mut self,
+        record: &crate::model::ManualSelection,
+    ) -> Result<String, eutheto_domain_api::DomainPackError> {
+        super::baseline::manual_checksum(record, &mut self.inner)
+    }
+
+    /// Resolves current generated, detached and manual work through original-source temporal
+    /// authority, charging validation and the complete catalogue to this inherited allowance.
+    ///
+    /// # Errors
+    /// Rejects malformed source, stale occurrence identities, temporal/resource bounds or interruption.
+    pub fn resolved_shifts(
+        &mut self,
+        document: &eutheto_types::ScenarioDocument,
+    ) -> Result<Vec<crate::temporal::ResolvedShift>, eutheto_domain_api::DomainPackError> {
+        let prepared = super::authority::prepare_source(document, &mut self.inner)?;
+        Ok(prepared.shifts)
+    }
+
+    /// Evaluates complete Required outcomes; the native owner must reject unsatisfied outcomes.
+    /// # Errors
+    /// Rejects malformed selections, unsupported/incomplete obligations, bounds or interruption.
+    pub fn evaluate_required_selection(
+        &mut self,
+        document: &eutheto_types::ScenarioDocument,
+        pairs: &[crate::model::AssignmentPair],
+    ) -> Result<super::AssignmentRuleEvaluation, eutheto_domain_api::DomainPackError> {
+        super::authority::evaluate_required_with_budget(document, pairs, &mut self.inner)
+    }
+
+    /// Resolves exact bound pairs, borrowing snapshot data or owning one captured decode.
+    /// # Errors
+    /// Rejects content/source/checksum mismatches, bounds or interruption.
+    pub fn baseline_pairs<'d>(
+        &mut self,
+        domain: &'d crate::model::WorkforceDomainV1,
+        scenario_id: eutheto_types::ScenarioId,
+        binding: &eutheto_domain_ir::RunBaselineBinding,
+    ) -> Result<
+        std::borrow::Cow<'d, [crate::model::AssignmentPair]>,
+        eutheto_domain_api::DomainPackError,
+    > {
+        super::baseline::standalone_baseline_pairs(domain, scenario_id, binding, &mut self.inner)
+    }
+    /// Derives complete source-owned descriptive outcomes under this cumulative allowance.
+    /// # Errors
+    /// Rejects source/recorded-score disagreement, incomplete census, bounds or interruption.
+    pub fn alternative_outcomes(
+        &mut self,
+        document: &eutheto_types::ScenarioDocument,
+        accepted: &eutheto_domain_ir::AcceptedResult,
+        objective_context: &eutheto_domain_ir::RunObjectiveContext,
+    ) -> Result<super::WorkforceAlternativeOutcomes, eutheto_domain_api::DomainPackError> {
+        super::alternative_outcomes::extract(document, accepted, objective_context, &mut self.inner)
+    }
+
+    /// Establishes exact local equivalence, never acceptance or imported provenance.
+    /// # Errors
+    /// Rejects exhausted cumulative work or interruption; never proves partial equality.
+    pub fn same_alternative_outcomes(
+        &mut self,
+        left: &super::WorkforceAlternativeOutcomes,
+        right: &super::WorkforceAlternativeOutcomes,
+    ) -> Result<bool, eutheto_domain_api::DomainPackError> {
+        super::alternative_outcomes::same(left, right, &mut self.inner)
     }
 }
 

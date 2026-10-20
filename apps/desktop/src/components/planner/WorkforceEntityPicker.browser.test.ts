@@ -24,14 +24,14 @@ function deferred() {
 }
 const oldId = "01900000-0000-7000-8000-000000000001";
 const nextId = "01900000-0000-7000-8000-000000000002";
-function page(id: string, name: string) {
+function page(id: string, name: string | null, kind: "person" | "shiftInstance" = "person") {
   return {
     result: {
       view: {
         data: {
           result: {
             data: {
-              items: [{ entityId: id, kind: "person", name }],
+              items: [{ entityId: id, kind, name }],
               continuation: null,
               totalItems: 1,
             },
@@ -101,5 +101,32 @@ describe("native-backed reference picker", () => {
     await userEvent.click(screen.getByRole("combobox", { name: "Search Person" }));
     await userEvent.click(await screen.findByRole("option", { name: /Replacement/u }));
     expect(selected.value).toEqual([nextId]);
+  });
+
+  it("allows keyboard selection of unnamed shifts without issuing unsupported text searches", async () => {
+    native.search.mockReturnValue({ result: Promise.resolve(page(nextId, null, "shiftInstance")) });
+    const selected = shallowRef<readonly string[]>([]);
+    render({
+      render: () =>
+        h(WorkforceEntityPicker, {
+          project,
+          libraryEpoch: 1,
+          kind: "shiftInstance",
+          label: "Stored shift",
+          searchDisabled: true,
+          modelValue: selected.value,
+          "onUpdate:modelValue": (ids: readonly string[]) => {
+            selected.value = ids;
+          },
+        }),
+    });
+    const input = screen.getByRole("combobox", { name: "Choose Stored shift" });
+    await userEvent.click(input);
+    await screen.findByRole("option", { name: new RegExp(nextId, "u") });
+    await userEvent.keyboard("unsupported search");
+    expect(input).toHaveValue("");
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    await expect.poll(() => selected.value).toEqual([nextId]);
+    expect(native.search.mock.calls.every(([, request]) => request.search === "")).toBe(true);
   });
 });

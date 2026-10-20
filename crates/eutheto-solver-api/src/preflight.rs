@@ -1,16 +1,18 @@
 use crate::{
-    BACKEND_STATISTIC_MAX_V1, BackendCandidate, BackendSolveOutcome, BackendTerminationReason,
-    CapabilityMatrix, CompatibilityReport, ModelCostEstimate, RequiredFeature, SolverApiLimits,
-    SolverDescriptor, SupportFeatureId,
+    BACKEND_STATISTIC_MAX_V1, BackendAssumptionCoreEvidence, BackendCandidate, BackendSolveOutcome,
+    BackendTerminationReason, CapabilityMatrix, CompatibilityReport, ModelCostEstimate,
+    RequiredFeature, SolverApiLimits, SolverDescriptor, SupportFeatureId,
 };
+use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
-    Capability, LexicographicStrategy, PlanningIrLimitsV1, PlanningProblemSummary, summarize,
-    validate,
+    Capability, LexicographicStrategy, PlanningIrLimitsV1, PlanningProblemSummary,
+    summarize_with_budget,
 };
 use eutheto_types::{
     BackendSelection, ExplanationMode, ReproducibilityMode, SolveOptions, WorkerThreadPolicy,
 };
 use std::fmt;
+use std::sync::Arc;
 
 /// Derives every matrix requirement visible in the frozen planning summary and solve options.
 ///
@@ -186,12 +188,20 @@ pub fn preflight(
         .validate_descriptor(descriptor)
         .map_err(|error| PreflightError::Matrix(error.to_string()))?;
     let limits = PlanningIrLimitsV1::DEFAULT.tightened_by(request.options().resource_limits);
-    validate(request.problem(), limits)
-        .map_err(|error| PreflightError::InvalidProblem(error.to_string()))?;
-    let actual = summarize(request.problem(), limits)
-        .map_err(|error| PreflightError::InvalidProblem(error.to_string()))?;
-    if &actual != request.summary() {
-        return Err(PreflightError::SummaryMismatch);
+    let prepared_matches = matches!(
+        request.prepared_model(),
+        Some(prepared)
+            if prepared.limits() == limits
+                && Arc::ptr_eq(prepared.problem(), request.problem())
+                && prepared.summary() == request.summary()
+    );
+    if !prepared_matches {
+        let mut preparation = request.dispatch_budget().preparation_budget(limits);
+        let actual = summarize_with_budget(request.problem(), limits, &mut preparation)
+            .map_err(|error| PreflightError::InvalidProblem(error.to_string()))?;
+        if actual.summary() != request.summary() {
+            return Err(PreflightError::SummaryMismatch);
+        }
     }
     if request.options().validate().is_err() {
         return Err(PreflightError::InvalidSolveOptions);
@@ -213,8 +223,9 @@ pub fn preflight(
 /// # Errors
 ///
 /// Returns an error if the limits are invalid or if the outcome's identity, budget evidence,
-/// timing, objective dimensions, candidates, termination reason, or first-incumbent evidence
-/// violates the request contract.
+/// timing, objective dimensions and bound consistency, candidates, termination reason,
+/// first-incumbent evidence, or profile-bound complete assumption-core evidence violates the
+/// request contract.
 pub fn validate_outcome(
     request: &crate::SolveRequest,
     outcome: &BackendSolveOutcome,
@@ -248,6 +259,7 @@ pub fn validate_outcome(
         return Err(OutcomeError::InvalidFirstIncumbentTime);
     }
     validate_execution_evidence(request, outcome)?;
+    validate_assumption_core(request, outcome)?;
     if outcome.evidence.evidence_refs.len() > limits.max_evidence_refs_per_candidate as usize {
         return Err(OutcomeError::OutputLimitExceeded);
     }
@@ -260,6 +272,12 @@ pub fn validate_outcome(
         candidates,
         limits,
         outcome.evidence.elapsed_milliseconds,
+    )?;
+    validate_best_bound_evidence(
+        request,
+        outcome.evidence.best_bound_values.as_deref(),
+        outcome.evidence.objective.as_ref(),
+        candidates,
     )?;
     let has_candidates = !candidates.is_empty();
     match outcome.termination {
@@ -305,6 +323,49 @@ pub fn validate_outcome(
         .map(|candidate| candidate.observed_after_milliseconds);
     if outcome.evidence.first_incumbent_milliseconds != expected_first_incumbent {
         return Err(OutcomeError::FirstIncumbentMismatch);
+    }
+    Ok(())
+}
+
+fn validate_assumption_core(
+    request: &crate::SolveRequest,
+    outcome: &BackendSolveOutcome,
+) -> Result<(), OutcomeError> {
+    let problem = request.problem();
+    let safe_profile = !problem.assumptions.is_empty()
+        && problem.objectives.levels.is_empty()
+        && request.options().worker_threads == WorkerThreadPolicy::Exact(1);
+    let expected =
+        safe_profile && outcome.termination == BackendTerminationReason::InfeasibilityClaimed;
+    let Some(core) = &outcome.evidence.assumption_core else {
+        return if expected {
+            Err(OutcomeError::InvalidAssumptionCoreEvidence)
+        } else {
+            Ok(())
+        };
+    };
+    if !expected {
+        return Err(OutcomeError::InvalidAssumptionCoreEvidence);
+    }
+    let BackendAssumptionCoreEvidence::Sufficient { literals } = core else {
+        return Ok(());
+    };
+    if literals.is_empty()
+        || literals.len() > problem.assumptions.len()
+        || !literals.windows(2).all(|pair| pair[0] < pair[1])
+    {
+        return Err(OutcomeError::InvalidAssumptionCoreEvidence);
+    }
+    // The admitted IR has unique assumption variables. Searching the canonical core while
+    // walking submitted assumptions proves complete signed membership without an extra index
+    // allocation or quadratic work, regardless of assumption-group identity order.
+    let matched = problem
+        .assumptions
+        .iter()
+        .filter(|assumption| literals.binary_search(&assumption.literal).is_ok())
+        .count();
+    if matched != literals.len() {
+        return Err(OutcomeError::InvalidAssumptionCoreEvidence);
     }
     Ok(())
 }
@@ -460,14 +521,46 @@ fn validate_objective_evidence(
     evidence: Option<&crate::BackendObjectiveEvidence>,
     objective_level_count: usize,
 ) -> Result<(), OutcomeError> {
-    if evidence.is_some_and(|value| {
-        value.objective_values.len() != objective_level_count
-            || value
-                .best_bound_values
-                .as_ref()
-                .is_some_and(|bounds| bounds.len() != objective_level_count)
-    }) {
+    if evidence.is_some_and(|value| value.objective_values.len() != objective_level_count) {
         return Err(OutcomeError::InvalidObjectiveDimension);
+    }
+    Ok(())
+}
+
+fn validate_best_bound_evidence(
+    request: &crate::SolveRequest,
+    bounds: Option<&[i64]>,
+    objective: Option<&crate::BackendObjectiveEvidence>,
+    candidates: &[BackendCandidate],
+) -> Result<(), OutcomeError> {
+    let Some(bounds) = bounds else {
+        return Ok(());
+    };
+    let levels = &request.problem().objectives.levels;
+    if levels.is_empty() || bounds.is_empty() || bounds.len() != levels.len() {
+        return Err(OutcomeError::InvalidObjectiveDimension);
+    }
+    for (index, (bound, level)) in bounds.iter().zip(levels).enumerate() {
+        if !(level.lower_bound..=level.upper_bound).contains(bound) {
+            return Err(OutcomeError::BestBoundOutsideDeclaredRange);
+        }
+        for evidence in objective.into_iter().chain(
+            candidates
+                .iter()
+                .filter_map(|candidate| candidate.objective.as_ref()),
+        ) {
+            let value = evidence
+                .objective_values
+                .get(index)
+                .ok_or(OutcomeError::InvalidObjectiveDimension)?;
+            let consistent = match level.direction {
+                OptimizationDirection::Minimize => bound <= value,
+                OptimizationDirection::Maximize => bound >= value,
+            };
+            if !consistent {
+                return Err(OutcomeError::BestBoundContradictsObjective);
+            }
+        }
     }
     Ok(())
 }
@@ -510,6 +603,8 @@ pub enum OutcomeError {
     OutputLimitExceeded,
     CandidateAssignmentLimitExceeded,
     InvalidObjectiveDimension,
+    BestBoundOutsideDeclaredRange,
+    BestBoundContradictsObjective,
     NonMonotonicCandidateTime,
     CandidateSequenceMismatch,
     CandidateAfterTermination,
@@ -523,6 +618,7 @@ pub enum OutcomeError {
     ExecutionOptionsMismatch,
     ExecutionModelCountMismatch,
     InvalidExecutionEvidence,
+    InvalidAssumptionCoreEvidence,
 }
 
 impl fmt::Display for OutcomeError {

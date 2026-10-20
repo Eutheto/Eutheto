@@ -57,6 +57,56 @@ UI001 browser component checks are a separate, explicit surface: run `just front
 
 Report exactly what you ran and what it proved. A build does not prove product acceptance, a unit test does not prove packaging, and repository checks do not prove deferred product behavior.
 
+## Temporary Phase 07 maintenance dispositions
+
+Owner **Phase07maintainer** accepts only the following informational
+`unmaintained` notices through **2026-11-16 UTC inclusive**, with **no automatic
+renewal**. These are maintenance-risk dispositions, not vulnerability exemptions.
+
+| Locked package | Maintenance notice |
+| --- | --- |
+| bincode 1.3.3 | RUSTSEC-2025-0141 |
+| paste 1.0.15 | RUSTSEC-2024-0436 |
+| rustybuzz 0.20.1 | RUSTSEC-2026-0206 |
+| ttf-parser 0.25.1 | RUSTSEC-2026-0192 |
+| unsafe-libyaml 0.2.11 | RUSTSEC-2024-0449 |
+| yaml-rust 0.4.5 | RUSTSEC-2024-0320 |
+
+The accepted exposure is the closed PDF worker World, fixed report template and
+reviewed embedded fonts. No external XML, YAML, bibliography or syntax-definition
+input is admitted, including arbitrary font bytes. Font parsing and shaping remain
+active; retain existing embedded-font identity, closed World, unsupported-glyph,
+Unicode and layout checks. Font, parser or shaping source changes require renewed
+review including malformed-font robustness evidence. This accepts future
+maintenance risk, especially for the active font components; it does not prove
+their safety.
+
+Re-review immediately for **any new advisory, dependency version or source change,
+World or template capability expansion, font change, or new parser reachability**.
+The owner must review these triggers before accepting the change; the automated
+gate checks dependency identity and advisory findings, not semantic reachability.
+
+Run `just rust-advisories` locally and in CI. Its mandatory Python precheck binds
+each exact package version, crates.io source and checksum, checks the current UTC
+date, then inspects an unfiltered `cargo audit --json --deny warnings` report.
+Only the six matching `unmaintained` findings receive these dispositions;
+reclassification, missing notices, changed identities and new findings fail.
+The ignore-ID set is fixed to these six notices plus the 17 existing GTK
+exceptions; adding an ignored advisory ID requires an explicit policy review.
+`cargo deny --locked check advisories licenses bans sources` runs only after that
+precheck passes. Direct `cargo deny` ignores advisory IDs alone and does not
+enforce these dispositions' expiry or package scope. `just rust-advisories-test`
+exercises the accepted deadline and rejection boundaries without network access.
+Existing GTK exceptions retain their separate 2026-11-30 gate.
+
+Never suppress RUSTSEC-2026-0194, RUSTSEC-2026-0195, RUSTSEC-2026-0367,
+RUSTSEC-2026-0368 or RUSTSEC-2026-0369. Their quick-xml/zip remediation, a fresh
+official advisory database, license/source checks, regenerated notices/SBOM and
+affected packaged acceptance evidence remain necessary. Passing the maintenance
+precheck alone does not establish Phase 07 or release acceptance. After expiry,
+remove the affected dependencies or obtain a new explicit reviewed decision;
+changing the deadline is not routine dependency upkeep.
+
 ## Architecture and security boundaries
 
 All contributions must preserve these boundaries:

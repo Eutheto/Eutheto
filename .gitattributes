@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 LICENSE text eol=lf
 NOTICE text eol=lf
+migrations/*.sql text eol=lf
 workers/ortools/patches/*.patch text eol=lf
 workers/ortools/source-contract.json text eol=lf
 workers/ortools/dependency-sources.json text eol=lf
 workers/ortools/VERSION text eol=lf
 protocol/solver-worker.proto text eol=lf
 protocol/version.json text eol=lf
+crates/eutheto-cli/tests/fixtures/progress-pre-terminal-bound-cutover.jsonl text eol=lf
 apps/desktop/src-tauri/Cargo.toml text eol=lf
 workers/ortools/proto/**/*.proto text eol=lf
+# Preserve reviewed upstream bytes, including fixture whitespace.
+vendor/citationberg/** -text -whitespace
+vendor/citationberg.provenance.json text eol=lf
+vendor/citationberg-fixtures.* text eol=lf

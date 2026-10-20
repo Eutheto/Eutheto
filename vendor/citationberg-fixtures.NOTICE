@@ -1,0 +1,112 @@
+SPDX-License-Identifier: Apache-2.0
+
+Citationberg unchanged CSL test-fixture attribution
+
+Scope: the eight files listed below from upstream citationberg commit
+06a591e2f237d25e1dfdedac3f3d1494c496c52d. These files remain unchanged.
+Their license is CC-BY-SA-3.0, as stated in every fixture and upstream NOTICE.
+They are filesystem-read test data; the production renderer does not embed them.
+The citationberg library code retains MIT OR Apache-2.0 licensing.
+This project-authored attribution metadata does not relicense the fixtures.
+
+License: https://creativecommons.org/licenses/by-sa/3.0/
+Full legal text: citationberg-fixtures.CC-BY-SA-3.0.txt
+Retained upstream notice: citationberg/NOTICE
+Exact source: https://github.com/typst/citationberg/tree/06a591e2f237d25e1dfdedac3f3d1494c496c52d
+
+vendor/citationberg/tests/dependent/academic-questions.csl
+  Title: Academic Questions
+  Identifier: http://www.zotero.org/styles/academic-questions
+  Named authors/contributors/translators: not supplied; none invented.
+  self: http://www.zotero.org/styles/academic-questions
+  independent-parent: http://www.zotero.org/styles/springer-humanities-brackets
+  documentation: http://www.springer.com/cda/content/document/cda_downloaddocument/Key_Style_Points_1.0.pdf
+  documentation: http://www.springer.com/cda/content/document/cda_downloaddocument/manuscript-guidelines-1.0.pdf
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 1e9fd1710c60522ae36fbb0d4fa50d74ab9f69731e67cdc8fbbb7c4a43af1051
+
+vendor/citationberg/tests/dependent/accounts-of-chemical-research.csl
+  Title: Accounts of Chemical Research
+  Identifier: http://www.zotero.org/styles/accounts-of-chemical-research
+  Named authors/contributors/translators: not supplied; none invented.
+  self: http://www.zotero.org/styles/accounts-of-chemical-research
+  independent-parent: http://www.zotero.org/styles/american-chemical-society
+  documentation: http://pubs.acs.org/paragonplus/submission/achre4/achre4_authguide.pdf
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 19ca705ebdf14183a9b33d6ac801f7e54dd80d0444d7708013e9580f23bef567
+
+vendor/citationberg/tests/independent/art-history.csl
+  Title: Art History
+  Identifier: http://www.zotero.org/styles/art-history
+  Author: Julian Onions
+  self: http://www.zotero.org/styles/art-history
+  documentation: http://onlinelibrary.wiley.com/journal/10.1111/%28ISSN%291467-8365/homepage/ForAuthors.html
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 6a002cb035565a10fd66d353872ddddde7baef7efabe72dcfea008833633c2ed
+
+vendor/citationberg/tests/independent/chicago-author-date.csl
+  Title: Chicago Manual of Style 17th edition (author-date)
+  Identifier: http://www.zotero.org/styles/chicago-author-date
+  Author: Julian Onions
+  Contributor: Sebastian Karcher
+  Contributor: Richard Karnesky (http://arc.nucapt.northwestern.edu/Richard_Karnesky)
+  Contributor: Andrew Dunning (https://orcid.org/0000-0003-0464-5036)
+  Contributor: Matthew Roth ( https://orcid.org/0000-0001-7902-6331)
+  Contributor: Brenton M. Wiernik
+  self: http://www.zotero.org/styles/chicago-author-date
+  documentation: http://www.chicagomanualofstyle.org/tools_citationguide.html
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 0e8c35572c05819de3774dc6ff57eb7f90e3ac7c16a8495449b10a4e5e11a2f2
+
+vendor/citationberg/tests/independent/chicago-fullnote-bibliography.csl
+  Title: Chicago Manual of Style 17th edition (full note)
+  Identifier: http://www.zotero.org/styles/chicago-fullnote-bibliography
+  Author: Julian Onions
+  Contributor: Simon Kornblith
+  Contributor: Elena Razlogova
+  Contributor: Frank Bennett
+  Contributor: Andrew Dunning
+  Contributor: Sebastian Karcher
+  Contributor: Brenton M. Wiernik
+  self: http://www.zotero.org/styles/chicago-fullnote-bibliography
+  documentation: http://www.chicagomanualofstyle.org/tools_citationguide.html
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 9be535c9144a63a5c51a041febd80d60d9c1a0a41fada47fe29ef87c0be23953
+
+vendor/citationberg/tests/independent/ieee.csl
+  Title: IEEE
+  Identifier: http://www.zotero.org/styles/ieee
+  Author: Michael Berkowitz
+  Contributor: Julian Onions
+  Contributor: Rintze Zelle (http://twitter.com/rintzezelle)
+  Contributor: Stephen Frank (http://www.zotero.org/sfrank)
+  Contributor: Sebastian Karcher
+  Contributor: Giuseppe Silano (http://giuseppesilano.net)
+  Contributor: Patrick O'Brien
+  Contributor: Brenton M. Wiernik
+  Contributor: Oliver Couch
+  self: http://www.zotero.org/styles/ieee
+  documentation: http://journals.ieeeauthorcenter.ieee.org/wp-content/uploads/sites/7/IEEE_Reference_Guide.pdf
+  documentation: https://journals.ieeeauthorcenter.ieee.org/your-role-in-article-production/ieee-editorial-style-manual/
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 913bcf74362f2a66d042cee1d8ac80e35020adace619a98285241995d0127262
+
+vendor/citationberg/tests/locales/locales-en-US.xml
+  Title: Not supplied
+  Identifier: Not supplied
+  Translator: Andrew Dunning (https://orcid.org/0000-0003-0464-5036)
+  Translator: Sebastian Karcher (https://orcid.org/0000-0001-8249-7388)
+  Translator: Rintze M. Zelle (https://orcid.org/0000-0003-1779-8883)
+  Translator: Denis Meier
+  Translator: Brenton M. Wiernik (https://orcid.org/0000-0001-9560-6336)
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 9ed8350a124d66b9ea258018bcbfa74c7278fdfb78c4408fc58e5c6b73914b5f
+
+vendor/citationberg/tests/locales/locales-zh-CN.xml
+  Title: Not supplied
+  Identifier: Not supplied
+  Translator: rongls
+  Translator: sati-bodhi
+  Translator: Heromyth
+  License: http://creativecommons.org/licenses/by-sa/3.0/
+  SHA-256: 85cade24d6ef21cb08c98c022f8c0d49c33a0a842e2233518c7c19cc773eab65

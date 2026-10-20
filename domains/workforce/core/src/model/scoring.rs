@@ -71,6 +71,7 @@ pub enum WorkloadTargetMode {
     Explicit { targets: Vec<PersonTarget> },
     PersonTargets {},
     WeightedEqualShare {},
+    EqualShare {},
 }
 
 /// Unique-person reference records; supplied order is preserved but has no target meaning.

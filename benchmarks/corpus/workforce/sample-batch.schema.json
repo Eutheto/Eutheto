@@ -257,7 +257,9 @@
               "dst-spring",
               "dst-fall",
               "large-supported",
-              "large-pressure"
+              "large-pressure",
+              "practitioner-workflow",
+              "practitioner-infeasible"
             ],
             "type": "string"
           },
@@ -404,7 +406,7 @@
         ],
         "type": "object"
       },
-      "maxItems": 52,
+      "maxItems": 60,
       "minItems": 1,
       "type": "array"
     },
@@ -425,6 +427,6 @@
     "runnerSha256",
     "samples"
   ],
-  "title": "Workforce corpus v1 sample-batch",
+  "title": "Workforce corpus v2 sample-batch",
   "type": "object"
 }

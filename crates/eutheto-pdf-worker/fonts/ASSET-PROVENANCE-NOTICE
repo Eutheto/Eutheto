@@ -1,0 +1,51 @@
+Additional embedded Typst asset provenance and attribution
+
+CMYK-to-XYZ.icc is byte-identical to Compact-ICC-Profiles
+profiles/CGATS001Compat-v2-micro.icc at commit
+bdd84663061bc4ae95ca70decff54f581e27f702.
+The project applies CC0-1.0 to all profiles, as stated in its pinned readme:
+https://github.com/saucecontrol/Compact-ICC-Profiles/blob/bdd84663061bc4ae95ca70decff54f581e27f702/readme.md
+The unchanged full license accompanies this notice as COMPACT-ICC-LICENSE.
+
+icu_cj_segment.postcard is the unchanged typst-assets 0.15.1 blob.
+Typst records the generator branch typst/icu4x cj-patch-update.
+The inspected branch revision is 662e8320615aef5d07717456736e0d55b5011117;
+its line/grapheme providers use Unicode property data. The blob was not
+regenerated for this review. The unchanged Unicode License V3 accompanies
+this notice as ICU4X-LICENSE.
+https://github.com/typst/icu4x/tree/662e8320615aef5d07717456736e0d55b5011117
+
+This software includes material copied from or derived from MathML Core:
+https://www.w3.org/TR/2025/CR-mathml-core-20250624/
+https://raw.githubusercontent.com/w3c/mathml-core/3ce07269fe6b7e6888ecfea28b180e78774a4705/tables/operator-dictionary-compact.html
+https://raw.githubusercontent.com/w3c/mathml-core/3ce07269fe6b7e6888ecfea28b180e78774a4705/tables/inline-axis-operators.html
+Copyright © 2025 World Wide Web Consortium.
+The source tables were transformed into Rust by Typst codegen; Eutheto
+copies the generated data unchanged. The complete W3C Software and
+Document License (2023 wording, SPDX W3C-20150513) is retained in
+UPSTREAM-NOTICE. Project-authored generated code is Apache-2.0.
+
+The HTML metadata tables also incorporate WHATWG HTML and Fetch source
+portions under BSD-3-Clause, with full text retained in UPSTREAM-NOTICE.
+The WAI-ARIA 1.1 and Referrer Policy document-derived portions use the
+distinct W3C Document License (2015), retained in full in
+W3C-DOCUMENT-LICENSE-2015. This reviewed use is generated Rust software
+implementation metadata, within its software-derivative exception; it does
+not grant permission to publish modified technical specifications.
+
+Includes material derived from Accessible Rich Internet Applications
+(WAI-ARIA) 1.1, W3C Recommendation 14 December 2017:
+https://www.w3.org/TR/2017/REC-wai-aria-1.1-20171214/
+Copyright © 2013–2017 W3C (MIT, ERCIM, Keio, Beihang).
+And Referrer Policy, W3C Candidate Recommendation 26 January 2017:
+https://www.w3.org/TR/2017/CR-referrer-policy-20170126/
+Copyright © 2017 W3C (MIT, ERCIM, Keio, Beihang).
+Typst transformed these portions into Rust metadata; Eutheto copies unchanged.
+The full dated document-license terms accompany these attributions.
+The license file is a complete rendered-text extraction of the primary
+W3C page, not original source HTML; its retrieval provenance is retained
+under attribution/typst-assets-0.15.1/.
+
+Copyright © 2015 W3C® (MIT, ERCIM, Keio, Beihang). This software or document includes material copied from or derived from Accessible Rich Internet Applications (WAI-ARIA) 1.1 (https://www.w3.org/TR/2017/REC-wai-aria-1.1-20171214/).
+
+Copyright © 2015 W3C® (MIT, ERCIM, Keio, Beihang). This software or document includes material copied from or derived from Referrer Policy (https://www.w3.org/TR/2017/CR-referrer-policy-20170126/).

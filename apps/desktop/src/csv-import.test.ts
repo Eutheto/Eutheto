@@ -7,12 +7,21 @@ import type {
   ApiErrorDto,
   ApiResponseDto,
   HistoryEntrySummaryDtoV1,
+  AssignmentCsvMapping,
+  AssignmentCsvTarget,
+  EligibilityCsvMapping,
   PeopleCsvDecision,
   PeopleCsvMapping,
 } from "./api/generated";
 import peopleCsvNative from "./api/fixtures/people-csv-native.json";
-import { usePeopleCsvImport } from "./people-csv-import";
-import { createProjectHomeController, type ProjectSummary } from "./project-home";
+import assignmentCsvNative from "./api/fixtures/assignment-csv-native.json";
+import eligibilityCsvNative from "./api/fixtures/eligibility-csv-native.json";
+import { usePeopleCsvImport, useAssignmentCsvImport, useEligibilityCsvImport } from "./csv-import";
+import {
+  createProjectHomeController,
+  type ProjectHomeController,
+  type ProjectSummary,
+} from "./project-home";
 import { fakeApi, project, response } from "./testing/project-home";
 
 const tauri = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -88,20 +97,20 @@ function nativeCsv(
         return Promise.resolve(
           nativeResponse(input, { schemaVersion: 1, acknowledgement: "cancellationRequested" }),
         );
-      case "people_csv_source_close":
-      case "people_csv_preview_discard":
+      case "csv_source_close":
+      case "csv_preview_discard":
         return Promise.resolve(nativeResponse(input, { schemaVersion: 1 }));
-      case "people_csv_source_open":
+      case "csv_source_open":
         return Promise.resolve(nativeResponse(input, peopleCsvNative.sourceOpened));
       case "people_csv_preview":
         return Promise.resolve(nativeResponse(input, peopleCsvNative.preview, 0));
-      case "people_csv_apply":
+      case "csv_apply":
         return Promise.resolve(nativeResponse(input, applied(input), 1));
-      case "people_csv_rejected_rows":
+      case "csv_report":
         return Promise.resolve(
           nativeResponse(input, { ...peopleCsvNative.rejectedRows, consumed: false }),
         );
-      case "people_csv_rejected_rows_save":
+      case "csv_report_save":
         return Promise.resolve(nativeResponse(input, peopleCsvNative.reportSaved));
       default:
         throw new Error(`Unexpected native CSV command: ${command}`);
@@ -109,11 +118,14 @@ function nativeCsv(
   });
 }
 
-function createConsumer() {
+function createConsumerWith<Importer>(
+  useImport: (home: ProjectHomeController, project: () => ProjectSummary) => Importer,
+  scenario: Pick<ProjectSummary, "scenarioId" | "revision"> = peopleCsvNative.preview,
+) {
   const current = shallowRef<ProjectSummary>({
     ...project,
-    scenarioId: peopleCsvNative.preview.scenarioId,
-    revision: peopleCsvNative.preview.revision,
+    scenarioId: scenario.scenarioId,
+    revision: scenario.revision,
   });
   const api = fakeApi([current.value]);
   api.listProjects.mockImplementation(() => Promise.resolve(response([current.value])));
@@ -134,7 +146,7 @@ function createConsumer() {
   const home = app.runWithContext(() => rootScope.run(() => createProjectHomeController(api)));
   if (!home) throw new Error("Expected an active controller scope");
   const childScope = effectScope();
-  const importer = childScope.run(() => usePeopleCsvImport(home, () => current.value));
+  const importer = childScope.run(() => useImport(home, () => current.value));
   if (!importer) throw new Error("Expected an active import scope");
   onTestFinished(async () => {
     childScope.stop();
@@ -143,6 +155,114 @@ function createConsumer() {
     disposePinia(pinia);
   });
   return { home, importer, childScope, current, api };
+}
+
+function createConsumer() {
+  return createConsumerWith(usePeopleCsvImport);
+}
+
+function nativeAssignmentCsv(
+  override?: (command: string, input: Invocation) => Promise<unknown> | undefined,
+) {
+  nativeCsv((command, input) => {
+    const overridden = override?.(command, input);
+    if (overridden !== undefined) return overridden;
+    switch (command) {
+      case "csv_source_open":
+        return Promise.resolve(nativeResponse(input, assignmentCsvNative.sourceOpened));
+      case "csv_detect":
+        return Promise.resolve(nativeResponse(input, assignmentCsvNative.detection));
+      case "csv_record_sample":
+        return Promise.resolve(nativeResponse(input, assignmentCsvNative.sample));
+      case "assignment_csv_preview":
+        return Promise.resolve(
+          nativeResponse(input, assignmentCsvNative.preview, assignmentCsvNative.preview.revision),
+        );
+      case "csv_apply":
+        return Promise.resolve(
+          nativeResponse(
+            input,
+            {
+              ...assignmentCsvNative.applied,
+              outcome: {
+                ...assignmentCsvNative.applied.outcome,
+                commandId: input.request.commandId,
+              },
+            },
+            assignmentCsvNative.applied.outcome.revision,
+          ),
+        );
+      case "csv_report":
+        return Promise.resolve(nativeResponse(input, assignmentCsvNative.report));
+      case "csv_report_save":
+        return Promise.resolve(nativeResponse(input, assignmentCsvNative.reportSaved));
+      default:
+        return undefined;
+    }
+  });
+}
+
+function assignmentInput() {
+  const review = assignmentCsvNative.preview.preview.review;
+  const mapping: AssignmentCsvMapping = { format: "canonicalV1" };
+  const target = {
+    kind: "create",
+    id: review.target.id,
+    name: review.target.name,
+  } satisfies AssignmentCsvTarget;
+  return {
+    mapping,
+    target,
+    skippedRecords: [...review.skippedRecords],
+    allowEmpty: review.allowEmpty,
+  };
+}
+
+function nativeEligibilityCsv() {
+  nativeCsv((command, input) => {
+    if (command === "csv_source_open") {
+      // Unit-test picker stub; actual OS selection is exercised by packaged acceptance.
+      return Promise.resolve(
+        nativeResponse(input, {
+          schemaVersion: 1,
+          sourceId: eligibilityCsvNative.sourceId,
+          byteCount: eligibilityCsvNative.preview.result.preview.source.rawBytes,
+        }),
+      );
+    }
+    if (command === "csv_apply") {
+      const receipt = eligibilityCsvNative.applied;
+      return Promise.resolve(
+        nativeResponse(
+          input,
+          {
+            ...receipt.result,
+            outcome: { ...receipt.result.outcome, commandId: input.request.commandId },
+          },
+          receipt.currentRevision,
+        ),
+      );
+    }
+    const receipt =
+      command === "csv_detect"
+        ? eligibilityCsvNative.detection
+        : command === "csv_record_sample"
+          ? eligibilityCsvNative.sample
+          : command === "eligibility_csv_preview"
+            ? eligibilityCsvNative.preview
+            : command === "csv_report"
+              ? eligibilityCsvNative.report
+              : null;
+    return receipt === null
+      ? undefined
+      : Promise.resolve(nativeResponse(input, receipt.result, receipt.currentRevision));
+  });
+}
+
+function eligibilityInput() {
+  const review = eligibilityCsvNative.preview.result.preview.review;
+  const mapping: EligibilityCsvMapping = { ...review.mapping, dialect: "comma" };
+  return { mapping, skippedRecords: review.skippedRecords };
 }
 
 function csvInput(): { mapping: PeopleCsvMapping; decisions: readonly PeopleCsvDecision[] } {
@@ -187,12 +307,12 @@ describe("CSV consumer lifecycle with its root owner", () => {
     const sample = (record: number, name: string) => ({
       schemaVersion: 1,
       sourceId: peopleCsvNative.sourceOpened.sourceId,
-      dialect: "comma",
+      readFormat: { family: "people", dialect: "comma" },
       record,
       cells: [{ text: name, truncated: false }],
     });
     nativeCsv((command, input) => {
-      if (command !== "people_csv_record_sample") return undefined;
+      if (command !== "csv_record_sample") return undefined;
       if (input.request.record === 2) {
         if (++delayedReads === 1) {
           rowAEntered.resolve(input);
@@ -224,13 +344,13 @@ describe("CSV consumer lifecycle with its root owner", () => {
     await obsolete;
     expect(importer.state.sample).toEqual({ status: "idle" });
     expect(await importer.apply()).toBeNull();
-    expect(nativeCalls("people_csv_apply")).toHaveLength(0);
+    expect(nativeCalls("csv_apply")).toHaveLength(0);
   });
 
   it("retains the old report and blocks replacement acquisition until failed cleanup is resolved", async () => {
     let failCleanup = true;
     nativeCsv((command) =>
-      command === "people_csv_preview_discard" && failCleanup
+      command === "csv_preview_discard" && failCleanup
         ? Promise.reject(Object.assign(new Error(storageFailure.message), storageFailure))
         : undefined,
     );
@@ -246,9 +366,12 @@ describe("CSV consumer lifecycle with its root owner", () => {
     expect(importer.state.preview).toBeNull();
     expect(await importer.apply()).toBeNull();
     expect(nativeCalls("people_csv_preview")).toHaveLength(1);
-    expect(nativeCalls("people_csv_apply")).toHaveLength(0);
+    expect(nativeCalls("csv_apply")).toHaveLength(0);
     expect(await importer.readReport()).toBe(true);
-    expect(importer.state.report?.rejectedRows).toEqual([{ record: 3, code: "missingName" }]);
+    expect(importer.state.report?.rows).toEqual({
+      family: "people",
+      rejectedRows: [{ record: 3, code: "missingName" }],
+    });
 
     childScope.stop();
     await expect.poll(() => home.state.reviewCleanupError).not.toBeNull();
@@ -263,7 +386,7 @@ describe("CSV consumer lifecycle with its root owner", () => {
     const terminal = deferred<unknown>();
     const durableHistory: HistoryEntrySummaryDtoV1[] = [];
     nativeCsv((command, input) => {
-      if (command !== "people_csv_apply") return undefined;
+      if (command !== "csv_apply") return undefined;
       const commandId = input.request.commandId;
       if (typeof commandId !== "string") throw new Error("Expected a command identity");
       // The native boundary committed once; only delivery of its result remains pending.
@@ -321,7 +444,7 @@ describe("CSV consumer lifecycle with its root owner", () => {
       revision: 1,
       history: { kind: "found", applied: true },
     });
-    expect(nativeCalls("people_csv_apply")).toHaveLength(1);
+    expect(nativeCalls("csv_apply")).toHaveLength(1);
   });
 
   it("publishes a received receipt before refresh and keeps report I/O failures separate after late cancellation and revision change", async () => {
@@ -331,14 +454,14 @@ describe("CSV consumer lifecycle with its root owner", () => {
     const refresh = deferred<ApiResponseDto<ProjectSummary[]>>();
     let failReport = true;
     nativeCsv((command, input) => {
-      if (command === "people_csv_apply") {
+      if (command === "csv_apply") {
         entered.resolve(input);
         return terminal.promise;
       }
-      if (command === "people_csv_rejected_rows" || command === "people_csv_rejected_rows_save") {
+      if (command === "csv_report" || command === "csv_report_save") {
         if (failReport)
           return Promise.reject(Object.assign(new Error(storageFailure.message), storageFailure));
-        if (command === "people_csv_rejected_rows")
+        if (command === "csv_report")
           return Promise.resolve(nativeResponse(input, peopleCsvNative.rejectedRows));
       }
       return undefined;
@@ -360,7 +483,7 @@ describe("CSV consumer lifecycle with its root owner", () => {
     expect(home.state.mutation?.outcome).toBe("applied");
     expect(importer.state.sourceState).toBe("consumed");
     expect(importer.state.report).toEqual(peopleCsvNative.applied.report);
-    expect(nativeCalls("people_csv_rejected_rows")).toHaveLength(0);
+    expect(nativeCalls("csv_report")).toHaveLength(0);
     refresh.resolve(response([current.value]));
     expect(await applying).toEqual(applied(dispatch));
 
@@ -373,14 +496,14 @@ describe("CSV consumer lifecycle with its root owner", () => {
     expect(await importer.readReport()).toBe(true);
     expect(await importer.saveReport()).toBe(true);
     expect(await importer.apply()).toBeNull();
-    expect(nativeCalls("people_csv_apply")).toHaveLength(1);
+    expect(nativeCalls("csv_apply")).toHaveLength(1);
   });
 
   it("settles an in-flight receipt at the root even after cancellation, scenario replacement and route disposal", async () => {
     const entered = deferred<Invocation>();
     const terminal = deferred<unknown>();
     nativeCsv((command, input) => {
-      if (command !== "people_csv_apply") return undefined;
+      if (command !== "csv_apply") return undefined;
       entered.resolve(input);
       return terminal.promise;
     });
@@ -404,7 +527,7 @@ describe("CSV consumer lifecycle with its root owner", () => {
     expect(home.state.errorMessage).toBeNull();
     expect(importer.state.report).toBeNull();
     expect(await importer.apply()).toBeNull();
-    expect(nativeCalls("people_csv_apply")).toHaveLength(1);
+    expect(nativeCalls("csv_apply")).toHaveLength(1);
   });
 
   it.each([false, true])(
@@ -414,7 +537,7 @@ describe("CSV consumer lifecycle with its root owner", () => {
       const terminal = deferred<unknown>();
       let firstApply = true;
       nativeCsv((command, input) => {
-        if (command !== "people_csv_apply" || !firstApply) return undefined;
+        if (command !== "csv_apply" || !firstApply) return undefined;
         firstApply = false;
         entered.resolve(input);
         return terminal.promise;
@@ -445,7 +568,7 @@ describe("CSV consumer lifecycle with its root owner", () => {
       if (invalidate) {
         expect(importer.state.approval).toBeNull();
         expect(await importer.apply(true)).toBeNull();
-        expect(nativeCalls("people_csv_apply")).toHaveLength(1);
+        expect(nativeCalls("csv_apply")).toHaveLength(1);
       } else {
         const receipt = await importer.apply(true);
         expect(receipt?.outcome).toEqual({
@@ -454,8 +577,130 @@ describe("CSV consumer lifecycle with its root owner", () => {
           commandId: dispatch.request.commandId,
         });
         expect(home.state.mutation?.outcome).toBe("applied");
-        expect(nativeCalls("people_csv_apply")).toHaveLength(2);
+        expect(nativeCalls("csv_apply")).toHaveLength(2);
       }
     },
   );
+});
+
+describe("assignment CSV shared lifecycle", () => {
+  it("captures target and skip intent before native acquisition and retains its source/report without stale approval", async () => {
+    const entered = deferred<Invocation>();
+    const preparing = deferred<unknown>();
+    let delayPreparation = false;
+    nativeAssignmentCsv((command, input) => {
+      if (command !== "operation_prepare" || !delayPreparation) return undefined;
+      delayPreparation = false;
+      entered.resolve(input);
+      return preparing.promise;
+    });
+    const { importer, current } = createConsumerWith(
+      useAssignmentCsvImport,
+      assignmentCsvNative.preview,
+    );
+    expect(await importer.choose()).toBe(true);
+    expect(await importer.detect()).toBe(true);
+    expect(importer.state.detection).toEqual(assignmentCsvNative.detection.data);
+    await importer.inspect({ format: "canonicalV1" }, assignmentCsvNative.sample.record);
+    expect(importer.state.sample).toEqual({ status: "ready", sample: assignmentCsvNative.sample });
+    const source = importer.state.source;
+    const input = assignmentInput();
+    const captured = structuredClone(input);
+    delayPreparation = true;
+    const previewing = importer.preview(
+      input.mapping,
+      input.target,
+      input.skippedRecords,
+      input.allowEmpty,
+    );
+    const prepared = await entered.promise;
+    input.target.name = "Unsubmitted edit";
+    input.skippedRecords.push(10_002);
+    preparing.resolve(
+      nativeResponse(prepared, {
+        schemaVersion: 1,
+        operationId: "01900000-0000-7000-8000-000000009999",
+      }),
+    );
+    expect(await previewing).toBe(true);
+    const request = nativeCalls("assignment_csv_preview")[0]?.[1]?.request;
+    expect(request).toMatchObject(captured);
+    expect(importer.state.preview).toEqual(assignmentCsvNative.preview);
+    expect(importer.state.approval).not.toBeNull();
+    current.value = { ...current.value, revision: current.value.revision + 1 };
+    expect(importer.state.source).toBe(source);
+    expect(importer.state.stale).toBe(true);
+    expect(importer.state.preview).toBeNull();
+    expect(importer.state.approval).toBeNull();
+    expect(importer.state.sample).toEqual({ status: "idle" });
+    expect(await importer.apply()).toBeNull();
+    expect(nativeCalls("csv_apply")).toHaveLength(0);
+    expect(await importer.readReport()).toBe(true);
+    expect(importer.state.report).toEqual(assignmentCsvNative.report);
+  });
+
+  it("applies a native external-plan review without People proposal correlation and retains the assignment report", async () => {
+    nativeAssignmentCsv();
+    const { importer, home } = createConsumerWith(
+      useAssignmentCsvImport,
+      assignmentCsvNative.preview,
+    );
+    expect(await importer.choose()).toBe(true);
+    const input = assignmentInput();
+    expect(
+      await importer.preview(input.mapping, input.target, input.skippedRecords, input.allowEmpty),
+    ).toBe(true);
+    expect(importer.state.approval).not.toBeNull();
+    const result = await importer.apply();
+    expect(result?.outcome.kind).toBe("applied");
+    expect(home.state.mutation?.outcome).toBe("applied");
+    expect(importer.state.sourceState).toBe("consumed");
+    expect(importer.state.report?.rows).toEqual(assignmentCsvNative.applied.report.rows);
+    expect(await importer.saveReport()).toBe(true);
+    expect(await importer.apply()).toBeNull();
+    expect(nativeCalls("csv_apply")).toHaveLength(1);
+  });
+});
+
+describe("eligibility CSV shared lifecycle", () => {
+  it("retains the source and report across revision changes without retaining stale approval", async () => {
+    nativeEligibilityCsv();
+    const { importer, current } = createConsumerWith(
+      useEligibilityCsvImport,
+      eligibilityCsvNative.preview.result,
+    );
+    expect(await importer.choose()).toBe(true);
+    expect(await importer.detect()).toBe(true);
+    await importer.inspect("comma", 2);
+    const input = eligibilityInput();
+    expect(await importer.preview(input.mapping, input.skippedRecords)).toBe(true);
+    const source = importer.state.source;
+    expect(importer.state.approval).not.toBeNull();
+    current.value = { ...current.value, revision: current.value.revision + 1 };
+    expect(importer.state.source).toBe(source);
+    expect(importer.state.stale).toBe(true);
+    expect(importer.state.approval).toBeNull();
+    expect(importer.state.sample).toEqual({ status: "idle" });
+    expect(await importer.apply()).toBeNull();
+    expect(nativeCalls("csv_apply")).toHaveLength(0);
+    expect(await importer.readReport()).toBe(true);
+    expect(importer.state.report?.rows).toEqual(eligibilityCsvNative.report.result.rows);
+  });
+
+  it("consumes a grouped membership review once and retains its native commit receipt", async () => {
+    nativeEligibilityCsv();
+    const { importer, home } = createConsumerWith(
+      useEligibilityCsvImport,
+      eligibilityCsvNative.preview.result,
+    );
+    expect(await importer.choose()).toBe(true);
+    const input = eligibilityInput();
+    expect(await importer.preview(input.mapping, input.skippedRecords)).toBe(true);
+    expect((await importer.apply())?.outcome.kind).toBe("applied");
+    expect(home.state.mutation?.outcome).toBe("applied");
+    expect(importer.state.sourceState).toBe("consumed");
+    expect(importer.state.report?.rows).toEqual(eligibilityCsvNative.applied.result.report.rows);
+    expect(await importer.apply()).toBeNull();
+    expect(nativeCalls("csv_apply")).toHaveLength(1);
+  });
 });

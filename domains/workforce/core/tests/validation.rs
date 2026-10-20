@@ -160,6 +160,67 @@ fn only_inactive_rules_can_retain_empty_explicit_scopes() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn required_quota_requires_ordered_bounds_and_compatible_measure_even_when_inactive()
+-> Result<(), Box<dyn Error>> {
+    let mut document = fixture()?;
+    document.domain.rules.insert(
+        id(20).parse()?,
+        json!({
+            "kind":"workloadQuota","id":id(20),"active":true,"strength":"required",
+            "scope":{"people":{"kind":"all"}},"calendarId":id(2),
+            "membership":"reportingDate","measure":{"kind":"assignmentCount"},
+            "minimum":1,"maximum":2
+        }),
+    );
+    validate_document(&document)?;
+    assert_eq!(decode_document(&serde_json::to_vec(&document)?)?, document);
+
+    document
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("quota")?["maximum"] = json!(0);
+    assert!(validate_document(&document).is_err());
+    document
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("quota")?["active"] = json!(false);
+    assert!(validate_document(&document).is_err());
+
+    let quota = document
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("quota")?;
+    quota["maximum"] = json!(2);
+    quota["active"] = json!(true);
+    quota["membership"] = json!("intersection");
+    assert!(validate_document(&document).is_err());
+
+    document.domain.entities.insert(
+        id(30).parse()?,
+        json!({
+            "kind":"workloadBucket","id":id(30),"name":"Count bucket",
+            "measurement":"assignmentCount","overlappingContribution":"sum"
+        }),
+    );
+    document
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("quota")?["measure"] = json!({"kind":"bucketMinutes","bucketId":id(30)});
+    assert!(validate_document(&document).is_err());
+    document
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("quota")?["measure"] = json!({"kind":"bucketMinutes","bucketId":id(3)});
+    validate_document(&document)?;
+    Ok(())
+}
+
+#[test]
 fn explicit_fold_instants_are_authority_but_forged_offsets_are_not() -> Result<(), Box<dyn Error>> {
     let mut document = fixture()?;
     validate_document(&document)?;
@@ -206,6 +267,41 @@ fn workload_target_modes_have_no_population_or_target_fallback() -> Result<(), B
     validate_document(&document)?;
     entity(&mut document, 1)?["tags"] = json!(["day"]);
     assert!(validate_document(&document).is_err());
+    Ok(())
+}
+
+#[test]
+fn active_workload_preference_rejects_empty_peer_group_without_invalidating_unused_policy()
+-> Result<(), Box<dyn Error>> {
+    for mode in [
+        "personTargets",
+        "weightedEqualShare",
+        "equalShare",
+        "explicit",
+    ] {
+        let mut document = fixture()?;
+        entity(&mut document, 9)?["workloadPolicies"][id(10)]["targetMode"] = if mode == "explicit"
+        {
+            json!({"kind":"explicit","targets":[]})
+        } else {
+            json!({"kind":mode})
+        };
+        entity(&mut document, 9)?["workloadPolicies"][id(10)]["peerGroup"]["people"] =
+            json!({"kind":"filter","allTags":["no-matching-person"],"anyTags":[]});
+        validate_document(&document)?;
+        document.domain.preferences.insert(
+            id(40).parse()?,
+            json!({
+                "id":id(40),"kind":"workloadBalance","active":true,
+                "scope":{"people":{"kind":"all"}},"priority":"low","weight":1,
+                "workloadPolicyId":id(10)
+            }),
+        );
+        assert!(
+            validate_document(&document).is_err(),
+            "{mode} cannot silently score an empty active peer group"
+        );
+    }
     Ok(())
 }
 

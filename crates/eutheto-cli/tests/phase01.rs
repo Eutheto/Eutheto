@@ -1057,8 +1057,7 @@ fn json_is_exactly_one_envelope_and_human_diagnostics_stay_on_stderr() -> Result
 }
 
 #[test]
-fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
--> Result<(), Box<dyn Error>> {
+fn usage_validation_storage_and_conflict_have_stable_exit_codes() -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Exit codes")?;
 
@@ -1125,22 +1124,6 @@ fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
     assert_eq!(conflict_output.status.code(), Some(10));
     assert_eq!(conflict["error"]["code"], "state.revision_conflict");
 
-    let (unavailable_output, unavailable) = run_json(
-        directory.path(),
-        &[
-            "solutions",
-            "export",
-            "scenario",
-            "solution",
-            "--format",
-            "ics",
-        ],
-    )?;
-    assert_eq!(unavailable_output.status.code(), Some(6));
-    assert_eq!(
-        unavailable["error"]["code"],
-        "solution.export_format_unavailable"
-    );
     Ok(())
 }
 

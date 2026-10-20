@@ -132,7 +132,15 @@ fn validate_document_identities<'a>(
     })
 }
 
-fn visit_document_identities<'a, E>(
+/// Visits borrowed scenario/domain identity definitions and the supplied extension values.
+///
+/// Callers include document extensions in `extensions` when required. The visitor may
+/// charge storage before retaining an identity; this traversal allocates no collection.
+///
+/// # Errors
+///
+/// Returns the visitor's first error; earlier visitor effects are not rolled back.
+pub fn visit_document_identities<'a, E>(
     document: &'a ScenarioDocument,
     extensions: impl Iterator<Item = &'a Value>,
     visit: &mut impl FnMut(Uuid) -> Result<(), E>,
@@ -169,7 +177,12 @@ fn visit_document_identities<'a, E>(
     Ok(())
 }
 
-fn visit_self_declared_uuids<E>(
+/// Visits recursively self-declared identities without allocating an intermediate census.
+///
+/// # Errors
+///
+/// Returns the visitor's first error; earlier visitor effects are not rolled back.
+pub fn visit_self_declared_uuids<E>(
     value: &Value,
     visit: &mut impl FnMut(Uuid) -> Result<(), E>,
 ) -> Result<(), E> {

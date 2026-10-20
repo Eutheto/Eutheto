@@ -13,10 +13,11 @@ use std::sync::Arc;
 
 use eutheto_domain_ir::{DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef};
 use eutheto_planning_ir::{
-    BoolVariable, BoolVariableId, Capability, CompilerId, ObjectivePlan,
-    PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningIrLimitsV1, PlanningMetadata,
-    PlanningProblem, ProjectionExpression, ProjectionId, ProvenanceId, ProvenanceRecord,
-    ProvenanceSourceKind, SolutionProjection, Variable, summarize,
+    BoolVariable, BoolVariableId, Capability, CompilerId, Constraint, ConstraintRecord,
+    InclusiveRange, IntDomain, IntVariable, IntVariableId, Literal, ObjectivePlan,
+    PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId,
+    PlanningIrLimitsV1, PlanningMetadata, PlanningProblem, ProjectionExpression, ProjectionId,
+    ProvenanceId, ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, summarize,
 };
 use eutheto_solver_api::{
     BackendOutputSink, BackendTerminationReason, BoundedBackendOutput, ProgressSink,
@@ -90,7 +91,8 @@ async fn fixture_artifact()
             "objective-bounds",
             "progress",
             "solution-projection",
-            "solution-stats"
+            "solution-stats",
+            "sufficient-assumptions"
         ],
         "licenses": null,
         "manifest": {"generation_contract_version": 1, "schema_version": 1},
@@ -223,7 +225,69 @@ fn problem() -> Result<PlanningProblem, Box<dyn Error>> {
     })
 }
 
+fn enforced_abs_problem(enforced: bool, target: i64) -> Result<PlanningProblem, Box<dyn Error>> {
+    let mut problem = problem()?;
+    let provenance = ProvenanceId::new("backend.provenance")?;
+    let activation = BoolVariableId::new("backend.latent")?;
+    let left = IntVariableId::new("backend.a_left")?;
+    let right = IntVariableId::new("backend.b_right")?;
+    let result = IntVariableId::new("backend.c_result")?;
+    for (id, value) in [
+        (left.clone(), 2),
+        (right.clone(), 0),
+        (result.clone(), target),
+    ] {
+        problem.variables.push(Variable::Integer(IntVariable {
+            id,
+            domain: IntDomain {
+                inclusive_ranges: vec![InclusiveRange {
+                    start: value,
+                    end: value,
+                }],
+            },
+            provenance: provenance.clone(),
+        }));
+    }
+    problem
+        .variables
+        .sort_by(|left, right| left.canonical_id().cmp(right.canonical_id()));
+    problem.constraints = vec![
+        ConstraintRecord {
+            id: PlanningConstraintId::new("backend.constraint.activation")?,
+            body: Constraint::bool_or(vec![if enforced {
+                Literal::positive(activation.clone())
+            } else {
+                Literal::negative(activation.clone())
+            }]),
+            enforcement: Vec::new(),
+            provenance: provenance.clone(),
+            tags: Vec::new(),
+        },
+        ConstraintRecord {
+            id: PlanningConstraintId::new("backend.constraint.difference")?,
+            body: Constraint::AbsDifference {
+                target: result,
+                left,
+                right,
+            },
+            enforcement: vec![Literal::positive(activation)],
+            provenance,
+            tags: Vec::new(),
+        },
+    ];
+    problem
+        .declared_capabilities
+        .extend([Capability::BoolOr, Capability::AbsDifference]);
+    Ok(problem)
+}
+
 fn options() -> Result<SolveOptions, Box<dyn Error>> {
+    options_with_intermediate(false)
+}
+
+fn options_with_intermediate(
+    collect_intermediate_solutions: bool,
+) -> Result<SolveOptions, Box<dyn Error>> {
     Ok(SolveOptions {
         backend: BackendSelection::Specific(ORTOOLS_BACKEND_ID.parse()?),
         mode: SolveMode::Balanced,
@@ -233,7 +297,7 @@ fn options() -> Result<SolveOptions, Box<dyn Error>> {
         random_seed: 1,
         solution_limit: None,
         stop_after_first_feasible: false,
-        collect_intermediate_solutions: false,
+        collect_intermediate_solutions,
         explanation_mode: ExplanationMode::None,
         preserve_existing: PreservationPolicy::None,
         reproducibility: ReproducibilityMode::Deterministic,
@@ -317,7 +381,7 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         Arc::clone(&problem),
         summary,
         options,
-        &parent_budget,
+        parent_budget.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -433,6 +497,188 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         assert!(statistics.branches.is_some());
         assert!(statistics.binary_propagations.is_some());
         assert!(statistics.integer_propagations.is_some());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_backend_applies_requested_intermediate_parameter() -> TestResult {
+    let (artifact, _artifact_guard) = verified_artifact().await?;
+    let registry = registry_with_ortools(artifact)?;
+    let backend_id = ORTOOLS_BACKEND_ID.parse()?;
+    let backend = registry
+        .get(&backend_id)
+        .ok_or("missing OR-Tools backend")?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let options = options_with_intermediate(true)?;
+    let parent_budget = ParentSolveBudget::new(
+        options.time_limit_milliseconds,
+        Arc::new(SystemMonotonicClock::new()),
+        CancellationToken::new(),
+    )?;
+    let request = SolveRequest::new(
+        backend_id,
+        ORTOOLS_VERSION,
+        ORTOOLS_ADAPTER_VERSION,
+        Arc::clone(&problem),
+        summary,
+        options,
+        parent_budget.phase_view(),
+        None,
+        DurationMillis::ZERO,
+    )?;
+    let mut progress = Progress(Vec::new());
+    let mut output = BoundedBackendOutput::new(
+        &problem,
+        &mut progress,
+        request.dispatch_budget(),
+        SolverApiLimits::DEFAULT,
+    )?;
+    let outcome = backend
+        .solve(&request, &mut output as &mut dyn BackendOutputSink)
+        .await?;
+    let result = output.into_result(outcome);
+    validate_outcome(
+        &request,
+        &result.outcome,
+        &result.candidates,
+        SolverApiLimits::DEFAULT,
+    )?;
+    let execution = result
+        .outcome
+        .evidence
+        .execution
+        .as_ref()
+        .ok_or("missing OR-Tools execution evidence")?;
+    assert!(
+        execution
+            .reproducibility
+            .applied_parameters
+            .emit_intermediate_solutions
+    );
+    assert!(
+        execution
+            .reproducibility
+            .applied_options
+            .collect_intermediate_solutions
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_backend_recovers_retained_incumbent_after_clean_internal_worker_error()
+-> TestResult {
+    let (artifact, _artifact_guard, _) = fixture_artifact().await?;
+    let registry = registry_with_ortools(artifact)?;
+    let backend_id = ORTOOLS_BACKEND_ID.parse()?;
+    let backend = registry
+        .get(&backend_id)
+        .ok_or("missing OR-Tools backend")?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let mut options = options_with_intermediate(true)?;
+    options.random_seed = 2;
+    options.reproducibility = ReproducibilityMode::Performance;
+    let parent_budget = ParentSolveBudget::new(
+        options.time_limit_milliseconds,
+        Arc::new(SystemMonotonicClock::new()),
+        CancellationToken::new(),
+    )?;
+    let request = SolveRequest::new(
+        backend_id,
+        ORTOOLS_VERSION,
+        ORTOOLS_ADAPTER_VERSION,
+        Arc::clone(&problem),
+        summary,
+        options,
+        parent_budget.phase_view(),
+        None,
+        DurationMillis::ZERO,
+    )?;
+    let mut progress = Progress(Vec::new());
+    let mut output = BoundedBackendOutput::new(
+        &problem,
+        &mut progress,
+        request.dispatch_budget(),
+        SolverApiLimits::DEFAULT,
+    )?;
+
+    let error = backend
+        .solve(&request, &mut output as &mut dyn BackendOutputSink)
+        .await
+        .err()
+        .ok_or("clean internal terminal after an incumbent must be a backend error")?;
+    assert_eq!(error.code(), "solver.ortools.session_after_candidate");
+    assert_eq!(output.candidates().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires EUTHETO_TEST_ORTOOLS_ARTIFACT pointing to an approved installed real worker"]
+async fn real_worker_honors_enforced_absolute_difference() -> TestResult {
+    if std::env::var_os("EUTHETO_TEST_ORTOOLS_ARTIFACT").is_none() {
+        return Err("real worker artifact required".into());
+    }
+    let (artifact, _guard) = verified_artifact().await?;
+    let registry = registry_with_ortools(artifact)?;
+    let backend_id = ORTOOLS_BACKEND_ID.parse()?;
+    let backend = registry.get(&backend_id).ok_or("missing real worker")?;
+    for (enabled, fixed_target, expected) in [
+        (false, 0, BackendTerminationReason::OptimalityClaimed),
+        (true, 2, BackendTerminationReason::OptimalityClaimed),
+        (true, 0, BackendTerminationReason::InfeasibilityClaimed),
+    ] {
+        let problem = Arc::new(enforced_abs_problem(enabled, fixed_target)?);
+        let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let options = options()?;
+        assert!(backend.compatibility(&summary, &options).compatible());
+        let parent_budget = ParentSolveBudget::new(
+            options.time_limit_milliseconds,
+            Arc::new(SystemMonotonicClock::new()),
+            CancellationToken::new(),
+        )?;
+        let request = SolveRequest::new(
+            backend_id.clone(),
+            ORTOOLS_VERSION,
+            ORTOOLS_ADAPTER_VERSION,
+            Arc::clone(&problem),
+            summary,
+            options,
+            parent_budget.phase_view(),
+            None,
+            DurationMillis::ZERO,
+        )?;
+        let mut progress = Progress(Vec::new());
+        let mut output = BoundedBackendOutput::new(
+            &problem,
+            &mut progress,
+            request.dispatch_budget(),
+            SolverApiLimits::DEFAULT,
+        )?;
+        let outcome = backend
+            .solve(&request, &mut output as &mut dyn BackendOutputSink)
+            .await?;
+        let result = output.into_result(outcome);
+        validate_outcome(
+            &request,
+            &result.outcome,
+            &result.candidates,
+            SolverApiLimits::DEFAULT,
+        )?;
+        assert_eq!(
+            result.outcome.termination, expected,
+            "enforced={enabled}, target={fixed_target}"
+        );
+        if expected == BackendTerminationReason::InfeasibilityClaimed {
+            assert!(result.candidates.is_empty());
+        } else {
+            assert_eq!(result.candidates.len(), 1);
+            assert_eq!(
+                result.candidates[0].values.booleans[&BoolVariableId::new("backend.latent")?],
+                enabled
+            );
+        }
     }
     Ok(())
 }

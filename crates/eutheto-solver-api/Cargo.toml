@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+eutheto-domain-ir = { path = "../eutheto-domain-ir" }
 eutheto-planning-ir = { path = "../eutheto-planning-ir" }
 eutheto-types = { path = "../eutheto-types" }
 serde = { version = "=1.0.229", features = ["derive"] }

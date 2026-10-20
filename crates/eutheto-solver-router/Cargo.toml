@@ -14,7 +14,7 @@ eutheto-planning-ir = { path = "../eutheto-planning-ir" }
 eutheto-solver-api = { path = "../eutheto-solver-api" }
 eutheto-types = { path = "../eutheto-types" }
 serde = { version = "=1.0.229", features = ["derive"] }
-tokio = { version = "=1.53.1", features = ["time"] }
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
 eutheto-domain-ir = { path = "../eutheto-domain-ir" }

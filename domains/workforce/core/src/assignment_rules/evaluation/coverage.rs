@@ -1,16 +1,23 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::super::{
     AssignmentRuleError,
     budget::{OperationBudget, add, count},
     input::AssignmentInput,
 };
-use super::{Selected, Summary, Witness, invalid, predicates};
+use super::{
+    HealthDirection, HealthObservation, HealthObservationKind, HealthUnits,
+    MAX_HEALTH_AFFECTED_PAIRS, Selected, Summary, Witness, invalid, predicates,
+};
 use crate::{
     ids::QualificationId,
-    model::{Coverage, QualificationMatch, Scope, ShiftScope, WorkforceEntity},
+    model::{
+        AssignmentPair, Coverage, PersonSelection, QualificationMatch, Scope, ShiftScope,
+        WorkforceEntity,
+    },
     temporal::ResolvedShift,
 };
 use eutheto_types::{EntityId, PersonId};
-use std::collections::{BTreeMap, BTreeSet};
 
 struct Minimum {
     expression: QualificationMatch,
@@ -174,6 +181,8 @@ pub(super) fn evaluate(
         }
         check(
             input,
+            selected,
+            scope,
             embedded
                 .get(&metadata.definition.entity_id())
                 .ok_or_else(invalid)?,
@@ -190,15 +199,46 @@ pub(super) fn evaluate(
                 &metadata,
                 budget,
             )? {
-                check(input, requirement, shift, &population, summary, budget)?;
+                check(
+                    input,
+                    selected,
+                    scope,
+                    requirement,
+                    shift,
+                    &population,
+                    summary,
+                    budget,
+                )?;
             }
         }
     }
     Ok(())
 }
 
+/// Evaluates every embedded and active standalone source owner with no authored-rule filter.
+/// Health uses this pass so source coverage remains visible even when a Coverage rule is absent.
+pub(super) fn evaluate_all(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    summary: &mut Summary,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let scope = Scope {
+        people: PersonSelection::All {},
+        team_ids: None,
+        assignment_type_ids: None,
+        categories: None,
+        weekdays: None,
+        location_ids: None,
+    };
+    evaluate(input, selected, &scope, summary, budget)
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn check(
     input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
     requirement: &Requirement<'_>,
     shift: &ResolvedShift,
     population: &[PersonId],
@@ -207,9 +247,12 @@ fn check(
 ) -> Result<(), AssignmentRuleError> {
     budget.step()?;
     let actual = count(population.len())?;
+    let failed =
+        actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper);
     let mut witness = Witness {
         person: None,
-        shift: shift.id,
+        other_person: None,
+        shift: Some(shift.id),
         other_shift: None,
         owner: requirement.owner,
         owner_kind: requirement.owner_kind,
@@ -220,16 +263,35 @@ fn check(
         upper: requirement.upper,
         actual: Some(actual),
         interval: None,
+        period: None,
+        consecutive_start_date: None,
+        consecutive_end_date: None,
         rest: None,
+        transition: None,
+        hours: None,
+        quota: None,
+        quota_count: None,
     };
-    summary.predicate(
-        actual < requirement.lower || requirement.upper.is_some_and(|upper| actual > upper),
-        &witness,
-        budget,
-    )?;
+    if summary.collecting_health() {
+        record_headcount_health(requirement, shift, population, actual, summary, budget)?;
+    }
+    if failed && summary.collecting_repair() {
+        summary.predicate_with_members(
+            failed,
+            &witness,
+            Some(associated_pairs(
+                input, selected, scope, shift, None, budget,
+            )?),
+            "coverage_headcount",
+            budget,
+        )?;
+    } else {
+        summary.predicate(failed, &witness, budget)?;
+    }
     for (rank, minimum) in requirement.minima.iter().enumerate() {
         budget.step()?;
         let mut matching = 0;
+        let mut matching_pairs = Vec::new();
         for person_id in population {
             budget.step()?;
             if predicates::qualification_match(
@@ -239,6 +301,12 @@ fn check(
                 budget,
             )? {
                 matching = add(matching, 1)?;
+                if summary.collecting_health() && matching_pairs.len() < MAX_HEALTH_AFFECTED_PAIRS {
+                    matching_pairs.push(AssignmentPair {
+                        person_id: *person_id,
+                        shift_id: shift.id,
+                    });
+                }
             }
         }
         witness.reason = "coverage_qualification_minimum";
@@ -247,7 +315,150 @@ fn check(
         witness.lower = Some(u64::from(minimum.required));
         witness.upper = None;
         witness.actual = Some(matching);
-        summary.predicate(matching < u64::from(minimum.required), &witness, budget)?;
+        if summary.collecting_health() {
+            let required = u64::from(minimum.required);
+            summary.record_health(
+                HealthObservation {
+                    kind: HealthObservationKind::CoverageQualification,
+                    rule_id: None,
+                    coverage_owner: Some((requirement.owner, requirement.owner_kind)),
+                    person_id: None,
+                    shift_id: Some(shift.id),
+                    other_shift_id: None,
+                    period: Some((
+                        shift.interval.starts_at.instant,
+                        shift.interval.ends_at.instant,
+                    )),
+                    units: HealthUnits::People,
+                    direction: HealthDirection::Minimum,
+                    threshold: Some(i128::from(required)),
+                    observed: Some(i128::from(matching)),
+                    satisfied: Some(matching >= required),
+                    minimum_rank: Some(count(rank)?),
+                    affected_pairs: matching_pairs,
+                    affected_pair_count: matching,
+                    affected_pairs_truncated: matching
+                        > u64::try_from(MAX_HEALTH_AFFECTED_PAIRS).map_err(|_| invalid())?,
+                },
+                budget,
+            )?;
+        }
+        let failed = matching < u64::from(minimum.required);
+        if failed && summary.collecting_repair() {
+            summary.predicate_with_members(
+                failed,
+                &witness,
+                Some(associated_pairs(
+                    input,
+                    selected,
+                    scope,
+                    shift,
+                    Some(minimum),
+                    budget,
+                )?),
+                "coverage_qualification_minimum",
+                budget,
+            )?;
+        } else {
+            summary.predicate(failed, &witness, budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn associated_pairs(
+    input: &AssignmentInput,
+    selected: &Selected<'_>,
+    scope: &Scope,
+    shift: &ResolvedShift,
+    minimum: Option<&Minimum>,
+    budget: &mut OperationBudget<'_>,
+) -> Result<Vec<AssignmentPair>, AssignmentRuleError> {
+    let mut members = Vec::new();
+    if let Some(associations) = selected.associations() {
+        for pair in associations {
+            budget.step()?;
+            if pair.shift_id != shift.id {
+                continue;
+            }
+            let person = input.person(pair.person_id).ok_or_else(invalid)?;
+            if !predicates::person_matches(person, scope, budget)? {
+                continue;
+            }
+            if let Some(minimum) = minimum
+                && !predicates::qualification_match(
+                    person,
+                    &minimum.expression,
+                    predicates::interval(shift),
+                    budget,
+                )?
+            {
+                continue;
+            }
+            budget.reserve(0, 1, 48)?;
+            members.push(*pair);
+        }
+    }
+    Ok(members)
+}
+
+fn record_headcount_health(
+    requirement: &Requirement<'_>,
+    shift: &ResolvedShift,
+    population: &[PersonId],
+    actual: u64,
+    summary: &mut Summary,
+    budget: &mut OperationBudget<'_>,
+) -> Result<(), AssignmentRuleError> {
+    let exact = requirement.upper == Some(requirement.lower);
+    let observation = HealthObservation {
+        kind: HealthObservationKind::CoverageHeadcount,
+        rule_id: None,
+        coverage_owner: Some((requirement.owner, requirement.owner_kind)),
+        person_id: None,
+        shift_id: Some(shift.id),
+        other_shift_id: None,
+        period: Some((
+            shift.interval.starts_at.instant,
+            shift.interval.ends_at.instant,
+        )),
+        units: HealthUnits::People,
+        direction: if exact {
+            HealthDirection::Exact
+        } else {
+            HealthDirection::Minimum
+        },
+        threshold: Some(i128::from(requirement.lower)),
+        observed: Some(i128::from(actual)),
+        satisfied: Some(if exact {
+            actual == requirement.lower
+        } else {
+            actual >= requirement.lower
+        }),
+        minimum_rank: None,
+        affected_pairs: population
+            .iter()
+            .take(MAX_HEALTH_AFFECTED_PAIRS)
+            .map(|person_id| AssignmentPair {
+                person_id: *person_id,
+                shift_id: shift.id,
+            })
+            .collect(),
+        affected_pair_count: actual,
+        affected_pairs_truncated: population.len() > MAX_HEALTH_AFFECTED_PAIRS,
+    };
+    let maximum = requirement
+        .upper
+        .filter(|upper| *upper != requirement.lower)
+        .map(|upper| HealthObservation {
+            direction: HealthDirection::Maximum,
+            threshold: Some(i128::from(upper)),
+            satisfied: Some(actual <= upper),
+            ..observation.clone()
+        });
+    summary.record_health(observation, budget)?;
+    if let Some(maximum) = maximum {
+        summary.record_health(maximum, budget)?;
     }
     Ok(())
 }

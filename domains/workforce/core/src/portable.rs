@@ -14,10 +14,11 @@ use eutheto_types::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const PORTABLE_VERSION: u32 = 1;
 const PORTABLE_CAPABILITY: &str = "official.workforce.portable";
+const EXTERNAL_STARTING_PLAN_CAPABILITY: &str = "official.workforce.external-starting-plan";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,7 +56,13 @@ pub fn export_portable(
     let portable = PortableDomainDocument {
         pack_id: document.domain_pack.id.clone(),
         schema_version: PORTABLE_VERSION,
-        required_capabilities: [portable_capability()].into_iter().collect(),
+        required_capabilities: capabilities(
+            document
+                .domain
+                .entities
+                .values()
+                .any(is_external_starting_plan),
+        ),
         payload,
     };
     bounded_json_size(&portable, ContractJsonLimits::DEFAULT.max_serialized_bytes)?;
@@ -81,11 +88,12 @@ pub fn import_portable(
     if document.schema_version != PORTABLE_VERSION {
         return Err(DomainPackError::UnsupportedVersion(document.schema_version));
     }
-    if document.required_capabilities.len() != 1
-        || !document
-            .required_capabilities
-            .contains(&portable_capability())
-    {
+    let has_external = document
+        .payload
+        .get("entities")
+        .and_then(Value::as_object)
+        .is_some_and(|entities| entities.values().any(is_external_starting_plan));
+    if document.required_capabilities != capabilities(has_external) {
         return Err(invalid(
             "/portable",
             "unknown or missing semantic capability",
@@ -123,11 +131,22 @@ pub fn import_portable(
     Ok(result)
 }
 
-fn portable_capability() -> SemanticCapability {
-    SemanticCapability {
+pub(crate) fn capabilities(external_starting_plan: bool) -> BTreeSet<SemanticCapability> {
+    let mut capabilities = BTreeSet::from([SemanticCapability {
         id: PORTABLE_CAPABILITY.to_owned(),
         version: PORTABLE_VERSION,
+    }]);
+    if external_starting_plan {
+        capabilities.insert(SemanticCapability {
+            id: EXTERNAL_STARTING_PLAN_CAPABILITY.to_owned(),
+            version: 1,
+        });
     }
+    capabilities
+}
+
+fn is_external_starting_plan(record: &Value) -> bool {
+    record.get("kind").and_then(Value::as_str) == Some("externalStartingPlan")
 }
 
 fn validate_payload(payload: &Value) -> Result<(), DomainPackError> {

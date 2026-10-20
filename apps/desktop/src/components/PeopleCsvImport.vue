@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from "vue";
-import type { FieldErrorDto, PeopleCsvColumn, PeopleCsvDialect } from "../api/generated";
-import { usePeopleCsvImport } from "../people-csv-import";
+import type { FieldErrorDto, PeopleCsvColumn, CsvDialect } from "../api/generated";
+import { usePeopleCsvImport } from "../csv-import";
 import {
   createPersonFieldsDraft,
   personFieldsValue,
@@ -30,7 +30,7 @@ const props = defineProps<{
 const copy = messages.csvImport;
 const importer = usePeopleCsvImport(props.home, () => props.project);
 const { state } = importer;
-const dialect = ref<PeopleCsvDialect | "">("");
+const dialect = ref<CsvDialect | "">("");
 const header = ref<"" | "yes" | "no">("");
 const width = ref("");
 const columns = shallowRef<readonly PeopleCsvColumn[]>([]);
@@ -118,8 +118,11 @@ const findings = computed(() => {
   const issues = all.slice(validationPage.value * 50, (validationPage.value + 1) * 50);
   return { counts: validationCounts.value, issues, omitted: all.length - issues.length };
 });
-const rejected = computed(
-  () => state.report?.rejectedRows.slice(reportPage.value * 50, (reportPage.value + 1) * 50) ?? [],
+const rejectedRows = computed(() =>
+  state.report?.rows.family === "people" ? state.report.rows.rejectedRows : [],
+);
+const rejected = computed(() =>
+  rejectedRows.value.slice(reportPage.value * 50, (reportPage.value + 1) * 50),
 );
 
 function clearFeedback(): void {
@@ -552,7 +555,7 @@ watch(
           ><p>
             {{ state.report.consumed ? copy.reportConsumed : copy.reportUnconsumed }}
           </p>
-          <p v-if="state.report.rejectedRows.length === 0">{{ copy.reportEmpty }}</p>
+          <p v-if="rejectedRows.length === 0">{{ copy.reportEmpty }}</p>
           <table v-else>
             <caption>
               {{
@@ -574,12 +577,12 @@ watch(
               </tr>
             </tbody>
           </table>
-          <div v-if="state.report.rejectedRows.length > 50" class="action-row">
+          <div v-if="rejectedRows.length > 50" class="action-row">
             <button type="button" :disabled="reportPage === 0" @click="reportPage -= 1">
               {{ messages.people.previous }}</button
             ><button
               type="button"
-              :disabled="(reportPage + 1) * 50 >= state.report.rejectedRows.length"
+              :disabled="(reportPage + 1) * 50 >= rejectedRows.length"
               @click="reportPage += 1"
             >
               {{ messages.people.next }}

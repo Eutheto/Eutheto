@@ -25,6 +25,18 @@ const MODEL: [u8; 32] = [
 ];
 
 fn expectations() -> Result<HandshakeExpectations, ProtocolFault> {
+    let mut advertised = vec![
+        Capability::CpSat,
+        Capability::IntermediateSolutions,
+        Capability::Progress,
+        Capability::SolutionProjection,
+        Capability::ObjectiveBounds,
+        Capability::SolutionStats,
+        Capability::DeterministicTime,
+    ];
+    if eutheto_protocol::limits::SUFFICIENT_ASSUMPTIONS_ENABLED {
+        advertised.insert(6, Capability::SufficientAssumptions);
+    }
     HandshakeExpectations::checked_in(
         "eutheto-ortools-worker",
         "0.1.0",
@@ -33,15 +45,7 @@ fn expectations() -> Result<HandshakeExpectations, ProtocolFault> {
         "0.1.0",
         MANIFEST,
         [Capability::CpSat, Capability::SolutionProjection],
-        [
-            Capability::CpSat,
-            Capability::IntermediateSolutions,
-            Capability::Progress,
-            Capability::SolutionProjection,
-            Capability::ObjectiveBounds,
-            Capability::SolutionStats,
-            Capability::DeterministicTime,
-        ],
+        advertised,
     )
 }
 
@@ -64,6 +68,18 @@ fn handshake_request() -> Result<ParentFrame, ProtocolFault> {
 
 fn handshake_success() -> Result<WorkerFrame, ProtocolFault> {
     let policy = checked_in_policy()?;
+    let mut capabilities = vec![
+        Capability::CpSat as i32,
+        Capability::IntermediateSolutions as i32,
+        Capability::Progress as i32,
+        Capability::SolutionProjection as i32,
+        Capability::ObjectiveBounds as i32,
+        Capability::SolutionStats as i32,
+        Capability::DeterministicTime as i32,
+    ];
+    if eutheto_protocol::limits::SUFFICIENT_ASSUMPTIONS_ENABLED {
+        capabilities.insert(6, Capability::SufficientAssumptions as i32);
+    }
     Ok(WorkerFrame {
         body: Some(worker_frame::Body::HandshakeResponse(HandshakeResponse {
             outcome: Some(Outcome::Success(HandshakeSuccess {
@@ -75,15 +91,7 @@ fn handshake_success() -> Result<WorkerFrame, ProtocolFault> {
                 ortools_version: "9.15.6755".to_owned(),
                 adapter_version: "0.1.0".to_owned(),
                 manifest_sha256: Bytes::copy_from_slice(&MANIFEST),
-                capabilities: vec![
-                    Capability::CpSat as i32,
-                    Capability::IntermediateSolutions as i32,
-                    Capability::Progress as i32,
-                    Capability::SolutionProjection as i32,
-                    Capability::ObjectiveBounds as i32,
-                    Capability::SolutionStats as i32,
-                    Capability::DeterministicTime as i32,
-                ],
+                capabilities,
             })),
         })),
     })
@@ -1024,11 +1032,72 @@ fn terminal_semantics_reject_partial_or_contradictory_evidence() -> Result<(), P
     }
     assert_running_rejects(negative_time)?;
 
-    let mut unnegotiated_assumptions = finished("request-1");
-    if let Some(worker_frame::Body::Finished(finished)) = &mut unnegotiated_assumptions.body {
+    Ok(())
+}
+
+#[test]
+fn assumption_core_requires_negotiated_infeasible_terminal() -> Result<(), ProtocolFault> {
+    let required = [Capability::CpSat, Capability::SufficientAssumptions];
+    let advertised = [
+        Capability::CpSat,
+        Capability::IntermediateSolutions,
+        Capability::Progress,
+        Capability::SolutionProjection,
+        Capability::ObjectiveBounds,
+        Capability::SolutionStats,
+        Capability::SufficientAssumptions,
+        Capability::DeterministicTime,
+    ];
+    let mut core_frame = finished("request-1");
+    if let Some(worker_frame::Body::Finished(finished)) = &mut core_frame.body {
+        finished.raw_cp_sat_status = 3;
+        finished.status = WorkerSolveStatus::Infeasible as i32;
+        finished.termination_reason = TerminationReason::Infeasible as i32;
+        finished.final_candidate = None;
         finished.sufficient_assumptions.push(1);
     }
-    assert_running_rejects(unnegotiated_assumptions)?;
+    let without_core = advertised
+        .iter()
+        .copied()
+        .filter(|capability| *capability != Capability::SufficientAssumptions)
+        .collect::<Vec<_>>();
+    let (mut unnegotiated, _) =
+        running_protocol_with_capabilities(&[Capability::CpSat], &without_core, |_| {})?;
+    assert!(unnegotiated.on_worker_frame(core_frame.clone()).is_err());
+    assert_eq!(unnegotiated.phase(), ParentPhase::Failed);
+
+    let (mut valid, _) = running_protocol_with_capabilities(&required, &advertised, |_| {})?;
+    assert_eq!(
+        valid.on_worker_frame(core_frame.clone())?,
+        WorkerObservation::Terminal
+    );
+    valid.on_eof()?;
+    valid.on_exit(0)?;
+    assert_eq!(valid.phase(), ParentPhase::Complete);
+
+    let (mut wrong_status, _) = running_protocol_with_capabilities(&required, &advertised, |_| {})?;
+    let mut wrong_status_frame = finished("request-1");
+    if let Some(worker_frame::Body::Finished(finished)) = &mut wrong_status_frame.body {
+        finished.sufficient_assumptions.push(1);
+    }
+    assert!(wrong_status.on_worker_frame(wrong_status_frame).is_err());
+    assert_eq!(wrong_status.phase(), ParentPhase::Failed);
+
+    let (mut wrong_candidate, _) =
+        running_protocol_with_capabilities(&required, &advertised, |_| {})?;
+    let mut wrong_candidate_frame = finished("request-1");
+    if let Some(worker_frame::Body::Finished(finished)) = &mut wrong_candidate_frame.body {
+        finished.raw_cp_sat_status = 3;
+        finished.status = WorkerSolveStatus::Infeasible as i32;
+        finished.termination_reason = TerminationReason::Infeasible as i32;
+        finished.sufficient_assumptions.push(1);
+    }
+    assert!(
+        wrong_candidate
+            .on_worker_frame(wrong_candidate_frame)
+            .is_err()
+    );
+    assert_eq!(wrong_candidate.phase(), ParentPhase::Failed);
     Ok(())
 }
 
@@ -1198,35 +1267,6 @@ fn protocol_minor_must_exactly_match_v1_1() {
             )
             .is_err()
         );
-    }
-}
-
-#[test]
-fn sufficient_assumptions_gate_rejects_configuration() {
-    for (required, advertised) in [
-        (
-            vec![Capability::CpSat, Capability::SufficientAssumptions],
-            vec![Capability::CpSat, Capability::SufficientAssumptions],
-        ),
-        (
-            vec![Capability::CpSat],
-            vec![Capability::CpSat, Capability::SufficientAssumptions],
-        ),
-    ] {
-        assert!(matches!(
-            HandshakeExpectations::checked_in(
-                "eutheto-ortools-worker",
-                "0.1.0",
-                "ortools-cp-sat",
-                "9.15.6755",
-                "0.1.0",
-                MANIFEST,
-                required,
-                advertised,
-            ),
-            Err(ProtocolFault::State(StateFault::CapabilityDisabled(value)))
-                if value == Capability::SufficientAssumptions as i32
-        ));
     }
 }
 

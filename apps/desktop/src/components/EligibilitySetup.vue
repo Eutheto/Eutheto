@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
 import { useEligibilitySetup } from "../eligibility-setup";
 import { formatNumber, messages } from "../messages";
@@ -67,6 +68,17 @@ async function focusAfter(action: Promise<boolean>, target: "review" | "matrix")
     </h2>
     <template v-if="project.domainPackId === 'official.workforce'">
       <p>{{ messages.eligibilityUi.description }}</p>
+      <RouterLink
+        :to="{ name: 'project-eligibility-import', params: { scenarioId: project.scenarioId } }"
+        >{{ messages.eligibilityCsv.navigate }}</RouterLink
+      >
+      <RouterLink
+        :to="{
+          name: 'project-eligibility-matrix-import',
+          params: { scenarioId: project.scenarioId },
+        }"
+        >{{ messages.eligibilityMatrix.navigate }}</RouterLink
+      >
       <form class="state-panel field-stack" @submit.prevent="load(null, true)">
         <label for="eligibility-people-search">{{
           messages.eligibilityUi.filters.peopleSearch

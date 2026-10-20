@@ -2,6 +2,7 @@ mod binding;
 mod rows;
 
 use super::{
+    hash,
     mapping::validate_mapping,
     parsing::scan_csv,
     types::{
@@ -182,15 +183,15 @@ pub fn preview_people_csv<R: Read + ?Sized>(
             schema_version: 1,
             scenario_id: document.scenario_id,
             revision,
-            scenario_blake3: binding::hash(document)?,
+            scenario_blake3: hash(document)?,
             source: source.clone(),
             parser_version: CSV_PARSER_VERSION.to_owned(),
             limits_version: CSV_LIMITS_VERSION,
             mapping: mapping.clone(),
             decisions: decisions.to_vec(),
-            changes_blake3: binding::hash(&batch)?,
-            rejected_blake3: binding::hash(&rejected_rows)?,
-            validation_blake3: binding::hash(&validation_issues)?,
+            changes_blake3: hash(&batch)?,
+            rejected_blake3: hash(&rejected_rows)?,
+            validation_blake3: hash(&validation_issues)?,
         })
     };
     let approval_digest = review.as_ref().map(binding::approval_digest).transpose()?;

@@ -41,6 +41,7 @@
       nix/dev-shell-welcome.sh \
       nix/eutheto-cli.nix \
       nix/ortools-worker.nix \
+      nix/pdf-worker.nix \
       nix/packages.nix \
       nix/release-shell.nix \
       nix/release-tooling.nix \
@@ -89,6 +90,7 @@
         cargo = tomllib.load(stream)
     assert cargo["workspace"]["members"] == [
         "crates/eutheto-types",
+        "crates/eutheto-pdf-worker",
         "crates/eutheto-domain-ir",
         "crates/eutheto-planning-ir",
         "crates/eutheto-domain-api",
@@ -285,7 +287,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 21 and
+      (.workspace_members | length) == 22 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -296,6 +298,7 @@
         "eutheto-explain",
         "eutheto-export",
         "eutheto-import",
+        "eutheto-pdf-worker",
         "eutheto-phase03-benchmark",
         "eutheto-planning-ir",
         "eutheto-protocol",

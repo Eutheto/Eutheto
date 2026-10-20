@@ -15,6 +15,7 @@ fn model() -> Result<(PlanningProblem, CandidateValues)> {
     document.settings.overlap_policy = OverlapPolicy::Earlier;
     document.domain.locked_assignments.clear();
     let context = CompileContext {
+        objective_context: None,
         scenario_revision: 7,
         semantic_metadata: BTreeMap::new(),
         control: OperationControl::Cancellation(CancellationToken::new()),
@@ -508,6 +509,7 @@ fn running_deadline_interrupts_projection_validation_and_pack_compilation_prefli
     document.metadata.title =
         "x".repeat(eutheto_domain_api::ContractJsonLimits::DEFAULT.max_string_bytes + 1);
     let context = CompileContext {
+        objective_context: None,
         scenario_revision: 1,
         semantic_metadata: BTreeMap::new(),
         control: control()?,

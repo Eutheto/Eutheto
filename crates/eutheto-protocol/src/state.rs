@@ -1299,7 +1299,16 @@ fn validate_finished(
                 StateFault::CapabilityDisabled(Capability::SufficientAssumptions as i32).into(),
             );
         }
-        if !negotiated_capabilities.contains(&(Capability::SufficientAssumptions as i32)) {
+        require_negotiated_capability(
+            negotiated_capabilities,
+            Capability::SufficientAssumptions,
+            "finished.sufficient_assumptions",
+        )?;
+        if finished.raw_cp_sat_status != 3
+            || status != WorkerSolveStatus::Infeasible
+            || termination != TerminationReason::Infeasible
+            || finished.final_candidate.is_some()
+        {
             return Err(StateFault::InvalidWorkerField("finished.sufficient_assumptions").into());
         }
     }

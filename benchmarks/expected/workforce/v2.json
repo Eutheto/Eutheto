@@ -1,0 +1,371 @@
+{
+  "format": "eutheto/workforce-corpus-expectations",
+  "schemaVersion": 1,
+  "corpusVersion": 2,
+  "generatorSourceSha256": "2ad2968eb3d46b551cbb0e9bf5a15c5ffa565c24b46f3bd4c7b6a870d4c9d6a9",
+  "cases": [
+    {
+      "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
+      "expected": {
+        "id": "appendix-f",
+        "disposition": "infeasible",
+        "people": 3,
+        "horizonDays": 30,
+        "resolvedShifts": 52,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Source-complete Appendix F remains infeasible: Smith's full local September 10 absence excludes the preceding overnight call and morning clinic; the remaining call owner cannot cover that clinic after only 120 of the Required 600 rest minutes, leaving one clinician for exact-two coverage. Preserve all three people, full-day absence, coverage, rest and active preferences; no accepted assignment count or score is claimed."
+        ]
+      }
+    },
+    {
+      "inputSha256": "0326ab03e1589efa7cb73b260b60234d90086ed9749b4bf42302c424075c1cb4",
+      "expected": {
+        "id": "clinic-tiny",
+        "disposition": "accepted",
+        "people": 3,
+        "horizonDays": 7,
+        "resolvedShifts": 5,
+        "selectedAssignments": 10,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 150
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Three clinicians, five four-hour weekday shifts, exact two physicians, one full local day unavailable; basic Required rules only"
+        ]
+      }
+    },
+    {
+      "inputSha256": "0408a81ccd2f25ca77490eb781cd51e524d07611d129d1784c3b5fb61a443789",
+      "expected": {
+        "id": "clinic-initial",
+        "disposition": "accepted",
+        "people": 8,
+        "horizonDays": 28,
+        "resolvedShifts": 20,
+        "selectedAssignments": 40,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 6400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Eight clinicians/four weeks; availability and exact two physicians; explicitly omits clinic-full workload balance and Friday preference"
+        ]
+      }
+    },
+    {
+      "inputSha256": "80f3035b79e7b02294043d9eff1b62bfd5d76809e90e67dc13421273e13dde47",
+      "expected": {
+        "id": "clinic-full",
+        "disposition": "accepted",
+        "people": 8,
+        "horizonDays": 28,
+        "resolvedShifts": 20,
+        "selectedAssignments": 40,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 6400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Eight clinicians/four weeks; exact two physicians plus active whole-plan weighted equal-share balance and whole-Friday avoidance; current compiler supports the complete source"
+        ]
+      }
+    },
+    {
+      "inputSha256": "cafac7775abba59f5176b102b8bf7633f48afb6c0b6dfe98f3472617c70090a9",
+      "expected": {
+        "id": "clinic-overnight",
+        "disposition": "accepted",
+        "people": 12,
+        "horizonDays": 28,
+        "resolvedShifts": 48,
+        "selectedAssignments": 68,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 39168
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Twelve clinicians;20 clinic shifts and28 overnight calls; exact2/1 qualified coverage; unavailable day intersects preceding overnight;600 elapsed minutes call-to-clinic rest"
+        ]
+      }
+    },
+    {
+      "inputSha256": "1eaba8574541d3ac335ec30838d8c3651ca85705adfc750c2b5dfd4d1da5a452",
+      "expected": {
+        "id": "rolling-hours",
+        "disposition": "accepted",
+        "people": 8,
+        "horizonDays": 28,
+        "resolvedShifts": 20,
+        "selectedAssignments": 40,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 6400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Eight clinicians/four weeks; overlapping7-day1200-minute and14-day2400-minute Intersection hour limits plus a concrete first-clinic hard lock; Phase07"
+        ]
+      }
+    },
+    {
+      "inputSha256": "1336f005281153d36396ec229d99d9c9a7f199567d35d78e87b58892d7a90b68",
+      "expected": {
+        "id": "specialist-coverage",
+        "disposition": "accepted",
+        "people": 6,
+        "horizonDays": 7,
+        "resolvedShifts": 5,
+        "selectedAssignments": 10,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 300
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Six physicians, exactly two also specialists; each shift requires exactly two physicians including at least one specialist through Coverage.qualification_minimums; no RequiredSkillMix"
+        ]
+      }
+    },
+    {
+      "inputSha256": "008e4a66850fc3cf5b97a668b26715e88c111a5fe38294460f95afcc4d53808f",
+      "expected": {
+        "id": "repair-before",
+        "disposition": "accepted",
+        "people": 4,
+        "horizonDays": 7,
+        "resolvedShifts": 5,
+        "selectedAssignments": 10,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 200
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Four clinicians ordinary supported before-input; no BaseSchedule or accepted/selected authority; separately typed call-out mutation remains an independent recipe requiring a genuine accepted and selected baseline"
+        ]
+      }
+    },
+    {
+      "inputSha256": "3c83a3042c9854c681035595cda7ba24969318d7b311294608ceab3c3a4c9ed6",
+      "expected": {
+        "id": "infeasible-coverage",
+        "disposition": "infeasible",
+        "people": 3,
+        "horizonDays": 1,
+        "resolvedShifts": 1,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Three active qualified people but only one eligible for a clinic needing exactly two; structurally valid model must reach backend infeasible termination"
+        ]
+      }
+    },
+    {
+      "inputSha256": "9067997adc9dafaf677f3f1f4787ce969f65c50cf9947ad1d8c5c90d35932bcd",
+      "expected": {
+        "id": "dst-spring",
+        "disposition": "accepted",
+        "people": 2,
+        "horizonDays": 1,
+        "resolvedShifts": 1,
+        "selectedAssignments": 1,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 2
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Chicago2026-03-08 gap02:30 moved forward;03:30 actual start/04:30 end;60 elapsed and120 scheduled minutes; Reject fails with Gap"
+        ]
+      }
+    },
+    {
+      "inputSha256": "9a30d8e7f5aa456b37243b6491a403fa81ff4b0b839a5b30c43fbd61a70f3087",
+      "expected": {
+        "id": "dst-fall",
+        "disposition": "accepted",
+        "people": 2,
+        "horizonDays": 1,
+        "resolvedShifts": 1,
+        "selectedAssignments": 1,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 2
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Chicago2026-11-01 first01:30 to02:30;120 elapsed and60 scheduled minutes; Later gives60 elapsed; Reject fails with Overlap"
+        ]
+      }
+    },
+    {
+      "inputSha256": "ebee95aec00b746e08e50948d76bb773ec0d503ac3d3e4337bdf567f42e5a172",
+      "expected": {
+        "id": "large-supported",
+        "disposition": "accepted",
+        "people": 101,
+        "horizonDays": 12,
+        "resolvedShifts": 12,
+        "selectedAssignments": 12,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 14544
+        },
+        "modelEnvelope": {
+          "minimumVariables": 2400,
+          "maximumVariables": 2600,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Exactly101 active universally eligible people by12 independent daily one-hour shifts:1212 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
+        ]
+      }
+    },
+    {
+      "inputSha256": "8e9f66ae66fda1a7f03c9e39f7fe37220a136324835a5ca426f71f7378339134",
+      "expected": {
+        "id": "large-pressure",
+        "disposition": "resourceLimit",
+        "people": 100,
+        "horizonDays": 64,
+        "resolvedShifts": 64,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": null,
+        "deferredObligations": [],
+        "semantics": [
+          "Exactly100 active universally eligible people by64 independent daily one-hour shifts:6400 unpruned pairs; expected typed resource limit, never infeasible or accepted; metrics unavailable unless actually produced"
+        ]
+      }
+    },
+    {
+      "inputSha256": "9a43c8917164cc6033e155b74bbf14d0c6b284494637f5ab8edbe68e3264daa2",
+      "expected": {
+        "id": "practitioner-workflow",
+        "disposition": "accepted",
+        "people": 12,
+        "horizonDays": 28,
+        "resolvedShifts": 48,
+        "selectedAssignments": 68,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 39168
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 12000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Twelve fictional clinicians across 2027-02-01..2027-03-01: 20 weekday four-hour clinics and 28 ten-hour overnight calls; exact qualified coverage, dated eligibility, approved leave, 600-minute directional rest, count/hour quotas, maxima, hard-protected anchor, distinct-weekend cap and explicit weekend target jointly optimize one source",
+          "Reviewed source totals: 20 weekday clinic occurrences at exact two physicians with one specialist minimum in the feasible variant (two in the infeasible variation), plus 28 daily overnight calls at exact one call-qualified clinician; the feasible source therefore has 40 clinic and 28 call assignments, while the variation has no accepted assignment authority.",
+          "Reviewed Required boundaries: dated active eligibility is 2027-02-01..2027-03-02 (exclusive end, containing the final overnight tail), approved study leave is an explicit non-work availability record, both directional recovery rules require 600 minutes, weekly count quota is 1..=3, weekly elapsed bucket quota is 240..=2400 minutes, rolling maximum is 6000 minutes per 14 days, and weekly assignment maximum is 3.",
+          "Reviewed burden/preference metrics: all-hours, clinic-hours, call-hours and combined-count source buckets are retained; clinician weights are 1/1, 3/4 or 1/2; Required distinct worked weekends cap at 2 and explicit weekendTarget prefers 1 across the horizon; operator totals report period, burden and preference deviations rather than a prescribed roster.",
+          "Boundary and scope decisions are explicit: weekly quotas use four authored Monday-midnight periods from February 1 through March 1; the final overnight tail remains work but lies outside those quota periods. Other elapsed/weekend membership still includes overnight tails, no unpaid-break or administrative-leave credit is inferred, no new-work grouping or guaranteed free/consecutive weekend is claimed, and no linked split-session alternative is modeled."
+        ]
+      }
+    },
+    {
+      "inputSha256": "46512dde06bb418b62dab22a60c786d882cf1cf23f3c10c937009011a6d0f521",
+      "expected": {
+        "id": "practitioner-infeasible",
+        "disposition": "infeasible",
+        "people": 12,
+        "horizonDays": 28,
+        "resolvedShifts": 48,
+        "selectedAssignments": null,
+        "score": null,
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 12000,
+          "maximumConstraints": 12000
+        },
+        "deferredObligations": [],
+        "semantics": [
+          "Same twelve-clinician combined source and boundaries, but every clinic requires two distinct specialist-qualified people while only one dated specialist grant is authored; this is a genuine mapped specialist-coverage infeasible variation, not a time-limit result",
+          "Reviewed source totals: 20 weekday clinic occurrences at exact two physicians with one specialist minimum in the feasible variant (two in the infeasible variation), plus 28 daily overnight calls at exact one call-qualified clinician; the feasible source therefore has 40 clinic and 28 call assignments, while the variation has no accepted assignment authority.",
+          "Reviewed Required boundaries: dated active eligibility is 2027-02-01..2027-03-02 (exclusive end, containing the final overnight tail), approved study leave is an explicit non-work availability record, both directional recovery rules require 600 minutes, weekly count quota is 1..=3, weekly elapsed bucket quota is 240..=2400 minutes, rolling maximum is 6000 minutes per 14 days, and weekly assignment maximum is 3.",
+          "Reviewed burden/preference metrics: all-hours, clinic-hours, call-hours and combined-count source buckets are retained; clinician weights are 1/1, 3/4 or 1/2; Required distinct worked weekends cap at 2 and explicit weekendTarget prefers 1 across the horizon; operator totals report period, burden and preference deviations rather than a prescribed roster.",
+          "Boundary and scope decisions are explicit: weekly quotas use four authored Monday-midnight periods from February 1 through March 1; the final overnight tail remains work but lies outside those quota periods. Other elapsed/weekend membership still includes overnight tails, no unpaid-break or administrative-leave credit is inferred, no new-work grouping or guaranteed free/consecutive weekend is claimed, and no linked split-session alternative is modeled."
+        ]
+      }
+    }
+  ]
+}

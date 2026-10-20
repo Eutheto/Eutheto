@@ -271,6 +271,8 @@ mod tests {
         let mut plan = Plan {
             definitions: Vec::new(),
             constraints: Vec::new(),
+            weekends: Vec::new(),
+            hours: Vec::new(),
             parents: BTreeMap::new(),
         };
         let mut entered = false;

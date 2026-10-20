@@ -2,8 +2,8 @@ use crate::{
     AcceptedResult, AcceptedResultRefV1, AssignmentComparisonV1, AssignmentLockStateV1,
     ComparisonBindingV1, ComparisonOrdering, DomainContractError, ExplanationCertainty,
     LockComparisonV1, MetricComparisonV1, RuleComparisonV1, RunComparisonSideV1, RunComparisonV1,
-    RunManifestV1, RunTerminalOutcomeV1, ScoreCategoryComparisonV1, ScoreLevelComparisonV1,
-    SolutionComparisonV1,
+    RunManifest, RunTerminalOutcomeV1, ScoreCategoryComparisonV1, ScoreLevelComparisonV1,
+    SemanticDifferenceV1, SolutionComparisonV1,
 };
 use eutheto_types::SolveStatus;
 use std::cmp::Ordering;
@@ -34,9 +34,9 @@ pub struct ComparisonLockPair {
 #[derive(Clone, Copy, Debug)]
 pub struct ComparisonRunManifests<'a> {
     /// Manifest associated with the base accepted result.
-    pub base: &'a RunManifestV1,
+    pub base: &'a RunManifest,
     /// Manifest associated with the candidate accepted result.
-    pub candidate: &'a RunManifestV1,
+    pub candidate: &'a RunManifest,
 }
 
 /// Optional, nonserializable comparison authority supplied by the caller.
@@ -73,6 +73,8 @@ pub enum ComparisonError {
     ArithmeticOverflow,
     /// The resulting strict domain comparison contract was rejected.
     InvalidComparison(DomainContractError),
+    /// The inherited operation was cancelled or reached its original deadline.
+    Interrupted(eutheto_types::OperationInterruption),
 }
 
 impl fmt::Display for ComparisonError {
@@ -89,6 +91,12 @@ impl fmt::Display for ComparisonError {
                 write!(formatter, "invalid {side:?} run manifest")
             }
             Self::ArithmeticOverflow => formatter.write_str("score comparison arithmetic overflow"),
+            Self::Interrupted(interruption) => {
+                write!(
+                    formatter,
+                    "comparison operation interrupted: {interruption:?}"
+                )
+            }
             Self::InvalidComparison(error) => {
                 write!(formatter, "invalid solution comparison: {error}")
             }
@@ -112,21 +120,11 @@ pub fn compare_accepted_results(
     candidate: &AcceptedResult,
     context: Option<&ComparisonContext<'_>>,
 ) -> Result<SolutionComparisonV1, ComparisonError> {
-    base.validate()
-        .map_err(|source| ComparisonError::InvalidAcceptedResult {
-            side: ComparisonSide::Base,
-            source,
-        })?;
-    candidate
-        .validate()
-        .map_err(|source| ComparisonError::InvalidAcceptedResult {
-            side: ComparisonSide::Candidate,
-            source,
-        })?;
+    validate_accepted_results(base, candidate)?;
     validate_compatibility(base, candidate)?;
 
-    let (assignments, mut affected_entities) = assignment_deltas(base, candidate);
-    let (rules, rule_entities) = rule_deltas(base, candidate);
+    let (assignments, mut affected_entities) = assignment_deltas(base, candidate, None)?;
+    let (rules, rule_entities) = rule_deltas(base, candidate, None)?;
     affected_entities.extend(rule_entities);
     let score_levels = score_deltas(base, candidate)?;
     let metrics = metric_deltas(base, candidate);
@@ -151,7 +149,319 @@ pub fn compare_accepted_results(
     .map_err(ComparisonError::InvalidComparison)
 }
 
-fn validate_compatibility(
+/// Compares two independently accepted results without making objective-score or lock claims.
+///
+/// This path accepts different score shapes and never computes score deltas or ordering. It
+/// retains only canonical assignment, required-rule, metric, and explicitly supplied terminal-run
+/// differences.
+///
+/// # Errors
+/// Rejects invalid inputs, incompatible bindings, invalid supplied manifests, and an invalid
+/// resulting semantic-difference contract.
+pub fn compare_semantic_accepted_results(
+    base: &AcceptedResult,
+    candidate: &AcceptedResult,
+    context: Option<&ComparisonContext<'_>>,
+) -> Result<SemanticDifferenceV1, ComparisonError> {
+    validate_accepted_results(base, candidate)?;
+    validate_semantic_compatibility(base, candidate)?;
+
+    let (assignments, mut affected_entities) = assignment_deltas(base, candidate, None)?;
+    let (rules, rule_entities) = rule_deltas(base, candidate, None)?;
+    affected_entities.extend(rule_entities);
+    let metrics = metric_deltas(base, candidate);
+    let runs = run_comparison(base, candidate, context)?;
+
+    SemanticDifferenceV1::new(
+        binding(base),
+        binding(candidate),
+        assignments,
+        rules,
+        metrics,
+        runs,
+        affected_entities.into_iter().collect(),
+    )
+    .map_err(ComparisonError::InvalidComparison)
+}
+
+/// Pack-established score semantics for one exact result; this is not acceptance authority.
+#[derive(Clone, Debug)]
+pub struct ComparisonScoringContext<'a> {
+    /// Exact immutable result/input/manifest source whose scoring meaning was evaluated.
+    pub source: &'a crate::PortableAcceptedResult,
+    /// Versioned pack-owned semantic projection producer, not a display label.
+    pub producer_id: crate::DomainEvidenceId,
+    /// BLAKE3 of scoring definitions, units, population, weights, scaling and order.
+    pub semantic_hash: String,
+}
+
+/// Source-owned additions to generic deltas, obtained before the complete envelope is sealed.
+#[derive(Clone, Debug, Default)]
+pub struct ComparisonEnrichmentV2<'a> {
+    /// Complete source protection union in canonical assignment order.
+    pub protections: Vec<crate::AssignmentProtectionComparisonV1>,
+    /// Canonical affected-party labels resolved separately from both immutable sources.
+    pub affected_parties: Vec<crate::ComparisonEntityObservationV1>,
+    /// Both exact source scoring projections, or no established compatible policy.
+    pub scoring_contexts: Option<(ComparisonScoringContext<'a>, ComparisonScoringContext<'a>)>,
+}
+
+/// Computed generic deltas awaiting pack-owned source projection, with no wire checksum yet.
+///
+/// The two-stage boundary lets a pack map changed assignment identities without owning generic
+/// delta computation or introducing a dependency from `DomainIR` back to a domain pack.
+pub struct PreparedComparisonV2<'a> {
+    base: &'a crate::PortableAcceptedResult,
+    candidate: &'a crate::PortableAcceptedResult,
+    control: Option<&'a eutheto_types::OperationControl>,
+    assignments: Vec<AssignmentComparisonV1>,
+    rules: Vec<RuleComparisonV1>,
+    metrics: Vec<MetricComparisonV1>,
+    runs: crate::RunComparisonV2,
+    affected_entities: BTreeSet<crate::DomainEntityRef>,
+}
+
+/// Validates both immutable portable records and computes generic deltas exactly once.
+///
+/// Contract validation is not local acceptance. Native consumers must load canonical records and
+/// freshly verify the two original sources before calling this helper.
+///
+/// # Errors
+/// Rejects malformed/crossbound records, incompatible pack/projection identity, finite output
+/// bounds, or inherited cancellation/deadline.
+pub fn prepare_comparison_v2<'a>(
+    base: &'a crate::PortableAcceptedResult,
+    candidate: &'a crate::PortableAcceptedResult,
+    control: Option<&'a eutheto_types::OperationControl>,
+) -> Result<PreparedComparisonV2<'a>, ComparisonError> {
+    for (source, side) in [
+        (base, ComparisonSide::Base),
+        (candidate, ComparisonSide::Candidate),
+    ] {
+        comparison_checkpoint(control, 0)?;
+        crate::ensure_portable_domain_contract_size(source)
+            .map_err(|source| ComparisonError::InvalidAcceptedResult { side, source })?;
+        source
+            .validate()
+            .map_err(|source| ComparisonError::InvalidAcceptedResult { side, source })?;
+    }
+    let before = &base.accepted_result;
+    let after = &candidate.accepted_result;
+    validate_semantic_compatibility(before, after)?;
+    let (assignments, mut affected_entities) = assignment_deltas(before, after, control)?;
+    let (rules, rule_entities) = rule_deltas(before, after, control)?;
+    for (index, entity) in rule_entities.into_iter().enumerate() {
+        comparison_checkpoint(control, index)?;
+        if affected_entities.len() >= crate::MAX_EXPLANATION_RECORDS
+            && !affected_entities.contains(&entity)
+        {
+            return Err(ComparisonError::InvalidComparison(
+                DomainContractError::LimitExceeded("comparison affected entities"),
+            ));
+        }
+        affected_entities.insert(entity);
+    }
+    // Portable custody was validated above; recorded status cannot authenticate backend proof.
+    let runs = crate::RunComparisonV2 {
+        base: crate::RunComparisonSideV2 {
+            run_id: base.run_manifest.run_id,
+            run_manifest_checksum: base.run_manifest.checksum.clone(),
+            outcome: base.run_manifest.outcome.clone(),
+        },
+        candidate: crate::RunComparisonSideV2 {
+            run_id: candidate.run_manifest.run_id,
+            run_manifest_checksum: candidate.run_manifest.checksum.clone(),
+            outcome: candidate.run_manifest.outcome.clone(),
+        },
+    };
+    comparison_checkpoint(control, 0)?;
+    Ok(PreparedComparisonV2 {
+        base,
+        candidate,
+        control,
+        assignments,
+        rules,
+        metrics: metric_deltas(before, after),
+        runs,
+        affected_entities,
+    })
+}
+
+impl PreparedComparisonV2<'_> {
+    /// Borrowed canonical assignment deltas for pack-owned affected-party projection.
+    #[must_use]
+    pub fn assignments(&self) -> &[AssignmentComparisonV1] {
+        &self.assignments
+    }
+
+    /// Borrowed Required-rule deltas; their scope bindings remain side-specific.
+    #[must_use]
+    pub fn rules(&self) -> &[RuleComparisonV1] {
+        &self.rules
+    }
+
+    /// Borrowed changed metrics, without asserting that unlike policies share universal utility.
+    #[must_use]
+    pub fn metrics(&self) -> &[MetricComparisonV1] {
+        &self.metrics
+    }
+
+    /// Canonical generic affected identities for source-side label resolution.
+    #[must_use]
+    pub fn affected_entities(&self) -> &BTreeSet<crate::DomainEntityRef> {
+        &self.affected_entities
+    }
+
+    /// Validates source-owned additions, derives compatible scores and seals complete evidence.
+    ///
+    /// # Errors
+    /// Rejects misbound scoring projections, contradictory additions, overflow, resource bounds
+    /// or inherited interruption. Incompatible scores are explicitly unavailable, not an error.
+    pub fn finish(
+        mut self,
+        enrichment: ComparisonEnrichmentV2<'_>,
+    ) -> Result<crate::SolutionComparisonV2, ComparisonError> {
+        comparison_checkpoint(self.control, 0)?;
+        if enrichment.protections.len() > crate::MAX_EXPLANATION_RECORDS
+            || enrichment.affected_parties.len() > crate::MAX_EXPLANATION_RECORDS
+        {
+            return Err(ComparisonError::InvalidComparison(
+                DomainContractError::LimitExceeded("comparison source additions"),
+            ));
+        }
+        for (index, protection) in enrichment.protections.iter().enumerate() {
+            comparison_checkpoint(self.control, index)?;
+            let [before, after] = [self.base, self.candidate].map(|source| {
+                source
+                    .accepted_result
+                    .solution
+                    .assignments
+                    .binary_search_by(|assignment| assignment.id.cmp(&protection.assignment_id))
+                    .ok()
+                    .map(|index| &source.accepted_result.solution.assignments[index].value)
+            });
+            protection
+                .validate_selection_values(before, after)
+                .map_err(ComparisonError::InvalidComparison)?;
+        }
+        for (index, party) in enrichment.affected_parties.iter().enumerate() {
+            comparison_checkpoint(self.control, index)?;
+            insert_affected_entity(&mut self.affected_entities, &party.entity)?;
+        }
+        let score = comparison_score_v2(
+            self.base,
+            self.candidate,
+            enrichment.scoring_contexts.as_ref(),
+        )?;
+        let comparison = crate::SolutionComparisonV2 {
+            schema_version: crate::SOLUTION_COMPARISON_V2_SCHEMA_VERSION,
+            base: binding(&self.base.accepted_result),
+            candidate: binding(&self.candidate.accepted_result),
+            assignments: self.assignments,
+            rules: self.rules,
+            score,
+            metrics: self.metrics,
+            protections: enrichment.protections,
+            runs: self.runs,
+            affected_entities: self.affected_entities.into_iter().collect(),
+            entity_observations: enrichment.affected_parties,
+            checksum: String::new(),
+        }
+        .seal()
+        .map_err(ComparisonError::InvalidComparison)?;
+        comparison_checkpoint(self.control, 0)?;
+        Ok(comparison)
+    }
+}
+
+fn comparison_score_v2(
+    base: &crate::PortableAcceptedResult,
+    candidate: &crate::PortableAcceptedResult,
+    contexts: Option<&(ComparisonScoringContext<'_>, ComparisonScoringContext<'_>)>,
+) -> Result<crate::ScoreComparisonV2, ComparisonError> {
+    let unavailable = |reason| crate::ScoreComparisonV2::Unavailable { reason };
+    let Some((before, after)) = contexts else {
+        return Ok(unavailable(
+            crate::ScoreComparisonUnavailableReasonV1::PolicyOrScopeMismatch,
+        ));
+    };
+    for (projection, source) in [(before, base), (after, candidate)] {
+        if projection.source.result_id != source.result_id
+            || projection.source.accepted_result.checksum != source.accepted_result.checksum
+            || projection.source.run_input.checksum != source.run_input.checksum
+            || projection.source.run_manifest.checksum != source.run_manifest.checksum
+        {
+            return Err(ComparisonError::InvalidComparison(
+                DomainContractError::InvalidExplanationContract("comparison scoring source"),
+            ));
+        }
+        crate::validate_hash(&projection.semantic_hash)
+            .map_err(ComparisonError::InvalidComparison)?;
+    }
+    if before.producer_id != after.producer_id
+        || before.semantic_hash != after.semantic_hash
+        || base.run_input.compiler_version != candidate.run_input.compiler_version
+        || objective_semantics(&base.run_input) != objective_semantics(&candidate.run_input)
+    {
+        return Ok(unavailable(
+            crate::ScoreComparisonUnavailableReasonV1::PolicyOrScopeMismatch,
+        ));
+    }
+    let before = &base.accepted_result;
+    let after = &candidate.accepted_result;
+    if before
+        .verification
+        .score
+        .compare(&after.verification.score)
+        .is_err()
+    {
+        return Ok(unavailable(
+            crate::ScoreComparisonUnavailableReasonV1::ScoreShapeMismatch,
+        ));
+    }
+    Ok(crate::ScoreComparisonV2::Comparable {
+        base_score: before.verification.score.clone(),
+        candidate_score: after.verification.score.clone(),
+        score_levels: score_deltas(before, after)?,
+        ordering: ordering(before, after)?,
+    })
+}
+
+fn objective_semantics(
+    input: &crate::RunInput,
+) -> Option<(
+    &crate::ObjectiveProfileId,
+    u32,
+    crate::RunObjectiveOperation,
+)> {
+    input.objective_context.as_ref().map(|context| {
+        (
+            &context.profile_id,
+            context.semantic_version,
+            context.operation,
+        )
+    })
+}
+
+fn validate_accepted_results(
+    base: &AcceptedResult,
+    candidate: &AcceptedResult,
+) -> Result<(), ComparisonError> {
+    base.validate()
+        .map_err(|source| ComparisonError::InvalidAcceptedResult {
+            side: ComparisonSide::Base,
+            source,
+        })?;
+    candidate
+        .validate()
+        .map_err(|source| ComparisonError::InvalidAcceptedResult {
+            side: ComparisonSide::Candidate,
+            source,
+        })?;
+    Ok(())
+}
+
+fn validate_semantic_compatibility(
     base: &AcceptedResult,
     candidate: &AcceptedResult,
 ) -> Result<(), ComparisonError> {
@@ -161,11 +471,22 @@ fn validate_compatibility(
         || (base.solution.scenario_revision == candidate.solution.scenario_revision
             && base.verification.verification_scope_checksum
                 != candidate.verification.verification_scope_checksum)
-        || base
-            .verification
-            .score
-            .compare(&candidate.verification.score)
-            .is_err()
+    {
+        return Err(ComparisonError::Incompatible);
+    }
+    Ok(())
+}
+
+fn validate_compatibility(
+    base: &AcceptedResult,
+    candidate: &AcceptedResult,
+) -> Result<(), ComparisonError> {
+    validate_semantic_compatibility(base, candidate)?;
+    if base
+        .verification
+        .score
+        .compare(&candidate.verification.score)
+        .is_err()
     {
         return Err(ComparisonError::Incompatible);
     }
@@ -190,10 +511,14 @@ fn binding(result: &AcceptedResult) -> ComparisonBindingV1 {
 fn assignment_deltas(
     base: &AcceptedResult,
     candidate: &AcceptedResult,
-) -> (
-    Vec<AssignmentComparisonV1>,
-    BTreeSet<crate::DomainEntityRef>,
-) {
+    control: Option<&eutheto_types::OperationControl>,
+) -> Result<
+    (
+        Vec<AssignmentComparisonV1>,
+        BTreeSet<crate::DomainEntityRef>,
+    ),
+    ComparisonError,
+> {
     let before = &base.solution.assignments;
     let after = &candidate.solution.assignments;
     let mut left = 0;
@@ -201,55 +526,67 @@ fn assignment_deltas(
     let mut deltas = Vec::new();
     let mut entities = BTreeSet::new();
     while left < before.len() || right < after.len() {
-        match (before.get(left), after.get(right)) {
+        comparison_checkpoint(control, left + right)?;
+        let (old, new) = match (before.get(left), after.get(right)) {
             (Some(old), Some(new)) => match old.id.cmp(&new.id) {
                 Ordering::Less => {
-                    entities.insert(old.entity.clone());
-                    deltas.push(AssignmentComparisonV1::Removed {
-                        before: old.clone(),
-                    });
                     left += 1;
+                    (Some(old), None)
                 }
                 Ordering::Greater => {
-                    entities.insert(new.entity.clone());
-                    deltas.push(AssignmentComparisonV1::Added { after: new.clone() });
                     right += 1;
+                    (None, Some(new))
                 }
                 Ordering::Equal => {
-                    if old != new {
-                        entities.insert(old.entity.clone());
-                        entities.insert(new.entity.clone());
-                        deltas.push(AssignmentComparisonV1::Changed {
-                            before: old.clone(),
-                            after: new.clone(),
-                        });
-                    }
                     left += 1;
                     right += 1;
+                    if old == new {
+                        continue;
+                    }
+                    (Some(old), Some(new))
                 }
             },
             (Some(old), None) => {
-                entities.insert(old.entity.clone());
-                deltas.push(AssignmentComparisonV1::Removed {
-                    before: old.clone(),
-                });
                 left += 1;
+                (Some(old), None)
             }
             (None, Some(new)) => {
-                entities.insert(new.entity.clone());
-                deltas.push(AssignmentComparisonV1::Added { after: new.clone() });
                 right += 1;
+                (None, Some(new))
             }
             (None, None) => break,
+        };
+        comparison_record_capacity(deltas.len(), "assignment comparisons")?;
+        for entity in old
+            .into_iter()
+            .map(|value| &value.entity)
+            .chain(new.into_iter().map(|value| &value.entity))
+        {
+            insert_affected_entity(&mut entities, entity)?;
         }
+        let delta = match (old, new) {
+            (Some(before), Some(after)) => AssignmentComparisonV1::Changed {
+                before: before.clone(),
+                after: after.clone(),
+            },
+            (Some(before), None) => AssignmentComparisonV1::Removed {
+                before: before.clone(),
+            },
+            (None, Some(after)) => AssignmentComparisonV1::Added {
+                after: after.clone(),
+            },
+            (None, None) => unreachable!("a canonical merge always yields at least one side"),
+        };
+        deltas.push(delta);
     }
-    (deltas, entities)
+    Ok((deltas, entities))
 }
 
 fn rule_deltas(
     base: &AcceptedResult,
     candidate: &AcceptedResult,
-) -> (Vec<RuleComparisonV1>, BTreeSet<crate::DomainEntityRef>) {
+    control: Option<&eutheto_types::OperationControl>,
+) -> Result<(Vec<RuleComparisonV1>, BTreeSet<crate::DomainEntityRef>), ComparisonError> {
     let before = &base.verification.required_rule_results;
     let after = &candidate.verification.required_rule_results;
     let mut left = 0;
@@ -257,6 +594,7 @@ fn rule_deltas(
     let mut deltas = Vec::new();
     let mut entities = BTreeSet::new();
     while left < before.len() || right < after.len() {
+        comparison_checkpoint(control, left + right)?;
         let (rule_id, old, new) = match (before.get(left), after.get(right)) {
             (Some(old), Some(new)) => match old.rule_id.cmp(&new.rule_id) {
                 Ordering::Less => {
@@ -286,12 +624,13 @@ fn rule_deltas(
             }
             (None, None) => break,
         };
+        comparison_record_capacity(deltas.len(), "rule comparisons")?;
         for entity in old
             .into_iter()
             .flat_map(|value| &value.affected_entities)
             .chain(new.into_iter().flat_map(|value| &value.affected_entities))
         {
-            entities.insert(entity.clone());
+            insert_affected_entity(&mut entities, entity)?;
         }
         deltas.push(RuleComparisonV1 {
             rule_id,
@@ -299,7 +638,44 @@ fn rule_deltas(
             after: new.cloned(),
         });
     }
-    (deltas, entities)
+    Ok((deltas, entities))
+}
+
+fn comparison_checkpoint(
+    control: Option<&eutheto_types::OperationControl>,
+    visited: usize,
+) -> Result<(), ComparisonError> {
+    // A merge advances one or two source rows; either parity must reach a checkpoint.
+    if visited % 256 <= 1
+        && let Some(control) = control
+    {
+        control.check().map_err(ComparisonError::Interrupted)?;
+    }
+    Ok(())
+}
+
+fn comparison_record_capacity(len: usize, label: &'static str) -> Result<(), ComparisonError> {
+    if len >= crate::MAX_EXPLANATION_RECORDS {
+        return Err(ComparisonError::InvalidComparison(
+            DomainContractError::NonCanonicalExplanationCollection(label),
+        ));
+    }
+    Ok(())
+}
+
+fn insert_affected_entity(
+    entities: &mut BTreeSet<crate::DomainEntityRef>,
+    entity: &crate::DomainEntityRef,
+) -> Result<(), ComparisonError> {
+    if !entities.contains(entity) {
+        if entities.len() >= crate::MAX_EXPLANATION_RECORDS {
+            return Err(ComparisonError::InvalidComparison(
+                DomainContractError::LimitExceeded("comparison affected entities"),
+            ));
+        }
+        entities.insert(entity.clone());
+    }
+    Ok(())
 }
 
 fn score_deltas(
@@ -472,7 +848,7 @@ fn run_comparison(
 }
 
 fn validate_manifest(
-    manifest: &RunManifestV1,
+    manifest: &RunManifest,
     accepted: &AcceptedResult,
     side: ComparisonSide,
 ) -> Result<(), ComparisonError> {
@@ -499,7 +875,7 @@ fn validate_manifest(
     }
 }
 
-fn run_side(manifest: &RunManifestV1) -> RunComparisonSideV1 {
+fn run_side(manifest: &RunManifest) -> RunComparisonSideV1 {
     RunComparisonSideV1 {
         run_id: manifest.run_id,
         run_manifest_checksum: manifest.checksum.clone(),
@@ -691,10 +1067,10 @@ mod tests {
         suffix: u8,
         accepted: &AcceptedResult,
         status: SolveStatus,
-    ) -> Result<RunManifestV1, Box<dyn std::error::Error>> {
+    ) -> Result<RunManifest, Box<dyn std::error::Error>> {
         let run_id =
             format!("01890a5d-ac96-7b64-9f74-bbfcf30f9f{suffix:02x}").parse::<SolveRunId>()?;
-        Ok(RunManifestV1::new(
+        Ok(RunManifest::new(
             run_id,
             hash(&format!("input-{suffix}")),
             RunTerminalOutcomeV1::Accepted {
@@ -799,6 +1175,136 @@ mod tests {
         assert!(matches!(
             compare_accepted_results(&minimum, &incompatible, None),
             Err(ComparisonError::Incompatible)
+        ));
+        assert!(matches!(
+            compare_semantic_accepted_results(&minimum, &incompatible, None),
+            Err(ComparisonError::Incompatible)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_comparison_allows_score_shape_mismatch() -> Result<(), Box<dyn std::error::Error>> {
+        let (base, candidate) = pair(10, 5)?;
+        let mut levels = candidate.verification.score.levels.clone();
+        levels.push(ScoreLevelValue {
+            level_id: ScoreLevelId::new("tests.secondary")?,
+            value: 99,
+            direction: OptimizationDirection::Minimize,
+            category_breakdown: BTreeMap::new(),
+        });
+        let score = ScoreVector {
+            feasibility: candidate.verification.score.feasibility,
+            levels,
+        };
+        let context = VerificationContextV1::new(
+            candidate.solution.scenario_id,
+            candidate.solution.scenario_revision,
+            candidate.verification.document_hash.clone(),
+            candidate.verification.planning_model_hash.clone(),
+            candidate.solution.canonical_hash()?,
+            candidate.verification.verification_scope_checksum.clone(),
+        )?;
+        let report = VerificationReport::new(
+            &context,
+            candidate.verification.required_rule_results.clone(),
+            score,
+            candidate.verification.warnings.clone(),
+            candidate.verification.metrics.clone(),
+        )?;
+        let candidate = AcceptedResult::new(candidate.solution.clone(), report)?;
+
+        assert!(matches!(
+            compare_accepted_results(&base, &candidate, None),
+            Err(ComparisonError::Incompatible)
+        ));
+        let difference = compare_semantic_accepted_results(&base, &candidate, None)?;
+        assert_eq!(difference.assignments.len(), 3);
+        assert_eq!(difference.rules.len(), 2);
+        assert_eq!(difference.metrics.len(), 3);
+        let wire = serde_json::to_value(&difference)?;
+        assert!(wire.get("baseScore").is_none());
+        assert!(wire.get("candidateScore").is_none());
+        assert!(wire.get("ordering").is_none());
+        assert!(wire.get("locks").is_none());
+        difference.validate()?;
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_comparison_preserves_canonical_changes_and_checksum()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (base, candidate) = pair(10, 5)?;
+        let difference = compare_semantic_accepted_results(&base, &candidate, None)?;
+        assert!(matches!(
+            difference.assignments[0],
+            AssignmentComparisonV1::Removed { .. }
+        ));
+        assert_eq!(
+            difference.affected_entities,
+            vec![entity("a")?, entity("b")?, entity("c")?]
+        );
+        let encoded = serde_json::to_vec(&difference)?;
+        assert_eq!(SemanticDifferenceV1::from_json(&encoded)?, difference);
+
+        let mut tampered = difference.clone();
+        tampered.checksum = hash("tampered");
+        assert!(matches!(
+            tampered.validate(),
+            Err(DomainContractError::ChecksumMismatch)
+        ));
+
+        let mut noncanonical = difference;
+        noncanonical.affected_entities.reverse();
+        assert!(matches!(
+            noncanonical.validate(),
+            Err(DomainContractError::NonCanonicalExplanationCollection(
+                "comparison affected entities"
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_comparison_rejects_malformed_manifest_and_oversized_data()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (base, candidate) = pair(10, 5)?;
+        let mut base_manifest = manifest(0x30, &base, SolveStatus::Feasible)?;
+        base_manifest.checksum = hash("tampered");
+        let candidate_manifest = manifest(0x31, &candidate, SolveStatus::Optimal)?;
+        let context = ComparisonContext {
+            locks: &[],
+            manifests: Some(ComparisonRunManifests {
+                base: &base_manifest,
+                candidate: &candidate_manifest,
+            }),
+        };
+        assert!(matches!(
+            compare_semantic_accepted_results(&base, &candidate, Some(&context)),
+            Err(ComparisonError::InvalidManifest {
+                side: ComparisonSide::Base,
+                source: Some(DomainContractError::ChecksumMismatch),
+            })
+        ));
+
+        let valid = compare_semantic_accepted_results(&base, &candidate, None)?;
+        let mut oversized = valid.clone();
+        oversized.affected_entities = (0..=crate::MAX_VERIFICATION_ENTITIES)
+            .map(
+                |index| -> Result<DomainEntityRef, Box<dyn std::error::Error>> {
+                    Ok(DomainEntityRef {
+                        kind: DomainEntityKindId::new("tests.person")?,
+                        id: DomainEntityId::new(format!("tests.entity-{index}"))?,
+                    })
+                },
+            )
+            .collect::<Result<_, _>>()?;
+        oversized.affected_entities.sort();
+        assert!(matches!(
+            oversized.validate(),
+            Err(DomainContractError::LimitExceeded(
+                "comparison affected entities"
+            ))
         ));
         Ok(())
     }

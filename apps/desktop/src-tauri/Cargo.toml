@@ -28,9 +28,11 @@ sha2 = "=0.10.9"
 
 [dependencies]
 eutheto-core = { path = "../../../crates/eutheto-core" }
+eutheto-domain-ir = { path = "../../../crates/eutheto-domain-ir" }
 eutheto-export = { path = "../../../crates/eutheto-export" }
 eutheto-import = { path = "../../../crates/eutheto-import" }
 eutheto-solver-ortools = { path = "../../../crates/eutheto-solver-ortools", optional = true }
+eutheto-solver-api = { path = "../../../crates/eutheto-solver-api" }
 eutheto-types = { path = "../../../crates/eutheto-types" }
 libc = "=0.2.189"
 tauri = { version = "=2.11.5", features = [] }

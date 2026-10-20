@@ -1,18 +1,22 @@
 use eutheto_types::{AssignmentId, RuleId, ScenarioSnapshotV1, SolveMode, SolveStatus};
-use eutheto_workforce::commands::EntityPayload;
+use eutheto_workforce::{
+    ids::{AvailabilityId, ShiftId},
+    model::{DateRange, TimeWindow},
+};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const FORMAT_VERSION: u32 = 1;
-pub(crate) const CORPUS_VERSION: u32 = 1;
+pub(crate) const CORPUS_VERSION: u32 = 2;
+pub(crate) const REPAIR_SCHEMA_VERSION: u32 = 2;
 pub(crate) const CORPUS_FORMAT: &str = "eutheto/workforce-corpus";
 pub(crate) const EXPECTED_FORMAT: &str = "eutheto/workforce-corpus-expectations";
 pub(crate) const REPAIR_FORMAT: &str = "eutheto/workforce-repair-fixture";
 pub(crate) const EVIDENCE_FORMAT: &str = "eutheto/workforce-benchmark-evidence";
 pub(crate) const CLI_EVIDENCE_FORMAT: &str = "eutheto/workforce-cli-corpus-evidence";
-pub(crate) const FIXTURE_ROOT: &str = "domains/workforce/fixtures/v1";
-pub(crate) const CORPUS_PATH: &str = "benchmarks/corpus/workforce/v1.json";
-pub(crate) const EXPECTED_PATH: &str = "benchmarks/expected/workforce/v1.json";
-pub(crate) const REPAIR_PATH: &str = "domains/workforce/fixtures/v1/repair-callout.json";
+pub(crate) const FIXTURE_ROOT: &str = "domains/workforce/fixtures/v2";
+pub(crate) const CORPUS_PATH: &str = "benchmarks/corpus/workforce/v2.json";
+pub(crate) const EXPECTED_PATH: &str = "benchmarks/expected/workforce/v2.json";
+pub(crate) const REPAIR_PATH: &str = "domains/workforce/fixtures/v2/repair-callout.json";
 pub(crate) const FIXTURE_CLOCK: &str = "2026-08-28T23:00:00Z";
 pub(crate) const MAX_INDEX_BYTES: u64 = 256 * 1024;
 pub(crate) const MAX_EXPECTED_BYTES: u64 = 256 * 1024;
@@ -34,10 +38,12 @@ pub(crate) enum CaseId {
     DstFall,
     LargeSupported,
     LargePressure,
+    PractitionerWorkflow,
+    PractitionerInfeasible,
 }
 
 impl CaseId {
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::AppendixF,
         Self::ClinicTiny,
         Self::ClinicInitial,
@@ -51,6 +57,8 @@ impl CaseId {
         Self::DstFall,
         Self::LargeSupported,
         Self::LargePressure,
+        Self::PractitionerWorkflow,
+        Self::PractitionerInfeasible,
     ];
 
     pub(crate) const fn slug(self) -> &'static str {
@@ -62,6 +70,8 @@ impl CaseId {
             Self::ClinicOvernight => "clinic-overnight",
             Self::RollingHours => "rolling-hours",
             Self::SpecialistCoverage => "specialist-coverage",
+            Self::PractitionerWorkflow => "practitioner-workflow",
+            Self::PractitionerInfeasible => "practitioner-infeasible",
             Self::RepairBefore => "repair-before",
             Self::InfeasibleCoverage => "infeasible-coverage",
             Self::DstSpring => "dst-spring",
@@ -85,6 +95,7 @@ pub(crate) enum CorpusFamily {
     SpecialistCoverage,
     RepairCallout,
     InfeasibleCoverage,
+    PractitionerWorkflow,
     Dst,
     LargeSynthetic,
 }
@@ -189,7 +200,10 @@ pub(crate) struct RepairFixture {
     pub execution_phase: u32,
     pub baseline_requirement: String,
     pub command_id: String,
-    pub payload: EntityPayload,
+    pub availability_id: AvailabilityId,
+    pub target_shift_id: ShiftId,
+    pub time_window: TimeWindow,
+    pub effective_range: DateRange,
     pub repair_requirement: String,
 }
 

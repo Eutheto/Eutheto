@@ -1,10 +1,11 @@
 //! Closed schemas for the private corpus records, not new application contracts.
 //! Schemas check shape and local bounds. Rust additionally checks source semantics,
 //! filesystem custody, exact byte hashes, metric relationships and result authority.
+use crate::cases::{BASELINE_REQUIREMENT, REPAIR_REQUIREMENT};
 use crate::contract::{
     CLI_EVIDENCE_FORMAT, CORPUS_FORMAT, CORPUS_VERSION, CaseId, EVIDENCE_FORMAT, EXPECTED_FORMAT,
     EXPECTED_PATH, FIXTURE_CLOCK, FORMAT_VERSION, MAX_EXPECTED_BYTES, MAX_INDEX_BYTES,
-    MeasurementProfile, REPAIR_FORMAT, REPAIR_PATH,
+    MeasurementProfile, REPAIR_FORMAT, REPAIR_PATH, REPAIR_SCHEMA_VERSION,
 };
 use eutheto_workforce::commands;
 use serde_json::{Value, json};
@@ -150,6 +151,9 @@ fn case_manifest() -> Value {
                 CaseId::SpecialistCoverage => json!("specialist-coverage"),
                 CaseId::RepairBefore => json!("repair-callout"),
                 CaseId::InfeasibleCoverage => json!("infeasible-coverage"),
+                CaseId::PractitionerWorkflow | CaseId::PractitionerInfeasible => {
+                    json!("practitioner-workflow")
+                }
                 CaseId::DstSpring | CaseId::DstFall => json!("dst"),
                 CaseId::LargeSupported | CaseId::LargePressure => json!("large-synthetic"),
             };
@@ -176,7 +180,7 @@ fn case_manifest() -> Value {
     json!({"oneOf":variants})
 }
 fn inventory(items: Value, nested_expectation: bool) -> Value {
-    let mut schema = array(items, 13, 13);
+    let mut schema = array(items, CaseId::ALL.len(), CaseId::ALL.len());
     let assertions: Vec<_> = CaseId::ALL.into_iter().map(|case| {
         let identity = json!({"type":"object","required":["id"],"properties":{"id":{"const":case.slug()}}});
         let contains = if nested_expectation {
@@ -258,39 +262,36 @@ fn expectations() -> Value {
     object(&properties)
 }
 fn repair() -> Value {
-    // This is a deliberately narrower closed subset of the landed Availability schema:
-    // absent assignmentTypeIds/locationIds are omitted, NOT serialized as null. All other
-    // EntityPayload variants are excluded, so no BaseSchedule/solution authority is possible.
-    // Typed source-ID equality and the real baseline's acceptance/selection remain Rust/runtime gates.
-    let availability = object(&[
-        ("kind", constant("availability")),
-        ("id", uuid()),
-        ("personId", uuid()),
-        ("availabilityKind", constant("unavailable")),
+    // A closed person-free recipe. Rust binds typed source/occurrence identities;
+    // only the accepted-result CLI path chooses the explicit incumbent person.
+    let mut properties = vec![
+        ("format", constant(REPAIR_FORMAT)),
+        ("schemaVersion", constant(REPAIR_SCHEMA_VERSION)),
+        ("corpusVersion", constant(CORPUS_VERSION)),
+        ("availabilityId", uuid()),
+        ("targetShiftId", uuid()),
         (
             "timeWindow",
             object(&[
                 ("kind", constant("instant")),
-                ("startsAt", constant("2026-09-02T05:00:00Z")),
-                ("endsAt", constant("2026-09-03T05:00:00Z")),
+                ("startsAt", constant("2027-02-10T13:00:00Z")),
+                ("endsAt", constant("2027-02-11T01:00:00Z")),
             ]),
         ),
         (
             "effectiveRange",
             object(&[
-                ("startDate", constant("2026-09-01")),
-                ("endDateExclusive", constant("2026-09-08")),
+                ("startDate", constant("2027-02-01")),
+                ("endDateExclusive", constant("2027-03-01")),
             ]),
         ),
-        ("source", constant("synthetic-callout")),
-        ("note", constant("Synthetic unexpected call-out")),
-    ]);
-    let mut properties = version_fields(REPAIR_FORMAT).to_vec();
+    ];
     properties.extend([
-        ("beforeCase", constant("repair-before")), ("executionPhase", constant(7)),
-        ("baselineRequirement", constant("Phase07: obtain a genuine independently accepted solution of repair-before containing person-0 on the September2 clinic and select it as the baseline before applying this call-out")),
-        ("commandId", constant(commands::ADD_ENTITY)), ("payload", object(&[("entity", availability)])),
-        ("repairRequirement", constant("Phase07: repair from that accepted and selected baseline after this single unavailable-person mutation; pure mutation validation is not repair execution")),
+        ("beforeCase", constant(CaseId::PractitionerWorkflow.slug())),
+        ("executionPhase", constant(7)),
+        ("baselineRequirement", constant(BASELINE_REQUIREMENT)),
+        ("commandId", constant(commands::ADD_ENTITY)),
+        ("repairRequirement", constant(REPAIR_REQUIREMENT)),
     ]);
     object(&properties)
 }
@@ -353,7 +354,7 @@ fn sample_batch() -> Value {
         ("corpusSha256", digest()),
         ("workerManifestSha256", digest()),
         ("runnerSha256", digest()),
-        ("samples", array(sample(), 1, 52)),
+        ("samples", array(sample(), 1, CaseId::ALL.len() * 4)),
     ])
 }
 fn aggregate() -> Value {
@@ -399,8 +400,8 @@ fn evidence() -> Value {
         ("evidenceClass", text(1, 256)),
         ("aggregationMethod", text(1, 512)),
         ("variancePolicy", text(1, 1024)),
-        ("samples", array(sample(), 1, 52)),
-        ("aggregates", array(aggregate(), 0, 1664)),
+        ("samples", array(sample(), 1, CaseId::ALL.len() * 4)),
+        ("aggregates", array(aggregate(), 0, CaseId::ALL.len() * 128)),
     ]);
     object(&properties)
 }
@@ -432,7 +433,7 @@ pub(crate) fn documents() -> Vec<(&'static str, Value)> {
         ("evidence", evidence()), ("cli-evidence", cli_evidence()), ("sample-batch", sample_batch()),
     ].into_iter().map(|(name, mut schema)| {
         schema["$schema"] = json!("https://json-schema.org/draft/2020-12/schema");
-        schema["title"] = json!(format!("Workforce corpus v1 {name}"));
+        schema["title"] = json!(format!("Workforce corpus v{CORPUS_VERSION} {name}"));
         schema["description"] = json!("Private synthetic corpus record. Structural validation does not prove source fidelity, safe filesystem custody, cross-file digest binding, accepted-result authority, historical execution authenticity or timing relationships; the corpus runner performs those applicable checks.");
         (name, schema)
     }).collect()

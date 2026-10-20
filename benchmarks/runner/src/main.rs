@@ -363,7 +363,7 @@ async fn run_case(
         Arc::clone(&problem),
         case.summary,
         options.clone(),
-        &parent_budget,
+        parent_budget.phase_view(),
         None,
         DurationMillis::ZERO,
     )?;
@@ -383,15 +383,11 @@ async fn run_case(
     let candidate_count = u32::try_from(result.candidates.len())
         .map_err(|_| case_error(&case.id, "returned too many raw candidates"))?;
     let evidence = &result.outcome.evidence;
-    let (objective_values, best_bound_values) = evidence.objective.as_ref().map_or_else(
-        || (None, None),
-        |objective| {
-            (
-                Some(objective.objective_values.clone()),
-                objective.best_bound_values.clone(),
-            )
-        },
-    );
+    let objective_values = evidence
+        .objective
+        .as_ref()
+        .map(|objective| objective.objective_values.clone());
+    let best_bound_values = evidence.best_bound_values.clone();
     let execution = evidence
         .execution
         .as_ref()

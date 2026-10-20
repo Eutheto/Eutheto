@@ -17,6 +17,7 @@ mod portable_encode;
 mod portable_migrate;
 
 use eutheto_command::validate_document_shape;
+use eutheto_domain_ir::DomainEntityRef;
 use eutheto_export::{
     ApplicationMetadata, BUNDLE_FORMAT, BackupSelection, BundleKind, BundleManifest,
     CHECKSUM_ALGORITHM, CHECKSUMS_PATH, CURRENT_BUNDLE_FORMAT_VERSION,
@@ -28,11 +29,13 @@ use eutheto_export::{
     validate_scenario_snapshot,
 };
 use eutheto_types::{
-    BundleId, PackId, PortableAsset, Revision, Rfc3339Timestamp, SCENARIO_SNAPSHOT_SCHEMA_VERSION,
-    ScenarioDocument, ScenarioFormat, ScenarioId, ScenarioSnapshotV1, SemanticCapability,
-    SupplementalIdentity, SupplementalSectionKind, ValidationReport, collect_scenario_owned_uuids,
+    ARCHIVAL_RESULT_CAPABILITY, BundleId, PackId, PortableAsset, Revision, Rfc3339Timestamp,
+    SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument, ScenarioFormat, ScenarioId,
+    ScenarioSnapshotV1, SemanticCapability, SupplementalIdentity, SupplementalSectionKind,
+    ValidationReport, collect_result_owned_uuids, collect_scenario_owned_uuids,
     collect_self_declared_uuids, extract_asset_references, extract_result_dependency,
-    extract_result_id, extract_scenario_references, validate_scenario_owned_uuid_uniqueness,
+    extract_result_id, extract_scenario_references, is_archival_result,
+    validate_scenario_owned_uuid_uniqueness,
 };
 use serde::de::{
     self, DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor,
@@ -63,7 +66,7 @@ impl Default for InspectionPolicy {
     fn default() -> Self {
         Self {
             limits: PORTABLE_LIMITS,
-            supported_capabilities: BTreeMap::new(),
+            supported_capabilities: BTreeMap::from([(ARCHIVAL_RESULT_CAPABILITY.to_owned(), 1)]),
         }
     }
 }
@@ -1493,6 +1496,20 @@ fn validate_source_requirements(
 ) -> Result<(), ImportError> {
     let mut requirements = BTreeSet::new();
     for (path, content) in entries {
+        if path.starts_with("results/") {
+            let value = parse_strict_json(path, content, &policy.limits)?;
+            if is_archival_result(&value)
+                .map_err(|error| ImportError::InvalidManifest(format!("{path}: {error}")))?
+            {
+                let capability = SemanticCapability {
+                    id: ARCHIVAL_RESULT_CAPABILITY.to_owned(),
+                    version: 1,
+                };
+                require_capability(&capability, policy)?;
+                requirements.insert(capability);
+            }
+            continue;
+        }
         if !path.starts_with("scenarios/") && !path.starts_with("scenario-revisions/") {
             continue;
         }
@@ -1510,7 +1527,7 @@ fn validate_source_requirements(
     }
     if requirements != manifest.required_capabilities {
         return Err(ImportError::InvalidManifest(
-            "required capabilities are not the exact union of source scenario declarations"
+            "required capabilities are not the exact union of source scenario and result requirements"
                 .to_owned(),
         ));
     }
@@ -1820,7 +1837,18 @@ fn inspect_logical_entries(
             }
         } else {
             if path.as_bytes().strip_suffix(b".json").is_some() {
-                let _validated = parse_strict_json(&path, &content, &policy.limits)?;
+                let validated = parse_strict_json(&path, &content, &policy.limits)?;
+                if path.starts_with("results/")
+                    && is_archival_result(&validated)
+                        .map_err(|error| ImportError::InvalidManifest(format!("{path}: {error}")))?
+                {
+                    let capability = SemanticCapability {
+                        id: ARCHIVAL_RESULT_CAPABILITY.to_owned(),
+                        version: 1,
+                    };
+                    require_capability(&capability, policy)?;
+                    effective_requirements.insert(capability);
+                }
             }
             let raw_memory_bytes = content
                 .capacity()
@@ -2433,7 +2461,13 @@ fn register_supplemental_value_definitions(
         section,
         key: key.to_owned(),
     });
-    for identity in collect_self_declared_uuids(value) {
+    let identities = if section == SupplementalSectionKind::Results {
+        collect_result_owned_uuids(value)
+            .map_err(|error| ImportError::InvalidManifest(format!("{section}/{key}: {error}")))?
+    } else {
+        collect_self_declared_uuids(value)
+    };
+    for identity in identities {
         register_bundle_owned_uuid(identity_owners, identity, owner.clone())?;
     }
     Ok(())
@@ -2651,6 +2685,12 @@ fn require_capability(
         return Err(ImportError::InvalidManifest(
             "a required capability declaration is invalid".to_owned(),
         ));
+    }
+    if capability.id == ARCHIVAL_RESULT_CAPABILITY && capability.version != 1 {
+        return Err(ImportError::UnsupportedCapability {
+            id: capability.id.clone(),
+            version: capability.version,
+        });
     }
     if policy
         .supported_capabilities
@@ -3739,6 +3779,8 @@ pub struct StagedImport {
     pub mode: RestoreMode,
     pub scenarios: Vec<StagedScenario>,
     pub scenario_revisions: Vec<ScenarioSnapshotV1>,
+    /// Exact complete map applied by generic reference rewriting, including result identities.
+    pub reference_remap: BTreeMap<Uuid, Uuid>,
     pub results: BTreeMap<String, Vec<u8>>,
     pub shared_records: BTreeMap<String, Vec<u8>>,
     pub preferences: BTreeMap<String, Vec<u8>>,
@@ -3834,6 +3876,7 @@ pub fn stage_import(
         mode: options.restore_mode,
         scenarios: scenario_staging.scenarios,
         scenario_revisions,
+        reference_remap: scenario_staging.bundle_mapping,
         results: split.results,
         shared_records: split.shared_records,
         preferences: split.preferences,
@@ -4351,6 +4394,9 @@ fn stage_json_section(
     let mut staged = BTreeMap::new();
     for (key, bytes) in values {
         let mut value = parse_strict_json(&format!("{section}/{key}"), &bytes, &PORTABLE_LIMITS)?;
+        let archival = section == SupplementalSectionKind::Results
+            && is_archival_result(&value)
+                .map_err(|error| ImportError::Remap(format!("{section}/{key}: {error}")))?;
         let result_id = if section == SupplementalSectionKind::Results {
             Some(extract_result_id(&value).map_err(|error| {
                 ImportError::Remap(format!("{section}/{key} has invalid identity: {error}"))
@@ -4393,10 +4439,25 @@ fn stage_json_section(
         let copy_identity =
             copied_scenario && result_id.is_some_and(|id| mapping.contains_key(&id));
         let rewritten = !mapping.is_empty();
-        if rewritten {
-            rewrite_declared_references(&mut value, mapping)?;
+        if archival {
+            // Only the envelope owns live identities; archive records inert originals.
+            if rewritten {
+                for field in ["resultId", "scenarioId"] {
+                    let old = value[field]
+                        .as_str()
+                        .and_then(|text| Uuid::parse_str(text).ok())
+                        .ok_or_else(|| ImportError::Remap(format!("invalid archival {field}")))?;
+                    if let Some(new) = mapping.get(&old) {
+                        value[field] = Value::String(new.to_string());
+                    }
+                }
+            }
+        } else {
+            if rewritten {
+                rewrite_declared_references(&mut value, mapping)?;
+            }
+            reject_stale_declared_references(&value, mapping)?;
         }
-        reject_stale_declared_references(&value, mapping)?;
         let staged_key = if copy_identity {
             let old = result_id.ok_or_else(|| {
                 ImportError::Remap(format!(
@@ -4681,7 +4742,12 @@ fn supplemental_owned_uuids(
             .collect::<BTreeSet<_>>();
         if identity.section != SupplementalSectionKind::Assets {
             let value = parse_strict_json(path, bytes, &PORTABLE_LIMITS)?;
-            owned.extend(collect_self_declared_uuids(&value));
+            owned.extend(if identity.section == SupplementalSectionKind::Results {
+                collect_result_owned_uuids(&value)
+                    .map_err(|error| ImportError::InvalidManifest(format!("{path}: {error}")))?
+            } else {
+                collect_self_declared_uuids(&value)
+            });
         }
         if owners.insert(identity, owned).is_some() {
             return Err(ImportError::InvalidManifest(
@@ -5068,6 +5134,7 @@ fn rewrite_declared_references(
                 rewrite_declared_references(value, mapping)?;
             }
         }
+        Value::Object(_) if DomainEntityRef::matches_json(value) => {}
         Value::Object(values) => {
             for (key, value) in values {
                 match declared_reference_kind(key) {
@@ -5163,6 +5230,7 @@ fn reject_stale_declared_references(
                 reject_stale_declared_references(value, mapping)?;
             }
         }
+        Value::Object(_) if DomainEntityRef::matches_json(value) => {}
         Value::Object(values) => {
             for (key, value) in values {
                 match declared_reference_kind(key) {
@@ -5287,7 +5355,7 @@ mod tests {
         ScenarioExportSnapshot, assemble_full_backup, assemble_scenario_export,
         backup_selection_extension_value, omitted_asset_placeholder,
     };
-    use eutheto_types::{PackId, ScenarioDocument};
+    use eutheto_types::{ARCHIVAL_RESULT_FORMAT, PackId, ScenarioDocument};
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
@@ -5950,6 +6018,271 @@ mod tests {
         Ok(())
     }
 
+    fn resealed_entries(
+        mut entries: BTreeMap<String, Vec<u8>>,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let checksums = Checksums {
+            algorithm: CHECKSUM_ALGORITHM.to_owned(),
+            files: entries
+                .iter()
+                .filter(|(path, _)| path.as_str() != CHECKSUMS_PATH)
+                .map(|(path, bytes)| (path.clone(), sha256_hex(bytes)))
+                .collect(),
+        };
+        entries.insert(CHECKSUMS_PATH.to_owned(), canonical_json(&checksums)?);
+        let archive_entries = entries
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+            .collect::<Vec<_>>();
+        raw_zip(&archive_entries, CompressionMethod::Stored)
+    }
+
+    fn archival_entries() -> Result<BTreeMap<String, Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut entries =
+            read_archive_entries(&supplemental_bundle()?, &InspectionPolicy::default())?;
+        let scenario = portable_scenario()?;
+        let result_id = "018f1e2d-3c4b-7a69-8def-100000000007";
+        let value = serde_json::json!({
+            "format": ARCHIVAL_RESULT_FORMAT,
+            "schemaVersion": 1,
+            "resultId": result_id,
+            "scenarioId": scenario.document.scenario_id,
+            "scenarioRevision": scenario.revision.value(),
+            "archive": {
+                "resultId": result_id,
+                "scenarioId": scenario.document.scenario_id,
+                "scenarioRevision": scenario.revision.value(),
+                "solveRunId": "018f1e2d-3c4b-7a69-8def-900000000099",
+                "status": "legacy_unverified",
+                "accepted": false,
+                "createdAt": "2026-08-29T01:02:03+01:00",
+                "normalizedSolution": {
+                    "definitions": {
+                        "018f1e2d-3c4b-7a69-8def-100000000001": {
+                            "id": "018f1e2d-3c4b-7a69-8def-100000000001",
+                            "scenarioId": "018f1e2d-3c4b-7a69-8def-900000000099"
+                        },
+                        "018f1e2d-3c4b-7a69-8def-900000000099": {
+                            "id": "018f1e2d-3c4b-7a69-8def-900000000099"
+                        }
+                    }
+                },
+                "score": null,
+                "verificationReport": {"accepted": true},
+                "evidence": null
+            }
+        });
+        entries.insert(format!("results/{result_id}.json"), canonical_json(&value)?);
+        let mut manifest: BundleManifest =
+            serde_json::from_slice(entries.get(MANIFEST_PATH).ok_or("missing manifest")?)?;
+        manifest.required_capabilities.insert(SemanticCapability {
+            id: ARCHIVAL_RESULT_CAPABILITY.to_owned(),
+            version: 1,
+        });
+        entries.insert(MANIFEST_PATH.to_owned(), canonical_json(&manifest)?);
+        Ok(entries)
+    }
+
+    #[test]
+    fn archival_default_admission_requires_exact_supported_capability_and_wrapper()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let entries = archival_entries()?;
+        let inspected = inspect(&resealed_entries(entries.clone())?)?;
+        let capability = SemanticCapability {
+            id: ARCHIVAL_RESULT_CAPABILITY.to_owned(),
+            version: 1,
+        };
+        let baseline_requirements = inspect(&supplemental_bundle()?)?
+            .manifest
+            .required_capabilities;
+        assert!(!baseline_requirements.contains(&capability));
+        assert!(
+            !inspect(&valid_bundle()?)?
+                .manifest
+                .required_capabilities
+                .contains(&capability)
+        );
+        let mut expected_requirements = baseline_requirements;
+        expected_requirements.insert(capability);
+        assert_eq!(
+            inspected.manifest.required_capabilities,
+            expected_requirements
+        );
+
+        for requirements in [
+            serde_json::json!([]),
+            serde_json::json!([{"id": ARCHIVAL_RESULT_CAPABILITY, "version": 0}]),
+            serde_json::json!([{"id": ARCHIVAL_RESULT_CAPABILITY, "version": 2}]),
+            serde_json::json!([{"id": "example.wrong", "version": 1}]),
+        ] {
+            let mut changed = entries.clone();
+            let mut manifest: Value =
+                serde_json::from_slice(changed.get(MANIFEST_PATH).ok_or("missing manifest")?)?;
+            manifest["requiredCapabilities"] = requirements;
+            changed.insert(MANIFEST_PATH.to_owned(), canonical_json(&manifest)?);
+            assert!(inspect(&resealed_entries(changed)?).is_err());
+        }
+        let path = "results/018f1e2d-3c4b-7a69-8def-100000000007.json";
+        for version in [0, 2] {
+            let mut changed = entries.clone();
+            let mut value: Value =
+                serde_json::from_slice(changed.get(path).ok_or("missing result")?)?;
+            value["schemaVersion"] = Value::from(version);
+            changed.insert(path.to_owned(), canonical_json(&value)?);
+            assert!(matches!(
+                inspect(&resealed_entries(changed)?),
+                Err(ImportError::InvalidManifest(message)) if message.contains("archival-result")
+            ));
+        }
+        let mut changed = entries;
+        let mut value: Value = serde_json::from_slice(changed.get(path).ok_or("missing result")?)?;
+        value["archive"]
+            .as_object_mut()
+            .ok_or("invalid archive")?
+            .remove("score");
+        changed.insert(path.to_owned(), canonical_json(&value)?);
+        assert!(inspect(&resealed_entries(changed)?).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn archival_copy_remaps_live_roots_but_preserves_inert_originals()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let inspected = inspect(&resealed_entries(archival_entries()?)?)?;
+        let original = inspected.scenarios[0].document.scenario_id;
+        let result_id = Uuid::parse_str("018f1e2d-3c4b-7a69-8def-100000000007")?;
+        let path = format!("results/{result_id}.json");
+        let source: Value = serde_json::from_slice(
+            inspected
+                .additional_entries
+                .get(&path)
+                .ok_or("missing result")?,
+        )?;
+        let options = ImportOptions {
+            restore_mode: RestoreMode::ImportScenario,
+            include_results: true,
+            include_assets: true,
+        };
+        let identity = SupplementalIdentity {
+            section: SupplementalSectionKind::Results,
+            key: format!("{result_id}.json"),
+        };
+        assert_eq!(
+            supplemental_owned_uuids(&inspected, &options)?.get(&identity),
+            Some(&BTreeSet::from([result_id]))
+        );
+        let local = LocalLibrarySnapshot {
+            supplemental_identity_owners: BTreeMap::new(),
+            identity_owners: BTreeMap::new(),
+            revision: Revision::INITIAL,
+            scenario_ids: BTreeSet::from([original]),
+            scenario_revision_high_water: BTreeMap::new(),
+            occupied_uuids: BTreeSet::from([original.to_string()]),
+            scenarios: Vec::new(),
+            supplemental_identities: BTreeSet::new(),
+            settings: BTreeMap::new(),
+        };
+        let preview = build_preview(&inspected, &options, &local)?;
+        let copied = stage_import(
+            &inspected,
+            &preview,
+            &options,
+            &local,
+            &CollisionPlan {
+                scenarios: BTreeMap::from([(original, CollisionAction::CreateCopy)]),
+                supplemental: BTreeMap::new(),
+            },
+        )?;
+        let (key, bytes) = copied
+            .results
+            .first_key_value()
+            .ok_or("missing copied result")?;
+        let value: Value = serde_json::from_slice(bytes)?;
+        let copied_result_id = extract_result_id(&value)?;
+        let copied_scenario_id = copied.scenarios[0].scenario.document.scenario_id;
+        assert_ne!(copied_result_id, result_id);
+        assert_ne!(copied_scenario_id, original);
+        assert_eq!(key, &format!("{copied_result_id}.json"));
+        assert_eq!(value["scenarioId"], copied_scenario_id.to_string());
+        assert_eq!(value["scenarioRevision"], source["scenarioRevision"]);
+        assert_eq!(value["archive"], source["archive"]);
+        assert!(
+            copied
+                .reference_remap
+                .contains_key(&Uuid::parse_str("018f1e2d-3c4b-7a69-8def-100000000001")?)
+        );
+        assert!(
+            !copied
+                .reference_remap
+                .contains_key(&Uuid::parse_str("018f1e2d-3c4b-7a69-8def-900000000099")?)
+        );
+
+        let second_result_id = Uuid::parse_str("018f1e2d-3c4b-7a69-8def-200000000077")?;
+        let second_scenario_id = Uuid::parse_str("018f1e2d-3c4b-7a69-8def-200000000078")?;
+        let repeated = stage_json_section(
+            SupplementalSectionKind::Results,
+            copied.results,
+            &CollisionPlan::default(),
+            &BTreeSet::new(),
+            &BTreeMap::from([
+                (copied_result_id, second_result_id),
+                (copied_scenario_id.as_uuid(), second_scenario_id),
+            ]),
+        )?;
+        let (key, bytes) = repeated.first_key_value().ok_or("missing repeated copy")?;
+        let value: Value = serde_json::from_slice(bytes)?;
+        assert_eq!(key, &format!("{second_result_id}.json"));
+        assert_eq!(value["resultId"], second_result_id.to_string());
+        assert_eq!(value["scenarioId"], second_scenario_id.to_string());
+        assert_eq!(value["archive"], source["archive"]);
+        assert!(value["archive"].get("explanationIndex").is_none());
+        assert_eq!(value["archive"].get("evidence"), Some(&Value::Null));
+        Ok(())
+    }
+
+    #[test]
+    fn archival_inert_payload_retains_recursive_asset_content_and_depth_checks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let entries = archival_entries()?;
+        let path = "results/018f1e2d-3c4b-7a69-8def-100000000007.json";
+        for payload in [
+            serde_json::json!({"nested": {"asset": "absent.txt"}}),
+            serde_json::json!({"nested": {"apiKey": "synthetic secret"}}),
+            serde_json::json!({"nested": {"content": "<script>synthetic</script>"}}),
+        ] {
+            let mut changed = entries.clone();
+            let mut value: Value =
+                serde_json::from_slice(changed.get(path).ok_or("missing result")?)?;
+            value["archive"]["normalizedSolution"] = payload;
+            changed.insert(path.to_owned(), canonical_json(&value)?);
+            assert!(inspect(&resealed_entries(changed)?).is_err());
+        }
+        let mut changed = entries.clone();
+        let mut value: Value = serde_json::from_slice(changed.get(path).ok_or("missing result")?)?;
+        value["archive"]["normalizedSolution"] =
+            serde_json::json!({"nested": {"asset": "notes.txt"}});
+        changed.insert(path.to_owned(), canonical_json(&value)?);
+        inspect(&resealed_entries(changed)?)?;
+
+        let mut changed = entries.clone();
+        let mut value: Value = serde_json::from_slice(changed.get(path).ok_or("missing result")?)?;
+        value["archive"]["normalizedSolution"] =
+            Value::String("x".repeat(PORTABLE_LIMITS.max_string_bytes + 1));
+        changed.insert(path.to_owned(), canonical_json(&value)?);
+        assert!(inspect(&resealed_entries(changed)?).is_err());
+
+        let mut deep = Value::Null;
+        for _ in 0..PORTABLE_LIMITS.max_json_depth {
+            deep = serde_json::json!({"nested": deep});
+        }
+        let mut changed = entries;
+        let mut value: Value = serde_json::from_slice(changed.get(path).ok_or("missing result")?)?;
+        value["archive"]["normalizedSolution"] = deep;
+        changed.insert(path.to_owned(), serde_json::to_vec(&value)?);
+        assert!(inspect(&resealed_entries(changed)?).is_err());
+        Ok(())
+    }
+
     fn supplemental_bundle() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let scenario = portable_scenario()?;
         let scenario_id = scenario.document.scenario_id;
@@ -6485,7 +6818,10 @@ mod tests {
         let unopened = inspect_unopened_bundle_for_exact_reexport(&bytes, &policy).map(|_| ());
         for result in [semantic, unopened] {
             assert!(
-                matches!(&result, Err(ImportError::EntryTooLarge { path: rejected }) if rejected == path),
+                matches!(&result, Err(ImportError::EntryTooLarge { path: rejected }) if rejected == path)
+                    || matches!(&result, Err(ImportError::Io(error))
+                        if error.kind() == std::io::ErrorKind::InvalidData
+                            && error.to_string() == "File is larger than its declared uncompressed size"),
                 "{result:?}"
             );
         }
@@ -7786,7 +8122,16 @@ mod tests {
             "vehicle_ids": [rule_id],
             "externalId": person_id,
             "opaque": rule_id,
-            "note": format!("keep external UUID {person_id}")
+            "note": format!("keep external UUID {person_id}"),
+            "opaqueEntity": {"kind": "tests.entity", "id": "tests.person"},
+            "assetId": "notes.txt",
+            "assetIds": ["notes.txt"],
+            "extraFieldReference": {
+                "kind": "tests.entity",
+                "id": person_id,
+                "label": "not an exact typed reference"
+            },
+            "malformedReference": {"kind": "Invalid.Kind", "id": person_id}
         });
         document_references["definitions"] = Value::Object(Map::from_iter([(
             document_extension_owned.to_string().to_ascii_uppercase(),
@@ -7808,6 +8153,15 @@ mod tests {
         scenario
             .extensions
             .insert("example.wrapper-refs".to_owned(), wrapper_references);
+        let mut sections = BackupSections::default();
+        sections.assets.insert(
+            "notes.txt".to_owned(),
+            PortableAsset {
+                bytes: b"opaque reference asset".to_vec(),
+                media_type: "text/plain".to_owned(),
+                redistribution_permitted: true,
+            },
+        );
         let bytes = assemble_scenario_export(
             &ScenarioExportSnapshot {
                 bundle_id: BundleId::from_uuid(Uuid::from_u128(
@@ -7821,7 +8175,7 @@ mod tests {
                 title: "Extension references".to_owned(),
                 scenario,
                 scenario_revisions: Vec::new(),
-                sections: BackupSections::default(),
+                sections,
                 nonsemantic_extensions: BTreeSet::new(),
                 manifest_extensions: BTreeMap::new(),
             },
@@ -7887,6 +8241,14 @@ mod tests {
             assert_eq!(extension["externalId"], person_id.to_string());
             assert_eq!(extension["opaque"], rule_id.to_string());
             assert_eq!(extension["note"], format!("keep external UUID {person_id}"));
+            assert_eq!(
+                extension["opaqueEntity"],
+                serde_json::json!({"kind": "tests.entity", "id": "tests.person"})
+            );
+            assert_eq!(extension["assetId"], "notes.txt");
+            assert_eq!(extension["assetIds"], serde_json::json!(["notes.txt"]));
+            assert_eq!(extension["extraFieldReference"]["id"], remapped_person);
+            assert_eq!(extension["malformedReference"]["id"], remapped_person);
             assert_eq!(
                 extension["definitions"][remapped_extension_owned.as_str()]["id"],
                 remapped_extension_owned.as_str()
@@ -8982,6 +9344,9 @@ mod tests {
             serde_json::json!({"participantId": 7}),
             serde_json::json!({"vehicleIds": "not-an-array"}),
             serde_json::json!({"activity_ids": [7]}),
+            serde_json::json!({
+                "participantId": {"kind": "tests.entity", "id": "tests.person"}
+            }),
         ] {
             assert!(rewrite_declared_references(&mut malformed, &mapping).is_err());
         }

@@ -22,6 +22,7 @@ const props = defineProps<
     readonly kind: WorkforceSetupEntityKind;
     readonly modelValue: readonly string[];
     readonly multiple?: boolean;
+    readonly searchDisabled?: boolean;
     readonly project: ProjectSummary;
     readonly libraryEpoch: number;
     readonly draftReferences?: readonly DomainEntityRef[];
@@ -39,6 +40,7 @@ const fieldProps = computed(() => ({
   required: props.required,
   disabled: props.disabled,
   readOnly: props.readOnly,
+  searchDisabled: props.searchDisabled,
   ...(props.locale === undefined ? {} : { locale: props.locale }),
 }));
 const query = ref("");
@@ -147,6 +149,7 @@ function load(continuation: WorkforceSetupEntityContinuation | null, delayed = f
   else void fetchPage(captured, continuation);
 }
 function search(value: string): void {
+  if (props.searchDisabled) return;
   query.value = value;
   cursor = null;
   load(null, true);
@@ -171,8 +174,10 @@ watch(
     () => props.project.revision,
     () => props.libraryEpoch,
     () => props.kind,
+    () => props.searchDisabled,
   ],
   () => {
+    if (props.searchDisabled) query.value = "";
     invalidate();
     labels.value = new Map();
     labelError.value = null;

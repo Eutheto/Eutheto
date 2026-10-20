@@ -8,16 +8,21 @@ use eutheto_domain_api::{
     DomainCapability, DomainCatalog, DomainChange, DomainMutation, DomainPack,
     DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
     DomainValidationReport, LicenseMetadata, LocalizedText, PortableImportContext,
-    SchemaVersionDescriptor, ShareResultOptions, ValidatedContractSchema, validate_contract_value,
+    SchemaVersionDescriptor, ShareResultOptions, ValidatedContractSchema, bounded_json_size,
+    validate_contract_value,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
-    DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef, DomainEvidenceId,
-    EvidenceMessageV1, EvidenceRenderRequestV1, EvidenceRenderResultV1, ExplanationCapability,
-    ExplanationKind, NormalizedSolution, OptimizationDirection, RequiredRuleBinding,
-    RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue, ScoreVector,
-    VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
-    VerificationValue, blake3_hex,
+    AUTHORED_OBJECTIVE_PROFILE_ID, AcceptedResult, AssignmentComparisonV1, AssignmentValue,
+    ComparisonEnrichmentV2, ComparisonError, CounterfactualConditionPayloadV1,
+    CounterfactualConditionV1, DomainAssignment, DomainAssignmentId, DomainEntityId,
+    DomainEntityKindId, DomainEntityRef, DomainEvidenceId, EvidenceMessageV1,
+    EvidenceRenderRequestV2, EvidenceRenderResultV1, ExplanationCapability,
+    ExplanationEvidencePayloadV2, ExplanationKind, MAX_DOMAIN_CONTRACT_JSON_BYTES,
+    MAX_EVIDENCE_MESSAGE_REFERENCES, MAX_EVIDENCE_MESSAGES, MAX_EXPLANATION_RECORDS,
+    MAX_VERIFICATION_FACTS, NormalizedSolution, OptimizationDirection, RequiredRuleBinding,
+    RuleEvaluation, RunObjectiveContext, RunObjectiveOperation, ScoreCategoryId, ScoreLevelId,
+    ScoreLevelValue, ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport,
+    VerificationScope, VerificationValue, blake3_hex, prepare_comparison_v2,
 };
 use eutheto_planning_ir::{
     BoolVariable, BoolVariableId, CandidateValues, Capability, ComparisonOp, CompilerId,
@@ -317,8 +322,9 @@ impl DomainPack for crate::OfficialTestPack {
         context: &CompileContext,
     ) -> Result<PlanningProblem, DomainPackError> {
         context.control.check()?;
-        require_pack(document)?;
-        build_problem(document, context, &parse_entities(document)?)
+        validate_objective_context(document, context.objective_context.as_ref())?;
+        let entities = parse_entities(document)?;
+        build_problem(document, context, &entities)
     }
 
     fn project(
@@ -371,12 +377,20 @@ impl DomainPack for crate::OfficialTestPack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&RunObjectiveContext>,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
         control: &eutheto_types::OperationControl,
     ) -> Result<VerificationReport, DomainPackError> {
         control.check()?;
-        validate_verification_context(*self, document, solution, context, control)?;
+        validate_verification_context(
+            *self,
+            document,
+            solution,
+            objective_context,
+            context,
+            control,
+        )?;
         let evaluations = evaluate_required_rules(document, solution, control)?;
         VerificationReport::new(
             context,
@@ -392,10 +406,11 @@ impl DomainPack for crate::OfficialTestPack {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        objective_context: Option<&RunObjectiveContext>,
         control: &eutheto_types::OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
         control.check()?;
-        authoritative_score(document, solution, control)
+        authoritative_score(document, solution, objective_context, control)
     }
 
     fn export_portable(
@@ -576,10 +591,12 @@ impl DomainPack for crate::OfficialTestPack {
         &self,
         document: &ScenarioDocument,
         accepted: &AcceptedResult,
+        objective_context: Option<&RunObjectiveContext>,
         options: ShareResultOptions,
     ) -> Result<DomainShareResult, DomainPackError> {
         require_pack(document)?;
         accepted.validate().map_err(contract)?;
+        validate_objective_context(document, objective_context)?;
         if accepted.solution.pack_id.as_str() != OFFICIAL_TEST_PACK_ID
             || accepted.solution.scenario_id != document.scenario_id
         {
@@ -628,7 +645,9 @@ impl DomainPack for crate::OfficialTestPack {
         let eutheto_domain_api::DomainViewInput::AcceptedSolution {
             document,
             solution,
+            objective_context,
             view_id,
+            ..
         } = input
         else {
             return Err(DomainPackError::InvalidPayload {
@@ -636,7 +655,7 @@ impl DomainPack for crate::OfficialTestPack {
                 message: "official.test exposes only accepted-solution views".to_owned(),
             });
         };
-        require_pack(document)?;
+        validate_objective_context(document, objective_context)?;
         if !generated_catalog()?
             .ui
             .result_views
@@ -663,12 +682,213 @@ impl DomainPack for crate::OfficialTestPack {
     fn render_evidence(
         &self,
         document: &ScenarioDocument,
-        request: &EvidenceRenderRequestV1,
+        request: &EvidenceRenderRequestV2,
+        objective_context: Option<&RunObjectiveContext>,
+        control: &eutheto_types::OperationControl,
     ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        control.check()?;
         parse_entities(document)?;
         request.validate().map_err(contract)?;
+        validate_objective_context(document, objective_context)?;
+        let context_matches = match &request.evidence.evidence {
+            ExplanationEvidencePayloadV2::OptimalityStatus { status } => {
+                status.run_input.objective_context.as_ref() == objective_context
+            }
+            ExplanationEvidencePayloadV2::Counterfactual { result } => {
+                result.base_run_input.objective_context.as_ref() == objective_context
+                    && result.run_input.objective_context.as_ref() == objective_context
+            }
+            _ => true,
+        };
+        if !context_matches {
+            return Err(DomainPackError::Contract(
+                "render objective context does not match evidence".to_owned(),
+            ));
+        }
         require_explanation_capability(explanation_capability(request.kind))?;
+        if request.kind == ExplanationKind::Repair {
+            return Err(DomainPackError::UnsupportedExplanationCapability(
+                ExplanationCapability::Repair,
+            ));
+        }
         EvidenceRenderResultV1::new(request, vec![evidence_message(request)?]).map_err(contract)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn render_repair_evidence(
+        &self,
+        base_document: &ScenarioDocument,
+        base: &eutheto_domain_ir::PortableAcceptedResult,
+        candidate_document: &ScenarioDocument,
+        candidate: &eutheto_domain_ir::PortableAcceptedResult,
+        request: &EvidenceRenderRequestV2,
+        control: &eutheto_types::OperationControl,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        control.check()?;
+        preflight_repair_document(base_document, control)?;
+        preflight_repair_document(candidate_document, control)?;
+        preflight_repair_source(base, control)?;
+        preflight_repair_source(candidate, control)?;
+        bounded_repair_size(request)?;
+        control.check()?;
+        request.validate().map_err(repair_contract_error)?;
+        let ExplanationEvidencePayloadV2::Repair { repair } = &request.evidence.evidence else {
+            return Err(contract("full-source renderer requires Repair"));
+        };
+        require_explanation_capability(ExplanationCapability::Repair)?;
+
+        for (document, source, binding, run) in [
+            (
+                base_document,
+                base,
+                &repair.comparison.base,
+                &repair.comparison.runs.base,
+            ),
+            (
+                candidate_document,
+                candidate,
+                &repair.comparison.candidate,
+                &repair.comparison.runs.candidate,
+            ),
+        ] {
+            control.check()?;
+            require_pack(document)?;
+            validate_objective_context(document, source.run_input.objective_context.as_ref())?;
+            let document_hash = blake3_hex(&serde_json::to_vec(document).map_err(contract)?);
+            control.check()?;
+            if source.run_input.pack_id != document.domain_pack.id
+                || source.run_input.pack_schema_version != document.domain_pack.schema_version
+                || source.scenario_id != document.scenario_id
+                || source.run_input.snapshot_document_hash != document_hash
+                || binding.pack_id != document.domain_pack.id
+                || binding.scenario_id != source.scenario_id
+                || binding.scenario_revision != source.scenario_revision
+                || binding.document_hash != document_hash
+                || binding.accepted_result.solution_id != source.result_id
+                || binding.accepted_result.result_checksum != source.accepted_result.checksum
+                || binding.verification_scope_checksum
+                    != source
+                        .accepted_result
+                        .verification
+                        .verification_scope_checksum
+                || binding.projection_version != source.accepted_result.solution.projection_version
+                || run.run_id != source.run_manifest.run_id
+                || run.run_manifest_checksum != source.run_manifest.checksum
+                || run.outcome != source.run_manifest.outcome
+            {
+                return Err(contract("Repair source binding mismatch"));
+            }
+        }
+
+        let expected_comparison = prepare_comparison_v2(base, candidate, Some(control))
+            .map_err(comparison_error)?
+            .finish(ComparisonEnrichmentV2::default())
+            .map_err(comparison_error)?;
+        if expected_comparison != repair.comparison {
+            return Err(contract(
+                "Repair comparison does not match its complete accepted sources",
+            ));
+        }
+
+        let base_entities = parse_entities_with_control(base_document, control)?;
+        let candidate_entities = parse_entities_with_control(candidate_document, control)?;
+        let (assignment_changes, unavailable_endpoints) = repair_assignment_index(
+            &repair.comparison.assignments,
+            &base_entities,
+            &candidate_entities,
+            control,
+        )?;
+        let message_limit = MAX_EVIDENCE_MESSAGES
+            .checked_sub(1 + unavailable_endpoints.len())
+            .ok_or(DomainPackError::ResourceLimitExceeded)?;
+        let evaluations = evaluate_required_rules_with_entities(
+            candidate_document,
+            &base.accepted_result.solution,
+            &candidate_entities,
+            Some(&base_entities),
+            true,
+            Some(message_limit),
+            control,
+        )?;
+
+        let mut messages = Vec::new();
+        let mut retained_bytes = 0;
+        let mut summary = evidence_message(request)?;
+        summary.parameters.insert(
+            VerificationFactId::new("official.test.fact.baseline_admission").map_err(contract)?,
+            VerificationValue::Text("notEstablished".to_owned()),
+        );
+        retain_repair_message(&mut messages, &mut retained_bytes, summary, control)?;
+        for evaluation in evaluations {
+            control.check()?;
+            let assignment_count = evaluation
+                .affected_entities
+                .iter()
+                .try_fold(0_usize, |count, entity| {
+                    count.checked_add(assignment_changes.get(entity).map_or(0, Vec::len))
+                })
+                .ok_or(DomainPackError::ResourceLimitExceeded)?;
+            if assignment_count > MAX_EVIDENCE_MESSAGE_REFERENCES
+                || evaluation.affected_entities.len() > MAX_EVIDENCE_MESSAGE_REFERENCES
+                || evaluation.evidence.len() > MAX_EVIDENCE_MESSAGE_REFERENCES
+                || evaluation.expected.len() + evaluation.observed.len() + 1
+                    > MAX_VERIFICATION_FACTS
+            {
+                return Err(DomainPackError::ResourceLimitExceeded);
+            }
+            let assignments = evaluation
+                .affected_entities
+                .iter()
+                .filter_map(|entity| assignment_changes.get(entity))
+                .flatten()
+                .map(|assignment_id| (*assignment_id).clone())
+                .collect();
+            let mut parameters = BTreeMap::new();
+            for (prefix, facts) in [
+                ("expected", evaluation.expected),
+                ("observed", evaluation.observed),
+            ] {
+                for (key, value) in facts {
+                    control.check()?;
+                    parameters.insert(
+                        VerificationFactId::new(format!("{prefix}.{}", key.as_str()))
+                            .map_err(contract)?,
+                        value,
+                    );
+                }
+            }
+            parameters.insert(
+                VerificationFactId::new("official.test.fact.repair_frame").map_err(contract)?,
+                VerificationValue::Text("acceptedBaseToCandidate".to_owned()),
+            );
+            retain_repair_message(
+                &mut messages,
+                &mut retained_bytes,
+                EvidenceMessageV1 {
+                    message_key: evaluation.message_key,
+                    parameters,
+                    entities: evaluation.affected_entities,
+                    rules: vec![evaluation.rule_id],
+                    assignments,
+                    evidence: evaluation.evidence,
+                },
+                control,
+            )?;
+        }
+        for (assignment, entity_id) in unavailable_endpoints {
+            control.check()?;
+            retain_repair_message(
+                &mut messages,
+                &mut retained_bytes,
+                unavailable_repair_endpoint_message(assignment, entity_id)?,
+                control,
+            )?;
+        }
+        control.check()?;
+        let result =
+            EvidenceRenderResultV1::new(request, messages).map_err(repair_render_result_error)?;
+        control.check()?;
+        Ok(result)
     }
 
     fn compile_counterfactual(
@@ -679,6 +899,45 @@ impl DomainPack for crate::OfficialTestPack {
     ) -> Result<PlanningProblem, DomainPackError> {
         require_explanation_capability(ExplanationCapability::Counterfactual)?;
         compile_counterfactual_problem(document, condition, context)
+    }
+
+    fn compile_infeasibility(
+        &self,
+        document: &ScenarioDocument,
+        context: &eutheto_domain_api::InfeasibilityCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        if context.budget.is_cancelled() {
+            return Err(DomainPackError::Cancelled);
+        }
+        if context.budget.is_expired() {
+            return Err(DomainPackError::BudgetExpired);
+        }
+        context.compile_context.control.check()?;
+        validate_objective_context(document, context.compile_context.objective_context.as_ref())?;
+        Err(DomainPackError::UnsupportedDomainCapability(
+            DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn diagnostic_verification_scope(
+        &self,
+        _document: &ScenarioDocument,
+        _scenario_revision: u64,
+        _control: &eutheto_types::OperationControl,
+    ) -> Result<eutheto_domain_api::DiagnosticVerificationScope, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn prepare_diagnostic_copy_changes(
+        &self,
+        _source: &ScenarioDocument,
+        _context: &eutheto_domain_api::DiagnosticCopyContext<'_>,
+    ) -> Result<DomainBatchCommand, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            DomainCapability::InfeasibilityDiagnostics,
+        ))
     }
 }
 
@@ -711,7 +970,7 @@ fn require_explanation_capability(
 }
 
 fn evidence_message(
-    request: &EvidenceRenderRequestV1,
+    request: &EvidenceRenderRequestV2,
 ) -> Result<EvidenceMessageV1, DomainPackError> {
     evidence_message_for_kind(request.kind, &request.evidence.checksum)
 }
@@ -796,6 +1055,7 @@ fn compile_counterfactual_problem(
         context.compile_context.planning_limits,
     )
     .map_err(contract)?;
+    validate_objective_context(document, context.compile_context.objective_context.as_ref())?;
 
     let (assignment_id, value, force) = match &condition.condition {
         CounterfactualConditionPayloadV1::ForceAssignmentValue {
@@ -806,6 +1066,12 @@ fn compile_counterfactual_problem(
             assignment_id,
             value,
         } => (assignment_id, value, false),
+        CounterfactualConditionPayloadV1::ReplaceAssignment { .. } => {
+            return Err(counterfactual_payload_error(
+                "/condition",
+                "replaceAssignment conditions are not supported by official.test counterfactual compilation",
+            ));
+        }
     };
     let projection = context
         .base_problem
@@ -1033,6 +1299,27 @@ fn require_pack(document: &ScenarioDocument) -> Result<(), DomainPackError> {
     Ok(())
 }
 
+fn validate_objective_context(
+    document: &ScenarioDocument,
+    objective_context: Option<&RunObjectiveContext>,
+) -> Result<(), DomainPackError> {
+    require_pack(document)?;
+    if let Some(context) = objective_context {
+        context
+            .validate_for(&document.domain_pack.id, document.scenario_id)
+            .map_err(contract)?;
+        if context.profile_id.as_str() != AUTHORED_OBJECTIVE_PROFILE_ID
+            || context.operation != RunObjectiveOperation::Optimize
+            || context.baseline.is_some()
+        {
+            return Err(DomainPackError::Contract(
+                "unsupported objective context".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn portable_capability() -> SemanticCapability {
     SemanticCapability {
         id: PORTABLE_CAPABILITY.to_owned(),
@@ -1062,12 +1349,237 @@ fn validate_portable_extensions(
     Ok(())
 }
 
-fn parse_entities(
+fn preflight_repair_document(
     document: &ScenarioDocument,
+    control: &eutheto_types::OperationControl,
+) -> Result<(), DomainPackError> {
+    control.check()?;
+    for value in document
+        .domain
+        .entities
+        .values()
+        .chain(document.domain.rules.values())
+        .chain(document.domain.preferences.values())
+        .chain(document.domain.locked_assignments.values())
+        .chain(document.extensions.values())
+    {
+        control.check()?;
+        crate::validate_nonsecret_portable_json(value, &crate::COMMAND_JSON_LIMITS)
+            .map_err(contract)?;
+    }
+    control.check()?;
+    bounded_repair_size(document)?;
+    control.check()?;
+    crate::validate_document_shape(document).map_err(contract)?;
+    control.check().map_err(DomainPackError::from)
+}
+
+fn preflight_repair_source(
+    source: &eutheto_domain_ir::PortableAcceptedResult,
+    control: &eutheto_types::OperationControl,
+) -> Result<(), DomainPackError> {
+    bounded_repair_size(source)?;
+    control.check().map_err(DomainPackError::from)
+}
+
+fn bounded_repair_size(value: &impl Serialize) -> Result<(), DomainPackError> {
+    bounded_json_size(value, MAX_DOMAIN_CONTRACT_JSON_BYTES)
+        .map(|_| ())
+        .map_err(|_| DomainPackError::ResourceLimitExceeded)
+}
+
+fn repair_contract_error(error: eutheto_domain_ir::DomainContractError) -> DomainPackError {
+    match error {
+        eutheto_domain_ir::DomainContractError::LimitExceeded(_) => {
+            DomainPackError::ResourceLimitExceeded
+        }
+        error => contract(error),
+    }
+}
+
+fn comparison_error(error: ComparisonError) -> DomainPackError {
+    match error {
+        ComparisonError::Interrupted(interruption) => interruption.into(),
+        ComparisonError::InvalidAcceptedResult { source, .. }
+        | ComparisonError::InvalidComparison(source) => repair_contract_error(source),
+        error => contract(error),
+    }
+}
+
+fn repair_render_result_error(error: eutheto_domain_ir::DomainContractError) -> DomainPackError {
+    repair_contract_error(error)
+}
+
+fn retain_repair_message(
+    messages: &mut Vec<EvidenceMessageV1>,
+    retained_bytes: &mut usize,
+    message: EvidenceMessageV1,
+    control: &eutheto_types::OperationControl,
+) -> Result<(), DomainPackError> {
+    control.check()?;
+    if messages.len() >= MAX_EVIDENCE_MESSAGES {
+        return Err(DomainPackError::ResourceLimitExceeded);
+    }
+    message.validate().map_err(repair_contract_error)?;
+    let remaining = MAX_DOMAIN_CONTRACT_JSON_BYTES
+        .checked_sub(*retained_bytes)
+        .ok_or(DomainPackError::ResourceLimitExceeded)?;
+    let bytes = bounded_json_size(&message, remaining)
+        .map_err(|_| DomainPackError::ResourceLimitExceeded)?;
+    *retained_bytes = (*retained_bytes)
+        .checked_add(bytes)
+        .filter(|total| *total <= MAX_DOMAIN_CONTRACT_JSON_BYTES)
+        .ok_or(DomainPackError::ResourceLimitExceeded)?;
+    control.check()?;
+    messages.push(message);
+    Ok(())
+}
+
+fn unavailable_repair_endpoint_message(
+    assignment: &DomainAssignment,
+    entity_id: EntityId,
+) -> Result<EvidenceMessageV1, DomainPackError> {
+    let parameters = [
+        (
+            VerificationFactId::new("official.test.fact.repair_frame").map_err(contract)?,
+            VerificationValue::Text("acceptedBaseToCandidate".to_owned()),
+        ),
+        (
+            VerificationFactId::new("official.test.fact.current_endpoint").map_err(contract)?,
+            VerificationValue::Text("unavailable".to_owned()),
+        ),
+        (
+            VerificationFactId::new("official.test.fact.endpoint_reason").map_err(contract)?,
+            VerificationValue::Text("entityAbsentFromCandidateDocument".to_owned()),
+        ),
+        (
+            VerificationFactId::new("official.test.fact.historical_value").map_err(contract)?,
+            assignment_verification_value(Some(&assignment.value)),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    Ok(EvidenceMessageV1 {
+        message_key: "official.test.explanation.repair.endpoint_unavailable".to_owned(),
+        parameters,
+        entities: vec![assignment.entity.clone()],
+        rules: vec![RuleId::from_uuid(entity_id.as_uuid())],
+        assignments: vec![assignment.id.clone()],
+        evidence: assignment.evidence.clone(),
+    })
+}
+
+fn test_entity_ref(entity_id: EntityId) -> Result<DomainEntityRef, DomainPackError> {
+    Ok(DomainEntityRef {
+        kind: DomainEntityKindId::new(ENTITY_KIND).map_err(contract)?,
+        id: DomainEntityId::new(format!("official.test.entity.{entity_id}")).map_err(contract)?,
+    })
+}
+
+fn assignment_entity_id(assignment: &DomainAssignment) -> Result<EntityId, DomainPackError> {
+    let value = assignment.id.as_str();
+    let (role, suffix) = value
+        .strip_prefix("official.test.assignment.enabled.")
+        .map(|suffix| ("enabled", suffix))
+        .or_else(|| {
+            value
+                .strip_prefix("official.test.assignment.target.")
+                .map(|suffix| ("target", suffix))
+        })
+        .ok_or_else(|| contract("solution contains an unknown domain assignment"))?;
+    let entity_id = EntityId::from_str(suffix)
+        .map_err(|_| contract("solution contains an unknown domain assignment"))?;
+    if format!("official.test.assignment.{role}.{entity_id}") != value {
+        return Err(contract("solution contains an unknown domain assignment"));
+    }
+    Ok(entity_id)
+}
+
+fn index_repair_assignment<'a>(
+    index: &mut BTreeMap<DomainEntityRef, Vec<&'a DomainAssignmentId>>,
+    assignment: &'a DomainAssignment,
+    source_entities: &BTreeMap<EntityId, TestEntity>,
+) -> Result<EntityId, DomainPackError> {
+    let entity_id = assignment_entity_id(assignment)?;
+    if !source_entities.contains_key(&entity_id) {
+        return Err(contract("solution contains an unknown domain assignment"));
+    }
+    if assignment.entity != test_entity_ref(entity_id)? {
+        return Err(contract("solution assignment entity mismatch"));
+    }
+    if let Some(assignments) = index.get(&assignment.entity) {
+        if assignments.last().is_some_and(|id| *id == &assignment.id) {
+            return Ok(entity_id);
+        }
+        if assignments.len() >= MAX_EVIDENCE_MESSAGE_REFERENCES {
+            return Err(DomainPackError::ResourceLimitExceeded);
+        }
+    } else if index.len() >= MAX_EXPLANATION_RECORDS {
+        return Err(DomainPackError::ResourceLimitExceeded);
+    }
+    index
+        .entry(assignment.entity.clone())
+        .or_default()
+        .push(&assignment.id);
+    Ok(entity_id)
+}
+
+#[allow(clippy::type_complexity)]
+fn repair_assignment_index<'a>(
+    changes: &'a [AssignmentComparisonV1],
+    base_entities: &BTreeMap<EntityId, TestEntity>,
+    candidate_entities: &BTreeMap<EntityId, TestEntity>,
+    control: &eutheto_types::OperationControl,
+) -> Result<
+    (
+        BTreeMap<DomainEntityRef, Vec<&'a DomainAssignmentId>>,
+        Vec<(&'a DomainAssignment, EntityId)>,
+    ),
+    DomainPackError,
+> {
+    let mut index = BTreeMap::new();
+    let mut unavailable = Vec::new();
+    for change in changes {
+        control.check()?;
+        match change {
+            AssignmentComparisonV1::Added { after } => {
+                index_repair_assignment(&mut index, after, candidate_entities)?;
+            }
+            AssignmentComparisonV1::Removed { before } => {
+                let entity_id = index_repair_assignment(&mut index, before, base_entities)?;
+                if !candidate_entities.contains_key(&entity_id) {
+                    if unavailable.len() >= MAX_EVIDENCE_MESSAGES - 1 {
+                        return Err(DomainPackError::ResourceLimitExceeded);
+                    }
+                    unavailable.push((before, entity_id));
+                }
+            }
+            AssignmentComparisonV1::Changed { before, after } => {
+                index_repair_assignment(&mut index, before, base_entities)?;
+                index_repair_assignment(&mut index, after, candidate_entities)?;
+            }
+        }
+    }
+    Ok((index, unavailable))
+}
+
+fn parse_entities_with_control(
+    document: &ScenarioDocument,
+    control: &eutheto_types::OperationControl,
+) -> Result<BTreeMap<EntityId, TestEntity>, DomainPackError> {
+    parse_entities_controlled(document, Some(control))
+}
+
+fn parse_entities_controlled(
+    document: &ScenarioDocument,
+    control: Option<&eutheto_types::OperationControl>,
 ) -> Result<BTreeMap<EntityId, TestEntity>, DomainPackError> {
     require_pack(document)?;
     let mut entities = BTreeMap::new();
     for (id, value) in &document.domain.entities {
+        if let Some(control) = control {
+            control.check()?;
+        }
         let entity: TestEntity = serde_json::from_value(value.clone())
             .map_err(|error| payload(&format!("/domain/entities/{id}"), error))?;
         if entity.id != *id {
@@ -1079,6 +1591,11 @@ fn parse_entities(
         entities.insert(*id, entity);
     }
     Ok(entities)
+}
+fn parse_entities(
+    document: &ScenarioDocument,
+) -> Result<BTreeMap<EntityId, TestEntity>, DomainPackError> {
+    parse_entities_controlled(document, None)
 }
 
 fn check_target(target: i64) -> Result<(), DomainPackError> {
@@ -1381,6 +1898,8 @@ fn build_problem(
     context: &CompileContext,
     entities: &BTreeMap<EntityId, TestEntity>,
 ) -> Result<PlanningProblem, DomainPackError> {
+    context.control.check()?;
+    validate_objective_context(document, context.objective_context.as_ref())?;
     let preference_provenance =
         ProvenanceId::new("official_test.preference.target").map_err(contract)?;
     let mut parts = ProblemParts::with_capacity(entities.len());
@@ -1471,6 +1990,7 @@ fn validate_verification_context(
     pack: crate::OfficialTestPack,
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
+    objective_context: Option<&RunObjectiveContext>,
     context: &VerificationContextV1,
     control: &eutheto_types::OperationControl,
 ) -> Result<(), DomainPackError> {
@@ -1478,6 +1998,7 @@ fn validate_verification_context(
     let document_hash =
         blake3_hex(&serde_json::to_vec(document).map_err(|error| payload("/document", error))?);
     let normalized_solution_hash = solution.canonical_hash().map_err(contract)?;
+    validate_objective_context(document, objective_context)?;
     let scope = pack.verification_scope(document, solution.scenario_revision, control)?;
     if context.scenario_id != document.scenario_id
         || context.evaluated_revision != solution.scenario_revision
@@ -1498,56 +2019,58 @@ fn evaluate_required_rules(
     require_pack(document)?;
     solution.validate().map_err(contract)?;
     if solution.pack_id != document.domain_pack.id || solution.scenario_id != document.scenario_id {
-        return Err(DomainPackError::Contract(
-            "solution scenario mismatch".to_owned(),
-        ));
+        return Err(contract("solution scenario mismatch"));
     }
     let entities = parse_entities(document)?;
+    evaluate_required_rules_with_entities(document, solution, &entities, None, false, None, control)
+}
+
+fn evaluate_required_rules_with_entities(
+    document: &ScenarioDocument,
+    solution: &NormalizedSolution,
+    entities: &BTreeMap<EntityId, TestEntity>,
+    historical_entities: Option<&BTreeMap<EntityId, TestEntity>>,
+    failures_only: bool,
+    result_limit: Option<usize>,
+    control: &eutheto_types::OperationControl,
+) -> Result<Vec<RuleEvaluation>, DomainPackError> {
+    require_pack(document)?;
+    solution.validate().map_err(contract)?;
+    if solution.pack_id != document.domain_pack.id || solution.scenario_id != document.scenario_id {
+        return Err(contract("solution scenario mismatch"));
+    }
+    let source_entities = historical_entities.unwrap_or(entities);
     let assignments: BTreeMap<_, _> = solution
         .assignments
         .iter()
-        .map(|assignment| (assignment.id.as_str().to_owned(), assignment))
+        .map(|assignment| (assignment.id.as_str(), assignment))
         .collect();
-    let expected_assignment_ids: BTreeSet<_> = entities
-        .keys()
-        .flat_map(|id| {
-            let suffix = id.to_string();
-            [
-                format!("official.test.assignment.enabled.{suffix}"),
-                format!("official.test.assignment.target.{suffix}"),
-            ]
-        })
-        .collect();
-    if assignments
-        .keys()
-        .any(|id| !expected_assignment_ids.contains(id))
-    {
-        return Err(DomainPackError::Contract(
-            "solution contains an unknown domain assignment".to_owned(),
-        ));
+    for assignment in &solution.assignments {
+        control.check()?;
+        let entity_id = assignment_entity_id(assignment)?;
+        if !source_entities.contains_key(&entity_id) {
+            return Err(contract("solution contains an unknown domain assignment"));
+        }
+        if assignment.entity != test_entity_ref(entity_id)? {
+            return Err(contract("solution assignment entity mismatch"));
+        }
     }
 
     let enabled_fact = VerificationFactId::new("official.test.fact.enabled").map_err(contract)?;
     let target_fact = VerificationFactId::new("official.test.fact.target").map_err(contract)?;
-    let mut evaluations = Vec::with_capacity(entities.len());
-    for (id, entity) in &entities {
+    let mut evaluations = if failures_only {
+        Vec::new()
+    } else {
+        Vec::with_capacity(entities.len())
+    };
+    for (id, entity) in entities {
         control.check()?;
         let suffix = id.to_string();
-        let entity_ref = DomainEntityRef {
-            kind: DomainEntityKindId::new(ENTITY_KIND).map_err(contract)?,
-            id: DomainEntityId::new(format!("official.test.entity.{suffix}")).map_err(contract)?,
-        };
-        let enabled_assignment =
-            assignments.get(&format!("official.test.assignment.enabled.{suffix}"));
-        let target_assignment =
-            assignments.get(&format!("official.test.assignment.target.{suffix}"));
-        if enabled_assignment
-            .into_iter()
-            .chain(target_assignment)
-            .any(|assignment| assignment.entity != entity_ref)
-        {
-            return Err(contract("solution assignment entity mismatch"));
-        }
+        let entity_ref = test_entity_ref(*id)?;
+        let enabled_id = format!("official.test.assignment.enabled.{suffix}");
+        let target_id = format!("official.test.assignment.target.{suffix}");
+        let enabled_assignment = assignments.get(enabled_id.as_str()).copied();
+        let target_assignment = assignments.get(target_id.as_str()).copied();
         let enabled = enabled_assignment.map(|assignment| &assignment.value);
         let target = target_assignment.map(|assignment| &assignment.value);
         let satisfied = matches!(
@@ -1559,6 +2082,12 @@ fn evaluate_required_rules(
                 && *target == entity.target
                 && *enabled == (*target >= 1)
         );
+        if failures_only && satisfied {
+            continue;
+        }
+        if result_limit.is_some_and(|limit| evaluations.len() >= limit) {
+            return Err(DomainPackError::ResourceLimitExceeded);
+        }
         evaluations.push(RuleEvaluation {
             rule_id: RuleId::from_uuid(id.as_uuid()),
             satisfied,
@@ -1594,6 +2123,7 @@ fn evaluate_required_rules(
 fn authoritative_score(
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
+    objective_context: Option<&RunObjectiveContext>,
     control: &eutheto_types::OperationControl,
 ) -> Result<ScoreVector, DomainPackError> {
     require_pack(document)?;
@@ -1603,6 +2133,7 @@ fn authoritative_score(
             "solution scenario mismatch".to_owned(),
         ));
     }
+    validate_objective_context(document, objective_context)?;
     let entities = parse_entities(document)?;
     let assignments: BTreeMap<_, _> = solution
         .assignments
@@ -1747,35 +2278,4 @@ fn configure_entity(
         .map_err(|error| payload("/inverse", error))?,
     };
     Ok((change, inverse))
-}
-#[cfg(test)]
-mod tests {
-    use super::{DomainPackError, ExplanationKind, VerificationValue, evidence_message_for_kind};
-    use std::collections::BTreeSet;
-
-    #[test]
-    fn all_seven_evidence_kinds_render_to_distinct_typed_messages() -> Result<(), DomainPackError> {
-        let kinds = [
-            ExplanationKind::Validation,
-            ExplanationKind::Infeasibility,
-            ExplanationKind::Assignment,
-            ExplanationKind::Counterfactual,
-            ExplanationKind::SolutionDifference,
-            ExplanationKind::Repair,
-            ExplanationKind::OptimalityStatus,
-        ];
-        let mut keys = BTreeSet::new();
-        for kind in kinds {
-            let message = evidence_message_for_kind(kind, &"a".repeat(64))?;
-            message.validate().map_err(super::contract)?;
-            assert!(keys.insert(message.message_key));
-            assert!(
-                message
-                    .parameters
-                    .values()
-                    .all(|value| matches!(value, VerificationValue::Text(_)))
-            );
-        }
-        Ok(())
-    }
 }

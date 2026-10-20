@@ -191,8 +191,12 @@ async fn native_readiness_requires_explicit_full_validation_and_cancelled_claim_
         &json!({"requestId":RequestId::new(&SystemIdGenerator)?, "schemaVersion":1, "operationId":operation_id}),
     )?;
     assert_eq!(cancelled.result["acknowledgement"], "cancellationRequested");
-    let error = invoke_ipc_args(&fixture.window, "scenario_validate", json!({"onProgress":"__CHANNEL__:42", "request":{
+    let old = invoke_ipc_args(&fixture.window, "scenario_validate", json!({"onProgress":"__CHANNEL__:42", "request":{
         "requestId":RequestId::new(&SystemIdGenerator)?, "schemaVersion":2, "scenarioId":fixture.scenario_id, "expectedRevision":0, "operationId":operation_id
+    }}))?.err().ok_or("old full-validation wire version must be refused")?;
+    assert_eq!(old["code"], "setup.version_unsupported");
+    let error = invoke_ipc_args(&fixture.window, "scenario_validate", json!({"onProgress":"__CHANNEL__:42", "request":{
+        "requestId":RequestId::new(&SystemIdGenerator)?, "schemaVersion":3, "scenarioId":fixture.scenario_id, "expectedRevision":0, "operationId":operation_id
     }}))?.err().ok_or("cancelled validation cannot run")?;
     assert_eq!(error["code"], "operation.cancelled");
     assert_eq!(summary(&fixture)?.result["full"]["state"], "notRun");
@@ -205,12 +209,17 @@ async fn native_readiness_requires_explicit_full_validation_and_cancelled_claim_
         &fixture.window,
         "scenario_validate",
         &json!({
-            "requestId":RequestId::new(&SystemIdGenerator)?, "schemaVersion":2, "scenarioId":fixture.scenario_id, "expectedRevision":0, "operationId":operation_id
+            "requestId":RequestId::new(&SystemIdGenerator)?, "schemaVersion":3, "scenarioId":fixture.scenario_id, "expectedRevision":0, "operationId":operation_id
         }),
     )?;
     let issues = validated.result["report"]["issues"]
         .as_array()
         .ok_or("missing complete report")?;
+    let issue_ids = validated.result["issueIds"]
+        .as_array()
+        .ok_or("missing full-report issue IDs")?;
+    assert_eq!(issue_ids.len(), issues.len());
+    assert_eq!(validated.result["schemaVersion"], 3);
     let after = summary(&fixture)?;
     assert_eq!(after.result["full"]["state"], "completed");
     assert_eq!(after.result["full"]["stale"], false);

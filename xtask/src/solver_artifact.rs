@@ -52,7 +52,7 @@ const LICENSE_SOURCE_SHA256: [(&str, &str); 8] = [
         "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
     ),
 ];
-const CAPABILITIES: [&str; 7] = [
+const CAPABILITIES: [&str; 8] = [
     "cp-sat",
     "deterministic-time",
     "intermediate-solutions",
@@ -60,6 +60,7 @@ const CAPABILITIES: [&str; 7] = [
     "progress",
     "solution-projection",
     "solution-stats",
+    "sufficient-assumptions",
 ];
 const ORTOOLS_KEYS: [&str; 13] = [
     "CMAKE_C_COMPILER",

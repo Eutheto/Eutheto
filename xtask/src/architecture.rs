@@ -11,6 +11,7 @@ const REQUIRED_ARCHITECTURE_PACKAGES: &[&str] = &[
     "eutheto-solver-api",
     "eutheto-solver-router",
     "eutheto-verify",
+    "eutheto-pdf-worker",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +63,7 @@ fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
     let graph = workspace_graph(&packages);
 
     for (name, package) in &packages {
+        verify_pdf_boundary(name, package, &graph)?;
         let relative_manifest = package
             .manifest_path
             .strip_prefix(repo_root)
@@ -155,6 +157,36 @@ fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
 
     Ok(())
 }
+fn verify_pdf_boundary<'a>(
+    name: &'a str,
+    package: &Package,
+    graph: &BTreeMap<&'a str, BTreeSet<&'a str>>,
+) -> Result<()> {
+    if name == "eutheto-pdf-worker" {
+        reject_reachable(
+            name,
+            graph,
+            |candidate| candidate != "eutheto-types",
+            "the PDF helper may reach only shared wire and recipient contracts",
+        )?;
+    } else {
+        reject_reachable(
+            name,
+            graph,
+            |candidate| candidate == "eutheto-pdf-worker",
+            "the PDF renderer must remain a separate executable",
+        )?;
+        if package
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.name == "typst" || dependency.name.starts_with("typst-"))
+        {
+            bail!("only the PDF helper may link Typst: `{name}`");
+        }
+    }
+    Ok(())
+}
+
 fn verification_forbidden(candidate: &str) -> bool {
     (candidate.starts_with("eutheto-solver-") && candidate != "eutheto-solver-api")
         || matches!(
@@ -236,7 +268,52 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{reject_reachable, verification_forbidden};
+    use super::{
+        Dependency, Metadata, Package, REQUIRED_ARCHITECTURE_PACKAGES, reject_reachable,
+        verification_forbidden, verify_metadata,
+    };
+
+    #[test]
+    fn pdf_renderer_remains_a_contract_only_executable() -> Result<()> {
+        let root = std::path::Path::new("/repository");
+        let mut packages = REQUIRED_ARCHITECTURE_PACKAGES
+            .iter()
+            .chain(["eutheto-types"].iter())
+            .map(|name| Package {
+                id: (*name).into(),
+                name: (*name).into(),
+                manifest_path: root.join("crates").join(name).join("Cargo.toml"),
+                dependencies: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let worker_index = packages
+            .iter()
+            .position(|package| package.name == "eutheto-pdf-worker")
+            .ok_or_else(|| anyhow::anyhow!("missing worker fixture"))?;
+        packages[worker_index].dependencies.push(Dependency {
+            name: "eutheto-types".into(),
+            path: Some(root.join("crates/eutheto-types")),
+        });
+        let mut metadata = Metadata {
+            workspace_members: packages.iter().map(|package| package.id.clone()).collect(),
+            packages,
+        };
+        verify_metadata(root, &metadata)?;
+        metadata.packages[worker_index]
+            .dependencies
+            .push(Dependency {
+                name: "eutheto-domain-api".into(),
+                path: Some(root.join("crates/eutheto-domain-api")),
+            });
+        assert!(verify_metadata(root, &metadata).is_err());
+        metadata.packages[worker_index].dependencies.pop();
+        metadata.packages[0].dependencies.push(Dependency {
+            name: "typst".into(),
+            path: None,
+        });
+        assert!(verify_metadata(root, &metadata).is_err());
+        Ok(())
+    }
 
     #[test]
     fn transitive_forbidden_edges_are_rejected() {

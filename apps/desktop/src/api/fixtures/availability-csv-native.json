@@ -1,0 +1,956 @@
+{
+  "apply": {
+    "currentRevision": 2,
+    "requestId": "01a10b46-c843-7350-8c5d-ee3241e68620",
+    "result": {
+      "outcome": {
+        "commandId": "01a10b46-c843-7350-8c5d-ee27ecf8c777",
+        "kind": "applied",
+        "revision": 2
+      },
+      "report": {
+        "consumed": true,
+        "disposition": "reviewable",
+        "previewId": "01a10b46-c828-7d81-8d53-8adfd31ec87b",
+        "rows": {
+          "excludedRows": [],
+          "family": "availability"
+        },
+        "schemaVersion": 1
+      },
+      "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+      "schemaVersion": 1,
+      "sourceId": "01a10b46-c7cb-71f1-9055-a8e715d3f884"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "detection": {
+    "currentRevision": null,
+    "requestId": "01a10b46-c7cc-7151-8221-941434882d30",
+    "result": {
+      "data": {
+        "dialects": [
+          {
+            "consistentColumns": null,
+            "dialect": "comma",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "id\tperson\tkind\tstart\tend\tweekly\tfrom\tuntil\ttypes\tlocations\tsourc",
+                    "truncated": true
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000008\tsame\tapprovedTimeOff\t2026-0",
+                    "truncated": true
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "c9cabb7bd06225590ee6b159a3ccac5f9cf8cac02c1ce600df59ab33013026c8",
+              "logicalRecords": 4,
+              "rawBytes": 627
+            },
+            "status": "candidate"
+          },
+          {
+            "consistentColumns": 1,
+            "dialect": "semicolon",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "id\tperson\tkind\tstart\tend\tweekly\tfrom\tuntil\ttypes\tlocations\tsourc",
+                    "truncated": true
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000008\tsame\tapprovedTimeOff\t2026-0",
+                    "truncated": true
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "c9cabb7bd06225590ee6b159a3ccac5f9cf8cac02c1ce600df59ab33013026c8",
+              "logicalRecords": 4,
+              "rawBytes": 627
+            },
+            "status": "candidate"
+          },
+          {
+            "consistentColumns": 12,
+            "dialect": "tab",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "id",
+                    "truncated": false
+                  },
+                  {
+                    "text": "person",
+                    "truncated": false
+                  },
+                  {
+                    "text": "kind",
+                    "truncated": false
+                  },
+                  {
+                    "text": "start",
+                    "truncated": false
+                  },
+                  {
+                    "text": "end",
+                    "truncated": false
+                  },
+                  {
+                    "text": "weekly",
+                    "truncated": false
+                  },
+                  {
+                    "text": "from",
+                    "truncated": false
+                  },
+                  {
+                    "text": "until",
+                    "truncated": false
+                  },
+                  {
+                    "text": "types",
+                    "truncated": false
+                  },
+                  {
+                    "text": "locations",
+                    "truncated": false
+                  },
+                  {
+                    "text": "source",
+                    "truncated": false
+                  },
+                  {
+                    "text": "note",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000008",
+                    "truncated": false
+                  },
+                  {
+                    "text": "same",
+                    "truncated": false
+                  },
+                  {
+                    "text": "approvedTimeOff",
+                    "truncated": false
+                  },
+                  {
+                    "text": "2026-09-01T09:00:00.123",
+                    "truncated": false
+                  },
+                  {
+                    "text": "2026-09-01T10:00:00.456",
+                    "truncated": false
+                  },
+                  {
+                    "text": "",
+                    "truncated": false
+                  },
+                  {
+                    "text": "2026-09-01",
+                    "truncated": false
+                  },
+                  {
+                    "text": "2026-10-01",
+                    "truncated": false
+                  },
+                  {
+                    "text": "[\"same\"]",
+                    "truncated": false
+                  },
+                  {
+                    "text": "[\"same\"]",
+                    "truncated": false
+                  },
+                  {
+                    "text": "authored",
+                    "truncated": false
+                  },
+                  {
+                    "text": "changed",
+                    "truncated": false
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "c9cabb7bd06225590ee6b159a3ccac5f9cf8cac02c1ce600df59ab33013026c8",
+              "logicalRecords": 4,
+              "rawBytes": 627
+            },
+            "status": "candidate"
+          }
+        ],
+        "schemaVersion": 1
+      },
+      "family": "availability"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesApply": {
+    "currentRevision": 2,
+    "requestId": "01a10b46-c906-7411-b27b-29fc842b646f",
+    "result": {
+      "outcome": {
+        "kind": "noChanges",
+        "revision": 2
+      },
+      "report": {
+        "consumed": true,
+        "disposition": "noChanges",
+        "previewId": "01a10b46-c905-7233-a829-b8c9f82d00d1",
+        "rows": {
+          "excludedRows": [],
+          "family": "availability"
+        },
+        "schemaVersion": 1
+      },
+      "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+      "schemaVersion": 1,
+      "sourceId": "01a10b46-c8e7-7c32-8311-da342b7b5dff"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "noChangesPreview": {
+    "currentRevision": 2,
+    "requestId": "01a10b46-c8e7-7c32-8311-da49d07fb27b",
+    "result": {
+      "preview": {
+        "approvalDigest": "d8ede42059cc28936dd869ce0472dd195fdeb4c9627a15e502fa15ddca4682a6",
+        "batch": null,
+        "disposition": "noChanges",
+        "excludedRows": [],
+        "review": {
+          "changesBlake3": "03f88b99c3d8073bba8948d6e762aac443b265f606cc05abd4d172f03a4def6a",
+          "decisions": [],
+          "excludedBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab",
+          "format": "eutheto/workforce-availability-csv-review",
+          "limitsVersion": 1,
+          "mapping": {
+            "assignmentTypeMappings": {
+              "same": "018f7b40-a000-7000-8000-000000000004"
+            },
+            "columns": [
+              {
+                "blank": "preserve",
+                "field": "personId",
+                "index": 1
+              },
+              {
+                "blank": "preserve",
+                "field": "availabilityKind",
+                "index": 2
+              },
+              {
+                "blank": "preserve",
+                "field": "startsAt",
+                "index": 3
+              },
+              {
+                "blank": "preserve",
+                "field": "endsAt",
+                "index": 4
+              },
+              {
+                "blank": "preserve",
+                "field": "weeklyWindows",
+                "index": 5
+              },
+              {
+                "blank": "preserve",
+                "field": "effectiveStartDate",
+                "index": 6
+              },
+              {
+                "blank": "preserve",
+                "field": "effectiveEndDateExclusive",
+                "index": 7
+              },
+              {
+                "blank": "preserve",
+                "field": "assignmentTypeIds",
+                "index": 8
+              },
+              {
+                "blank": "preserve",
+                "field": "locationIds",
+                "index": 9
+              },
+              {
+                "blank": "preserve",
+                "field": "source",
+                "index": 10
+              },
+              {
+                "blank": "preserve",
+                "field": "note",
+                "index": 11
+              }
+            ],
+            "dialect": "tab",
+            "expectedColumns": 12,
+            "hasHeader": true,
+            "identityColumn": 0,
+            "locationMappings": {
+              "same": "018f7b40-a000-7000-8000-000000000005"
+            },
+            "personMappings": {
+              "same": "018f7b40-a000-7000-8000-000000000001"
+            }
+          },
+          "parserVersion": "csv-core-0.1.13",
+          "revision": 2,
+          "rowsBlake3": "c509ec18d81ecd71aafe7dc238b7e305f5152c0492e44a1ea15731e927df6f4f",
+          "scenarioBlake3": "cf76ecf6b894710b1b47989c484681503c241d83eef2befc1d085c3927cfb7cd",
+          "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+          "schemaVersion": 1,
+          "source": {
+            "blake3": "8f6a8f12f0b02a8e3c6852f2001723d28d0322f9922f0aaf55882040a9660e7e",
+            "logicalRecords": 2,
+            "rawBytes": 236
+          },
+          "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+        },
+        "rows": [
+          {
+            "after": null,
+            "availabilityId": "018f7b40-a000-7000-8000-00000000000a",
+            "before": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-00000000000a",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "original",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-00000000000a",
+              "kind": "supplied"
+            },
+            "issue": null,
+            "record": 2,
+            "resolvedEndsAt": {
+              "instant": "2026-09-01T14:00:00.456Z",
+              "local": "2026-09-01T10:00:00.456",
+              "offsetSeconds": -14400
+            },
+            "resolvedStartsAt": {
+              "instant": "2026-09-01T13:00:00.123Z",
+              "local": "2026-09-01T09:00:00.123",
+              "offsetSeconds": -14400
+            },
+            "status": "unchanged"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "8f6a8f12f0b02a8e3c6852f2001723d28d0322f9922f0aaf55882040a9660e7e",
+          "logicalRecords": 2,
+          "rawBytes": 236
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10b46-c905-7233-a829-b8c9f82d00d1",
+      "revision": 2,
+      "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+      "schemaVersion": 1,
+      "sourceId": "01a10b46-c8e7-7c32-8311-da342b7b5dff"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "preview": {
+    "currentRevision": 1,
+    "requestId": "01a10b46-c7ed-77f1-aed5-584fe6e37754",
+    "result": {
+      "preview": {
+        "approvalDigest": "ac3053089495746c023560ca57fa6691b84f9fbe31f2607b9bada997b576e1dc",
+        "batch": {
+          "commands": [
+            {
+              "commandType": "official.workforce.update_entity",
+              "payload": {
+                "entity": {
+                  "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+                  "availabilityKind": "approvedTimeOff",
+                  "effectiveRange": {
+                    "endDateExclusive": "2026-10-01",
+                    "startDate": "2026-09-01"
+                  },
+                  "id": "018f7b40-a000-7000-8000-000000000008",
+                  "kind": "availability",
+                  "locationIds": ["018f7b40a00070008000000000000005"],
+                  "note": "changed",
+                  "personId": "018F7B40-A000-7000-8000-000000000001",
+                  "source": "authored",
+                  "timeWindow": {
+                    "endsAt": "2026-09-01T10:00:00.456-04:00",
+                    "kind": "instant",
+                    "startsAt": "2026-09-01T09:00:00.123-04:00"
+                  }
+                }
+              }
+            },
+            {
+              "commandType": "official.workforce.add_entity",
+              "payload": {
+                "entity": {
+                  "assignmentTypeIds": ["018f7b40-a000-7000-8000-000000000004"],
+                  "availabilityKind": "requestedTimeOff",
+                  "effectiveRange": {
+                    "endDateExclusive": "2026-10-01",
+                    "startDate": "2026-09-01"
+                  },
+                  "id": "018f7b40-a000-7000-8000-000000000009",
+                  "kind": "availability",
+                  "locationIds": ["018f7b40-a000-7000-8000-000000000005"],
+                  "note": " weekly note ",
+                  "personId": "018f7b40-a000-7000-8000-000000000001",
+                  "source": " weekly source ",
+                  "timeWindow": {
+                    "kind": "weekly",
+                    "windows": [
+                      {
+                        "endDayOffset": 0,
+                        "endTime": "10:00:00",
+                        "startTime": "09:00:00",
+                        "weekdays": ["friday", "monday"]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "label": "Import stored availability records from CSV",
+          "packId": "official.workforce",
+          "scenarioSchemaVersion": 1,
+          "schemaVersion": 1
+        },
+        "disposition": "reviewable",
+        "excludedRows": [],
+        "review": {
+          "changesBlake3": "a78021fc2276123d02c1cec1e8bc2bb161c8e9c1d1138d1b18a0cff4e8c00291",
+          "decisions": [
+            {
+              "decision": {
+                "availabilityId": "018f7b40-a000-7000-8000-000000000009",
+                "kind": "add"
+              },
+              "record": 3
+            }
+          ],
+          "excludedBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab",
+          "format": "eutheto/workforce-availability-csv-review",
+          "limitsVersion": 1,
+          "mapping": {
+            "assignmentTypeMappings": {
+              "same": "018f7b40-a000-7000-8000-000000000004"
+            },
+            "columns": [
+              {
+                "blank": "preserve",
+                "field": "personId",
+                "index": 1
+              },
+              {
+                "blank": "preserve",
+                "field": "availabilityKind",
+                "index": 2
+              },
+              {
+                "blank": "preserve",
+                "field": "startsAt",
+                "index": 3
+              },
+              {
+                "blank": "preserve",
+                "field": "endsAt",
+                "index": 4
+              },
+              {
+                "blank": "preserve",
+                "field": "weeklyWindows",
+                "index": 5
+              },
+              {
+                "blank": "preserve",
+                "field": "effectiveStartDate",
+                "index": 6
+              },
+              {
+                "blank": "preserve",
+                "field": "effectiveEndDateExclusive",
+                "index": 7
+              },
+              {
+                "blank": "preserve",
+                "field": "assignmentTypeIds",
+                "index": 8
+              },
+              {
+                "blank": "preserve",
+                "field": "locationIds",
+                "index": 9
+              },
+              {
+                "blank": "preserve",
+                "field": "source",
+                "index": 10
+              },
+              {
+                "blank": "preserve",
+                "field": "note",
+                "index": 11
+              }
+            ],
+            "dialect": "tab",
+            "expectedColumns": 12,
+            "hasHeader": true,
+            "identityColumn": 0,
+            "locationMappings": {
+              "same": "018f7b40-a000-7000-8000-000000000005"
+            },
+            "personMappings": {
+              "same": "018f7b40-a000-7000-8000-000000000001"
+            }
+          },
+          "parserVersion": "csv-core-0.1.13",
+          "revision": 1,
+          "rowsBlake3": "abe989de91c7a88095114f0337f2b746715b645f7cb0099305aa38b059254fea",
+          "scenarioBlake3": "706a1cff39e302bc792652a087e4cbf9bfe7e3e724fbf6c261c0ba1763ce7cab",
+          "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+          "schemaVersion": 1,
+          "source": {
+            "blake3": "c9cabb7bd06225590ee6b159a3ccac5f9cf8cac02c1ce600df59ab33013026c8",
+            "logicalRecords": 4,
+            "rawBytes": 627
+          },
+          "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+        },
+        "rows": [
+          {
+            "after": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "changed",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "availabilityId": "018f7b40-a000-7000-8000-000000000008",
+            "before": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "original",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "supplied"
+            },
+            "issue": null,
+            "record": 2,
+            "resolvedEndsAt": {
+              "instant": "2026-09-01T14:00:00.456Z",
+              "local": "2026-09-01T10:00:00.456",
+              "offsetSeconds": -14400
+            },
+            "resolvedStartsAt": {
+              "instant": "2026-09-01T13:00:00.123Z",
+              "local": "2026-09-01T09:00:00.123",
+              "offsetSeconds": -14400
+            },
+            "status": "updated"
+          },
+          {
+            "after": {
+              "assignmentTypeIds": ["018f7b40-a000-7000-8000-000000000004"],
+              "availabilityKind": "requestedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-000000000009",
+              "kind": "availability",
+              "locationIds": ["018f7b40-a000-7000-8000-000000000005"],
+              "note": " weekly note ",
+              "personId": "018f7b40-a000-7000-8000-000000000001",
+              "source": " weekly source ",
+              "timeWindow": {
+                "kind": "weekly",
+                "windows": [
+                  {
+                    "endDayOffset": 0,
+                    "endTime": "10:00:00",
+                    "startTime": "09:00:00",
+                    "weekdays": ["friday", "monday"]
+                  }
+                ]
+              }
+            },
+            "availabilityId": "018f7b40-a000-7000-8000-000000000009",
+            "before": null,
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-000000000009",
+              "kind": "supplied"
+            },
+            "issue": null,
+            "record": 3,
+            "resolvedEndsAt": null,
+            "resolvedStartsAt": null,
+            "status": "added"
+          },
+          {
+            "after": null,
+            "availabilityId": "018f7b40-a000-7000-8000-00000000000a",
+            "before": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-00000000000a",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "original",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-00000000000a",
+              "kind": "supplied"
+            },
+            "issue": null,
+            "record": 4,
+            "resolvedEndsAt": {
+              "instant": "2026-09-01T14:00:00.456Z",
+              "local": "2026-09-01T10:00:00.456",
+              "offsetSeconds": -14400
+            },
+            "resolvedStartsAt": {
+              "instant": "2026-09-01T13:00:00.123Z",
+              "local": "2026-09-01T09:00:00.123",
+              "offsetSeconds": -14400
+            },
+            "status": "unchanged"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "c9cabb7bd06225590ee6b159a3ccac5f9cf8cac02c1ce600df59ab33013026c8",
+          "logicalRecords": 4,
+          "rawBytes": 627
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10b46-c828-7d81-8d53-8adfd31ec87b",
+      "revision": 1,
+      "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+      "schemaVersion": 1,
+      "sourceId": "01a10b46-c7cb-71f1-9055-a8e715d3f884"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "report": {
+    "currentRevision": null,
+    "requestId": "01a10b46-c8e6-7782-a451-75d006823f5f",
+    "result": {
+      "consumed": true,
+      "disposition": "reviewable",
+      "previewId": "01a10b46-c828-7d81-8d53-8adfd31ec87b",
+      "rows": {
+        "excludedRows": [],
+        "family": "availability"
+      },
+      "schemaVersion": 1
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sample": {
+    "currentRevision": null,
+    "requestId": "01a10b46-c7ce-7881-85dd-2d994b566046",
+    "result": {
+      "cells": [
+        {
+          "text": "018f7b40-a000-7000-8000-000000000008",
+          "truncated": false
+        },
+        {
+          "text": "same",
+          "truncated": false
+        },
+        {
+          "text": "approvedTimeOff",
+          "truncated": false
+        },
+        {
+          "text": "2026-09-01T09:00:00.123",
+          "truncated": false
+        },
+        {
+          "text": "2026-09-01T10:00:00.456",
+          "truncated": false
+        },
+        {
+          "text": "",
+          "truncated": false
+        },
+        {
+          "text": "2026-09-01",
+          "truncated": false
+        },
+        {
+          "text": "2026-10-01",
+          "truncated": false
+        },
+        {
+          "text": "[\"same\"]",
+          "truncated": false
+        },
+        {
+          "text": "[\"same\"]",
+          "truncated": false
+        },
+        {
+          "text": "authored",
+          "truncated": false
+        },
+        {
+          "text": "changed",
+          "truncated": false
+        }
+      ],
+      "readFormat": {
+        "dialect": "tab",
+        "family": "availability"
+      },
+      "record": 2,
+      "schemaVersion": 1,
+      "sourceId": "01a10b46-c7cb-71f1-9055-a8e715d3f884"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "unresolvedPreview": {
+    "currentRevision": 1,
+    "requestId": "01a10b46-c7ce-7881-85dd-2dc9fb03f301",
+    "result": {
+      "preview": {
+        "approvalDigest": null,
+        "batch": null,
+        "disposition": "blocked",
+        "excludedRows": [
+          {
+            "issue": "unresolvedIdentity",
+            "record": 3,
+            "skipped": false
+          }
+        ],
+        "review": null,
+        "rows": [
+          {
+            "after": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "changed",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "availabilityId": "018f7b40-a000-7000-8000-000000000008",
+            "before": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "original",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-000000000008",
+              "kind": "supplied"
+            },
+            "issue": null,
+            "record": 2,
+            "resolvedEndsAt": {
+              "instant": "2026-09-01T14:00:00.456Z",
+              "local": "2026-09-01T10:00:00.456",
+              "offsetSeconds": -14400
+            },
+            "resolvedStartsAt": {
+              "instant": "2026-09-01T13:00:00.123Z",
+              "local": "2026-09-01T09:00:00.123",
+              "offsetSeconds": -14400
+            },
+            "status": "updated"
+          },
+          {
+            "after": null,
+            "availabilityId": "018f7b40-a000-7000-8000-000000000009",
+            "before": null,
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-000000000009",
+              "kind": "supplied"
+            },
+            "issue": "unresolvedIdentity",
+            "record": 3,
+            "resolvedEndsAt": null,
+            "resolvedStartsAt": null,
+            "status": "unresolved"
+          },
+          {
+            "after": null,
+            "availabilityId": "018f7b40-a000-7000-8000-00000000000a",
+            "before": {
+              "assignmentTypeIds": ["018F7B40-A000-7000-8000-000000000004"],
+              "availabilityKind": "approvedTimeOff",
+              "effectiveRange": {
+                "endDateExclusive": "2026-10-01",
+                "startDate": "2026-09-01"
+              },
+              "id": "018f7b40-a000-7000-8000-00000000000a",
+              "kind": "availability",
+              "locationIds": ["018f7b40a00070008000000000000005"],
+              "note": "original",
+              "personId": "018F7B40-A000-7000-8000-000000000001",
+              "source": "authored",
+              "timeWindow": {
+                "endsAt": "2026-09-01T10:00:00.456-04:00",
+                "kind": "instant",
+                "startsAt": "2026-09-01T09:00:00.123-04:00"
+              }
+            },
+            "identity": {
+              "availabilityId": "018f7b40-a000-7000-8000-00000000000a",
+              "kind": "supplied"
+            },
+            "issue": null,
+            "record": 4,
+            "resolvedEndsAt": {
+              "instant": "2026-09-01T14:00:00.456Z",
+              "local": "2026-09-01T10:00:00.456",
+              "offsetSeconds": -14400
+            },
+            "resolvedStartsAt": {
+              "instant": "2026-09-01T13:00:00.123Z",
+              "local": "2026-09-01T09:00:00.123",
+              "offsetSeconds": -14400
+            },
+            "status": "unchanged"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "c9cabb7bd06225590ee6b159a3ccac5f9cf8cac02c1ce600df59ab33013026c8",
+          "logicalRecords": 4,
+          "rawBytes": 627
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10b46-c7ec-7542-9ab8-5963caa753ae",
+      "revision": 1,
+      "scenarioId": "01a10b46-c725-7ed1-9511-53d713cb517b",
+      "schemaVersion": 1,
+      "sourceId": "01a10b46-c7cb-71f1-9055-a8e715d3f884"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

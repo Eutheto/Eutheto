@@ -46,6 +46,15 @@ pub(super) fn page(
     let mut page = PageBuilder::new(parameters.limit, ORDINARY_DATA_BYTES)?;
     for (&entity_id, record) in &document.domain.entities {
         budget.visit()?;
+        if record.get("kind").and_then(Value::as_str) == Some("manualSelection") {
+            if previous == Some(entity_id) {
+                return Err(invalid(
+                    "/query/continuation/position",
+                    "continued entity is not an editable setup kind",
+                ));
+            }
+            continue;
+        }
         let (kind, name) = header(entity_id, record)?;
         let matches = kind == parameters.entity_kind
             && (search.is_empty()
@@ -190,5 +199,6 @@ const fn has_name(kind: WorkforceEntityKindV1) -> bool {
             | WorkforceEntityKindV1::Calendar
             | WorkforceEntityKindV1::AssignmentType
             | WorkforceEntityKindV1::ShiftTemplate
+            | WorkforceEntityKindV1::ExternalStartingPlan
     )
 }

@@ -20,9 +20,26 @@ use std::str::FromStr;
 
 mod comparison;
 mod explanation;
+mod infeasibility;
+mod native_observations;
+mod objective_context;
+mod source_assets;
 
 pub use comparison::*;
 pub use explanation::*;
+pub use infeasibility::*;
+pub use native_observations::*;
+pub use objective_context::*;
+pub use source_assets::*;
+
+// Only newly introduced optional fields use this: absent is None, present null is invalid.
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
 
 /// Current normalized-solution wire schema.
 pub const NORMALIZED_SOLUTION_SCHEMA_VERSION: u32 = 1;
@@ -35,13 +52,15 @@ pub const VERIFICATION_REPORT_SCHEMA_VERSION: u32 = 2;
 /// Current accepted-result wire schema.
 pub const ACCEPTED_RESULT_SCHEMA_VERSION: u32 = 2;
 /// Current canonical run-request semantic preimage schema.
-pub const RUN_REQUEST_SEMANTICS_SCHEMA_VERSION: u32 = 1;
+pub const RUN_REQUEST_SEMANTICS_SCHEMA_VERSION: u32 = 2;
 /// Current immutable run-input wire schema.
-pub const RUN_INPUT_SCHEMA_VERSION: u32 = 1;
+pub const RUN_INPUT_SCHEMA_VERSION: u32 = 2;
 /// Current terminal run-manifest wire schema.
-pub const RUN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const RUN_MANIFEST_SCHEMA_VERSION: u32 = 2;
 /// Current portable accepted-result wrapper wire schema.
-pub const PORTABLE_ACCEPTED_RESULT_SCHEMA_VERSION: u32 = 2;
+pub const PORTABLE_ACCEPTED_RESULT_SCHEMA_VERSION: u32 = 3;
+/// Local independently verified checkpoint while its original solve may still run.
+pub const VERIFIED_CHECKPOINT_SCHEMA_VERSION: u32 = 2;
 /// Maximum UTF-8 bytes in one persisted component version string.
 pub const MAX_RUN_VERSION_BYTES: usize = 64;
 /// Maximum UTF-8 bytes in one persisted diagnostic code.
@@ -135,6 +154,12 @@ macro_rules! domain_id {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
+
+            /// Returns backing allocation capacity, excluding this inline identifier.
+            #[must_use]
+            pub fn heap_capacity(&self) -> usize {
+                self.0.capacity()
+            }
         }
 
         impl fmt::Display for $name {
@@ -169,6 +194,10 @@ domain_id!(
 );
 domain_id!(DomainEntityId, "Stable identity of a domain entity.");
 domain_id!(
+    ObjectiveProfileId,
+    "Stable identity of a pack-owned recorded objective profile."
+);
+domain_id!(
     DomainEntityKindId,
     "Stable identity of a domain entity kind."
 );
@@ -179,6 +208,10 @@ domain_id!(
 domain_id!(
     AssumptionGroupId,
     "Stable identity of one explainable planning-assumption group."
+);
+domain_id!(
+    DiagnosticAssumptionVariableId,
+    "Canonical Boolean planning-variable identity retained only in diagnostic proof custody."
 );
 domain_id!(
     ScoreLevelId,
@@ -210,6 +243,27 @@ pub struct DomainEntityRef {
     pub kind: DomainEntityKindId,
     /// Entity identity within the kind.
     pub id: DomainEntityId,
+}
+
+impl DomainEntityRef {
+    /// Returns whether `value` is exactly a valid typed entity reference.
+    ///
+    /// Recognizes only the closed wire shape; it establishes neither locality nor authority.
+    #[must_use]
+    pub fn matches_json(value: &serde_json::Value) -> bool {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        object.len() == 2
+            && object
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(valid_id)
+            && object
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(valid_id)
+    }
 }
 
 /// A present half-open interval `[start, end)`.
@@ -407,6 +461,12 @@ fn ensure_domain_contract_size(value: &impl Serialize) -> Result<(), DomainContr
     }
 }
 
+fn ensure_portable_domain_contract_size(value: &impl Serialize) -> Result<(), DomainContractError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| DomainContractError::CanonicalSerialization(error.to_string()))?;
+    validate_portable_domain_json(&bytes)
+}
+
 fn parse_domain_json<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, DomainContractError> {
     if bytes.len() > MAX_DOMAIN_CONTRACT_JSON_BYTES {
         return Err(DomainContractError::LimitExceeded(
@@ -420,6 +480,12 @@ fn parse_domain_json<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, Do
 fn parse_portable_domain_json<'de, T: Deserialize<'de>>(
     bytes: &'de [u8],
 ) -> Result<T, DomainContractError> {
+    validate_portable_domain_json(bytes)?;
+    serde_json::from_slice(bytes)
+        .map_err(|error| DomainContractError::MalformedJson(error.to_string()))
+}
+
+fn validate_portable_domain_json(bytes: &[u8]) -> Result<(), DomainContractError> {
     if bytes.len() > MAX_DOMAIN_CONTRACT_JSON_BYTES {
         return Err(DomainContractError::LimitExceeded(
             "domain contract JSON bytes",
@@ -433,9 +499,7 @@ fn parse_portable_domain_json<'de, T: Deserialize<'de>>(
             max_collection_items: MAX_DOMAIN_CONTRACT_JSON_ITEMS,
         },
     )
-    .map_err(|error| DomainContractError::PortableJsonViolation(error.to_string()))?;
-    serde_json::from_slice(bytes)
-        .map_err(|error| DomainContractError::MalformedJson(error.to_string()))
+    .map_err(|error| DomainContractError::PortableJsonViolation(error.to_string()))
 }
 
 fn checksum_without_field(
@@ -545,23 +609,19 @@ impl ScoreVector {
         if self.levels.len() != other.levels.len() {
             return Err(DomainContractError::ScoreShapeMismatch);
         }
-        let feasibility = self.feasibility.cmp(&other.feasibility);
-        if feasibility != Ordering::Equal {
-            return Ok(feasibility);
-        }
+        let mut ordering = self.feasibility.cmp(&other.feasibility);
         for (left, right) in self.levels.iter().zip(&other.levels) {
             if left.level_id != right.level_id || left.direction != right.direction {
                 return Err(DomainContractError::ScoreShapeMismatch);
             }
-            let ordering = match left.direction {
-                OptimizationDirection::Minimize => left.value.cmp(&right.value),
-                OptimizationDirection::Maximize => right.value.cmp(&left.value),
-            };
-            if ordering != Ordering::Equal {
-                return Ok(ordering);
+            if ordering == Ordering::Equal {
+                ordering = match left.direction {
+                    OptimizationDirection::Minimize => left.value.cmp(&right.value),
+                    OptimizationDirection::Maximize => right.value.cmp(&left.value),
+                };
             }
         }
-        Ok(Ordering::Equal)
+        Ok(ordering)
     }
 
     /// Validates the released score identity and feasibility shape.
@@ -1189,11 +1249,11 @@ fn validate_result_binding(
     Ok(())
 }
 
-/// Canonical V1 semantic preimage for a solver request hash.
+/// Version-aware canonical semantic preimage for a solver request hash.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunRequestSemanticsV1 {
-    /// Must equal [`RUN_REQUEST_SEMANTICS_SCHEMA_VERSION`].
+pub struct RunRequestSemantics {
+    /// Recorded preimage version: legacy one or current two.
     pub schema_version: u32,
     /// Immutable scenario identity.
     pub scenario_id: ScenarioId,
@@ -1233,17 +1293,27 @@ pub struct RunRequestSemanticsV1 {
     pub scenario_timezone: IanaTimeZone,
     /// Optional lowercase BLAKE3 hash of the temporary-condition set.
     pub temporary_condition_hash: Option<String>,
+    /// Recorded current semantics; absent only for exact historical version-one replay.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub objective_context: Option<RunObjectiveContext>,
 }
 
-impl RunRequestSemanticsV1 {
+impl RunRequestSemantics {
     /// Validates the complete request-hash semantic preimage.
     ///
     /// # Errors
     /// Rejects invalid revisions, hashes, versions, options, or backend selection bindings.
     pub fn validate(&self) -> Result<(), DomainContractError> {
-        if self.schema_version != RUN_REQUEST_SEMANTICS_SCHEMA_VERSION {
-            return Err(DomainContractError::UnsupportedVersion(self.schema_version));
-        }
+        validate_recorded_objective_context(
+            self.schema_version,
+            self.objective_context.as_ref(),
+            &self.pack_id,
+            self.scenario_id,
+        )?;
         validate_revision(self.scenario_revision)?;
         for value in [&self.model_hash, &self.objective_policy_hash] {
             validate_hash(value)?;
@@ -1296,14 +1366,14 @@ impl RunRequestSemanticsV1 {
 /// Immutable, solver-neutral inputs that identify one solve run.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunInputV1 {
-    /// Must equal [`RUN_INPUT_SCHEMA_VERSION`].
+pub struct RunInput {
+    /// Recorded input version: legacy one or current two.
     pub schema_version: u32,
     /// Stable identity of the run.
     pub run_id: SolveRunId,
     /// Request correlation identity.
     pub request_id: RequestId,
-    /// Lowercase BLAKE3 hash of [`RunRequestSemanticsV1`].
+    /// Lowercase BLAKE3 hash of [`RunRequestSemantics`].
     pub request_hash: String,
     /// Immutable scenario identity.
     pub scenario_id: ScenarioId,
@@ -1349,11 +1419,18 @@ pub struct RunInputV1 {
     pub scenario_timezone: IanaTimeZone,
     /// Optional lowercase BLAKE3 hash of the temporary-condition set.
     pub temporary_condition_hash: Option<String>,
+    /// Exact recorded objective semantics, never reconstructed from score or display labels.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub objective_context: Option<RunObjectiveContext>,
     /// Lowercase BLAKE3 checksum of this input excluding this field.
     pub checksum: String,
 }
 
-impl RunInputV1 {
+impl RunInput {
     /// Creates one immutable run-input record, derives its request hash, and computes its checksum.
     ///
     /// # Errors
@@ -1384,9 +1461,14 @@ impl RunInputV1 {
         solve_options: SolveOptions,
         scenario_timezone: IanaTimeZone,
         temporary_condition_hash: Option<String>,
+        objective_context: Option<RunObjectiveContext>,
     ) -> Result<Self, DomainContractError> {
         let mut input = Self {
-            schema_version: RUN_INPUT_SCHEMA_VERSION,
+            schema_version: if objective_context.is_some() {
+                RUN_INPUT_SCHEMA_VERSION
+            } else {
+                1
+            },
             run_id,
             request_id,
             request_hash: String::new(),
@@ -1412,6 +1494,7 @@ impl RunInputV1 {
             solve_options,
             scenario_timezone,
             temporary_condition_hash,
+            objective_context,
             checksum: String::new(),
         };
         input.request_hash = input.request_semantics().canonical_hash()?;
@@ -1423,9 +1506,9 @@ impl RunInputV1 {
 
     /// Returns the canonical semantic preimage bound by `request_hash`.
     #[must_use]
-    pub fn request_semantics(&self) -> RunRequestSemanticsV1 {
-        RunRequestSemanticsV1 {
-            schema_version: RUN_REQUEST_SEMANTICS_SCHEMA_VERSION,
+    pub fn request_semantics(&self) -> RunRequestSemantics {
+        RunRequestSemantics {
+            schema_version: self.schema_version,
             scenario_id: self.scenario_id,
             scenario_revision: self.scenario_revision,
             pack_id: self.pack_id.clone(),
@@ -1445,10 +1528,11 @@ impl RunInputV1 {
             solve_options: self.solve_options.clone(),
             scenario_timezone: self.scenario_timezone.clone(),
             temporary_condition_hash: self.temporary_condition_hash.clone(),
+            objective_context: self.objective_context.clone(),
         }
     }
 
-    /// Strictly parses and validates a V1 run-input record.
+    /// Strictly parses and validates a retained version-one or version-two run input.
     ///
     /// # Errors
     /// Rejects malformed JSON and every run-input invariant violation.
@@ -1472,15 +1556,34 @@ impl RunInputV1 {
     }
 
     fn validate_payload(&self) -> Result<(), DomainContractError> {
-        if self.schema_version != RUN_INPUT_SCHEMA_VERSION {
-            return Err(DomainContractError::UnsupportedVersion(self.schema_version));
-        }
+        validate_recorded_objective_context(
+            self.schema_version,
+            self.objective_context.as_ref(),
+            &self.pack_id,
+            self.scenario_id,
+        )?;
         validate_hash(&self.snapshot_document_hash)?;
         validate_hash(&self.request_hash)?;
         if self.request_semantics().canonical_hash()? != self.request_hash {
             return Err(DomainContractError::RequestHashMismatch);
         }
         Ok(())
+    }
+}
+
+fn validate_recorded_objective_context(
+    version: u32,
+    context: Option<&RunObjectiveContext>,
+    pack_id: &PackId,
+    scenario_id: ScenarioId,
+) -> Result<(), DomainContractError> {
+    match (version, context) {
+        (1, None) => Ok(()),
+        (2, Some(context)) => context.validate_for(pack_id, scenario_id),
+        (1 | 2, _) => Err(DomainContractError::InvalidObjectiveContext(
+            "recorded presence",
+        )),
+        _ => Err(DomainContractError::UnsupportedVersion(version)),
     }
 }
 
@@ -1609,18 +1712,35 @@ impl RunTerminalOutcomeV1 {
     }
 }
 
+/// Exact clock-observation failure marker retained only on a quarantine manifest.
+///
+/// This is intentionally closed: a clock failure does not itself establish a
+/// verification alarm, and producers must attach it only after retaining an
+/// independently established non-clock alarm.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
+pub enum RunClockFailureV1 {
+    /// The final wall/elapsed observation could not be trusted.
+    UnreliableObservation {},
+}
+
 /// Terminal, checksummed record for one immutable run input.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RunManifestV1 {
-    /// Must equal [`RUN_MANIFEST_SCHEMA_VERSION`].
+pub struct RunManifest {
+    /// Writers emit [`RUN_MANIFEST_SCHEMA_VERSION`]; readers also accept legacy version 1.
     pub schema_version: u32,
     /// Stable identity of the terminal run.
     pub run_id: SolveRunId,
-    /// Checksum of the exact [`RunInputV1`] used by the run.
+    /// Checksum of the exact [`RunInput`] used by the run.
     pub run_input_checksum: String,
     /// Solver-neutral terminal outcome.
     pub outcome: RunTerminalOutcomeV1,
+    /// Optional marker for a trusted alarm whose terminal clock observation was unreliable.
+    ///
+    /// The marker is omitted for every normally measured manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_failure: Option<RunClockFailureV1>,
     /// Wall-clock time at which execution began.
     pub started_at: Rfc3339Timestamp,
     /// Wall-clock time at which terminal finalization completed.
@@ -1635,11 +1755,18 @@ pub struct RunManifestV1 {
     pub phase_timings: RunPhaseTimingsV1,
     /// Canonical verifier warnings in ascending warning-ID order.
     pub verification_warnings: Vec<VerificationWarning>,
+    /// Descriptive admitted router/native claims, distinct from this application's terminal outcome.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub native_observations: Option<RunNativeObservations>,
     /// Lowercase BLAKE3 checksum of this manifest excluding this field.
     pub checksum: String,
 }
 
-impl RunManifestV1 {
+impl RunManifest {
     /// Creates a canonical terminal manifest and computes its checksum.
     ///
     /// # Errors
@@ -1655,7 +1782,65 @@ impl RunManifestV1 {
         first_incumbent_milliseconds: Option<DurationMillis>,
         first_verified_feasible_milliseconds: Option<DurationMillis>,
         phase_timings: RunPhaseTimingsV1,
+        verification_warnings: Vec<VerificationWarning>,
+    ) -> Result<Self, DomainContractError> {
+        Self::new_with_clock_failure(
+            run_id,
+            run_input_checksum,
+            outcome,
+            started_at,
+            finished_at,
+            elapsed_milliseconds,
+            first_incumbent_milliseconds,
+            first_verified_feasible_milliseconds,
+            phase_timings,
+            verification_warnings,
+            None,
+        )
+    }
+
+    /// Creates an all-unmeasured verification alarm for an unreliable terminal clock observation.
+    ///
+    /// The supplied wall-clock observations are retained exactly, including a regressed
+    /// `finished_at`; no duration or phase timing is inferred or substituted.
+    ///
+    /// # Errors
+    /// Rejects an invalid run identity, diagnostic code, or checksum payload.
+    pub fn new_clock_failed_alarm(
+        run_id: SolveRunId,
+        run_input_checksum: String,
+        diagnostic_code: String,
+        started_at: Rfc3339Timestamp,
+        finished_at: Rfc3339Timestamp,
+    ) -> Result<Self, DomainContractError> {
+        Self::new_with_clock_failure(
+            run_id,
+            run_input_checksum,
+            RunTerminalOutcomeV1::VerificationAlarm { diagnostic_code },
+            started_at,
+            finished_at,
+            None,
+            None,
+            None,
+            RunPhaseTimingsV1::default(),
+            Vec::new(),
+            Some(RunClockFailureV1::UnreliableObservation {}),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_clock_failure(
+        run_id: SolveRunId,
+        run_input_checksum: String,
+        outcome: RunTerminalOutcomeV1,
+        started_at: Rfc3339Timestamp,
+        finished_at: Rfc3339Timestamp,
+        elapsed_milliseconds: Option<DurationMillis>,
+        first_incumbent_milliseconds: Option<DurationMillis>,
+        first_verified_feasible_milliseconds: Option<DurationMillis>,
+        phase_timings: RunPhaseTimingsV1,
         mut verification_warnings: Vec<VerificationWarning>,
+        clock_failure: Option<RunClockFailureV1>,
     ) -> Result<Self, DomainContractError> {
         if verification_warnings.len() > MAX_VERIFICATION_WARNINGS {
             return Err(DomainContractError::LimitExceeded("verification warnings"));
@@ -1674,6 +1859,7 @@ impl RunManifestV1 {
             run_id,
             run_input_checksum,
             outcome,
+            clock_failure,
             started_at,
             finished_at,
             elapsed_milliseconds,
@@ -1681,6 +1867,7 @@ impl RunManifestV1 {
             first_verified_feasible_milliseconds,
             phase_timings,
             verification_warnings,
+            native_observations: None,
             checksum: String::new(),
         };
         manifest.validate_payload()?;
@@ -1689,7 +1876,42 @@ impl RunManifestV1 {
         Ok(manifest)
     }
 
-    /// Strictly parses and validates a V1 terminal run manifest.
+    /// Packages compact claims without changing application outcome, timings or authority.
+    /// Exact input binding is checked by every containing run envelope and durable admission.
+    ///
+    /// # Errors
+    /// Rejects invalid native observations or an incompatible manifest version.
+    pub fn with_native_observations(
+        mut self,
+        observations: Option<RunNativeObservations>,
+    ) -> Result<Self, DomainContractError> {
+        self.native_observations = observations;
+        self.validate_payload()?;
+        self.checksum = checksum_without_field(&self, "checksum")?;
+        ensure_domain_contract_size(&self)?;
+        Ok(self)
+    }
+
+    /// Checks native claims against the exact input after the caller validates the manifest itself.
+    ///
+    /// # Errors
+    /// Rejects manifest/input identity, model/options/backend/runtime substitution.
+    pub fn validate_native_input_binding(
+        &self,
+        input: &RunInput,
+    ) -> Result<(), DomainContractError> {
+        if self.run_id != input.run_id || self.run_input_checksum != input.checksum {
+            return Err(DomainContractError::InvalidNativeObservations(
+                "manifest input binding",
+            ));
+        }
+        if let Some(observations) = &self.native_observations {
+            observations.validate_input_bindings(input)?;
+        }
+        Ok(())
+    }
+
+    /// Strictly parses and validates a supported legacy or current terminal run manifest.
     ///
     /// # Errors
     /// Rejects malformed JSON and every manifest invariant violation.
@@ -1713,8 +1935,16 @@ impl RunManifestV1 {
     }
 
     fn validate_payload(&self) -> Result<(), DomainContractError> {
-        if self.schema_version != RUN_MANIFEST_SCHEMA_VERSION {
+        if !matches!(self.schema_version, 1 | RUN_MANIFEST_SCHEMA_VERSION) {
             return Err(DomainContractError::UnsupportedVersion(self.schema_version));
+        }
+        if self.schema_version == 1 && self.native_observations.is_some() {
+            return Err(DomainContractError::InvalidNativeObservations(
+                "legacy manifest field",
+            ));
+        }
+        if let Some(observations) = &self.native_observations {
+            observations.validate()?;
         }
         validate_hash(&self.run_input_checksum)?;
         self.outcome.validate()?;
@@ -1728,18 +1958,33 @@ impl RunManifestV1 {
             self.phase_timings.evidence_persistence_milliseconds,
             self.phase_timings.optional_explanation_milliseconds,
         ];
-        let interrupted = matches!(self.outcome, RunTerminalOutcomeV1::Interrupted);
-        if interrupted {
-            if self.elapsed_milliseconds.is_some()
+        let interrupted = matches!(&self.outcome, RunTerminalOutcomeV1::Interrupted);
+        let clock_failed_alarm = self.clock_failure.is_some();
+        if clock_failed_alarm
+            && (!matches!(
+                &self.outcome,
+                RunTerminalOutcomeV1::VerificationAlarm { .. }
+            ) || self.elapsed_milliseconds.is_some()
                 || self.first_incumbent_milliseconds.is_some()
                 || self.first_verified_feasible_milliseconds.is_some()
                 || phase_timings.iter().any(Option::is_some)
-                || !self.verification_warnings.is_empty()
-            {
+                || !self.verification_warnings.is_empty())
+        {
+            return Err(DomainContractError::InvalidRunTiming);
+        }
+        if !clock_failed_alarm {
+            if interrupted {
+                if self.elapsed_milliseconds.is_some()
+                    || self.first_incumbent_milliseconds.is_some()
+                    || self.first_verified_feasible_milliseconds.is_some()
+                    || phase_timings.iter().any(Option::is_some)
+                    || !self.verification_warnings.is_empty()
+                {
+                    return Err(DomainContractError::InvalidRunTiming);
+                }
+            } else if self.elapsed_milliseconds.is_none() {
                 return Err(DomainContractError::InvalidRunTiming);
             }
-        } else if self.elapsed_milliseconds.is_none() {
-            return Err(DomainContractError::InvalidRunTiming);
         }
         let milestone_after_elapsed = self.elapsed_milliseconds.is_some_and(|elapsed| {
             [
@@ -1764,10 +2009,11 @@ impl RunManifestV1 {
         let phase_total_after_elapsed = self
             .elapsed_milliseconds
             .is_some_and(|elapsed| phase_total.is_none_or(|total| total > elapsed.value()));
-        if self.finished_at < self.started_at
-            || milestone_after_elapsed
-            || incumbent_after_verified
-            || phase_total_after_elapsed
+        if !clock_failed_alarm
+            && (self.finished_at < self.started_at
+                || milestone_after_elapsed
+                || incumbent_after_verified
+                || phase_total_after_elapsed)
         {
             return Err(DomainContractError::InvalidRunTiming);
         }
@@ -1788,11 +2034,11 @@ impl RunManifestV1 {
     }
 }
 
-/// Portable V2 wrapper for one terminal independently accepted result.
+/// Version-aware portable wrapper for one terminal independently accepted result.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PortableAcceptedResultV2 {
-    /// Must equal [`PORTABLE_ACCEPTED_RESULT_SCHEMA_VERSION`].
+pub struct PortableAcceptedResult {
+    /// Legacy wrapper two or current wrapper three.
     pub schema_version: u32,
     /// Stable result identity, equal to the accepted solution identity.
     pub result_id: SolutionId,
@@ -1801,9 +2047,9 @@ pub struct PortableAcceptedResultV2 {
     /// Exact scenario revision exposed for generic portable extractors.
     pub scenario_revision: u64,
     /// Terminal immutable run input.
-    pub run_input: RunInputV1,
+    pub run_input: RunInput,
     /// Terminal run manifest.
-    pub run_manifest: RunManifestV1,
+    pub run_manifest: RunManifest,
     /// Current accepted solution and independent verification report.
     pub accepted_result: AcceptedResult,
     /// Compact typed evidence keyed by stable evidence identity.
@@ -1812,14 +2058,14 @@ pub struct PortableAcceptedResultV2 {
     pub checksum: String,
 }
 
-impl PortableAcceptedResultV2 {
+impl PortableAcceptedResult {
     /// Creates a portable wrapper and derives its exposed identities from the accepted result.
     ///
     /// # Errors
     /// Rejects invalid nested contracts, evidence bounds, or any cross-contract binding mismatch.
     pub fn new(
-        run_input: RunInputV1,
-        run_manifest: RunManifestV1,
+        run_input: RunInput,
+        run_manifest: RunManifest,
         accepted_result: AcceptedResult,
         evidence: BTreeMap<DomainEvidenceId, VerificationValue>,
     ) -> Result<Self, DomainContractError> {
@@ -1840,7 +2086,7 @@ impl PortableAcceptedResultV2 {
         Ok(result)
     }
 
-    /// Strictly parses and validates the structure and integrity of a portable V2 accepted result.
+    /// Strictly parses and validates the structure and integrity of a supported portable accepted result.
     ///
     /// This check never grants local acceptance authority; callers must independently establish
     /// that the restored scenario and local trust boundary permit accepting the retained result.
@@ -1867,51 +2113,23 @@ impl PortableAcceptedResultV2 {
     }
 
     fn validate_payload(&self) -> Result<(), DomainContractError> {
-        if self.schema_version != PORTABLE_ACCEPTED_RESULT_SCHEMA_VERSION {
+        if !matches!(self.schema_version, 2 | 3) {
             return Err(DomainContractError::UnsupportedVersion(self.schema_version));
+        }
+        if self.schema_version == 2
+            && (self.run_input.schema_version != 1 || self.run_manifest.schema_version != 1)
+        {
+            return Err(DomainContractError::PortableResultBindingMismatch(
+                "legacy nested versions",
+            ));
         }
         validate_revision(self.scenario_revision)?;
         self.run_input.validate()?;
         self.run_manifest.validate()?;
         self.accepted_result.validate()?;
-        self.validate_evidence()?;
+        validate_result_evidence(&self.accepted_result, &self.evidence)?;
         self.validate_bindings()?;
         self.validate_accepted_outcome()
-    }
-
-    fn validate_evidence(&self) -> Result<(), DomainContractError> {
-        if self.evidence.len() > MAX_PORTABLE_RESULT_EVIDENCE_RECORDS {
-            return Err(DomainContractError::LimitExceeded(
-                "portable result evidence",
-            ));
-        }
-        for value in self.evidence.values() {
-            value.validate()?;
-        }
-        let referenced_evidence: BTreeSet<&DomainEvidenceId> = self
-            .accepted_result
-            .solution
-            .assignments
-            .iter()
-            .flat_map(|assignment| &assignment.evidence)
-            .chain(
-                self.accepted_result
-                    .verification
-                    .required_rule_results
-                    .iter()
-                    .flat_map(|evaluation| &evaluation.evidence),
-            )
-            .collect();
-        if self
-            .evidence
-            .keys()
-            .any(|evidence_id| !referenced_evidence.contains(evidence_id))
-        {
-            return Err(DomainContractError::PortableResultBindingMismatch(
-                "evidence reference",
-            ));
-        }
-        Ok(())
     }
 
     fn validate_bindings(&self) -> Result<(), DomainContractError> {
@@ -1968,6 +2186,9 @@ impl PortableAcceptedResultV2 {
                 "planning model hash",
             ));
         }
+        if let Some(observations) = &self.run_manifest.native_observations {
+            observations.validate_input_bindings(&self.run_input)?;
+        }
         Ok(())
     }
 
@@ -1993,6 +2214,147 @@ impl PortableAcceptedResultV2 {
                 DomainContractError::PortableResultBindingMismatch("terminal outcome"),
             ),
         }
+    }
+}
+
+fn validate_result_evidence(
+    accepted_result: &AcceptedResult,
+    evidence: &BTreeMap<DomainEvidenceId, VerificationValue>,
+) -> Result<(), DomainContractError> {
+    if evidence.len() > MAX_PORTABLE_RESULT_EVIDENCE_RECORDS {
+        return Err(DomainContractError::LimitExceeded(
+            "portable result evidence",
+        ));
+    }
+    for value in evidence.values() {
+        value.validate()?;
+    }
+    let referenced_evidence: BTreeSet<&DomainEvidenceId> = accepted_result
+        .solution
+        .assignments
+        .iter()
+        .flat_map(|assignment| &assignment.evidence)
+        .chain(
+            accepted_result
+                .verification
+                .required_rule_results
+                .iter()
+                .flat_map(|evaluation| &evaluation.evidence),
+        )
+        .collect();
+    if evidence
+        .keys()
+        .any(|evidence_id| !referenced_evidence.contains(evidence_id))
+    {
+        return Err(DomainContractError::PortableResultBindingMismatch(
+            "evidence reference",
+        ));
+    }
+    Ok(())
+}
+
+/// Independently accepted first candidate before its original solve has terminated.
+///
+/// This local authority is not a terminal run manifest or a portable accepted result. Its
+/// immutable input, exact domain result, and first-verification milestone survive a later
+/// backend failure or interrupted run without inventing proof.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerifiedCheckpoint {
+    pub schema_version: u32,
+    pub run_input: RunInput,
+    pub observed_after_milliseconds: DurationMillis,
+    pub verified_after_milliseconds: DurationMillis,
+    pub accepted_at: Rfc3339Timestamp,
+    pub accepted_result: AcceptedResult,
+    pub evidence: BTreeMap<DomainEvidenceId, VerificationValue>,
+    pub checksum: String,
+}
+
+impl VerifiedCheckpoint {
+    /// Binds one first verified candidate to its immutable, still-running input.
+    ///
+    /// # Errors
+    /// Rejects a nonaccepted result, extraneous evidence, mismatched immutable bindings,
+    /// regressing timing, or an excessive checkpoint.
+    pub fn new(
+        run_input: RunInput,
+        observed_after_milliseconds: DurationMillis,
+        verified_after_milliseconds: DurationMillis,
+        accepted_at: Rfc3339Timestamp,
+        accepted_result: AcceptedResult,
+        evidence: BTreeMap<DomainEvidenceId, VerificationValue>,
+    ) -> Result<Self, DomainContractError> {
+        let mut checkpoint = Self {
+            schema_version: VERIFIED_CHECKPOINT_SCHEMA_VERSION,
+            run_input,
+            observed_after_milliseconds,
+            verified_after_milliseconds,
+            accepted_at,
+            accepted_result,
+            evidence,
+            checksum: String::new(),
+        };
+        checkpoint.validate_payload()?;
+        checkpoint.checksum = checksum_without_field(&checkpoint, "checksum")?;
+        ensure_domain_contract_size(&checkpoint)?;
+        Ok(checkpoint)
+    }
+
+    /// Parses and verifies one bounded local checkpoint record.
+    ///
+    /// # Errors
+    /// Rejects malformed, oversized, newer-version or mismatched authority.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, DomainContractError> {
+        let checkpoint: Self = parse_portable_domain_json(bytes)?;
+        checkpoint.validate()?;
+        Ok(checkpoint)
+    }
+
+    /// Verifies the checkpoint and all nested checksums without claiming backend proof.
+    ///
+    /// # Errors
+    /// Rejects an invalid version, binding, evidence, timestamp or checksum.
+    pub fn validate(&self) -> Result<(), DomainContractError> {
+        self.validate_payload()?;
+        validate_hash(&self.checksum)?;
+        if checksum_without_field(self, "checksum")? != self.checksum {
+            return Err(DomainContractError::ChecksumMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_payload(&self) -> Result<(), DomainContractError> {
+        if !matches!(self.schema_version, 1 | 2) {
+            return Err(DomainContractError::UnsupportedVersion(self.schema_version));
+        }
+        if self.schema_version == 1 && self.run_input.schema_version != 1 {
+            return Err(DomainContractError::PortableResultBindingMismatch(
+                "legacy checkpoint input",
+            ));
+        }
+        self.run_input.validate()?;
+        self.accepted_result.validate()?;
+        validate_result_evidence(&self.accepted_result, &self.evidence)?;
+        if self.observed_after_milliseconds > self.verified_after_milliseconds
+            || self.verified_after_milliseconds
+                > self.run_input.solve_options.time_limit_milliseconds
+            || self.accepted_at < self.run_input.snapshot_created_at
+        {
+            return Err(DomainContractError::InvalidRunTiming);
+        }
+        if self.accepted_result.solution.scenario_id != self.run_input.scenario_id
+            || self.accepted_result.solution.scenario_revision != self.run_input.scenario_revision
+            || self.accepted_result.solution.pack_id != self.run_input.pack_id
+            || self.accepted_result.verification.document_hash
+                != self.run_input.snapshot_document_hash
+            || self.accepted_result.verification.planning_model_hash != self.run_input.model_hash
+        {
+            return Err(DomainContractError::PortableResultBindingMismatch(
+                "verified checkpoint input",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -2158,6 +2520,10 @@ pub enum DomainContractError {
     InvalidSolveOptions,
     /// An explicitly selected solve-option backend differs from the retained backend identity.
     RunInputBackendMismatch,
+    /// Recorded objective context violates its version, profile, or baseline binding.
+    InvalidObjectiveContext(&'static str),
+    /// Compact native observations violate their closed shape or exact input binding.
+    InvalidNativeObservations(&'static str),
     /// The retained request hash does not match its canonical semantic preimage.
     RequestHashMismatch,
     /// A persisted component version is empty, unsafe, or exceeds its byte bound.

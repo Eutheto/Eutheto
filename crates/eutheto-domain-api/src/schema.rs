@@ -224,7 +224,10 @@ fn validate_schema_constraints(
     path: &str,
 ) -> Result<(), DomainPackError> {
     if let Some(format) = object.get("format")
-        && !matches!(format.as_str(), Some("uuid" | "scenario-change-path"))
+        && !matches!(
+            format.as_str(),
+            Some("uuid" | "scenario-change-path" | "signed-u32-delta")
+        )
     {
         return invalid(path, "unsupported schema string format");
     }
@@ -434,6 +437,14 @@ fn is_scenario_change_path(value: &str) -> bool {
     value == "/settings" || value.starts_with("/settings/") || value.starts_with("/domain/")
 }
 
+fn is_signed_u32_delta(value: &str) -> bool {
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    !digits.is_empty()
+        && (digits == "0" && value == "0" || !digits.starts_with('0'))
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && digits.parse::<u32>().is_ok()
+}
+
 fn validate_value_at(
     schema: &Value,
     value: &Value,
@@ -493,6 +504,11 @@ fn validate_value_at(
         && !value.as_str().is_some_and(is_scenario_change_path)
     {
         return invalid(path, "expected scenario change field reference");
+    }
+    if object.get("format").and_then(Value::as_str) == Some("signed-u32-delta")
+        && !value.as_str().is_some_and(is_signed_u32_delta)
+    {
+        return invalid(path, "expected signed u32 difference");
     }
     if let Some(pattern) = object.get("pattern").and_then(Value::as_str) {
         let prefix = &pattern[1..];

@@ -135,6 +135,9 @@ function discardFeedback(): void {
                 <RouterLink :to="{ name: 'project-availability', params: { scenarioId } }">
                   {{ messages.setup.availability }}
                 </RouterLink>
+                <RouterLink :to="{ name: 'project-score-policy', params: { scenarioId } }">
+                  {{ messages.scorePolicy.heading }}
+                </RouterLink>
               </template>
               <RouterLink :to="{ name: 'project-history', params: { scenarioId } }">
                 {{ plannerMessage("history.title") }}

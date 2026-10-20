@@ -6,11 +6,17 @@ import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import WorkforceSetupOverview from "./components/WorkforceSetupOverview.vue";
 import PeopleSetup from "./components/PeopleSetup.vue";
 import WorkSetup from "./components/WorkSetup.vue";
+import ScorePolicySetup from "./components/ScorePolicySetup.vue";
 import EligibilitySetup from "./components/EligibilitySetup.vue";
 import AvailabilitySetup from "./components/AvailabilitySetup.vue";
 import RuleSetup from "./components/RuleSetup.vue";
 import ValidationSetup from "./components/ValidationSetup.vue";
 import PeopleCsvImport from "./components/PeopleCsvImport.vue";
+import AssignmentCsvImport from "./components/AssignmentCsvImport.vue";
+import EligibilityCsvImport from "./components/EligibilityCsvImport.vue";
+import EligibilityMatrixImport from "./components/EligibilityMatrixImport.vue";
+import ShiftCsvImport from "./components/ShiftCsvImport.vue";
+import AvailabilityCsvImport from "./components/AvailabilityCsvImport.vue";
 import HistoryPage from "./components/HistoryPage.vue";
 import SettingsPage from "./components/SettingsPage.vue";
 import AboutPage from "./components/AboutPage.vue";
@@ -44,9 +50,31 @@ export function createAppRouter() {
           { path: "setup", name: "project-setup", component: WorkforceSetupOverview },
           { path: "people", name: "project-people", component: PeopleSetup },
           { path: "people/import", name: "project-people-import", component: PeopleCsvImport },
+          {
+            path: "assignments/import",
+            name: "project-assignments-import",
+            component: AssignmentCsvImport,
+          },
           { path: "work", name: "project-work", component: WorkSetup },
+          { path: "work/import", name: "project-work-import", component: ShiftCsvImport },
+          { path: "score-policy", name: "project-score-policy", component: ScorePolicySetup },
           { path: "eligibility", name: "project-eligibility", component: EligibilitySetup },
+          {
+            path: "eligibility/import",
+            name: "project-eligibility-import",
+            component: EligibilityCsvImport,
+          },
+          {
+            path: "eligibility/paste",
+            name: "project-eligibility-matrix-import",
+            component: EligibilityMatrixImport,
+          },
           { path: "availability", name: "project-availability", component: AvailabilitySetup },
+          {
+            path: "availability/import",
+            name: "project-availability-import",
+            component: AvailabilityCsvImport,
+          },
           { path: "rules", name: "project-rules", component: RuleSetup },
           { path: "validation", name: "project-validation", component: ValidationSetup },
           { path: "history", name: "project-history", component: HistoryPage },

@@ -10,10 +10,19 @@ use crate::{
 pub(crate) use custody::CsvCustody;
 use custody::{Creator, PreviewTarget, SourceId, SourceTarget};
 use eutheto_core::{
-    CsvDialect, CsvSampleCell, MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_LOGICAL_RECORDS,
-    MAX_CSV_MAPPING_BYTES, MAX_CSV_SOURCE_BYTES, PeopleCsvApplyRequestV1, PeopleCsvMapping,
-    PeopleCsvOperation, PeopleCsvPreviewRequestV1, PeopleCsvRejectedRowsDtoV1, PeopleImportPreview,
-    RowDecision, bounded_json_size,
+    AssignmentCsvDetection, AssignmentCsvMapping, AssignmentCsvPreviewRequestV1,
+    AssignmentCsvReadFormat, AssignmentImportPreview, AssignmentImportTarget,
+    AvailabilityCsvMapping, AvailabilityCsvPreviewRequestV1, AvailabilityCsvRowDecision,
+    AvailabilityImportPreview, CsvApplyRequestV1, CsvDialect, CsvOperation, CsvReportDtoV1,
+    CsvReportRows, CsvSampleCell, EligibilityCsvMapping, EligibilityCsvPreviewRequestV1,
+    EligibilityImportPreview, EligibilityMatrixCellAddress, EligibilityMatrixDetection,
+    EligibilityMatrixMapping, EligibilityMatrixPreview, EligibilityMatrixPreviewRequestV1,
+    MAX_ASSIGNMENT_CSV_REPORT_BYTES, MAX_AVAILABILITY_CSV_REPORT_BYTES, MAX_CSV_DATA_RECORDS,
+    MAX_CSV_DECISION_BYTES, MAX_CSV_DECISIONS, MAX_CSV_LOGICAL_RECORDS, MAX_CSV_MAPPING_BYTES,
+    MAX_CSV_SOURCE_BYTES, MAX_ELIGIBILITY_CSV_REPORT_BYTES, MAX_ELIGIBILITY_MATRIX_REPORT_BYTES,
+    MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES, MAX_SHIFT_CSV_REPORT_BYTES, PeopleCsvDetection,
+    PeopleCsvMapping, PeopleCsvPreviewRequestV1, PeopleImportPreview, RowDecision, ShiftCsvMapping,
+    ShiftCsvPreviewRequestV1, ShiftCsvRowDecision, ShiftImportPreview, bounded_json_size,
 };
 use eutheto_types::{
     ActorRef, ApiErrorDto, CancellationToken, CommandId, CommandSource, OperationControl,
@@ -45,18 +54,36 @@ fn bounded_request(
     Ok(request)
 }
 
-fn bounded_preview_request(request: Option<Value>) -> Result<Option<Value>, ApiError> {
+fn bounded_preview_request(
+    request: Option<Value>,
+    decisions_field: &str,
+) -> Result<Option<Value>, ApiError> {
     if let Some(value) = &request {
         let mapping_exceeded = value
             .get("mapping")
             .is_some_and(|mapping| bounded_json_size(mapping, MAX_CSV_MAPPING_BYTES).is_err());
-        let decisions_exceeded = value.get("decisions").is_some_and(|decisions| {
+        let decisions_exceeded = value.get(decisions_field).is_some_and(|decisions| {
             decisions
                 .as_array()
                 .is_some_and(|rows| rows.len() > MAX_CSV_DECISIONS)
                 || bounded_json_size(decisions, MAX_CSV_DECISION_BYTES).is_err()
         });
-        if mapping_exceeded || decisions_exceeded {
+        let aliases_exceeded = [
+            "personMappings",
+            "shiftMappings",
+            "assignmentTypeMappings",
+            "locationMappings",
+            "referenceMappings",
+        ]
+        .iter()
+        .any(|field| {
+            value
+                .get("mapping")
+                .and_then(|mapping| mapping.get(field))
+                .and_then(Value::as_object)
+                .is_some_and(|aliases| aliases.len() > MAX_CSV_DATA_RECORDS as usize)
+        });
+        if mapping_exceeded || decisions_exceeded || aliases_exceeded {
             return Err(request_too_large().into());
         }
     }
@@ -73,6 +100,39 @@ fn request_too_large() -> ApiErrorDto {
         None,
     )
 }
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CsvFamily {
+    People,
+    Assignments,
+    Eligibility,
+    EligibilityMatrix,
+    Shifts,
+    Availability,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(tag = "family", rename_all = "camelCase", deny_unknown_fields)]
+enum CsvReadFormat {
+    People { dialect: CsvDialect },
+    Assignments { format: AssignmentCsvReadFormat },
+    Eligibility { dialect: CsvDialect },
+    EligibilityMatrix {},
+    Shifts { dialect: CsvDialect },
+    Availability { dialect: CsvDialect },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "family", content = "data", rename_all = "camelCase")]
+enum DetectionResult {
+    People(PeopleCsvDetection),
+    Assignments(AssignmentCsvDetection),
+    Eligibility(PeopleCsvDetection),
+    EligibilityMatrix(EligibilityMatrixDetection),
+    Shifts(PeopleCsvDetection),
+    Availability(PeopleCsvDetection),
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceOpenRequest {
@@ -84,6 +144,16 @@ struct SourceOpenRequest {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MatrixSourceOpenRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    text: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceWorkRequest {
     schema_version: u32,
     request_id: RequestId,
@@ -91,6 +161,7 @@ struct SourceWorkRequest {
     scenario_id: ScenarioId,
     expected_revision: Revision,
     source_id: SourceId,
+    family: CsvFamily,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -101,12 +172,12 @@ struct SampleRequest {
     scenario_id: ScenarioId,
     expected_revision: Revision,
     source_id: SourceId,
-    dialect: CsvDialect,
+    read_format: CsvReadFormat,
     record: u32,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PreviewRequest {
+struct PeoplePreviewRequest {
     schema_version: u32,
     request_id: RequestId,
     operation_id: OperationId,
@@ -115,6 +186,255 @@ struct PreviewRequest {
     source_id: SourceId,
     mapping: PeopleCsvMapping,
     decisions: Vec<RowDecision>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssignmentPreviewRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    mapping: AssignmentCsvMapping,
+    target: AssignmentImportTarget,
+    skipped_records: Vec<u32>,
+    allow_empty: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EligibilityPreviewRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    mapping: EligibilityCsvMapping,
+    skipped_records: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MatrixPreviewRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    mapping: EligibilityMatrixMapping,
+    skipped_cells: Vec<EligibilityMatrixCellAddress>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ShiftPreviewRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    mapping: ShiftCsvMapping,
+    decisions: Vec<ShiftCsvRowDecision>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AvailabilityPreviewRequest {
+    schema_version: u32,
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    mapping: AvailabilityCsvMapping,
+    decisions: Vec<AvailabilityCsvRowDecision>,
+}
+
+enum PreviewPolicy {
+    People {
+        mapping: PeopleCsvMapping,
+        decisions: Vec<RowDecision>,
+    },
+    Assignments {
+        mapping: AssignmentCsvMapping,
+        target: AssignmentImportTarget,
+        skipped_records: Vec<u32>,
+        allow_empty: bool,
+    },
+    Eligibility {
+        mapping: EligibilityCsvMapping,
+        skipped_records: Vec<u32>,
+    },
+    EligibilityMatrix {
+        mapping: EligibilityMatrixMapping,
+        skipped_cells: Vec<EligibilityMatrixCellAddress>,
+    },
+    Shifts {
+        mapping: ShiftCsvMapping,
+        decisions: Vec<ShiftCsvRowDecision>,
+    },
+    Availability {
+        mapping: AvailabilityCsvMapping,
+        decisions: Vec<AvailabilityCsvRowDecision>,
+    },
+}
+
+impl PreviewPolicy {
+    #[allow(clippy::too_many_lines)]
+    async fn preview(
+        self,
+        app: &eutheto_core::EuthetoApp,
+        scenario_id: ScenarioId,
+        expected_revision: Revision,
+        input: impl std::io::Read + Send + 'static,
+        operation: CsvOperation,
+    ) -> Result<(RequestId, PreviewBody), ApiError> {
+        match self {
+            Self::People { mapping, decisions } => app
+                .preview_people_csv(
+                    PeopleCsvPreviewRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        expected_revision,
+                        mapping,
+                        decisions,
+                    },
+                    input,
+                    operation,
+                )
+                .await
+                .map(|preview| (preview.preview_id, PreviewBody::People(preview.preview))),
+            Self::Assignments {
+                mapping,
+                target,
+                skipped_records,
+                allow_empty,
+            } => app
+                .preview_assignment_csv(
+                    AssignmentCsvPreviewRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        expected_revision,
+                        mapping,
+                        target,
+                        skipped_records,
+                        allow_empty,
+                    },
+                    input,
+                    operation,
+                )
+                .await
+                .map(|preview| {
+                    (
+                        preview.preview_id,
+                        PreviewBody::Assignments(preview.preview),
+                    )
+                }),
+            Self::Eligibility {
+                mapping,
+                skipped_records,
+            } => app
+                .preview_eligibility_csv(
+                    EligibilityCsvPreviewRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        expected_revision,
+                        mapping,
+                        skipped_records,
+                    },
+                    input,
+                    operation,
+                )
+                .await
+                .map(|preview| {
+                    (
+                        preview.preview_id,
+                        PreviewBody::Eligibility(preview.preview),
+                    )
+                }),
+            Self::EligibilityMatrix {
+                mapping,
+                skipped_cells,
+            } => app
+                .preview_eligibility_matrix(
+                    EligibilityMatrixPreviewRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        expected_revision,
+                        mapping,
+                        skipped_cells,
+                    },
+                    input,
+                    operation,
+                )
+                .await
+                .map(|preview| {
+                    (
+                        preview.preview_id,
+                        PreviewBody::EligibilityMatrix(preview.preview),
+                    )
+                }),
+            Self::Shifts { mapping, decisions } => app
+                .preview_shift_csv(
+                    ShiftCsvPreviewRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        expected_revision,
+                        mapping,
+                        decisions,
+                    },
+                    input,
+                    operation,
+                )
+                .await
+                .map(|preview| (preview.preview_id, PreviewBody::Shifts(preview.preview))),
+            Self::Availability { mapping, decisions } => app
+                .preview_availability_csv(
+                    AvailabilityCsvPreviewRequestV1 {
+                        schema_version: 1,
+                        scenario_id,
+                        expected_revision,
+                        mapping,
+                        decisions,
+                    },
+                    input,
+                    operation,
+                )
+                .await
+                .map(|preview| {
+                    (
+                        preview.preview_id,
+                        PreviewBody::Availability(preview.preview),
+                    )
+                }),
+        }
+        .map_err(|error| map_app_error(error).into())
+    }
+}
+
+struct PreviewWork {
+    request_id: RequestId,
+    operation_id: OperationId,
+    scenario_id: ScenarioId,
+    expected_revision: Revision,
+    source_id: SourceId,
+    policy: PreviewPolicy,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum PreviewBody {
+    People(PeopleImportPreview),
+    Assignments(AssignmentImportPreview),
+    Eligibility(EligibilityImportPreview),
+    EligibilityMatrix(EligibilityMatrixPreview),
+    Shifts(ShiftImportPreview),
+    Availability(AvailabilityImportPreview),
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -177,7 +497,7 @@ struct SourceOpened {
 struct SampleResult {
     schema_version: u32,
     source_id: SourceId,
-    dialect: CsvDialect,
+    read_format: CsvReadFormat,
     record: u32,
     cells: Option<Vec<CsvSampleCell>>,
 }
@@ -189,7 +509,7 @@ struct PreviewResult {
     scenario_id: ScenarioId,
     revision: Revision,
     preview_id: RequestId,
-    preview: PeopleImportPreview,
+    preview: PreviewBody,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,8 +517,8 @@ struct ApplyResult {
     schema_version: u32,
     source_id: SourceId,
     scenario_id: ScenarioId,
-    outcome: eutheto_core::PeopleCsvApplyOutcomeV1,
-    report: PeopleCsvRejectedRowsDtoV1,
+    outcome: eutheto_core::CsvApplyOutcomeV1,
+    report: CsvReportDtoV1,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,7 +541,7 @@ fn check_cancelled(token: &CancellationToken) -> Result<(), ApiError> {
 }
 
 #[tauri::command]
-pub(super) async fn people_csv_source_open<R: tauri::Runtime>(
+pub(super) async fn csv_source_open<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -261,8 +581,8 @@ pub(super) async fn people_csv_source_open<R: tauri::Runtime>(
                     let selected = handle
                         .dialog()
                         .file()
-                        .set_title("Choose people CSV snapshot")
-                        .add_filter("People CSV", &["csv", "tsv", "txt"])
+                        .set_title("Choose CSV snapshot")
+                        .add_filter("CSV or tab-separated text", &["csv", "tsv", "txt"])
                         .blocking_pick_file()
                         .ok_or(NativeFileError::Cancelled)?;
                     if token.is_cancelled() {
@@ -304,12 +624,88 @@ pub(super) async fn people_csv_source_open<R: tauri::Runtime>(
         .await
 }
 
+#[tauri::command]
+pub(super) async fn eligibility_matrix_source_open<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    // The initial IPC Value already exists; reject before typed decoding or queued retention.
+    if request
+        .as_ref()
+        .and_then(|value| value.get("text"))
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.len() > MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES)
+    {
+        return Err(request_too_large().into());
+    }
+    let request: MatrixSourceOpenRequest = decode(bounded_request(
+        request,
+        6 * MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES + FRAME_BYTES,
+    )?)?;
+    require_version(request.schema_version)?;
+    let owner = window.label().to_owned();
+    let custody = Arc::clone(&state.csv);
+    state
+        .operations
+        .run(
+            &owner.clone(),
+            claim(
+                request.operation_id,
+                request.request_id,
+                OperationPurposeV1::CsvSourceOpen,
+                request.scenario_id,
+                Some(request.expected_revision),
+            ),
+            Some(progress(on_progress)),
+            OperationPhaseV1::CapturingSnapshot,
+            (request, None),
+            move |request, mut execution| async move {
+                let reservation = custody.reserve_source(
+                    &owner,
+                    request.scenario_id,
+                    Creator {
+                        operation_id: request.operation_id,
+                        request_id: request.request_id,
+                    },
+                    execution.cancellation(),
+                )?;
+                let byte_count = request.text.len();
+                let source_id = reservation.publish(request.text.into_bytes())?;
+                let cancellation = Some(execution.cancellation());
+                let result = finish(
+                    &mut execution,
+                    request.request_id,
+                    None,
+                    SourceOpened {
+                        schema_version: 1,
+                        source_id,
+                        byte_count,
+                    },
+                    FRAME_BYTES,
+                    cancellation,
+                )
+                .await;
+                if result.is_err() {
+                    custody.close_source(
+                        &owner,
+                        request.scenario_id,
+                        &SourceTarget::Source { source_id },
+                    );
+                }
+                result
+            },
+        )
+        .await
+}
+
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Tauri extracts owned command arguments"
 )]
 #[tauri::command]
-pub(super) fn people_csv_source_close<R: tauri::Runtime>(
+pub(super) fn csv_source_close<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -328,7 +724,7 @@ pub(super) fn people_csv_source_close<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub(super) async fn people_csv_detect<R: tauri::Runtime>(
+pub(super) async fn csv_detect<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -355,13 +751,39 @@ pub(super) async fn people_csv_detect<R: tauri::Runtime>(
             (request, None),
             move |request, mut execution| async move {
                 let source = custody.source(&owner, request.scenario_id, request.source_id)?;
-                let result = app
-                    .detect_people_csv(
-                        source.reader(),
-                        PeopleCsvOperation::child_of(&execution.cancellation()),
-                    )
-                    .await
-                    .map_err(map_app_error)?;
+                let operation = CsvOperation::child_of(&execution.cancellation());
+                let result = match request.family {
+                    CsvFamily::People => DetectionResult::People(
+                        app.detect_people_csv(source.reader(), operation)
+                            .await
+                            .map_err(map_app_error)?,
+                    ),
+                    CsvFamily::Assignments => DetectionResult::Assignments(
+                        app.detect_assignment_csv(source.reader(), operation)
+                            .await
+                            .map_err(map_app_error)?,
+                    ),
+                    CsvFamily::Eligibility => DetectionResult::Eligibility(
+                        app.detect_people_csv(source.reader(), operation)
+                            .await
+                            .map_err(map_app_error)?,
+                    ),
+                    CsvFamily::EligibilityMatrix => DetectionResult::EligibilityMatrix(
+                        app.detect_eligibility_matrix(source.reader(), operation)
+                            .await
+                            .map_err(map_app_error)?,
+                    ),
+                    CsvFamily::Shifts => DetectionResult::Shifts(
+                        app.detect_people_csv(source.reader(), operation)
+                            .await
+                            .map_err(map_app_error)?,
+                    ),
+                    CsvFamily::Availability => DetectionResult::Availability(
+                        app.detect_people_csv(source.reader(), operation)
+                            .await
+                            .map_err(map_app_error)?,
+                    ),
+                };
                 let cancellation = Some(execution.cancellation());
                 let result = finish(
                     &mut execution,
@@ -380,7 +802,7 @@ pub(super) async fn people_csv_detect<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub(super) async fn people_csv_record_sample<R: tauri::Runtime>(
+pub(super) async fn csv_record_sample<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -388,7 +810,13 @@ pub(super) async fn people_csv_record_sample<R: tauri::Runtime>(
 ) -> SolutionApiResult {
     let request: SampleRequest = decode(bounded_request(request, FRAME_BYTES)?)?;
     require_version(request.schema_version)?;
-    if !(1..=MAX_CSV_LOGICAL_RECORDS).contains(&request.record) {
+    let maximum_record = match request.read_format {
+        CsvReadFormat::Assignments {
+            format: AssignmentCsvReadFormat::CanonicalV1,
+        } => MAX_CSV_DATA_RECORDS + 2,
+        _ => MAX_CSV_LOGICAL_RECORDS,
+    };
+    if !(1..=maximum_record).contains(&request.record) {
         return Err(boundary_error(
             "people_csv.invalid_record",
             "Choose a logical record within the CSV record limit.",
@@ -415,19 +843,43 @@ pub(super) async fn people_csv_record_sample<R: tauri::Runtime>(
             (request, None),
             move |request, mut execution| async move {
                 let source = custody.source(&owner, request.scenario_id, request.source_id)?;
-                let sample = app
-                    .sample_people_csv_record(
-                        source.reader(),
-                        request.dialect,
-                        request.record,
-                        PeopleCsvOperation::child_of(&execution.cancellation()),
-                    )
-                    .await
-                    .map_err(map_app_error)?;
+                let operation = CsvOperation::child_of(&execution.cancellation());
+                let sample = match request.read_format {
+                    CsvReadFormat::People { dialect }
+                    | CsvReadFormat::Eligibility { dialect }
+                    | CsvReadFormat::Shifts { dialect }
+                    | CsvReadFormat::Availability { dialect } => {
+                        app.sample_people_csv_record(
+                            source.reader(),
+                            dialect,
+                            request.record,
+                            operation,
+                        )
+                        .await
+                    }
+                    CsvReadFormat::Assignments { format } => {
+                        app.sample_assignment_csv_record(
+                            source.reader(),
+                            format,
+                            request.record,
+                            operation,
+                        )
+                        .await
+                    }
+                    CsvReadFormat::EligibilityMatrix {} => {
+                        app.sample_eligibility_matrix_record(
+                            source.reader(),
+                            request.record,
+                            operation,
+                        )
+                        .await
+                    }
+                }
+                .map_err(map_app_error)?;
                 let result = SampleResult {
                     schema_version: 1,
                     source_id: request.source_id,
-                    dialect: request.dialect,
+                    read_format: request.read_format,
                     record: request.record,
                     cells: sample.map(|sample| sample.cells),
                 };
@@ -455,8 +907,178 @@ pub(super) async fn people_csv_preview<R: tauri::Runtime>(
     request: Option<Value>,
     on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
 ) -> SolutionApiResult {
-    let request: PreviewRequest = decode(bounded_preview_request(request)?)?;
+    let request: PeoplePreviewRequest = decode(bounded_preview_request(request, "decisions")?)?;
     require_version(request.schema_version)?;
+    preview_csv(
+        window,
+        state,
+        PreviewWork {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            scenario_id: request.scenario_id,
+            expected_revision: request.expected_revision,
+            source_id: request.source_id,
+            policy: PreviewPolicy::People {
+                mapping: request.mapping,
+                decisions: request.decisions,
+            },
+        },
+        on_progress,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn assignment_csv_preview<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: AssignmentPreviewRequest =
+        decode(bounded_preview_request(request, "skippedRecords")?)?;
+    require_version(request.schema_version)?;
+    preview_csv(
+        window,
+        state,
+        PreviewWork {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            scenario_id: request.scenario_id,
+            expected_revision: request.expected_revision,
+            source_id: request.source_id,
+            policy: PreviewPolicy::Assignments {
+                mapping: request.mapping,
+                target: request.target,
+                skipped_records: request.skipped_records,
+                allow_empty: request.allow_empty,
+            },
+        },
+        on_progress,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn eligibility_csv_preview<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: EligibilityPreviewRequest =
+        decode(bounded_preview_request(request, "skippedRecords")?)?;
+    require_version(request.schema_version)?;
+    preview_csv(
+        window,
+        state,
+        PreviewWork {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            scenario_id: request.scenario_id,
+            expected_revision: request.expected_revision,
+            source_id: request.source_id,
+            policy: PreviewPolicy::Eligibility {
+                mapping: request.mapping,
+                skipped_records: request.skipped_records,
+            },
+        },
+        on_progress,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn eligibility_matrix_preview<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: MatrixPreviewRequest = decode(bounded_preview_request(request, "skippedCells")?)?;
+    require_version(request.schema_version)?;
+    preview_csv(
+        window,
+        state,
+        PreviewWork {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            scenario_id: request.scenario_id,
+            expected_revision: request.expected_revision,
+            source_id: request.source_id,
+            policy: PreviewPolicy::EligibilityMatrix {
+                mapping: request.mapping,
+                skipped_cells: request.skipped_cells,
+            },
+        },
+        on_progress,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn shift_csv_preview<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: ShiftPreviewRequest = decode(bounded_preview_request(request, "decisions")?)?;
+    require_version(request.schema_version)?;
+    preview_csv(
+        window,
+        state,
+        PreviewWork {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            scenario_id: request.scenario_id,
+            expected_revision: request.expected_revision,
+            source_id: request.source_id,
+            policy: PreviewPolicy::Shifts {
+                mapping: request.mapping,
+                decisions: request.decisions,
+            },
+        },
+        on_progress,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(super) async fn availability_csv_preview<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
+    let request: AvailabilityPreviewRequest =
+        decode(bounded_preview_request(request, "decisions")?)?;
+    require_version(request.schema_version)?;
+    preview_csv(
+        window,
+        state,
+        PreviewWork {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            scenario_id: request.scenario_id,
+            expected_revision: request.expected_revision,
+            source_id: request.source_id,
+            policy: PreviewPolicy::Availability {
+                mapping: request.mapping,
+                decisions: request.decisions,
+            },
+        },
+        on_progress,
+    )
+    .await
+}
+
+async fn preview_csv<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    state: State<'_, DesktopState>,
+    request: PreviewWork,
+    on_progress: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> SolutionApiResult {
     let owner = window.label().to_owned();
     let custody = Arc::clone(&state.csv);
     let app = state.app.clone();
@@ -485,21 +1107,18 @@ pub(super) async fn people_csv_preview<R: tauri::Runtime>(
                     },
                     execution.cancellation(),
                 )?;
-                let preview = app
-                    .preview_people_csv(
-                        PeopleCsvPreviewRequestV1 {
-                            schema_version: 1,
-                            scenario_id: request.scenario_id,
-                            expected_revision: request.expected_revision,
-                            mapping: request.mapping,
-                            decisions: request.decisions,
-                        },
+                let operation = CsvOperation::child_of(&execution.cancellation());
+                let (core_preview_id, body) = request
+                    .policy
+                    .preview(
+                        &app,
+                        request.scenario_id,
+                        request.expected_revision,
                         source.reader(),
-                        PeopleCsvOperation::child_of(&execution.cancellation()),
+                        operation,
                     )
-                    .await
-                    .map_err(map_app_error)?;
-                let preview_id = reservation.publish(preview.preview_id)?;
+                    .await?;
+                let preview_id = reservation.publish(core_preview_id)?;
                 let cancellation = Some(execution.cancellation());
                 let result = finish(
                     &mut execution,
@@ -511,7 +1130,7 @@ pub(super) async fn people_csv_preview<R: tauri::Runtime>(
                         scenario_id: request.scenario_id,
                         revision: request.expected_revision,
                         preview_id,
-                        preview: preview.preview,
+                        preview: body,
                     },
                     PREVIEW_BYTES + FRAME_BYTES,
                     cancellation,
@@ -532,7 +1151,7 @@ pub(super) async fn people_csv_preview<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub(super) async fn people_csv_apply<R: tauri::Runtime>(
+pub(super) async fn csv_apply<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -567,8 +1186,8 @@ pub(super) async fn people_csv_apply<R: tauri::Runtime>(
                     request.preview_id,
                 )?;
                 let applied = app
-                    .apply_people_csv_import(
-                        PeopleCsvApplyRequestV1 {
+                    .apply_csv_import(
+                        CsvApplyRequestV1 {
                             schema_version: 1,
                             preview_id: request.preview_id,
                             scenario_id: request.scenario_id,
@@ -581,14 +1200,15 @@ pub(super) async fn people_csv_apply<R: tauri::Runtime>(
                             truncate_redo: request.truncate_redo,
                         },
                         source.reader(),
-                        PeopleCsvOperation::child_of(&execution.cancellation()),
+                        CsvOperation::child_of(&execution.cancellation()),
                     )
                     .await
                     .map_err(map_app_error)?;
                 let revision = match applied.outcome {
-                    eutheto_core::PeopleCsvApplyOutcomeV1::Applied { revision, .. }
-                    | eutheto_core::PeopleCsvApplyOutcomeV1::NoChanges { revision } => revision,
+                    eutheto_core::CsvApplyOutcomeV1::Applied { revision, .. }
+                    | eutheto_core::CsvApplyOutcomeV1::NoChanges { revision } => revision,
                 };
+                let receipt_bytes = report_response_limit(&applied.report);
                 // Never replace a committed/no-change receipt with a late cancellation or cleanup error.
                 let result = finish(
                     &mut execution,
@@ -601,7 +1221,7 @@ pub(super) async fn people_csv_apply<R: tauri::Runtime>(
                         outcome: applied.outcome,
                         report: applied.report,
                     },
-                    DETECTION_BYTES + FRAME_BYTES,
+                    receipt_bytes,
                     None,
                 )
                 .await;
@@ -625,7 +1245,7 @@ pub(super) async fn people_csv_apply<R: tauri::Runtime>(
     reason = "Tauri extracts owned command arguments"
 )]
 #[tauri::command]
-pub(super) fn people_csv_preview_discard<R: tauri::Runtime>(
+pub(super) fn csv_preview_discard<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -644,11 +1264,11 @@ pub(super) fn people_csv_preview_discard<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub(super) async fn people_csv_rejected_rows<R: tauri::Runtime>(
+pub(super) async fn csv_report<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
-) -> ApiResult<PeopleCsvRejectedRowsDtoV1> {
+) -> ApiResult<CsvReportDtoV1> {
     let request: ReportRequest = decode(bounded_request(request, FRAME_BYTES)?)?;
     require_version(request.schema_version)?;
     let preview =
@@ -657,10 +1277,23 @@ pub(super) async fn people_csv_rejected_rows<R: tauri::Runtime>(
             .preview_for_report(window.label(), request.scenario_id, request.preview_id)?;
     let report = state
         .app
-        .people_csv_rejected_rows(preview.preview_id())
+        .csv_report(preview.preview_id())
         .await
         .map_err(map_app_error)?;
     Ok(response(request.request_id, None, Vec::new(), report))
+}
+
+fn report_response_limit(report: &CsvReportDtoV1) -> usize {
+    match &report.rows {
+        CsvReportRows::People { .. } => DETECTION_BYTES + FRAME_BYTES,
+        CsvReportRows::Assignments { .. } => MAX_ASSIGNMENT_CSV_REPORT_BYTES + FRAME_BYTES,
+        CsvReportRows::Eligibility { .. } => MAX_ELIGIBILITY_CSV_REPORT_BYTES + FRAME_BYTES,
+        CsvReportRows::EligibilityMatrix { .. } => {
+            MAX_ELIGIBILITY_MATRIX_REPORT_BYTES + FRAME_BYTES
+        }
+        CsvReportRows::Shifts { .. } => MAX_SHIFT_CSV_REPORT_BYTES + FRAME_BYTES,
+        CsvReportRows::Availability { .. } => MAX_AVAILABILITY_CSV_REPORT_BYTES + FRAME_BYTES,
+    }
 }
 
 fn publication_error(error: &eutheto_export::ExportError) -> ApiErrorDto {
@@ -668,20 +1301,53 @@ fn publication_error(error: &eutheto_export::ExportError) -> ApiErrorDto {
         eutheto_export::ExportError::Cancelled => {
             ("operation.cancelled", "Report publication was cancelled.")
         }
+        eutheto_export::ExportError::DeadlineExceeded => (
+            "operation.deadline_exceeded",
+            "Report publication reached its deadline.",
+        ),
         eutheto_export::ExportError::DestinationExists(_) => (
             "people_csv.destination_exists",
             "The destination already exists. Choose a new report filename.",
         ),
         _ => (
             "people_csv.publication_failed",
-            "The rejected-row report could not be saved. The import outcome is unchanged.",
+            "The CSV row report could not be saved. The import outcome is unchanged.",
         ),
     };
     boundary_error(code, message, None)
 }
 
+fn report_file_labels(rows: &CsvReportRows) -> (&'static str, &'static str) {
+    match rows {
+        CsvReportRows::People { .. } => (
+            "Save rejected people rows",
+            "people-import-rejected-rows.json",
+        ),
+        CsvReportRows::Assignments { .. } => (
+            "Save excluded assignment rows",
+            "assignment-import-excluded-rows.json",
+        ),
+        CsvReportRows::Eligibility { .. } => (
+            "Save excluded eligibility rows",
+            "eligibility-import-excluded-rows.json",
+        ),
+        CsvReportRows::EligibilityMatrix { .. } => (
+            "Save excluded eligibility matrix cells",
+            "eligibility-matrix-excluded-cells.json",
+        ),
+        CsvReportRows::Shifts { .. } => (
+            "Save excluded shift rows",
+            "shift-import-excluded-rows.json",
+        ),
+        CsvReportRows::Availability { .. } => (
+            "Save excluded availability rows",
+            "availability-import-excluded-rows.json",
+        ),
+    }
+}
+
 #[tauri::command]
-pub(super) async fn people_csv_rejected_rows_save<R: tauri::Runtime>(
+pub(super) async fn csv_report_save<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopState>,
     request: Option<Value>,
@@ -711,9 +1377,10 @@ pub(super) async fn people_csv_rejected_rows_save<R: tauri::Runtime>(
                 let preview =
                     custody.preview_for_report(&owner, request.scenario_id, request.preview_id)?;
                 let report = app
-                    .people_csv_rejected_rows(preview.preview_id())
+                    .csv_report(preview.preview_id())
                     .await
                     .map_err(map_app_error)?;
+                let (title, filename) = report_file_labels(&report.rows);
                 let token = execution.cancellation();
                 check_cancelled(&token)?;
                 let picker_token = token.clone();
@@ -724,8 +1391,8 @@ pub(super) async fn people_csv_rejected_rows_save<R: tauri::Runtime>(
                     let selected = handle
                         .dialog()
                         .file()
-                        .set_title("Save rejected people rows")
-                        .set_file_name("people-import-rejected-rows.json")
+                        .set_title(title)
+                        .set_file_name(filename)
                         .add_filter("JSON report", &["json"])
                         .blocking_save_file()
                         .ok_or(NativeFileError::Cancelled)?;

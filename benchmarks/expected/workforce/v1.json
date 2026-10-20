@@ -2,7 +2,7 @@
   "format": "eutheto/workforce-corpus-expectations",
   "schemaVersion": 1,
   "corpusVersion": 1,
-  "generatorSourceSha256": "50f46e25db4d742fa705c814a4c301c697e6faa4595b47a70bf16abc935cec46",
+  "generatorSourceSha256": "17cbb6a982ed87f82e5ee6de163e3f2e66bc74ce715c3c42eacb907e0de74697",
   "cases": [
     {
       "inputSha256": "34b522ada47de3fc046afd77fba50d7e49d04fa71aba6a3173166cab60099ffe",
@@ -17,16 +17,6 @@
         "modelEnvelope": null,
         "deferredObligations": [
           {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-701b-801e-739766e14e8b",
-            "ruleKind": "maximumHours"
-          },
-          {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-7d09-9a27-6ea768a298f9",
-            "ruleKind": "maximumConsecutive"
-          },
-          {
             "kind": "preference",
             "ruleId": "01a04a99-f980-74fd-abdc-547a6f74a762",
             "preferenceKind": "workloadBalance"
@@ -38,7 +28,7 @@
           }
         ],
         "semantics": [
-          "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later rules/preferences require Phase07; no claim of feasibility"
+          "Source-complete Appendix F; three resolved both-type/q-call selectors, weights 1/1,1/1,4/5; September whole-plan balance and independent final stable rank; active later preferences require Phase07; no claim of feasibility"
         ]
       }
     },
@@ -149,24 +139,22 @@
       "inputSha256": "1eaba8574541d3ac335ec30838d8c3651ca85705adfc750c2b5dfd4d1da5a452",
       "expected": {
         "id": "rolling-hours",
-        "disposition": "compileRejected",
+        "disposition": "accepted",
         "people": 8,
         "horizonDays": 28,
         "resolvedShifts": 20,
-        "selectedAssignments": null,
-        "score": null,
-        "modelEnvelope": null,
+        "selectedAssignments": 40,
+        "score": {
+          "feasibility": 0,
+          "minimumStableRank": 0,
+          "maximumStableRank": 6400
+        },
+        "modelEnvelope": {
+          "minimumVariables": 1,
+          "maximumVariables": 3000,
+          "maximumConstraints": 12000
+        },
         "deferredObligations": [
-          {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-7d27-b33f-00154d9992c3",
-            "ruleKind": "maximumHours"
-          },
-          {
-            "kind": "rule",
-            "ruleId": "01a04a99-f980-7371-8e25-0ec1eb2fbe6b",
-            "ruleKind": "maximumHours"
-          },
           {
             "kind": "lock",
             "assignmentId": "01a04a99-f980-718a-a9ec-92b833bd0246"
@@ -299,18 +287,18 @@
       }
     },
     {
-      "inputSha256": "ef3edf583839ea1d6170a2b186632168c54c61ff11187b6dab9485ff11feaf1d",
+      "inputSha256": "ebee95aec00b746e08e50948d76bb773ec0d503ac3d3e4337bdf567f42e5a172",
       "expected": {
         "id": "large-supported",
         "disposition": "accepted",
-        "people": 100,
+        "people": 101,
         "horizonDays": 12,
         "resolvedShifts": 12,
         "selectedAssignments": 12,
         "score": {
           "feasibility": 0,
           "minimumStableRank": 0,
-          "maximumStableRank": 14400
+          "maximumStableRank": 14544
         },
         "modelEnvelope": {
           "minimumVariables": 2400,
@@ -319,7 +307,7 @@
         },
         "deferredObligations": [],
         "semantics": [
-          "Exactly100 active universally eligible people by12 independent daily one-hour shifts:1200 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
+          "Exactly101 active universally eligible people by12 independent daily one-hour shifts:1212 potential/surviving pairs; no pruning; accepted profile pending exact first-run characterization"
         ]
       }
     },

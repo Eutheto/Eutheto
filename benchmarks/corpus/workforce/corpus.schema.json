@@ -199,6 +199,36 @@
           },
           "maxContains": 1,
           "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "practitioner-workflow"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "practitioner-infeasible"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
         }
       ],
       "items": {
@@ -221,7 +251,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/appendix-f.json"
+                    "const": "domains/workforce/fixtures/v2/appendix-f.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -267,7 +297,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/clinic-tiny.json"
+                    "const": "domains/workforce/fixtures/v2/clinic-tiny.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -313,7 +343,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/clinic-initial.json"
+                    "const": "domains/workforce/fixtures/v2/clinic-initial.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -359,7 +389,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/clinic-full.json"
+                    "const": "domains/workforce/fixtures/v2/clinic-full.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -405,7 +435,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/clinic-overnight.json"
+                    "const": "domains/workforce/fixtures/v2/clinic-overnight.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -451,7 +481,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/rolling-hours.json"
+                    "const": "domains/workforce/fixtures/v2/rolling-hours.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -497,7 +527,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/specialist-coverage.json"
+                    "const": "domains/workforce/fixtures/v2/specialist-coverage.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -543,7 +573,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/repair-before.json"
+                    "const": "domains/workforce/fixtures/v2/repair-before.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -589,7 +619,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/infeasible-coverage.json"
+                    "const": "domains/workforce/fixtures/v2/infeasible-coverage.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -635,7 +665,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/dst-spring.json"
+                    "const": "domains/workforce/fixtures/v2/dst-spring.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -681,7 +711,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/dst-fall.json"
+                    "const": "domains/workforce/fixtures/v2/dst-fall.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -727,7 +757,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/large-supported.json"
+                    "const": "domains/workforce/fixtures/v2/large-supported.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -773,7 +803,7 @@
                     "type": "integer"
                   },
                   "path": {
-                    "const": "domains/workforce/fixtures/v1/large-pressure.json"
+                    "const": "domains/workforce/fixtures/v2/large-pressure.json"
                   },
                   "sha256": {
                     "maxLength": 64,
@@ -800,15 +830,107 @@
               "input"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "practitioner-workflow"
+              },
+              "id": {
+                "const": "practitioner-workflow"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v2/practitioner-workflow.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "const": "practitioner-workflow"
+              },
+              "id": {
+                "const": "practitioner-infeasible"
+              },
+              "input": {
+                "additionalProperties": false,
+                "properties": {
+                  "bytes": {
+                    "maximum": 16777216,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "const": "domains/workforce/fixtures/v2/practitioner-infeasible.json"
+                  },
+                  "sha256": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256",
+                  "bytes"
+                ],
+                "type": "object"
+              },
+              "workloadClass": {
+                "const": "B"
+              }
+            },
+            "required": [
+              "id",
+              "family",
+              "workloadClass",
+              "input"
+            ],
+            "type": "object"
           }
         ]
       },
-      "maxItems": 13,
-      "minItems": 13,
+      "maxItems": 15,
+      "minItems": 15,
       "type": "array"
     },
     "corpusVersion": {
-      "const": 1
+      "const": 2
     },
     "expectations": {
       "additionalProperties": false,
@@ -819,7 +941,7 @@
           "type": "integer"
         },
         "path": {
-          "const": "benchmarks/expected/workforce/v1.json"
+          "const": "benchmarks/expected/workforce/v2.json"
         },
         "sha256": {
           "maxLength": 64,
@@ -955,7 +1077,7 @@
           "type": "integer"
         },
         "path": {
-          "const": "domains/workforce/fixtures/v1/repair-callout.json"
+          "const": "domains/workforce/fixtures/v2/repair-callout.json"
         },
         "sha256": {
           "maxLength": 64,
@@ -986,6 +1108,6 @@
     "expectations",
     "repair"
   ],
-  "title": "Workforce corpus v1 corpus",
+  "title": "Workforce corpus v2 corpus",
   "type": "object"
 }

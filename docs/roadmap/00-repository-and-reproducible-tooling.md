@@ -163,6 +163,8 @@ Roles are binding: bundled SQLite behind a dedicated service; strict project ZIP
 
 ESLint 10.9.1; `@vue/eslint-config-typescript` 14.9.0; `typescript-eslint` 8.68.0; `eslint-plugin-vue` 10.10.0; Prettier 3.9.6; Vitest 4.1.11; Vue Test Utils 2.5.0; Testing Library Vue 8.1.0; axe-core 4.13.0; WebDriverIO/CLI 9.31.4; Tauri service 1.3.0; Playwright/test 1.62.1. Playwright tests pure Vite only and does not replace packaged Tauri E2E.
 
+**Approved maintenance — 2026-10-18:** the unused `shadcn-vue` 2.8.2 generator and `@vue/eslint-config-typescript` 14.9.0 wrapper in these historical matrices are retired. Reviewed component source remains application-owned; equivalent local strict ESLint configuration uses the existing TypeScript/Vue plugins. See the [dated dependency ledger](assumptions.md#approved-frontend-dependency-cleanup--2026-10-18).
+
 Avoid initially: domain-relational ORM, duplicated frontend authority, generic workflow engine, Electron dependencies, Python production embedding, unofficial consumer OAuth/session libraries, GPL/AGPL solvers in official artifacts, native dynamic plugins, universal untrusted expression languages, and a generic heavy dashboard suite.
 
 ## Nix and native environment contract

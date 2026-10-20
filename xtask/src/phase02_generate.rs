@@ -84,12 +84,22 @@ struct PackContract {
     definitions: BTreeMap<String, Value>,
     commands: Vec<CommandDescriptor>,
     setup_queries: Vec<SetupQueryDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    result_views: Vec<ResultViewContract>,
     internal_schema: Value,
     portable_schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     share_result_schema: Option<Value>,
     ai_tools: Vec<SourceAiTool>,
     ui_manifest: DomainUiManifest,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResultViewContract {
+    id: String,
+    parameter_schema: Value,
+    result_schema: Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -386,6 +396,10 @@ fn expand_pack_schemas(pack: &mut PackContract) -> Result<()> {
     if let Some(schema) = &mut pack.share_result_schema {
         *schema = expander.expand(schema, 0)?;
     }
+    for result_view in &mut pack.result_views {
+        result_view.parameter_schema = expander.expand(&result_view.parameter_schema, 0)?;
+        result_view.result_schema = expander.expand(&result_view.result_schema, 0)?;
+    }
     for command in &mut pack.commands {
         command.payload_schema = expander.expand(&command.payload_schema, 0)?;
         command.result_schema = expander.expand(&command.result_schema, 0)?;
@@ -509,7 +523,12 @@ fn parse_matrix() -> Result<SupportMatrix> {
 }
 
 fn validate_pack(pack: &PackContract, source: &PackSource) -> Result<()> {
-    if pack.schema_version != 4 {
+    let expected_version = if source.id == "official.workforce" {
+        5
+    } else {
+        4
+    };
+    if pack.schema_version != expected_version {
         bail!("unsupported pack contract source version")
     }
     if pack.pack.id != source.id
@@ -535,6 +554,7 @@ fn validate_pack(pack: &PackContract, source: &PackSource) -> Result<()> {
     }
     validate_commands(pack, source)?;
     validate_setup_queries(pack, source)?;
+    validate_result_views(pack, source)?;
     let mut ai_names = BTreeSet::new();
     let mut ai_commands = BTreeSet::new();
     let mut prior_ai_command: Option<&str> = None;
@@ -578,8 +598,14 @@ fn validate_pack(pack: &PackContract, source: &PackSource) -> Result<()> {
     if source.id == "official.test" && later_groups.contains(&true) {
         bail!("official.test requires its complete implemented UI manifest")
     }
-    if source.id == "official.workforce" && later_groups.contains(&false) {
-        bail!("Workforce cannot publish unimplemented score, result or transfer metadata")
+    if source.id == "official.workforce"
+        && (!ui.score_kinds.is_empty()
+            || !ui.provenance_kinds.is_empty()
+            || !ui.importers.is_empty()
+            || !ui.exporters.is_empty()
+            || pack.result_views.is_empty())
+    {
+        bail!("Workforce may publish only its implemented result-view metadata")
     }
     if !eutheto_types::ScenarioDomain::has_schema_shape(&pack.internal_schema) {
         bail!("internalSchema must describe the four ScenarioDomain maps")
@@ -685,6 +711,34 @@ fn validate_setup_queries(pack: &PackContract, source: &PackSource) -> Result<()
         require_strict_object_schema(&query.parameter_schema, &query.id)?;
         require_strict_object_schema(&query.result_schema, &query.id)?;
         query.validate()?;
+    }
+    Ok(())
+}
+fn validate_result_views(pack: &PackContract, source: &PackSource) -> Result<()> {
+    let namespace = format!("{}.result.", source.id);
+    let mut prior_id: Option<&str> = None;
+    for result_view in &pack.result_views {
+        let suffix = result_view
+            .id
+            .strip_prefix(&namespace)
+            .filter(|suffix| suffix.split('.').all(valid_identifier))
+            .context("result view is outside its namespace or cannot produce a safe identifier")?;
+        if suffix.is_empty() || prior_id.is_some_and(|prior| prior >= result_view.id.as_str()) {
+            bail!("result views require sorted unique identifiers")
+        }
+        if !pack
+            .ui_manifest
+            .result_views
+            .iter()
+            .any(|view| view.id == result_view.id)
+        {
+            bail!("implemented result views require matching UI metadata")
+        }
+        require_strict_object_schema(&result_view.parameter_schema, &result_view.id)?;
+        require_strict_object_schema(&result_view.result_schema, &result_view.id)?;
+        eutheto_domain_api::validate_contract_schema(&result_view.parameter_schema)?;
+        eutheto_domain_api::validate_contract_schema(&result_view.result_schema)?;
+        prior_id = Some(&result_view.id);
     }
     Ok(())
 }
@@ -829,6 +883,58 @@ fn query_suffix<'a>(id: &'a str, source: &PackSource) -> Result<&'a str> {
         .filter(|suffix| valid_identifier(suffix))
         .context("setup query is outside its namespace or cannot produce a safe identifier")
 }
+fn result_view_suffix<'a>(id: &'a str, source: &PackSource) -> Result<&'a str> {
+    id.strip_prefix(source.id)
+        .and_then(|suffix| suffix.strip_prefix("."))
+        .filter(|suffix| {
+            suffix
+                .strip_prefix("result.")
+                .is_some_and(|name| name.split('.').all(valid_identifier))
+        })
+        .and_then(|suffix| suffix.strip_prefix("result."))
+        .context("result view is outside its namespace or cannot produce an identifier")
+}
+
+fn pascal_name(value: &str) -> Result<String> {
+    let mut output = String::new();
+    for segment in value.split('.') {
+        let mut chars = segment.chars();
+        let first = chars
+            .next()
+            .context("identifier contains an empty segment")?;
+        output.push(first.to_ascii_uppercase());
+        output.extend(chars);
+    }
+    Ok(output)
+}
+
+fn render_typescript_result_view_types(
+    pack: &PackContract,
+    source: &PackSource,
+    output: &mut String,
+    names: &mut BTreeSet<String>,
+) -> Result<()> {
+    let prefix = source.typescript_prefix;
+    for result_view in &pack.result_views {
+        let suffix = pascal_name(result_view_suffix(&result_view.id, source)?)?;
+        let parameters_name = format!("Result{suffix}ViewParameters");
+        let data_name = format!("Result{suffix}ViewData");
+        if !names.insert(parameters_name.clone()) || !names.insert(data_name.clone()) {
+            bail!("result view TypeScript identifiers collide")
+        }
+        writeln!(
+            output,
+            "export type {prefix}{parameters_name} = {};",
+            typescript_schema(&result_view.parameter_schema, prefix, 0)?
+        )?;
+        writeln!(
+            output,
+            "export type {prefix}{data_name} = {};",
+            typescript_schema(&result_view.result_schema, prefix, 0)?
+        )?;
+    }
+    Ok(())
+}
 
 fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<String> {
     let prefix = source.typescript_prefix;
@@ -845,7 +951,7 @@ fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<S
         writeln!(
             output,
             "export type {prefix}{name} = {};",
-            typescript_schema(schema, source, 0)?
+            typescript_schema(schema, prefix, 0)?
         )?;
     }
     for command in &pack.commands {
@@ -863,13 +969,14 @@ fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<S
         if !names.insert(name.clone()) {
             bail!("command payload TypeScript identifiers collide")
         }
-        let payload = typescript_schema(&command.payload_schema, source, 0)?;
+        let payload = typescript_schema(&command.payload_schema, prefix, 0)?;
         if source.id == "official.test" && command.id == "official.test.configure_entity" {
             writeln!(output, "export interface {prefix}{name} {payload}")?;
         } else {
             writeln!(output, "export type {prefix}{name} = {payload};")?;
         }
     }
+    render_typescript_result_view_types(pack, source, &mut output, &mut names)?;
     if pack.setup_queries.is_empty() {
         return Ok(output);
     }
@@ -888,7 +995,7 @@ fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<S
                 output,
                 "{}: {};",
                 serde_json::to_string(&query.id)?,
-                typescript_schema(schema, source, 0)?
+                typescript_schema(schema, prefix, 0)?
             )?;
         }
         output.push_str("}\n");
@@ -897,7 +1004,7 @@ fn render_typescript_types(pack: &PackContract, source: &PackSource) -> Result<S
     Ok(output)
 }
 
-fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Result<String> {
+pub(crate) fn typescript_schema(schema: &Value, prefix: &str, depth: usize) -> Result<String> {
     if depth > 32 {
         bail!("TypeScript schema rendering exceeds its depth limit")
     }
@@ -913,7 +1020,7 @@ fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Resul
         if object.len() != 1 {
             bail!("TypeScript schema references cannot have siblings")
         }
-        return Ok(format!("{}{name}", source.typescript_prefix));
+        return Ok(format!("{prefix}{name}"));
     }
     if let Some(value) = object.get("const") {
         if !value.is_null() && !value.is_boolean() && !value.is_number() && !value.is_string() {
@@ -932,7 +1039,7 @@ fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Resul
             .as_array()
             .context("TypeScript oneOf must be an array")?
             .iter()
-            .map(|option| typescript_schema(option, source, depth + 1))
+            .map(|option| typescript_schema(option, prefix, depth + 1))
             .collect::<Result<Vec<_>>>()
             .map(|options| options.join(" | "));
     }
@@ -946,7 +1053,7 @@ fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Resul
             "ReadonlyArray<{}>",
             typescript_schema(
                 object.get("items").context("array schema requires items")?,
-                source,
+                prefix,
                 depth + 1,
             )?
         )),
@@ -967,7 +1074,7 @@ fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Resul
                         output,
                         "readonly {}{optional}: {};",
                         serde_json::to_string(name)?,
-                        typescript_schema(child, source, depth + 1)?
+                        typescript_schema(child, prefix, depth + 1)?
                     )?;
                 }
             }
@@ -975,7 +1082,7 @@ fn typescript_schema(schema: &Value, source: &PackSource, depth: usize) -> Resul
             let additional = match object.get("additionalProperties") {
                 Some(Value::Bool(false)) => None,
                 Some(value) if value.is_object() => {
-                    Some(typescript_schema(value, source, depth + 1)?)
+                    Some(typescript_schema(value, prefix, depth + 1)?)
                 }
                 None | Some(Value::Bool(true)) => Some("unknown".to_owned()),
                 _ => bail!("invalid additionalProperties in TypeScript schema"),
@@ -1020,6 +1127,7 @@ fn collect_guard_refs<'a>(schema: &'a Value, references: &mut BTreeSet<&'a str>)
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_typescript_setup_guards(
     pack: &PackContract,
     source: &PackSource,
@@ -1040,6 +1148,10 @@ fn render_typescript_setup_guards(
     for query in &pack.setup_queries {
         collect_guard_refs(&query.result_schema, &mut references)?;
     }
+    for result_view in &pack.result_views {
+        collect_guard_refs(&result_view.parameter_schema, &mut references)?;
+        collect_guard_refs(&result_view.result_schema, &mut references)?;
+    }
     let mut expanded = BTreeSet::new();
     loop {
         let next = references.difference(&expanded).next().copied();
@@ -1053,13 +1165,9 @@ fn render_typescript_setup_guards(
     }
     // Static predicates use the existing restricted schema vocabulary, not a runtime interpreter.
     // Typed setup DTO IDs are canonical; raw CSV domain values use a separate schema guard.
-    output.push_str(&r#"
-const __PREFIX__WireUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-function is__PREFIX__WireObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
+    write_typescript_wire_helpers(output, prefix);
+    output.push_str(
+        &r"
 function check__PREFIX__WireProperties(
   value: Record<string, unknown>, check: (key: string, child: unknown) => boolean,
 ): boolean {
@@ -1067,6 +1175,70 @@ function check__PREFIX__WireProperties(
     if (!check(key, value[key])) return false;
   }
   return true;
+}
+"
+        .replace("__PREFIX__", prefix),
+    );
+    for name in references {
+        let schema = pack
+            .definitions
+            .get(name)
+            .context("wire guard definition disappeared")?;
+        writeln!(
+            output,
+            "function is{prefix}{name}(value: unknown): value is {prefix}{name} {{ return {}; }}",
+            typescript_guard(schema, prefix, "value", 0, None)?
+        )?;
+    }
+    for result_view in &pack.result_views {
+        let suffix = pascal_name(result_view_suffix(&result_view.id, source)?)?;
+        let parameters_name = format!("Result{suffix}ViewParameters");
+        let data_name = format!("Result{suffix}ViewData");
+        writeln!(
+            output,
+            "export function is{prefix}{parameters_name}(value: unknown): value is {prefix}{parameters_name} {{ return {}; }}",
+            typescript_guard(&result_view.parameter_schema, prefix, "value", 0, None)?
+        )?;
+        writeln!(
+            output,
+            "export function is{prefix}{data_name}(value: unknown): value is {prefix}{data_name} {{ return {}; }}",
+            typescript_guard(&result_view.result_schema, prefix, "value", 0, None)?
+        )?;
+    }
+    if prefix == "Workforce" {
+        render_typescript_csv_entity_guards(pack, source, output)?;
+    }
+    writeln!(
+        output,
+        "const {prefix}SetupResultGuards: {{ readonly [K in keyof {prefix}SetupQueryResults]: (value: unknown) => value is {prefix}SetupQueryResults[K] }} = {{"
+    )?;
+    for query in &pack.setup_queries {
+        writeln!(
+            output,
+            "{}: (value: unknown): value is {prefix}SetupQueryResults[{}] => {},",
+            serde_json::to_string(&query.id)?,
+            serde_json::to_string(&query.id)?,
+            typescript_guard(&query.result_schema, prefix, "value", 0, None)?
+        )?;
+    }
+    writeln!(
+        output,
+        "}};\nexport function is{prefix}SetupViewId(value: unknown): value is keyof {prefix}SetupQueryResults {{ return typeof value === \"string\" && Object.hasOwn({prefix}SetupResultGuards, value); }}"
+    )?;
+    writeln!(
+        output,
+        "export function is{prefix}SetupQueryResult<K extends keyof {prefix}SetupQueryResults>(query: K, value: unknown): value is {prefix}SetupQueryResults[K] {{ return Object.hasOwn({prefix}SetupResultGuards, query) && {prefix}SetupResultGuards[query](value); }}"
+    )?;
+    Ok(())
+}
+
+pub(crate) fn write_typescript_wire_helpers(output: &mut String, prefix: &str) {
+    output.push_str(&r#"
+const __PREFIX__WireUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function is__PREFIX__WireObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 function is__PREFIX__WireString(value: unknown, minimum: number, maximum: number): value is string {
   if (typeof value !== "string" || value.length < minimum || value.length > maximum * 2) return false;
@@ -1086,79 +1258,67 @@ function is__PREFIX__WireString(value: unknown, minimum: number, maximum: number
   return count >= minimum;
 }
 "#.replace("__PREFIX__", prefix));
-    for name in references {
-        let schema = pack
-            .definitions
-            .get(name)
-            .context("wire guard definition disappeared")?;
-        writeln!(
-            output,
-            "function is{prefix}{name}(value: unknown): value is {prefix}{name} {{ return {}; }}",
-            typescript_guard(schema, source, "value", 0, None)?
-        )?;
-    }
-    if prefix == "Workforce" {
-        render_typescript_csv_person_guard(pack, source, output)?;
-    }
-    writeln!(
-        output,
-        "const {prefix}SetupResultGuards: {{ readonly [K in keyof {prefix}SetupQueryResults]: (value: unknown) => value is {prefix}SetupQueryResults[K] }} = {{"
-    )?;
-    for query in &pack.setup_queries {
-        writeln!(
-            output,
-            "{}: (value: unknown): value is {prefix}SetupQueryResults[{}] => {},",
-            serde_json::to_string(&query.id)?,
-            serde_json::to_string(&query.id)?,
-            typescript_guard(&query.result_schema, source, "value", 0, None)?
-        )?;
-    }
-    writeln!(
-        output,
-        "}};\nexport function is{prefix}SetupViewId(value: unknown): value is keyof {prefix}SetupQueryResults {{ return typeof value === \"string\" && Object.hasOwn({prefix}SetupResultGuards, value); }}"
-    )?;
-    writeln!(
-        output,
-        "export function is{prefix}SetupQueryResult<K extends keyof {prefix}SetupQueryResults>(query: K, value: unknown): value is {prefix}SetupQueryResults[K] {{ return Object.hasOwn({prefix}SetupResultGuards, query) && {prefix}SetupResultGuards[query](value); }}"
-    )?;
-    Ok(())
 }
 
-fn render_typescript_csv_person_guard(
+fn render_typescript_csv_entity_guards(
     pack: &PackContract,
     source: &PackSource,
     output: &mut String,
 ) -> Result<()> {
-    // Raw domain Value payloads preserve schema-valid UUID case. Expand this one
-    // schema so its UUID policy cannot widen canonical typed setup DTO guards.
-    let mut expander = SchemaExpander {
-        definitions: &pack.definitions,
-        stack: Vec::new(),
-        used: BTreeSet::new(),
-        nodes: 0,
-        remaining_bytes: MAX_PACK_CONTRACT_BYTES,
-    };
-    let person = expander.expand(
-        pack.definitions
-            .get("Person")
-            .context("CSV person schema missing")?,
-        0,
-    )?;
-    output.push_str("const WorkforceCsvUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\n");
-    writeln!(
-        output,
-        "export function isWorkforceCsvPerson(value: unknown): value is WorkforcePerson {{ return {}; }}",
-        typescript_guard(&person, source, "value", 0, Some("WorkforceCsvUuid"))?
-    )?;
+    // Raw references retain native-accepted UUID spellings; root and setup IDs stay canonical.
+    output.push_str(
+        r#"
+export { isWorkforceResolvedLocalTime };
+export function isWorkforceCsvUuid(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const hyphenated = value.startsWith("urn:uuid:") ? value.slice(9) :
+    value.startsWith("{") && value.endsWith("}") ? value.slice(1, -1) : value;
+  return (hyphenated.length === 36 &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(hyphenated)) ||
+    (value.length === 32 && /^[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}$/i.test(value));
+}
+"#,
+    );
+    for definition in [
+        "Person",
+        "ExternalStartingPlan",
+        "ShiftInstance",
+        "Availability",
+    ] {
+        let mut expander = SchemaExpander {
+            definitions: &pack.definitions,
+            stack: Vec::new(),
+            used: BTreeSet::new(),
+            nodes: 0,
+            remaining_bytes: MAX_PACK_CONTRACT_BYTES,
+        };
+        let schema = expander.expand(
+            pack.definitions
+                .get(definition)
+                .context("CSV entity schema missing")?,
+            0,
+        )?;
+        writeln!(
+            output,
+            "export function isWorkforceCsv{definition}(value: unknown): value is Workforce{definition} {{ return {} && WorkforceWireUuid.test(value.id); }}",
+            typescript_guard(
+                &schema,
+                source.typescript_prefix,
+                "value",
+                0,
+                Some("isWorkforceCsvUuid")
+            )?
+        )?;
+    }
     Ok(())
 }
 
-fn typescript_guard(
+pub(crate) fn typescript_guard(
     schema: &Value,
-    source: &PackSource,
+    prefix: &str,
     value: &str,
     depth: usize,
-    uuid_pattern: Option<&str>,
+    uuid_guard: Option<&str>,
 ) -> Result<String> {
     if depth > 32 {
         bail!("wire guard rendering exceeds its depth limit");
@@ -1167,7 +1327,7 @@ fn typescript_guard(
         .as_object()
         .context("wire guard schema must be an object")?;
     if let Some(reference) = object.get("$ref") {
-        if uuid_pattern.is_some() {
+        if uuid_guard.is_some() {
             bail!("schema-value UUID policy requires expanded references");
         }
         let name = reference
@@ -1178,7 +1338,7 @@ fn typescript_guard(
         if object.len() != 1 {
             bail!("wire guard references cannot have siblings");
         }
-        return Ok(format!("is{}{name}({value})", source.typescript_prefix));
+        return Ok(format!("is{prefix}{name}({value})"));
     }
     let mut clauses = Vec::new();
     if let Some(expected) = object.get("const") {
@@ -1188,19 +1348,14 @@ fn typescript_guard(
         let alternatives = options
             .iter()
             .map(|option| {
-                typescript_guard(option, source, value, depth + 1, uuid_pattern)
+                typescript_guard(option, prefix, value, depth + 1, uuid_guard)
                     .map(|guard| format!("Number({guard})"))
             })
             .collect::<Result<Vec<_>>>()?;
         clauses.push(format!("({}) === 1", alternatives.join(" + ")));
     }
     match object.get("type").and_then(Value::as_str) {
-        Some("string") => clauses.push(typescript_guard_string(
-            object,
-            source,
-            value,
-            uuid_pattern,
-        )?),
+        Some("string") => clauses.push(typescript_guard_string(object, prefix, value, uuid_guard)?),
         Some("integer") => {
             clauses.push(format!(
                 "typeof {value} === \"number\" && Number.isSafeInteger({value})"
@@ -1226,19 +1381,15 @@ fn typescript_guard(
             let item = format!("item{depth}");
             let child = typescript_guard(
                 object.get("items").context("wire array requires items")?,
-                source,
+                prefix,
                 &item,
                 depth + 1,
-                uuid_pattern,
+                uuid_guard,
             )?;
             clauses.push(format!("Array.isArray({value}) && {value}.length >= {minimum} && {value}.length <= {maximum} && {value}.every(({item}: unknown) => {child})"));
         }
         Some("object") => clauses.push(typescript_guard_object(
-            object,
-            source,
-            value,
-            depth,
-            uuid_pattern,
+            object, prefix, value, depth, uuid_guard,
         )?),
         None => {}
         _ => bail!("unsupported wire guard schema type"),
@@ -1253,11 +1404,10 @@ fn typescript_guard(
 
 fn typescript_guard_string(
     schema: &Map<String, Value>,
-    source: &PackSource,
+    prefix: &str,
     value: &str,
-    uuid_pattern: Option<&str>,
+    uuid_guard: Option<&str>,
 ) -> Result<String> {
-    let prefix = source.typescript_prefix;
     let minimum = schema.get("minLength").and_then(Value::as_u64).unwrap_or(0);
     let maximum = schema
         .get("maxLength")
@@ -1268,8 +1418,8 @@ fn typescript_guard_string(
     )];
     if let Some(format) = schema.get("format").and_then(Value::as_str) {
         clauses.push(match format {
-            "uuid" => match uuid_pattern {
-                Some(pattern) => format!("{pattern}.test({value})"),
+            "uuid" => match uuid_guard {
+                Some(guard) => format!("{guard}({value})"),
                 None => format!("{prefix}WireUuid.test({value})"),
             },
             "scenario-change-path" => {
@@ -1277,6 +1427,9 @@ fn typescript_guard_string(
                     "({value} === \"/settings\" || {value}.startsWith(\"/settings/\") || {value}.startsWith(\"/domain/\"))"
                 )
             }
+            "signed-u32-delta" => format!(
+                "/^(?:0|-?[1-9][0-9]{{0,9}})$/.test({value}) && Math.abs(Number({value})) <= 4294967295"
+            ),
             _ => bail!("unsupported wire string format"),
         });
     }
@@ -1294,12 +1447,12 @@ fn typescript_guard_string(
 
 fn typescript_guard_object(
     schema: &Map<String, Value>,
-    source: &PackSource,
+    prefix: &str,
     value: &str,
     depth: usize,
-    uuid_pattern: Option<&str>,
+    uuid_guard: Option<&str>,
 ) -> Result<String> {
-    let mut clauses = vec![format!("is{}WireObject({value})", source.typescript_prefix)];
+    let mut clauses = vec![format!("is{prefix}WireObject({value})")];
     let properties = schema.get("properties").and_then(Value::as_object);
     let required = schema.get("required").and_then(Value::as_array);
     if let Some(required) = required {
@@ -1325,7 +1478,7 @@ fn typescript_guard_object(
         for (name, child) in ordered {
             let key = serde_json::to_string(name)?;
             let member = format!("{value}[{key}]");
-            let guard = typescript_guard(child, source, &member, depth + 1, uuid_pattern)?;
+            let guard = typescript_guard(child, prefix, &member, depth + 1, uuid_guard)?;
             if required
                 .is_some_and(|required| required.iter().any(|item| item.as_str() == Some(name)))
             {
@@ -1349,7 +1502,7 @@ fn typescript_guard_object(
         Some(Value::Bool(false)) => {}
         Some(additional) if additional.is_object() => {
             let member = format!("member{depth}");
-            let guard = typescript_guard(additional, source, &member, depth + 1, uuid_pattern)?;
+            let guard = typescript_guard(additional, prefix, &member, depth + 1, uuid_guard)?;
             if guard == "true" {
                 return Ok(format!("({})", clauses.join(" && ")));
             }
@@ -1360,8 +1513,7 @@ fn typescript_guard_object(
             };
             alternatives.push(guard);
             clauses.push(format!(
-                "check{}WireProperties({value}, ({key}, {member}) => {})",
-                source.typescript_prefix,
+                "check{prefix}WireProperties({value}, ({key}, {member}) => {})",
                 alternatives.join(" || ")
             ));
             return Ok(format!("({})", clauses.join(" && ")));
@@ -1400,6 +1552,16 @@ fn render_typescript_constants(pack: &PackContract, source: &PackSource) -> Resu
             output,
             "export const {prefix}_SETUP_{suffix}_QUERY_ID = {} as const;",
             serde_json::to_string(&query.id)?
+        )?;
+    }
+    for result_view in &pack.result_views {
+        let suffix = result_view_suffix(&result_view.id, source)?
+            .replace('.', "_")
+            .to_ascii_uppercase();
+        writeln!(
+            output,
+            "export const {prefix}_RESULT_{suffix}_VIEW_ID = {} as const;",
+            serde_json::to_string(&result_view.id)?
         )?;
     }
     writeln!(

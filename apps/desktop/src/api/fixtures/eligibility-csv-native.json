@@ -1,0 +1,333 @@
+{
+  "applied": {
+    "currentRevision": 2,
+    "requestId": "01a10a59-933c-7053-9199-f3a6f86845f4",
+    "result": {
+      "outcome": {
+        "commandId": "01a10a59-933c-7053-9199-f39dc42c4aca",
+        "kind": "applied",
+        "revision": 2
+      },
+      "report": {
+        "consumed": true,
+        "disposition": "reviewable",
+        "previewId": "01a10a59-931e-7a53-a6d5-f476c11b7e9a",
+        "rows": {
+          "excludedRows": [
+            {
+              "issue": "unresolvedPerson",
+              "record": 4,
+              "skipped": true
+            }
+          ],
+          "family": "eligibility"
+        },
+        "schemaVersion": 1
+      },
+      "scenarioId": "01a10a59-91fb-7ad1-a392-251484b6fa64",
+      "schemaVersion": 1,
+      "sourceId": "01a10a59-92e3-7a63-88c8-ab14dff30f3c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "detection": {
+    "currentRevision": null,
+    "requestId": "01a10a59-92e3-7a63-88c8-ab2b1bb3653e",
+    "result": {
+      "data": {
+        "dialects": [
+          {
+            "consistentColumns": 3,
+            "dialect": "comma",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "person",
+                    "truncated": false
+                  },
+                  {
+                    "text": "type",
+                    "truncated": false
+                  },
+                  {
+                    "text": "eligible",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000001",
+                    "truncated": false
+                  },
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000004",
+                    "truncated": false
+                  },
+                  {
+                    "text": "true",
+                    "truncated": false
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "9af6caf1626c962150366244ffd692ed8af73e10e13188d8f546e4f6b7de6b48",
+              "logicalRecords": 4,
+              "rawBytes": 200
+            },
+            "status": "candidate"
+          },
+          {
+            "consistentColumns": 1,
+            "dialect": "semicolon",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "person,type,eligible",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000001,018f7b40-a000-7000-8000-000",
+                    "truncated": true
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "9af6caf1626c962150366244ffd692ed8af73e10e13188d8f546e4f6b7de6b48",
+              "logicalRecords": 4,
+              "rawBytes": 200
+            },
+            "status": "candidate"
+          },
+          {
+            "consistentColumns": 1,
+            "dialect": "tab",
+            "samples": [
+              {
+                "cells": [
+                  {
+                    "text": "person,type,eligible",
+                    "truncated": false
+                  }
+                ],
+                "record": 1
+              },
+              {
+                "cells": [
+                  {
+                    "text": "018f7b40-a000-7000-8000-000000000001,018f7b40-a000-7000-8000-000",
+                    "truncated": true
+                  }
+                ],
+                "record": 2
+              }
+            ],
+            "source": {
+              "blake3": "9af6caf1626c962150366244ffd692ed8af73e10e13188d8f546e4f6b7de6b48",
+              "logicalRecords": 4,
+              "rawBytes": 200
+            },
+            "status": "candidate"
+          }
+        ],
+        "schemaVersion": 1
+      },
+      "family": "eligibility"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "preview": {
+    "currentRevision": 1,
+    "requestId": "01a10a59-92e5-76a0-ad05-6950b7869315",
+    "result": {
+      "preview": {
+        "approvalDigest": "30bdee6a84aca5018a5c486edb2a201022bc954dbda503fbe49940e9e2a35e3c",
+        "batch": {
+          "commands": [
+            {
+              "commandType": "official.workforce.update_entity",
+              "payload": {
+                "entity": {
+                  "activeRange": {
+                    "kind": "always"
+                  },
+                  "display": {
+                    "avatarInitials": "RV",
+                    "color": "#102030"
+                  },
+                  "eligibleAssignmentTypeIds": [
+                    "018f7b40-a000-7000-8000-000000000004",
+                    "018f7b40-a000-7000-8000-000000000015"
+                  ],
+                  "externalId": "staff-01",
+                  "homeLocationId": "018f7b40a00070008000000000000005",
+                  "id": "018f7b40-a000-7000-8000-000000000001",
+                  "kind": "person",
+                  "name": "River",
+                  "qualificationGrants": [],
+                  "tags": ["night", "reviewed"],
+                  "teamIds": [],
+                  "workloadWeight": {
+                    "denominator": 2,
+                    "numerator": 3
+                  }
+                }
+              }
+            }
+          ],
+          "label": "Import configured eligibility from CSV",
+          "packId": "official.workforce",
+          "scenarioSchemaVersion": 1,
+          "schemaVersion": 1
+        },
+        "disposition": "reviewable",
+        "excludedRows": [
+          {
+            "issue": "unresolvedPerson",
+            "record": 4,
+            "skipped": true
+          }
+        ],
+        "review": {
+          "changesBlake3": "0c6451ea06a572766765b75381c9174761f79c306d31575aa5bf8253e0e7aba1",
+          "excludedBlake3": "7a090d2b674f5940da145870ee2a25301872e6adf412ffd9749668ab4e29a90f",
+          "format": "eutheto/workforce-eligibility-csv-review",
+          "limitsVersion": 1,
+          "mapping": {
+            "assignmentTypeColumn": 1,
+            "assignmentTypeMappings": {},
+            "dialect": "comma",
+            "eligibleColumn": 2,
+            "expectedColumns": 3,
+            "hasHeader": true,
+            "personColumn": 0,
+            "personMappings": {}
+          },
+          "parserVersion": "csv-core-0.1.13",
+          "revision": 1,
+          "rowsBlake3": "63d0ed04dc9a59bee75a7a80e457e5e1c96093a64c2963d47cc84ef8212563e4",
+          "scenarioBlake3": "285181ee108c68ffff18c905f7c2db7d0aecec77d617c6267428f9db4c5958a2",
+          "scenarioId": "01a10a59-91fb-7ad1-a392-251484b6fa64",
+          "schemaVersion": 1,
+          "skippedRecords": [4],
+          "source": {
+            "blake3": "9af6caf1626c962150366244ffd692ed8af73e10e13188d8f546e4f6b7de6b48",
+            "logicalRecords": 4,
+            "rawBytes": 200
+          },
+          "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+        },
+        "rows": [
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000004",
+            "before": false,
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "record": 2,
+            "status": "changed"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": "018f7b40-a000-7000-8000-000000000015",
+            "before": false,
+            "issue": null,
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "record": 3,
+            "status": "changed"
+          },
+          {
+            "after": true,
+            "assignmentTypeId": null,
+            "before": null,
+            "issue": "unresolvedPerson",
+            "personId": null,
+            "record": 4,
+            "status": "skipped"
+          }
+        ],
+        "schemaVersion": 1,
+        "source": {
+          "blake3": "9af6caf1626c962150366244ffd692ed8af73e10e13188d8f546e4f6b7de6b48",
+          "logicalRecords": 4,
+          "rawBytes": 200
+        },
+        "validationIssues": []
+      },
+      "previewId": "01a10a59-931e-7a53-a6d5-f476c11b7e9a",
+      "revision": 1,
+      "scenarioId": "01a10a59-91fb-7ad1-a392-251484b6fa64",
+      "schemaVersion": 1,
+      "sourceId": "01a10a59-92e3-7a63-88c8-ab14dff30f3c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "report": {
+    "currentRevision": null,
+    "requestId": "01a10a59-93d9-7361-a1ef-c0df28ae1641",
+    "result": {
+      "consumed": true,
+      "disposition": "reviewable",
+      "previewId": "01a10a59-931e-7a53-a6d5-f476c11b7e9a",
+      "rows": {
+        "excludedRows": [
+          {
+            "issue": "unresolvedPerson",
+            "record": 4,
+            "skipped": true
+          }
+        ],
+        "family": "eligibility"
+      },
+      "schemaVersion": 1
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sample": {
+    "currentRevision": null,
+    "requestId": "01a10a59-92e4-7780-a419-20220d43cd05",
+    "result": {
+      "cells": [
+        {
+          "text": "018f7b40-a000-7000-8000-000000000001",
+          "truncated": false
+        },
+        {
+          "text": "018f7b40-a000-7000-8000-000000000004",
+          "truncated": false
+        },
+        {
+          "text": "true",
+          "truncated": false
+        }
+      ],
+      "readFormat": {
+        "dialect": "comma",
+        "family": "eligibility"
+      },
+      "record": 2,
+      "schemaVersion": 1,
+      "sourceId": "01a10a59-92e3-7a63-88c8-ab14dff30f3c"
+    },
+    "schemaVersion": 1,
+    "warnings": []
+  },
+  "sourceId": "01a10a59-92e3-7a63-88c8-ab14dff30f3c"
+}

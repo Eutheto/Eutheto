@@ -117,6 +117,7 @@ async function changeSelectionPage(page: number) {
       :aria-required="required || undefined"
       :disabled="disabled"
       :read-only="readOnly"
+      :search-disabled="searchDisabled"
       :locale="locale"
       :aria-describedby="describedBy"
       :aria-invalid="!!error || undefined"

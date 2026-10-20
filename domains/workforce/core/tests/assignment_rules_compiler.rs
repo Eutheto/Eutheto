@@ -6,7 +6,7 @@ use eutheto_types::{CancellationToken, OverlapPolicy, ScenarioDocument};
 use eutheto_workforce::{
     assignment_rules::{
         AssignmentRuleCompilation, AssignmentRuleError, AssignmentRuleLimit, RejectionCause,
-        analyze_assignments, compile_assignment_rules,
+        analyze_assignments, compile_assignment_rules, evaluate_assignment_rules,
     },
     model::AssignmentPair,
 };
@@ -45,6 +45,7 @@ fn rule(document: &mut ScenarioDocument, index: u32, kind: &str) -> Result {
 
 fn context(limits: PlanningIrLimitsV1) -> CompileContext {
     CompileContext {
+        objective_context: None,
         scenario_revision: 1,
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -81,13 +82,13 @@ fn allows(model: &AssignmentRuleCompilation, selected: &[AssignmentPair]) -> Res
         .collect();
     for record in &model.constraints {
         if !record.enforcement.is_empty() {
-            return Err("unexpected enforcement in four-rule contribution".into());
+            return Err("unexpected primitive contribution".into());
         }
         let (literals, min, max) = match &record.body {
             Constraint::BoolOr { literals } => (literals, 1, u64::MAX),
             Constraint::AtMostOne { literals } => (literals, 0, 1),
             Constraint::CardinalityRange { literals, min, max } => (literals, *min, *max),
-            _ => return Err("unexpected primitive in four-rule contribution".into()),
+            _ => return Err("unexpected primitive contribution".into()),
         };
         let mut count = 0;
         for literal in literals {
@@ -113,6 +114,172 @@ fn availability(
     document.domain.entities.insert(id(index).parse()?, json!({"kind":"availability","id":id(index),"personId":id(1),"availabilityKind":kind,
         "timeWindow":{"kind":"instant","startsAt":start,"endsAt":end},
         "effectiveRange":{"startDate":"2026-01-01","endDateExclusive":"2027-01-01"},"source":"private source","note":"private note"}));
+    Ok(())
+}
+fn shift_instance(
+    document: &mut ScenarioDocument,
+    index: u32,
+    starts_at: &str,
+    ends_at: &str,
+) -> Result {
+    let mut value = document
+        .domain
+        .entities
+        .get(&id(8).parse()?)
+        .ok_or("missing shift")?
+        .clone();
+    value["id"] = json!(id(index));
+    value["startsAt"] = json!({
+        "instant": format!("{starts_at}Z"),
+        "local": starts_at,
+        "offsetSeconds": 0
+    });
+    value["endsAt"] = json!({
+        "instant": format!("{ends_at}Z"),
+        "local": ends_at,
+        "offsetSeconds": 0
+    });
+    document.domain.entities.insert(id(index).parse()?, value);
+    Ok(())
+}
+
+#[test]
+fn maximum_assignment_count_compiles_one_cap_per_person_reporting_period() -> Result {
+    let mut value = document()?;
+    value.settings.time_zone = "UTC".parse()?;
+    value.settings.horizon = eutheto_types::Horizon::new(
+        "2026-11-01T00:00:00Z".parse()?,
+        "2026-11-03T00:00:00Z".parse()?,
+    )?;
+    entity(&mut value, 8)?["startsAt"] = json!({
+        "instant":"2026-11-01T08:00:00Z",
+        "local":"2026-11-01T08:00:00",
+        "offsetSeconds":0
+    });
+    entity(&mut value, 8)?["endsAt"] = json!({
+        "instant":"2026-11-01T10:00:00Z",
+        "local":"2026-11-01T10:00:00",
+        "offsetSeconds":0
+    });
+    shift_instance(&mut value, 30, "2026-11-01T12:00:00", "2026-11-01T13:00:00")?;
+    value.domain.rules.insert(
+        id(20).parse()?,
+        json!({
+            "kind":"maximumAssignmentCount", "id":id(20), "active":true,
+            "strength":"required", "scope":{"people":{"kind":"all"}},
+            "calendarId":id(2), "maximum":1
+        }),
+    );
+    let model = compile(&value)?;
+    let count_constraints = model
+        .constraints
+        .iter()
+        .filter_map(|record| match &record.body {
+            Constraint::CardinalityRange { literals, min, max }
+                if *min == 0 && *max == 1 && literals.len() >= 2 =>
+            {
+                Some(literals.len())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!count_constraints.is_empty());
+    assert!(!allows(&model, &[pair(1, 8)?, pair(1, 30)?],)?);
+    assert!(allows(&model, &[pair(1, 8)?])?);
+    let fact = model
+        .provenance
+        .iter()
+        .find(|fact| {
+            fact.message_key == "official.workforce.maximum_assignment_count"
+                && fact.parameters.contains_key("maximum")
+        })
+        .ok_or("missing maximum-count provenance")?;
+    assert_eq!(
+        fact.parameters
+            .get("maximum")
+            .ok_or("missing maximum parameter")?,
+        &eutheto_planning_ir::ProvenanceParameter::Integer(1)
+    );
+    let mut defective = model.clone();
+    let count_provenances = model
+        .provenance
+        .iter()
+        .filter(|fact| fact.message_key == "official.workforce.maximum_assignment_count")
+        .map(|fact| fact.id.clone())
+        .collect::<BTreeSet<_>>();
+    for record in &mut defective.constraints {
+        if count_provenances.contains(&record.provenance) {
+            let Constraint::CardinalityRange { literals, max, .. } = &mut record.body else {
+                return Err("count constraint lost its cardinality body".into());
+            };
+            *max = literals.len().try_into()?;
+        }
+    }
+    let selected = [pair(1, 8)?, pair(1, 30)?];
+    assert!(allows(&defective, &selected)?);
+    let count_rule_id: eutheto_types::RuleId = id(20).parse()?;
+    assert!(
+        evaluate_assignment_rules(&value, &selected, None)?
+            .evaluations
+            .iter()
+            .any(|entry| entry.rule_id == count_rule_id && !entry.satisfied),
+        "original-domain count evaluation must reject a compiler that drops its cap"
+    );
+    value
+        .domain
+        .rules
+        .get_mut(&id(20).parse()?)
+        .ok_or("missing count rule")?["maximum"] = json!(u32::MAX);
+    let generous = compile(&value)?;
+    assert!(allows(&generous, &[pair(1, 8)?, pair(1, 30)?])?);
+    Ok(())
+}
+
+#[test]
+fn required_count_quota_compiles_all_owned_days_even_without_candidate_shifts() -> Result {
+    let mut value = document()?;
+    value.domain.entities.remove(&id(6).parse()?);
+    value.settings.time_zone = "UTC".parse()?;
+    value.settings.horizon = eutheto_types::Horizon::new(
+        "2026-11-01T00:00:00Z".parse()?,
+        "2026-11-03T00:00:00Z".parse()?,
+    )?;
+    for (field, timestamp) in [
+        ("startsAt", "2026-11-01T08:00:00"),
+        ("endsAt", "2026-11-01T09:00:00"),
+    ] {
+        entity(&mut value, 8)?[field] = json!({
+            "instant":format!("{timestamp}Z"), "local":timestamp, "offsetSeconds":0
+        });
+    }
+    value.domain.rules.insert(
+        id(20).parse()?,
+        json!({
+            "kind":"workloadQuota", "id":id(20), "active":true,
+            "strength":"required", "scope":{"people":{"kind":"all"}},
+            "calendarId":id(2), "membership":"reportingDate",
+            "measure":{"kind":"assignmentCount"}, "minimum":1, "maximum":1
+        }),
+    );
+
+    let missing_day = compile(&value)?;
+    assert!(missing_day.constraints.iter().any(|record| matches!(
+        &record.body, Constraint::BoolOr { literals } if literals.is_empty()
+    )));
+    assert!(!allows(&missing_day, &[pair(1, 8)?])?);
+    let quota_id: eutheto_types::RuleId = id(20).parse()?;
+    assert!(
+        evaluate_assignment_rules(&value, &[pair(1, 8)?], None)?
+            .evaluations
+            .iter()
+            .any(|entry| entry.rule_id == quota_id && !entry.satisfied)
+    );
+
+    shift_instance(&mut value, 30, "2026-11-02T08:00:00", "2026-11-02T09:00:00")?;
+    let populated = compile(&value)?;
+    assert!(allows(&populated, &[pair(1, 8)?, pair(1, 30)?])?);
+    assert!(!allows(&populated, &[pair(1, 8)?])?);
+    assert!(!allows(&populated, &[pair(1, 30)?])?);
     Ok(())
 }
 
@@ -168,6 +335,149 @@ fn adjacent_qualification_renewals_cover_but_nanosecond_gap_and_expiry_do_not() 
     entity(&mut value, 1)?["qualificationGrants"] =
         json!([{"qualificationId":id(11),"expiresAt":"2026-11-01T05:30:00Z"}]);
     assert!(compile(&value)?.variables.is_empty());
+    Ok(())
+}
+#[test]
+fn dated_qualification_grant_must_cover_the_entire_shift() -> Result {
+    let mut value = document()?;
+    rule(&mut value, 20, "eligibility")?;
+    entity(&mut value, 1)?["qualificationGrants"] = json!([{
+        "qualificationId":id(11),
+        "effectiveFrom":"2026-11-01T05:30:00Z",
+        "expiresAt":"2026-11-01T07:30:00Z"
+    }]);
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 1)?["qualificationGrants"][0]["effectiveFrom"] =
+        json!("2026-11-01T05:30:00.000000001Z");
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 1)?["qualificationGrants"][0]["effectiveFrom"] =
+        json!("2026-11-01T05:30:00Z");
+    entity(&mut value, 1)?["qualificationGrants"][0]["expiresAt"] =
+        json!("2026-11-01T07:29:59.999999999Z");
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+    Ok(())
+}
+
+#[test]
+fn eligibility_type_and_location_scope_are_conjunctive() -> Result {
+    let mut value = document()?;
+    let mut alternate_type = entity(&mut value, 4)?.clone();
+    alternate_type["id"] = json!(id(12));
+    alternate_type["name"] = json!("Other");
+    value
+        .domain
+        .entities
+        .insert(id(12).parse()?, alternate_type);
+    let mut alternate_location = entity(&mut value, 5)?.clone();
+    alternate_location["id"] = json!(id(13));
+    alternate_location["name"] = json!("South");
+    value
+        .domain
+        .entities
+        .insert(id(13).parse()?, alternate_location);
+    entity(&mut value, 1)?["eligibleAssignmentTypeIds"] = json!([]);
+    entity(&mut value, 1)?["qualificationGrants"] = json!([]);
+    rule(&mut value, 20, "eligibility")?;
+
+    let scope = json!({
+        "people":{"kind":"all"},
+        "assignmentTypeIds":[id(12)],
+        "locationIds":[id(5)]
+    });
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("rule")?["scope"] = scope.clone();
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("rule")?["scope"] = json!({
+        "people":{"kind":"all"},
+        "assignmentTypeIds":[id(4)],
+        "locationIds":[id(13)]
+    });
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    value.domain.rules.get_mut(&id(20).parse()?).ok_or("rule")?["scope"] = json!({
+        "people":{"kind":"all"},
+        "assignmentTypeIds":[id(4)],
+        "locationIds":[id(5)]
+    });
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+    Ok(())
+}
+#[test]
+fn availability_record_type_and_location_filters_are_conjunctive() -> Result {
+    let mut value = document()?;
+    let mut alternate_type = entity(&mut value, 4)?.clone();
+    alternate_type["id"] = json!(id(12));
+    alternate_type["name"] = json!("Other");
+    value
+        .domain
+        .entities
+        .insert(id(12).parse()?, alternate_type);
+    let mut alternate_location = entity(&mut value, 5)?.clone();
+    alternate_location["id"] = json!(id(13));
+    alternate_location["name"] = json!("South");
+    value
+        .domain
+        .entities
+        .insert(id(13).parse()?, alternate_location);
+    availability(
+        &mut value,
+        30,
+        "unavailable",
+        "2026-11-01T05:30:00Z",
+        "2026-11-01T07:30:00Z",
+    )?;
+    entity(&mut value, 30)?["assignmentTypeIds"] = json!([id(12)]);
+    entity(&mut value, 30)?["locationIds"] = json!([id(5)]);
+    rule(&mut value, 21, "availability")?;
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 30)?["assignmentTypeIds"] = json!([id(4)]);
+    entity(&mut value, 30)?["locationIds"] = json!([id(13)]);
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 30)?["locationIds"] = json!([id(5)]);
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
+    Ok(())
+}
+
+#[test]
+fn recurring_availability_clips_an_effective_tail_across_dst() -> Result {
+    let mut value = document()?;
+    entity(&mut value, 8)?["startsAt"] = json!({
+        "instant":"2026-11-01T04:30:00Z",
+        "local":"2026-11-01T00:30:00",
+        "offsetSeconds":-14400
+    });
+    entity(&mut value, 8)?["endsAt"] = json!({
+        "instant":"2026-11-01T07:00:00Z",
+        "local":"2026-11-01T02:00:00",
+        "offsetSeconds":-18000
+    });
+    availability(
+        &mut value,
+        30,
+        "availableOnly",
+        "2026-11-01T00:00:00Z",
+        "2026-11-02T00:00:00Z",
+    )?;
+    entity(&mut value, 30)?["effectiveRange"] =
+        json!({"startDate":"2026-11-01","endDateExclusive":"2026-11-02"});
+    entity(&mut value, 30)?["timeWindow"] = json!({
+        "kind":"weekly",
+        "windows":[{
+            "weekdays":["saturday"],
+            "startTime":"23:00:00",
+            "endTime":"03:00:00",
+            "endDayOffset":1
+        }]
+    });
+    rule(&mut value, 21, "availability")?;
+    assert!(allows(&compile(&value)?, &[pair(1, 8)?])?);
+
+    entity(&mut value, 30)?["timeWindow"]["windows"][0]["endTime"] = json!("01:59:59.999999999");
+    assert!(!allows(&compile(&value)?, &[pair(1, 8)?])?);
     Ok(())
 }
 
@@ -499,7 +809,7 @@ fn coverage_intersects_reporting_weekdays_with_local_start_dates() -> Result {
 }
 
 #[test]
-fn hard_lock_readiness_and_partition_exclude_soft_and_unlocked_states() -> Result {
+fn hard_locks_force_named_pairs_but_soft_and_unlocked_states_do_not() -> Result {
     let mut value = document()?;
     rule(&mut value, 23, "noOverlap")?;
     for (index, shift) in [(50, 7), (51, 8)] {
@@ -509,10 +819,9 @@ fn hard_lock_readiness_and_partition_exclude_soft_and_unlocked_states() -> Resul
         );
     }
     let hard = compile(&value)?;
-    assert_eq!(
-        hard.obligations.remaining,
-        vec![id(50).parse()?, id(51).parse()?]
-    );
+    assert!(hard.obligations.remaining.is_empty());
+    assert!(!allows(&hard, &[])?);
+    assert!(!allows(&hard, &[pair(1, 7)?])?);
     assert!(
         hard.validation
             .issues
@@ -552,11 +861,43 @@ fn hard_lock_readiness_and_partition_exclude_soft_and_unlocked_states() -> Resul
             .iter()
             .any(|issue| issue.code == "official.workforce.hard_lock_unresolved_shift")
     );
+    assert!(!allows(&dormant, &[])?);
+    Ok(())
+}
+#[test]
+fn maximum_assignment_count_and_hard_locks_reject_impossible_joint_selection() -> Result {
+    let mut value = document()?;
+    value.domain.rules.insert(
+        id(20).parse()?,
+        json!({
+            "kind":"maximumAssignmentCount", "id":id(20), "active":true,
+            "strength":"required", "scope":{"people":{"kind":"all"}},
+            "calendarId":id(2), "maximum":1
+        }),
+    );
+    for (index, shift) in [(50, 7), (51, 8)] {
+        value.domain.locked_assignments.insert(
+            id(index).parse()?,
+            json!({
+                "id":id(index), "personId":id(1), "shiftId":id(shift),
+                "state":{"kind":"hard"}
+            }),
+        );
+    }
+    let result = compile(&value)?;
+    assert!(
+        result.validation.issues.iter().any(|issue| {
+            issue.code == "official.workforce.hard_locked_maximum_assignment_count"
+        })
+    );
+    assert!(!allows(&result, &[pair(1, 7)?, pair(1, 8)?])?);
+    assert!(result.obligations.remaining.is_empty());
+    assert!(!allows(&result, &[])?);
     Ok(())
 }
 
 #[test]
-fn rejected_hard_locks_and_excess_hard_coverage_are_readiness_only() -> Result {
+fn rejected_hard_locks_and_excess_hard_coverage_remain_infeasible() -> Result {
     let mut value = document()?;
     rule(&mut value, 20, "eligibility")?;
     rule(&mut value, 22, "coverage")?;
@@ -582,7 +923,8 @@ fn rejected_hard_locks_and_excess_hard_coverage_are_readiness_only() -> Result {
             .iter()
             .any(|issue| issue.code == "official.workforce.hard_locked_coverage_excess")
     );
-    assert_eq!(result.obligations.remaining, vec![id(50).parse()?]);
+    assert!(result.obligations.remaining.is_empty());
+    assert!(!allows(&result, &[])?);
     Ok(())
 }
 
@@ -1641,7 +1983,7 @@ fn rest_only_hard_locks_do_not_scan_unrelated_overlap_pairs() -> Result {
     // 20 million steps on these locks despite there being no NoOverlap rule.
     let result = compile(&value)?;
     assert_eq!(result.estimate.variables, 1_000);
-    assert_eq!(result.estimate.constraints, 0);
+    assert_eq!(result.estimate.constraints, 1_000);
     assert!(result.validation.issues.is_empty());
     // Even with an active overlap rule, unrelated rest rules must not be rescanned
     // for each overlapping lock pair.
@@ -1652,7 +1994,7 @@ fn rest_only_hard_locks_do_not_scan_unrelated_overlap_pairs() -> Result {
         .get_mut(&id(25).parse()?)
         .ok_or("overlap rule")?["scope"] = json!({"people":{"kind":"all"},"categories":["absent"]});
     let mixed = compile(&value)?;
-    assert_eq!(mixed.estimate.constraints, 0);
+    assert_eq!(mixed.estimate.constraints, 1_000);
     assert!(mixed.validation.issues.is_empty());
     Ok(())
 }

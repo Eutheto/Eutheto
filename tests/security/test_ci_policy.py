@@ -21,7 +21,7 @@ WORKFLOWS = {
 
 
 def run_block(filename: str, job: str) -> str:
-    """Read the first literal run block in the named, single-script policy job."""
+    """Read the first literal run block in the named policy job."""
     lines = (ROOT / ".github/workflows" / filename).read_text().splitlines()
     start = lines.index(f"  {job}:") + 1
     end = next(
@@ -219,6 +219,249 @@ class CiPolicyTests(unittest.TestCase):
                     self.assertNotEqual(self.gate(name, result=result), 0)
             with self.subTest(workflow="worker", windows=result):
                 self.assertNotEqual(self.gate("worker", windows=result), 0)
+
+    def test_canonical_requires_successful_browser_job_before_other_steps(self):
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        canonical = workflow.split("  canonical-linux:\n", 1)[1]
+        header, steps = canonical.split("    steps:\n", 1)
+        self.assertIn("    needs: browser-components\n", header)
+        self.assertIn("    if: ${{ always() }}\n", header)
+        self.assertTrue(steps.startswith(
+            "      - name: Require successful sandboxed browser components\n"
+            "        env:\n"
+            "          BROWSER_JOB_RESULT: ${{ needs.browser-components.result }}\n"
+            "        run: |\n"
+        ))
+        script = run_block("pr.yml", "canonical-linux")
+        with tempfile.TemporaryDirectory(prefix="eutheto-browser-gate-") as temporary:
+            directory = Path(temporary)
+            environment = isolated_environment(directory)
+            for result in ("success", "failure", "cancelled", "skipped", "", "unknown"):
+                with self.subTest(result=result):
+                    environment["BROWSER_JOB_RESULT"] = result
+                    outcome = execute(script, directory, environment)
+                    self.assertEqual(outcome.returncode == 0, result == "success")
+
+
+class DependencyPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.classifier = run_block("dependency-update.yml", "classify")
+
+    def classify(self, changes, *, before=None):
+        with tempfile.TemporaryDirectory(prefix="eutheto-dependency-policy-") as temporary:
+            directory = Path(temporary)
+            environment = isolated_environment(directory)
+            environment.update({
+                "GITHUB_OUTPUT": str(directory / ".git/output"),
+                "GITHUB_STEP_SUMMARY": str(directory / ".git/summary"),
+            })
+            hooks = directory / "empty-hooks"
+            hooks.mkdir()
+
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-c", f"core.hooksPath={hooks}", "-c", "commit.gpgsign=false",
+                     "-c", "core.autocrlf=false", *arguments],
+                    cwd=directory, env=environment, text=True, capture_output=True,
+                    check=True,
+                ).stdout.strip()
+
+            def write(files):
+                for path, content in files.items():
+                    destination = directory / path
+                    if content is None:
+                        destination.unlink()
+                    else:
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_text(content)
+
+            git("init", "-q", "-b", "main", f"--template={hooks}")
+            write({
+                ".github/workflows/dependency-update.yml":
+                    (ROOT / ".github/workflows/dependency-update.yml").read_text(),
+                "Cargo.toml": '[dependencies]\nzip = "=8.6.0"\n',
+                "workers/ortools/source-contract.json": '{"fixture":"before"}\n',
+                "benchmarks/expected/probe.json": '{}\n',
+                **(before or {}),
+            })
+            git("add", ".")
+            git("commit", "-qm", "Initial dependency fixture")
+            environment["BASE_SHA"] = git("rev-parse", "HEAD")
+            write(changes)
+            git("add", "-A")
+            git("commit", "-qm", "Dependency fixture change")
+            result = execute(self.classifier, directory, environment)
+            output = Path(environment["GITHUB_OUTPUT"])
+            outputs = dict(line.split("=", 1) for line in output.read_text().splitlines()) \
+                if output.exists() else {}
+            self.assertEqual(git("status", "--porcelain", "--untracked-files=all"), "")
+            return result, outputs
+
+    @staticmethod
+    def lock_inventory(path, identities):
+        if path == "Cargo.lock":
+            return "".join(
+                f'[[package]]\nname = "{name}"\nversion = "{version}.0.0"\n'
+                for name, version in identities
+            )
+        return "packages:\n" + "".join(
+            f"  '{name}@{version}.0.0': {{}}\n" for name, version in identities
+        )
+
+    def test_lock_inventory_pruning_does_not_create_major_family(self):
+        for path in ("Cargo.lock", "pnpm-lock.yaml"):
+            with self.subTest(path=path):
+                result, outputs = self.classify({
+                    path: self.lock_inventory(path, [("probe", 2), ("new", 3)]),
+                }, before={
+                    path: self.lock_inventory(path, [
+                        ("probe", 1), ("probe", 2), ("removed", 7),
+                    ]),
+                })
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["major_families"], "none")
+
+    def test_lock_inventory_introduced_majors_select_their_family(self):
+        for path, name, family in (
+            ("Cargo.lock", "probe", "rust-major"),
+            ("Cargo.lock", "tauri", "tauri-major"),
+            ("pnpm-lock.yaml", "probe", "node-major"),
+            ("pnpm-lock.yaml", "@tauri-apps/api", "tauri-major"),
+        ):
+            for old, new in (((1,), (1, 2)), ((2,), (1, 2)), ((1,), (2,)), ((2,), (1,))):
+                with self.subTest(path=path, name=name, old=old, new=new):
+                    result, outputs = self.classify({
+                        path: self.lock_inventory(path, [(name, version) for version in new]),
+                    }, before={
+                        path: self.lock_inventory(path, [(name, version) for version in old]),
+                    })
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs["major_families"], family)
+
+    def test_lock_inventory_actual_mixed_families_still_reject(self):
+        result, outputs = self.classify({
+            path: self.lock_inventory(path, [("probe", 1), ("probe", 2)])
+            for path in ("Cargo.lock", "pnpm-lock.yaml")
+        }, before={
+            path: self.lock_inventory(path, [("probe", 1)])
+            for path in ("Cargo.lock", "pnpm-lock.yaml")
+        })
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("combines independently reviewed", result.stderr)
+        self.assertIn("node-major, rust-major", result.stderr)
+        self.assertEqual(outputs, {})
+
+    def test_direct_manifest_crossings_survive_lock_inventory_pruning(self):
+        before = {
+            "Cargo.lock": self.lock_inventory("Cargo.lock", [("zip", 8), ("zip", 9)]),
+            "pnpm-lock.yaml": self.lock_inventory("pnpm-lock.yaml", [("probe", 1), ("probe", 2)]),
+            "package.json": '{"dependencies":{"probe":"1.0.0"}}\n',
+        }
+        pruned = {
+            "Cargo.lock": self.lock_inventory("Cargo.lock", [("zip", 9)]),
+            "pnpm-lock.yaml": self.lock_inventory("pnpm-lock.yaml", [("probe", 2)]),
+        }
+        for path, content, family in (
+            ("Cargo.toml", '[dependencies]\nzip = "=9.0.5"\n', "rust-major"),
+            ("package.json", '{"dependencies":{"probe":"2.0.0"}}\n', "node-major"),
+        ):
+            with self.subTest(path=path):
+                result, outputs = self.classify({**pruned, path: content}, before=before)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs["major_families"], family)
+
+    def test_rust_major_with_local_packaging_and_worker_feature_is_one_family(self):
+        paths = (
+            "nix/checks.nix", "nix/eutheto-cli.nix", "nix/packages.nix",
+            "nix/pdf-worker.nix", "nix/source-filter.nix",
+            "workers/ortools/README.md", "workers/ortools/src/worker.cc",
+            "workers/ortools/tests/native_tests.cc",
+            "workers/ortools/solver-build-evidence.schema.json",
+            "workers/ortools/solver-manifest.schema.json",
+        )
+        result, outputs = self.classify({
+            "Cargo.toml": '[dependencies]\nzip = "=9.0.5"\n',
+            **{path: "project-local feature fixture\n" for path in paths},
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs, {
+            "dependency_update": "true", "worker_required": "true",
+            "benchmark_required": "true", "sensitive": "true",
+            "major_families": "rust-major",
+        })
+
+    def test_worker_feature_alone_still_selects_worker_benchmark_and_ownership(self):
+        result, outputs = self.classify({
+            "workers/ortools/src/worker.cc": "project-local feature fixture\n",
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs["major_families"], "none")
+        for flag in ("dependency_update", "worker_required", "benchmark_required", "sensitive"):
+            self.assertEqual(outputs[flag], "true")
+
+    def test_upstream_and_unknown_paths_remain_isolated_migrations(self):
+        migrations = {
+            "nix-input-migration": ("flake.lock",),
+            "nix-definition-migration": (
+                "nix/ortools-worker.nix", "nix/tooling.nix", "nix/new-package.nix",
+            ),
+            "ortools-migration": (
+                "workers/ortools/source-contract.json",
+                "workers/ortools/source-contract.schema.json",
+                "workers/ortools/dependency-sources.json", "workers/ortools/VERSION",
+                "workers/ortools/CMakeLists.txt", "workers/ortools/tests/CMakeLists.txt",
+                "workers/ortools/cmake/native_windows_build.cmake",
+                "workers/ortools/patches/9.15-candidate-fixes.patch",
+                "workers/ortools/src/new-upstream.cc",
+                "workers/ortools/proto/new-metadata.json",
+                "workers/ortools/new-metadata.json",
+                "workers/ortools/new\nmetadata.json",
+            ),
+            "schema-migration": (
+                "workers/ortools/proto/ortools/sat/cp_model.proto",
+                "protocol/version.json",
+            ),
+        }
+        for family, paths in migrations.items():
+            for path in paths:
+                with self.subTest(path=path):
+                    change = {path: "migration fixture\n"}
+                    result, outputs = self.classify(change)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs["major_families"], family)
+                    result, outputs = self.classify({
+                        **change, "Cargo.toml": '[dependencies]\nzip = "=9.0.5"\n',
+                    })
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("combines independently reviewed", result.stderr)
+                    self.assertIn(family, result.stderr)
+                    self.assertIn("rust-major", result.stderr)
+                    self.assertEqual(outputs, {})
+
+    def test_deleted_migration_input_and_rename_to_local_source_stay_migrations(self):
+        result, _ = self.classify({
+            "Cargo.toml": '[dependencies]\nzip = "=9.0.5"\n',
+            "workers/ortools/source-contract.json": None,
+            "workers/ortools/src/worker.cc": '{"fixture":"before"}\n',
+        })
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ortools-migration, rust-major", result.stderr)
+
+    def test_real_migration_families_and_immutable_actions_still_reject(self):
+        for changes in (
+            {"flake.lock": "Nix input fixture\n",
+             "workers/ortools/source-contract.json": '{}\n'},
+            {"Cargo.toml": '[dependencies]\nzip = "=9.0.5"\n',
+             "package.json": '{"dependencies":{"probe":"2.0.0"}}\n'},
+            {".github/workflows/unpinned.yml": "steps:\n  - uses: actions/checkout@v7\n"},
+        ):
+            with self.subTest(changes=changes):
+                result, outputs = self.classify(changes, before={
+                    "package.json": '{"dependencies":{"probe":"1.0.0"}}\n',
+                })
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(outputs, {})
 
 
 if __name__ == "__main__":

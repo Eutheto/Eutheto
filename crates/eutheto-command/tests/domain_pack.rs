@@ -2,14 +2,20 @@ use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
 use eutheto_domain_api::{
     CompileContext, ContractJsonLimits, CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION,
     DomainBatchCommand, DomainPack, DomainPackError, DomainPackRegistry, DomainShareResult,
-    PortableImportContext, ShareResultOptions, validate_contract_value,
+    InfeasibilityCompileContext, PortableImportContext, ShareResultOptions,
+    validate_contract_value,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
-    DomainAssignmentId, EvidenceRenderRequestV1, ExplanationCapability,
-    ExplanationEvidencePayloadV1, ExplanationEvidenceV1, ExplanationValidationSeverity,
-    NormalizedSolution, ValidationIssueEvidenceV1, VerificationContextV1, VerificationIssueId,
-    VerificationValue, blake3_hex,
+    AcceptedResult, AssignmentValue, ComparisonEnrichmentV2, CounterfactualConditionPayloadV1,
+    CounterfactualConditionV1, DomainAssignment, DomainAssignmentId, DomainEntityId,
+    DomainEntityKindId, DomainEntityRef, EvidenceRenderRequestV2, ExplanationCapability,
+    ExplanationEvidencePayloadV2, ExplanationEvidenceV2, ExplanationKind,
+    ExplanationValidationSeverity, NormalizedSolution, ObjectiveProfileId,
+    OptimalityStatusEvidence, PortableAcceptedResult, RepairCausalityV1, RepairEvidenceV2,
+    RunInput, RunManifest, RunObjectiveContext, RunObjectiveOperation, RunPhaseTimingsV1,
+    RunTerminalOutcomeV1, SolutionComparisonV2, ValidationIssueEvidenceV1, VerificationContextV1,
+    VerificationFactId, VerificationIssueId, VerificationValue, VerifiedCheckpoint, blake3_hex,
+    prepare_comparison_v2,
 };
 use eutheto_planning_ir::{
     CandidateValues, Capability, ComparisonOp, Constraint, MetadataKey, PlanningIrLimitsV1,
@@ -18,8 +24,8 @@ use eutheto_planning_ir::{
 };
 use eutheto_types::{
     AssignmentId, CancellationToken, DomainCommandEnvelope, DurationMillis, EntityId,
-    FixedMonotonicClock, PackId, ParentSolveBudget, PortableDomainDocument, RuleId,
-    ScenarioDocument, SolutionId,
+    FixedMonotonicClock, PackId, ParentSolveBudget, PortableDomainDocument, RequestId, RuleId,
+    ScenarioDocument, ScenarioSnapshotId, SolutionId, SolveRunId, SolveStatus,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,14 +91,83 @@ fn batch(commands: Vec<DomainCommandEnvelope>) -> Result<DomainBatchCommand, Box
     })
 }
 
-fn context() -> CompileContext {
-    CompileContext {
+fn authored_objective_context() -> Result<RunObjectiveContext, Box<dyn Error>> {
+    Ok(RunObjectiveContext::authored(PackId::new(
+        OFFICIAL_TEST_PACK_ID,
+    )?)?)
+}
+
+fn context() -> Result<CompileContext, Box<dyn Error>> {
+    Ok(CompileContext {
+        objective_context: Some(authored_objective_context()?),
         scenario_revision: 7,
         semantic_metadata: BTreeMap::new(),
         control: eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
-    }
+    })
 }
+
+fn optimality_status_request(
+    source: &ScenarioDocument,
+    objective_context: Option<RunObjectiveContext>,
+) -> Result<EvidenceRenderRequestV2, Box<dyn Error>> {
+    let checkpoint = VerifiedCheckpoint::from_json(include_bytes!(
+        "../../eutheto-domain-ir/tests/fixtures/verified_checkpoint_v1.json"
+    ))?;
+    let template = checkpoint.run_input;
+    let run_input = RunInput::new(
+        template.run_id,
+        template.request_id,
+        source.scenario_id,
+        template.scenario_revision,
+        template.snapshot_id,
+        template.snapshot_document_hash,
+        template.snapshot_created_at,
+        source.domain_pack.id.clone(),
+        source.domain_pack.schema_version,
+        template.planning_ir_schema_version,
+        template.compiler_version,
+        template.application_version,
+        template.backend_id,
+        template.backend_version,
+        template.adapter_version,
+        template.worker_version,
+        template.solver_version,
+        template.protocol_major,
+        template.protocol_minor,
+        template.model_hash,
+        template.objective_policy_hash,
+        template.solve_options,
+        template.scenario_timezone,
+        template.temporary_condition_hash,
+        objective_context,
+    )?;
+    let run_manifest = RunManifest::new(
+        run_input.run_id,
+        run_input.checksum.clone(),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::Infeasible,
+        },
+        "2026-09-03T12:00:01Z".parse()?,
+        "2026-09-03T12:00:02Z".parse()?,
+        Some(DurationMillis::new(1_000)?),
+        None,
+        None,
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    Ok(EvidenceRenderRequestV2::new(ExplanationEvidenceV2::new(
+        ExplanationEvidencePayloadV2::OptimalityStatus {
+            status: Box::new(OptimalityStatusEvidence {
+                schema_version: Some(2),
+                run_input,
+                run_manifest,
+                result: None,
+            }),
+        },
+    )?)?)
+}
+
 fn verification_context(
     pack: &dyn DomainPack,
     document: &ScenarioDocument,
@@ -112,6 +187,115 @@ fn verification_context(
         solution.canonical_hash()?,
         scope.checksum,
     )?)
+}
+#[allow(clippy::too_many_arguments)]
+fn accepted_source(
+    document: &ScenarioDocument,
+    revision: u64,
+    solution_id: &str,
+    run_ids: (&str, &str, &str),
+    target: i64,
+    compiled_context: Option<RunObjectiveContext>,
+    recorded_context: Option<RunObjectiveContext>,
+    pack_schema_version: u32,
+) -> Result<PortableAcceptedResult, Box<dyn Error>> {
+    let pack = OfficialTestPack;
+    let compilation = CompileContext {
+        scenario_revision: revision,
+        objective_context: compiled_context,
+        ..context()?
+    };
+    let objective_context = compilation.objective_context.clone();
+    let problem = pack.compile(document, &compilation)?;
+    let solution = pack.project(
+        &problem,
+        &satisfying_candidate_for_target(&problem, target),
+        SolutionId::from_str(solution_id)?,
+        &compilation.control,
+    )?;
+    let score = pack.score(
+        document,
+        &solution,
+        objective_context.as_ref(),
+        &compilation.control,
+    )?;
+    let verification_context = verification_context(&pack, document, &problem, &solution)?;
+    let verification = pack.verify(
+        document,
+        &solution,
+        objective_context.as_ref(),
+        &verification_context,
+        &score,
+        &compilation.control,
+    )?;
+    let accepted = AcceptedResult::new(solution, verification)?;
+    let template = VerifiedCheckpoint::from_json(include_bytes!(
+        "../../eutheto-domain-ir/tests/fixtures/verified_checkpoint_v1.json"
+    ))?
+    .run_input;
+    let run_input = RunInput::new(
+        SolveRunId::from_str(run_ids.0)?,
+        RequestId::from_str(run_ids.1)?,
+        document.scenario_id,
+        revision,
+        ScenarioSnapshotId::from_str(run_ids.2)?,
+        blake3_hex(&serde_json::to_vec(document)?),
+        template.snapshot_created_at,
+        document.domain_pack.id.clone(),
+        pack_schema_version,
+        template.planning_ir_schema_version,
+        template.compiler_version,
+        template.application_version,
+        template.backend_id,
+        template.backend_version,
+        template.adapter_version,
+        template.worker_version,
+        template.solver_version,
+        template.protocol_major,
+        template.protocol_minor,
+        verification_context.planning_model_hash,
+        template.objective_policy_hash,
+        template.solve_options,
+        template.scenario_timezone,
+        template.temporary_condition_hash,
+        recorded_context,
+    )?;
+    let run_manifest = RunManifest::new(
+        run_input.run_id,
+        run_input.checksum.clone(),
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+        "2026-09-03T12:00:01Z".parse()?,
+        "2026-09-03T12:00:02Z".parse()?,
+        Some(DurationMillis::new(1_000)?),
+        None,
+        Some(DurationMillis::new(1_000)?),
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    Ok(PortableAcceptedResult::new(
+        run_input,
+        run_manifest,
+        accepted,
+        BTreeMap::new(),
+    )?)
+}
+
+fn repair_request(
+    comparison: SolutionComparisonV2,
+) -> Result<EvidenceRenderRequestV2, Box<dyn Error>> {
+    Ok(EvidenceRenderRequestV2::new(ExplanationEvidenceV2::new(
+        ExplanationEvidencePayloadV2::Repair {
+            repair: Box::new(RepairEvidenceV2 {
+                comparison,
+                causality: RepairCausalityV1::NotEstablished,
+            }),
+        },
+    )?)?)
 }
 
 #[test]
@@ -145,7 +329,7 @@ fn descriptor_declares_exact_explanation_capabilities() -> Result<(), Box<dyn Er
 }
 #[test]
 fn rendering_validates_and_returns_typed_message_parameters() -> Result<(), Box<dyn Error>> {
-    let evidence = ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Validation {
+    let evidence = ExplanationEvidenceV2::new(ExplanationEvidencePayloadV2::Validation {
         issue: ValidationIssueEvidenceV1 {
             issue_id: VerificationIssueId::new("official.test.issue.validation")?,
             severity: ExplanationValidationSeverity::MustFix,
@@ -156,8 +340,14 @@ fn rendering_validates_and_returns_typed_message_parameters() -> Result<(), Box<
             rule_id: None,
         },
     })?;
-    let request = EvidenceRenderRequestV1::new(evidence)?;
-    let rendered = OfficialTestPack.render_evidence(&document()?, &request)?;
+    let request = EvidenceRenderRequestV2::new(evidence)?;
+    let objective_context = authored_objective_context()?;
+    let rendered = OfficialTestPack.render_evidence(
+        &document()?,
+        &request,
+        Some(&objective_context),
+        &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
+    )?;
     assert_eq!(rendered.kind, request.kind);
     assert_eq!(rendered.messages.len(), 1);
     assert_eq!(
@@ -170,6 +360,424 @@ fn rendering_validates_and_returns_typed_message_parameters() -> Result<(), Box<
             .values()
             .all(|value| matches!(value, VerificationValue::Text(_)))
     );
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn synthetic_pack_requires_complete_sources_for_repair() -> Result<(), Box<dyn Error>> {
+    let base_document = document()?;
+    let mut candidate_document = base_document.clone();
+    candidate_document
+        .domain
+        .entities
+        .get_mut(&EntityId::from_str(ENTITY_ID)?)
+        .ok_or("candidate entity is missing")?["target"] = json!(4);
+    let base = accepted_source(
+        &base_document,
+        7,
+        SOLUTION_ID,
+        (
+            "0195a5e4-7c00-7000-8000-000000000011",
+            "0195a5e4-7c00-7000-8000-000000000012",
+            "0195a5e4-7c00-7000-8000-000000000013",
+        ),
+        3,
+        None,
+        None,
+        1,
+    )?;
+    let candidate = accepted_source(
+        &candidate_document,
+        8,
+        "0195a5e4-7c00-7000-8000-000000000014",
+        (
+            "0195a5e4-7c00-7000-8000-000000000015",
+            "0195a5e4-7c00-7000-8000-000000000016",
+            "0195a5e4-7c00-7000-8000-000000000017",
+        ),
+        4,
+        Some(authored_objective_context()?),
+        Some(authored_objective_context()?),
+        1,
+    )?;
+    let comparison =
+        prepare_comparison_v2(&base, &candidate, None)?.finish(ComparisonEnrichmentV2::default())?;
+    let control = eutheto_types::OperationControl::Cancellation(CancellationToken::new());
+    let difference_request = EvidenceRenderRequestV2::new(ExplanationEvidenceV2::new(
+        ExplanationEvidencePayloadV2::SolutionDifference {
+            comparison: Box::new(comparison.clone()),
+        },
+    )?)?;
+    let difference =
+        OfficialTestPack.render_evidence(&base_document, &difference_request, None, &control)?;
+    assert_eq!(difference.kind, ExplanationKind::SolutionDifference);
+    assert_eq!(
+        difference.messages[0].message_key,
+        "official.test.explanation.solution_difference"
+    );
+
+    let request = repair_request(comparison)?;
+    assert!(matches!(
+        OfficialTestPack.render_evidence(&base_document, &request, None, &control),
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            ExplanationCapability::Repair
+        ))
+    ));
+    let rendered = OfficialTestPack.render_repair_evidence(
+        &base_document,
+        &base,
+        &candidate_document,
+        &candidate,
+        &request,
+        &control,
+    )?;
+    rendered.validate()?;
+    let summary = rendered
+        .messages
+        .first()
+        .ok_or("Repair summary is missing")?;
+    assert_eq!(
+        summary.parameters.get(&VerificationFactId::new(
+            "official.test.fact.baseline_admission"
+        )?),
+        Some(&VerificationValue::Text("notEstablished".to_owned()))
+    );
+    let fact = rendered
+        .messages
+        .iter()
+        .find(|message| message.message_key == "official.test.verify.required_target")
+        .ok_or("the baseline selection's failed current rule was not rendered")?;
+    assert_eq!(
+        fact.parameters.get(&VerificationFactId::new(
+            "expected.official.test.fact.target"
+        )?),
+        Some(&VerificationValue::Integer(4))
+    );
+    assert_eq!(
+        fact.parameters.get(&VerificationFactId::new(
+            "observed.official.test.fact.target"
+        )?),
+        Some(&VerificationValue::Integer(3))
+    );
+    assert_eq!(
+        fact.parameters
+            .get(&VerificationFactId::new("official.test.fact.repair_frame")?),
+        Some(&VerificationValue::Text(
+            "acceptedBaseToCandidate".to_owned()
+        ))
+    );
+    assert_eq!(
+        fact.assignments,
+        vec![DomainAssignmentId::new(format!(
+            "official.test.assignment.target.{ENTITY_ID}"
+        ))?]
+    );
+    Ok(())
+}
+
+#[test]
+fn repair_rejects_a_resealed_comparison_body_with_unchanged_source_bindings()
+-> Result<(), Box<dyn Error>> {
+    let base_document = document()?;
+    let mut candidate_document = base_document.clone();
+    candidate_document
+        .domain
+        .entities
+        .get_mut(&EntityId::from_str(ENTITY_ID)?)
+        .ok_or("candidate entity is missing")?["target"] = json!(4);
+    let base = accepted_source(
+        &base_document,
+        7,
+        SOLUTION_ID,
+        (
+            "0195a5e4-7c00-7000-8000-000000000021",
+            "0195a5e4-7c00-7000-8000-000000000022",
+            "0195a5e4-7c00-7000-8000-000000000023",
+        ),
+        3,
+        None,
+        None,
+        1,
+    )?;
+    let candidate = accepted_source(
+        &candidate_document,
+        8,
+        "0195a5e4-7c00-7000-8000-000000000024",
+        (
+            "0195a5e4-7c00-7000-8000-000000000025",
+            "0195a5e4-7c00-7000-8000-000000000026",
+            "0195a5e4-7c00-7000-8000-000000000027",
+        ),
+        4,
+        Some(authored_objective_context()?),
+        Some(authored_objective_context()?),
+        1,
+    )?;
+    let mut body = serde_json::to_value(
+        prepare_comparison_v2(&base, &candidate, None)?.finish(ComparisonEnrichmentV2::default())?,
+    )?;
+    let first_change = body["assignments"]
+        .as_array_mut()
+        .and_then(|changes| changes.first_mut())
+        .ok_or("comparison has no changed assignments")?;
+    if first_change["type"] != "changed" {
+        return Err("comparison fixture did not produce a changed assignment".into());
+    }
+    first_change["after"]["value"]["value"] = json!(5);
+    body.as_object_mut()
+        .ok_or("comparison must serialize as an object")?
+        .remove("checksum")
+        .ok_or("comparison checksum is missing")?;
+    let checksum = blake3_hex(&serde_json::to_vec(&body)?);
+    body.as_object_mut()
+        .ok_or("comparison must serialize as an object")?
+        .insert("checksum".to_owned(), Value::String(checksum));
+    let tampered = serde_json::from_value::<SolutionComparisonV2>(body)?;
+    let request = repair_request(tampered)?;
+    let control = eutheto_types::OperationControl::Cancellation(CancellationToken::new());
+    assert!(matches!(
+        OfficialTestPack.render_repair_evidence(
+            &base_document,
+            &base,
+            &candidate_document,
+            &candidate,
+            &request,
+            &control,
+        ),
+        Err(DomainPackError::Contract(message))
+            if message.contains("does not match its complete accepted sources")
+    ));
+    Ok(())
+}
+
+#[test]
+fn repair_rejects_pack_schema_and_unsupported_objective_contexts() -> Result<(), Box<dyn Error>> {
+    let base_document = document()?;
+    let mut candidate_document = base_document.clone();
+    candidate_document
+        .domain
+        .entities
+        .get_mut(&EntityId::from_str(ENTITY_ID)?)
+        .ok_or("candidate entity is missing")?["target"] = json!(4);
+    let base = accepted_source(
+        &base_document,
+        7,
+        SOLUTION_ID,
+        (
+            "0195a5e4-7c00-7000-8000-000000000031",
+            "0195a5e4-7c00-7000-8000-000000000032",
+            "0195a5e4-7c00-7000-8000-000000000033",
+        ),
+        3,
+        None,
+        None,
+        1,
+    )?;
+    let control = eutheto_types::OperationControl::Cancellation(CancellationToken::new());
+
+    let wrong_schema = accepted_source(
+        &candidate_document,
+        8,
+        "0195a5e4-7c00-7000-8000-000000000034",
+        (
+            "0195a5e4-7c00-7000-8000-000000000035",
+            "0195a5e4-7c00-7000-8000-000000000036",
+            "0195a5e4-7c00-7000-8000-000000000037",
+        ),
+        4,
+        Some(authored_objective_context()?),
+        Some(authored_objective_context()?),
+        2,
+    )?;
+    let wrong_schema_request = repair_request(
+        prepare_comparison_v2(&base, &wrong_schema, None)?
+            .finish(ComparisonEnrichmentV2::default())?,
+    )?;
+    assert!(matches!(
+        OfficialTestPack.render_repair_evidence(
+            &base_document,
+            &base,
+            &candidate_document,
+            &wrong_schema,
+            &wrong_schema_request,
+            &control,
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+
+    let mut unsupported_context = authored_objective_context()?;
+    unsupported_context.profile_id = ObjectiveProfileId::new("official.test.objective.other")?;
+    let unsupported = accepted_source(
+        &candidate_document,
+        8,
+        "0195a5e4-7c00-7000-8000-000000000038",
+        (
+            "0195a5e4-7c00-7000-8000-000000000039",
+            "0195a5e4-7c00-7000-8000-000000000040",
+            "0195a5e4-7c00-7000-8000-000000000041",
+        ),
+        4,
+        Some(authored_objective_context()?),
+        Some(unsupported_context),
+        1,
+    )?;
+    let unsupported_request = repair_request(
+        prepare_comparison_v2(&base, &unsupported, None)?
+            .finish(ComparisonEnrichmentV2::default())?,
+    )?;
+    assert!(matches!(
+        OfficialTestPack.render_repair_evidence(
+            &base_document,
+            &base,
+            &candidate_document,
+            &unsupported,
+            &unsupported_request,
+            &control,
+        ),
+        Err(DomainPackError::Contract(message))
+            if message.contains("unsupported objective context")
+    ));
+    Ok(())
+}
+
+#[test]
+fn repair_reports_removed_historical_endpoints_as_unavailable() -> Result<(), Box<dyn Error>> {
+    let base_document = document()?;
+    let mut candidate_document = base_document.clone();
+    candidate_document.domain.entities.clear();
+    let base = accepted_source(
+        &base_document,
+        7,
+        SOLUTION_ID,
+        (
+            "0195a5e4-7c00-7000-8000-000000000051",
+            "0195a5e4-7c00-7000-8000-000000000052",
+            "0195a5e4-7c00-7000-8000-000000000053",
+        ),
+        3,
+        None,
+        None,
+        1,
+    )?;
+    let candidate = accepted_source(
+        &candidate_document,
+        8,
+        "0195a5e4-7c00-7000-8000-000000000054",
+        (
+            "0195a5e4-7c00-7000-8000-000000000055",
+            "0195a5e4-7c00-7000-8000-000000000056",
+            "0195a5e4-7c00-7000-8000-000000000057",
+        ),
+        3,
+        Some(authored_objective_context()?),
+        Some(authored_objective_context()?),
+        1,
+    )?;
+    let request = repair_request(
+        prepare_comparison_v2(&base, &candidate, None)?.finish(ComparisonEnrichmentV2::default())?,
+    )?;
+    let control = eutheto_types::OperationControl::Cancellation(CancellationToken::new());
+    let rendered = OfficialTestPack.render_repair_evidence(
+        &base_document,
+        &base,
+        &candidate_document,
+        &candidate,
+        &request,
+        &control,
+    )?;
+    assert_eq!(rendered.messages.len(), 3);
+    let unavailable: BTreeSet<String> = rendered.messages[1..]
+        .iter()
+        .map(|message| message.assignments[0].as_str().to_owned())
+        .collect();
+    assert_eq!(
+        unavailable,
+        [
+            format!("official.test.assignment.enabled.{ENTITY_ID}"),
+            format!("official.test.assignment.target.{ENTITY_ID}"),
+        ]
+        .into_iter()
+        .collect()
+    );
+    for message in rendered.messages.iter().skip(1) {
+        assert_eq!(
+            message.message_key,
+            "official.test.explanation.repair.endpoint_unavailable"
+        );
+        assert_eq!(
+            message.entities[0].id.as_str(),
+            format!("official.test.entity.{ENTITY_ID}").as_str()
+        );
+        assert_eq!(
+            message.parameters.get(&VerificationFactId::new(
+                "official.test.fact.current_endpoint"
+            )?),
+            Some(&VerificationValue::Text("unavailable".to_owned()))
+        );
+        assert_eq!(
+            message.parameters.get(&VerificationFactId::new(
+                "official.test.fact.endpoint_reason"
+            )?),
+            Some(&VerificationValue::Text(
+                "entityAbsentFromCandidateDocument".to_owned()
+            ))
+        );
+    }
+    rendered.validate()?;
+    Ok(())
+}
+
+#[test]
+fn ordinary_verification_still_rejects_unknown_assignment_endpoints() -> Result<(), Box<dyn Error>>
+{
+    let document = document()?;
+    let objective_context = authored_objective_context()?;
+    let source = accepted_source(
+        &document,
+        7,
+        SOLUTION_ID,
+        (
+            "0195a5e4-7c00-7000-8000-000000000061",
+            "0195a5e4-7c00-7000-8000-000000000062",
+            "0195a5e4-7c00-7000-8000-000000000063",
+        ),
+        3,
+        Some(objective_context.clone()),
+        Some(objective_context.clone()),
+        1,
+    )?;
+    let mut solution = source.accepted_result.solution.clone();
+    let unknown = "018f25a7-8b3c-7d11-8000-000000000099";
+    solution.assignments.push(DomainAssignment {
+        id: DomainAssignmentId::new(format!("official.test.assignment.enabled.{unknown}"))?,
+        entity: DomainEntityRef {
+            kind: DomainEntityKindId::new("official.test.entity")?,
+            id: DomainEntityId::new(format!("official.test.entity.{unknown}"))?,
+        },
+        value: AssignmentValue::Boolean(true),
+        evidence: Vec::new(),
+    });
+    solution.canonicalize()?;
+    let pack = OfficialTestPack;
+    let compile_context = CompileContext {
+        scenario_revision: solution.scenario_revision,
+        ..context()?
+    };
+    let problem = pack.compile(&document, &compile_context)?;
+    let verification_context = verification_context(&pack, &document, &problem, &solution)?;
+    assert!(matches!(
+        pack.verify(
+            &document,
+            &solution,
+            Some(&objective_context),
+            &verification_context,
+            &source.accepted_result.verification.score,
+            &compile_context.control,
+        ),
+        Err(DomainPackError::Contract(message))
+            if message.contains("solution contains an unknown domain assignment")
+    ));
     Ok(())
 }
 
@@ -377,7 +985,9 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
     let migrated = pack.migrate_portable_step(migrated)?;
     assert_eq!(migrated.payload, portable.payload);
 
-    let problem = pack.compile(&source, &context())?;
+    let compile_context = context()?;
+    let objective_context = compile_context.objective_context.as_ref();
+    let problem = pack.compile(&source, &compile_context)?;
     let mut candidate = CandidateValues::default();
     for variable in &problem.variables {
         match variable {
@@ -399,12 +1009,14 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
     let authoritative_score = pack.score(
         &source,
         &solution,
+        objective_context,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let verification_context = verification_context(&pack, &source, &problem, &solution)?;
     let verification = pack.verify(
         &source,
         &solution,
+        objective_context,
         &verification_context,
         &authoritative_score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -414,7 +1026,12 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
         "nonsemantic.source-only".to_owned(),
         json!({"private": "must-not-be-shared"}),
     );
-    let shared = pack.build_share_result(&source, &accepted, ShareResultOptions::default())?;
+    let shared = pack.build_share_result(
+        &source,
+        &accepted,
+        objective_context,
+        ShareResultOptions::default(),
+    )?;
     let share_bytes = serde_json::to_vec(&shared)?;
     let share_round_trip: DomainShareResult = serde_json::from_slice(&share_bytes)?;
     assert_eq!(share_round_trip, shared);
@@ -429,8 +1046,13 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
     let mut unaccepted = accepted.clone();
     unaccepted.verification.accepted = false;
     assert!(
-        pack.build_share_result(&source, &unaccepted, ShareResultOptions::default())
-            .is_err()
+        pack.build_share_result(
+            &source,
+            &unaccepted,
+            objective_context,
+            ShareResultOptions::default(),
+        )
+        .is_err()
     );
     Ok(())
 }
@@ -526,6 +1148,10 @@ fn historical_portable_semantic_extensions_are_rejected() -> Result<(), Box<dyn 
 }
 
 fn satisfying_candidate(problem: &PlanningProblem) -> CandidateValues {
+    satisfying_candidate_for_target(problem, 3)
+}
+
+fn satisfying_candidate_for_target(problem: &PlanningProblem, target: i64) -> CandidateValues {
     let mut candidate = CandidateValues::default();
     for variable in &problem.variables {
         match variable {
@@ -533,7 +1159,7 @@ fn satisfying_candidate(problem: &PlanningProblem) -> CandidateValues {
                 candidate.booleans.insert(value.id.clone(), true);
             }
             Variable::Integer(value) => {
-                candidate.integers.insert(value.id.clone(), 3);
+                candidate.integers.insert(value.id.clone(), target);
             }
             Variable::Interval(_) => {}
         }
@@ -550,20 +1176,22 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     let limits = PlanningIrLimitsV1::DEFAULT;
     let verification_scope = pack.verification_scope(
         &source,
-        context().scenario_revision,
+        context()?.scenario_revision,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     assert_eq!(
         verification_scope,
-        pack.verification_scope(&source, context().scenario_revision, &context().control)?
+        pack.verification_scope(&source, context()?.scenario_revision, &context()?.control)?
     );
     assert_eq!(verification_scope.required_rules.len(), 1);
     assert_eq!(
         verification_scope.required_rules[0].rule_id,
         RuleId::from_uuid(EntityId::from_str(ENTITY_ID)?.as_uuid())
     );
-    let first = pack.compile(&source, &context())?;
-    let second = pack.compile(&source, &context())?;
+    let compile_context = context()?;
+    let objective_context = compile_context.objective_context.as_ref();
+    let first = pack.compile(&source, &compile_context)?;
+    let second = pack.compile(&source, &context()?)?;
     validate(&first, limits)?;
     validate(&second, limits)?;
     let first_summary = summarize(&first, limits)?;
@@ -604,7 +1232,7 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     assert_eq!(first.objectives.levels[0].upper_bound, 10);
     let mut renamed_source = source.clone();
     renamed_source.metadata.title = "Renamed display-only scenario".to_owned();
-    let renamed = pack.compile(&renamed_source, &context())?;
+    let renamed = pack.compile(&renamed_source, &context()?)?;
     assert_eq!(
         summarize(&renamed, limits)?.canonical_ir_hash,
         first_summary.canonical_ir_hash
@@ -635,6 +1263,7 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     let authoritative_score = pack.score(
         &source,
         &solution,
+        objective_context,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let context_for_solution = verification_context(&pack, &source, &first, &solution)?;
@@ -648,12 +1277,14 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     let unsatisfied_score = pack.score(
         &source,
         &unsatisfied,
+        objective_context,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
     )?;
     let unsatisfied_context = verification_context(&pack, &source, &first, &unsatisfied)?;
     let report = pack.verify(
         &source,
         &solution,
+        objective_context,
         &context_for_solution,
         &authoritative_score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -691,15 +1322,17 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
         pack.verify(
             &source,
             &solution,
+            objective_context,
             &context_for_solution,
             &report.score,
-            &context().control
+            &context()?.control
         )?
     );
 
     let unsatisfied_report = pack.verify(
         &source,
         &unsatisfied,
+        objective_context,
         &unsatisfied_context,
         &unsatisfied_score,
         &eutheto_types::OperationControl::Cancellation(CancellationToken::new()),
@@ -712,6 +1345,368 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn direct_pack_paths_reject_unimplemented_objective_contexts() -> Result<(), Box<dyn Error>> {
+    let pack = OfficialTestPack;
+    let source = document()?;
+    let compile_context = context()?;
+    let objective_context = compile_context
+        .objective_context
+        .as_ref()
+        .ok_or("current compile context is missing its objective")?;
+    let problem = pack.compile(&source, &compile_context)?;
+    let solution = pack.project(
+        &problem,
+        &satisfying_candidate(&problem),
+        SolutionId::from_str(SOLUTION_ID)?,
+        &compile_context.control,
+    )?;
+    let authoritative_score = pack.score(
+        &source,
+        &solution,
+        Some(objective_context),
+        &compile_context.control,
+    )?;
+    let verification_context = verification_context(&pack, &source, &problem, &solution)?;
+    let report = pack.verify(
+        &source,
+        &solution,
+        Some(objective_context),
+        &verification_context,
+        &authoritative_score,
+        &compile_context.control,
+    )?;
+    let accepted = AcceptedResult::new(solution.clone(), report)?;
+
+    let mut unimplemented = authored_objective_context()?;
+    unimplemented.profile_id = ObjectiveProfileId::new("official.test.objective.other")?;
+    assert!(
+        unimplemented
+            .validate_for(&source.domain_pack.id, source.scenario_id)
+            .is_ok()
+    );
+    let unsupported_compile_context = CompileContext {
+        objective_context: Some(unimplemented.clone()),
+        ..compile_context.clone()
+    };
+    assert!(matches!(
+        pack.compile(&source, &unsupported_compile_context),
+        Err(DomainPackError::Contract(_))
+    ));
+
+    let mut malformed_contexts = Vec::new();
+    let mut wrong_pack = authored_objective_context()?;
+    wrong_pack.pack_id = PackId::new("official.test.other")?;
+    malformed_contexts.push(wrong_pack);
+    let mut wrong_schema = authored_objective_context()?;
+    wrong_schema.schema_version += 1;
+    malformed_contexts.push(wrong_schema);
+    let mut wrong_semantics = authored_objective_context()?;
+    wrong_semantics.semantic_version += 1;
+    malformed_contexts.push(wrong_semantics);
+    let mut repair = authored_objective_context()?;
+    repair.operation = RunObjectiveOperation::Repair;
+    malformed_contexts.push(repair);
+    for invalid in malformed_contexts {
+        let invalid_compile_context = CompileContext {
+            objective_context: Some(invalid),
+            ..compile_context.clone()
+        };
+        assert!(pack.compile(&source, &invalid_compile_context).is_err());
+    }
+
+    let projection = problem
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Boolean(_)))
+        .ok_or("Boolean projection missing")?;
+    let condition =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: projection.assignment_id.clone(),
+            value: AssignmentValue::Boolean(false),
+        })?;
+    let budget = parent_budget(
+        1_000,
+        Arc::new(FixedMonotonicClock::default()),
+        CancellationToken::new(),
+    )?;
+    assert!(matches!(
+        pack.compile_counterfactual(
+            &source,
+            &condition,
+            &CounterfactualCompileContext {
+                base_problem: &problem,
+                compile_context: &unsupported_compile_context,
+                budget: budget.phase_view(),
+            },
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+    assert!(matches!(
+        pack.compile_infeasibility(
+            &source,
+            &InfeasibilityCompileContext {
+                base_problem: &problem,
+                compile_context: &unsupported_compile_context,
+                condition: None,
+                budget: budget.phase_view(),
+            },
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+
+    let control = eutheto_types::OperationControl::Cancellation(CancellationToken::new());
+    assert!(matches!(
+        pack.score(&source, &solution, Some(&unimplemented), &control),
+        Err(DomainPackError::Contract(_))
+    ));
+    assert!(matches!(
+        pack.verify(
+            &source,
+            &solution,
+            Some(&unimplemented),
+            &verification_context,
+            &authoritative_score,
+            &control,
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+    assert!(matches!(
+        pack.build_share_result(
+            &source,
+            &accepted,
+            Some(&unimplemented),
+            ShareResultOptions::default(),
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+
+    let request = EvidenceRenderRequestV2::new(ExplanationEvidenceV2::new(
+        ExplanationEvidencePayloadV2::Validation {
+            issue: ValidationIssueEvidenceV1 {
+                issue_id: VerificationIssueId::new("official.test.issue.validation")?,
+                severity: ExplanationValidationSeverity::MustFix,
+                message_key: "official.test.validation.target".to_owned(),
+                parameters: BTreeMap::new(),
+                field_path: None,
+                entity: None,
+                rule_id: None,
+            },
+        },
+    )?)?;
+    assert!(matches!(
+        pack.render_evidence(&source, &request, Some(&unimplemented), &control,),
+        Err(DomainPackError::Contract(_))
+    ));
+    let query = eutheto_domain_api::DomainSetupQueryV1 {
+        schema_version: 1,
+        view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
+    };
+    assert!(matches!(
+        pack.build_view(
+            eutheto_domain_api::DomainViewInput::AcceptedSolution {
+                document: &source,
+                solution: &solution,
+                objective_context: Some(&unimplemented),
+                view_id: &query.view_id,
+                query: &query,
+                context: eutheto_domain_api::SetupViewContext {
+                    revision: eutheto_types::Revision::INITIAL,
+                    query_fingerprint: [0; 32],
+                },
+            },
+            &control,
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn legacy_none_context_preserves_model_and_report_semantics() -> Result<(), Box<dyn Error>> {
+    let pack = OfficialTestPack;
+    let source = document()?;
+    let current_context = context()?;
+    let objective_context = current_context
+        .objective_context
+        .as_ref()
+        .ok_or("current compile context is missing its objective")?;
+    let legacy_context = CompileContext {
+        objective_context: None,
+        ..current_context.clone()
+    };
+    let current_problem = pack.compile(&source, &current_context)?;
+    let legacy_problem = pack.compile(&source, &legacy_context)?;
+    assert_eq!(legacy_problem, current_problem);
+
+    let solution = pack.project(
+        &current_problem,
+        &satisfying_candidate(&current_problem),
+        SolutionId::from_str(SOLUTION_ID)?,
+        &current_context.control,
+    )?;
+    let current_score = pack.score(
+        &source,
+        &solution,
+        Some(objective_context),
+        &current_context.control,
+    )?;
+    let legacy_score = pack.score(&source, &solution, None, &current_context.control)?;
+    assert_eq!(legacy_score, current_score);
+    let verification_context = verification_context(&pack, &source, &current_problem, &solution)?;
+    let current_report = pack.verify(
+        &source,
+        &solution,
+        Some(objective_context),
+        &verification_context,
+        &current_score,
+        &current_context.control,
+    )?;
+    let legacy_report = pack.verify(
+        &source,
+        &solution,
+        None,
+        &verification_context,
+        &legacy_score,
+        &current_context.control,
+    )?;
+    assert_eq!(legacy_report, current_report);
+    let accepted = AcceptedResult::new(solution.clone(), legacy_report)?;
+    assert_eq!(
+        pack.build_share_result(&source, &accepted, None, ShareResultOptions::default(),)?,
+        pack.build_share_result(
+            &source,
+            &accepted,
+            Some(objective_context),
+            ShareResultOptions::default(),
+        )?
+    );
+
+    let legacy_request = optimality_status_request(&source, None)?;
+    let current_request = optimality_status_request(&source, Some((*objective_context).clone()))?;
+    let legacy_rendered =
+        pack.render_evidence(&source, &legacy_request, None, &current_context.control)?;
+    assert_eq!(legacy_rendered.kind, legacy_request.kind);
+    assert_eq!(
+        legacy_rendered.evidence_checksum,
+        legacy_request.evidence.checksum
+    );
+    let current_rendered = pack.render_evidence(
+        &source,
+        &current_request,
+        Some(objective_context),
+        &current_context.control,
+    )?;
+    assert_eq!(current_rendered.kind, current_request.kind);
+    assert_eq!(
+        current_rendered.evidence_checksum,
+        current_request.evidence.checksum
+    );
+    assert!(matches!(
+        pack.render_evidence(&source, &current_request, None, &current_context.control,),
+        Err(DomainPackError::Contract(_))
+    ));
+    assert!(matches!(
+        pack.render_evidence(
+            &source,
+            &legacy_request,
+            Some(objective_context),
+            &current_context.control,
+        ),
+        Err(DomainPackError::Contract(_))
+    ));
+
+    let query = eutheto_domain_api::DomainSetupQueryV1 {
+        schema_version: 1,
+        view_id: "official.test.result.summary".to_owned(),
+        parameters: json!({}),
+        continuation: None,
+    };
+    let view_context = eutheto_domain_api::SetupViewContext {
+        revision: eutheto_types::Revision::INITIAL,
+        query_fingerprint: [0; 32],
+    };
+    let current_view = pack.build_view(
+        eutheto_domain_api::DomainViewInput::AcceptedSolution {
+            document: &source,
+            solution: &solution,
+            objective_context: Some(objective_context),
+            view_id: &query.view_id,
+            query: &query,
+            context: view_context,
+        },
+        &current_context.control,
+    )?;
+    let legacy_view = pack.build_view(
+        eutheto_domain_api::DomainViewInput::AcceptedSolution {
+            document: &source,
+            solution: &solution,
+            objective_context: None,
+            view_id: &query.view_id,
+            query: &query,
+            context: view_context,
+        },
+        &current_context.control,
+    )?;
+    assert_eq!(legacy_view.view, current_view.view);
+
+    let projection = current_problem
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Boolean(_)))
+        .ok_or("Boolean projection missing")?;
+    let condition =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: projection.assignment_id.clone(),
+            value: AssignmentValue::Boolean(false),
+        })?;
+    let budget = parent_budget(
+        1_000,
+        Arc::new(FixedMonotonicClock::default()),
+        CancellationToken::new(),
+    )?;
+    assert!(matches!(
+        pack.compile_infeasibility(
+            &source,
+            &InfeasibilityCompileContext {
+                base_problem: &current_problem,
+                compile_context: &legacy_context,
+                condition: None,
+                budget: budget.phase_view(),
+            },
+        ),
+        Err(DomainPackError::UnsupportedDomainCapability(
+            eutheto_domain_api::DomainCapability::InfeasibilityDiagnostics
+        ))
+    ));
+
+    assert_eq!(
+        pack.compile_counterfactual(
+            &source,
+            &condition,
+            &CounterfactualCompileContext {
+                base_problem: &current_problem,
+                compile_context: &legacy_context,
+                budget: budget.phase_view(),
+            },
+        )?,
+        pack.compile_counterfactual(
+            &source,
+            &condition,
+            &CounterfactualCompileContext {
+                base_problem: &current_problem,
+                compile_context: &current_context,
+                budget: budget.phase_view(),
+            },
+        )?
+    );
+    Ok(())
+}
+
+#[test]
 fn unknown_internal_and_portable_fields_are_rejected() -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
     let mut source = document()?;
@@ -720,7 +1715,7 @@ fn unknown_internal_and_portable_fields_are_rejected() -> Result<(), Box<dyn Err
         json!({ "id": ENTITY_ID, "enabled": true, "target": 3, "future": true }),
     );
     assert!(!pack.validate_fast(&source).issues.is_empty());
-    assert!(pack.compile(&source, &context()).is_err());
+    assert!(pack.compile(&source, &context()?).is_err());
 
     let clean = document()?;
     let mut portable = pack.export_portable(&clean)?;
@@ -754,7 +1749,7 @@ fn parent_budget(
 fn counterfactual_compilation_adds_only_typed_condition_semantics() -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
     let source = document()?;
-    let compile_context = context();
+    let compile_context = context()?;
     let base = pack.compile(&source, &compile_context)?;
     let bool_projection = base
         .projections
@@ -887,7 +1882,7 @@ fn counterfactual_compilation_rejects_mismatch_and_unsupported_conditions()
 -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
     let source = document()?;
-    let compile_context = context();
+    let compile_context = context()?;
     let base = pack.compile(&source, &compile_context)?;
     let bool_projection = base
         .projections
@@ -1017,7 +2012,7 @@ fn counterfactual_compilation_observes_shared_cancellation_and_expiry() -> Resul
 {
     let pack = OfficialTestPack;
     let source = document()?;
-    let compile_context = context();
+    let compile_context = context()?;
     let base = pack.compile(&source, &compile_context)?;
     let assignment_id = base
         .projections

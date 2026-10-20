@@ -3,7 +3,7 @@ import {
   getScenarioSetupStatus,
   SetupOperationScope,
   validateScenario,
-  type FullValidationResultV2,
+  type FullValidationResultV3,
   type ScenarioSetupStatusV2,
   type SetupOperation,
 } from "./api/generated";
@@ -19,7 +19,7 @@ import {
 export function useFullValidation(home: ProjectHomeController, project: () => ProjectSummary) {
   const state = shallowReactive<{
     status: ScenarioSetupStatusV2 | null;
-    report: FullValidationResultV2 | null;
+    report: FullValidationResultV3 | null;
     loading: boolean;
     error: string | null;
     run: "idle" | "running" | "completed" | "cancelled" | "failed";
@@ -80,7 +80,7 @@ export function useFullValidation(home: ProjectHomeController, project: () => Pr
     state.run = "running";
     state.failure = null;
     let owned: SetupOperationScope | null = null;
-    let operation: SetupOperation<FullValidationResultV2> | null = null;
+    let operation: SetupOperation<FullValidationResultV3> | null = null;
     try {
       owned = new SetupOperationScope(captured.scenarioId, captured.revision);
       runScope = owned;

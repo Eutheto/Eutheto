@@ -393,6 +393,7 @@ Phase 09 is complete only when:
 
 - Pin **Konva 10.3.2** and **vue-konva 3.4.0** exactly in Phase 00’s pnpm lock. Reconfirm vue-konva peer compatibility with Vue 3.5.42 and Konva 10.3.2 in the install/build smoke gate; do not silently downgrade to the blueprint’s older unstated line.
 - The wider verified frontend inventory as of 2026-08-29 is Vue 3.5.42, Vue Router 5.3.0, Pinia 4.0.3, Vite 8.2.2, Tailwind 4.3.3, shadcn-vue 2.8.2, Reka 2.10.4, TanStack Table 9.2.4, TanStack Virtual 3.13.36, ECharts 6.1.0, and vue-echarts 8.1.0. Exact locks remain Phase 00 actions.
+- **Approved maintenance — 2026-10-18:** the unused `shadcn-vue` 2.8.2 generator in that historical inventory is retired; reviewed component source remains application-owned. See the [dated dependency ledger](assumptions.md#approved-frontend-dependency-cleanup--2026-10-18).
 - Public acceptance requires profiling the chosen Konva layer/cache/hit-detection strategy on 500-guest layouts and manual screen-reader/keyboard tests; library choice alone does not satisfy accessibility/performance.
 - Geometry distance/orientation thresholds, back-to-back defaults, display-unit rounding, event presets, and user-facing score weights require usability/domain review and explicit persisted defaults.
 - CLI name, application ID, signing, and hosting remain unresolved project gates. `.eutheto` is the proposed portable extension; Phase 11 closes the extension/media type/file association before public use.

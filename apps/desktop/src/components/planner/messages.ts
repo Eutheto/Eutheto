@@ -24,6 +24,8 @@ export const plannerMessages = {
   "action.clear": "Clear selection",
   "action.retry": "Try again",
   "entity.search": "Search {label}",
+  "entity.choose": "Choose {label}",
+  "entity.browse": "Open the list to choose an existing item.",
   "entity.idle": "Search for an existing item.",
   "entity.loading": "Loading matching items…",
   "entity.stale": "Waiting for results for the current search…",

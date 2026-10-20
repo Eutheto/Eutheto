@@ -1,0 +1,201 @@
+{
+  "applied": {
+    "outcome": {
+      "commandId": "01a109d2-c787-71f2-91b4-172928839640",
+      "kind": "applied",
+      "revision": 2
+    },
+    "report": {
+      "consumed": true,
+      "disposition": "reviewable",
+      "previewId": "01a109d2-c76c-71a1-b397-27dca3903862",
+      "rows": {
+        "excludedRows": [
+          {
+            "issue": "unresolvedPerson",
+            "record": 4,
+            "skipped": true
+          }
+        ],
+        "family": "assignments"
+      },
+      "schemaVersion": 1
+    },
+    "scenarioId": "01a109d2-c65f-7e70-ac13-ea7a6bc06d0e",
+    "schemaVersion": 1,
+    "sourceId": "01a109d2-c714-7f01-8701-466db45c8dfb"
+  },
+  "detection": {
+    "data": {
+      "format": "canonicalV1",
+      "schemaVersion": 1,
+      "source": {
+        "blake3": "130f48ce51f942964271ad6a46adb057b61829f7324bd5f2b0b6c2b9a7c9bfe0",
+        "logicalRecords": 4,
+        "rawBytes": 411
+      }
+    },
+    "family": "assignments"
+  },
+  "preview": {
+    "preview": {
+      "approvalDigest": "6974901c29d747d120742b3038ca5694a6e3c3e7a2fa92f621b96f32c01e40f4",
+      "batch": {
+        "commands": [
+          {
+            "commandType": "official.workforce.add_entity",
+            "payload": {
+              "entity": {
+                "assignments": [
+                  {
+                    "personId": "018f7b40-a000-7000-8000-000000000001",
+                    "shiftId": "018f7b40-a000-7000-8000-000000000008"
+                  }
+                ],
+                "id": "018f7b40-a000-7000-8000-000000000014",
+                "kind": "externalStartingPlan",
+                "name": "Unverified native plan",
+                "originalImport": {
+                  "pairContentHash": "f91f6e3b4459f562ec59eadd3c4f7f08fc471b5e149a832ccd73327eff0ef169",
+                  "sourceBlake3": "130f48ce51f942964271ad6a46adb057b61829f7324bd5f2b0b6c2b9a7c9bfe0"
+                },
+                "schemaVersion": 1
+              }
+            }
+          }
+        ],
+        "label": "Import unverified starting plan from CSV",
+        "packId": "official.workforce",
+        "scenarioSchemaVersion": 1,
+        "schemaVersion": 1
+      },
+      "changes": {
+        "addedPairs": [
+          {
+            "personId": "018f7b40-a000-7000-8000-000000000001",
+            "shiftId": "018f7b40-a000-7000-8000-000000000008"
+          }
+        ],
+        "afterPairCount": 1,
+        "beforePairCount": 0,
+        "previousName": null,
+        "provenanceChanged": true,
+        "removedPairs": []
+      },
+      "disposition": "reviewable",
+      "excludedRows": [
+        {
+          "issue": "unresolvedPerson",
+          "record": 4,
+          "skipped": true
+        }
+      ],
+      "review": {
+        "allowEmpty": false,
+        "changesBlake3": "55889c66d05bf7a96c77ce828db30778dd1a36ba1373c4351e5ace64550264c0",
+        "excludedBlake3": "7a090d2b674f5940da145870ee2a25301872e6adf412ffd9749668ab4e29a90f",
+        "format": "eutheto/workforce-assignment-csv-review",
+        "limitsVersion": 1,
+        "mapping": {
+          "format": "canonicalV1"
+        },
+        "parserVersion": "eutheto-assignments-csv-1",
+        "revision": 1,
+        "rowsBlake3": "b25c3d5ef738472a8f6ea2f41eefbace461167c76ee1b04ba2e027e0dce50f34",
+        "scenarioBlake3": "b6a2e29faa0c11b3093696254b7f442bd3159a8af00130f9a92dde64b1a90328",
+        "scenarioId": "01a109d2-c65f-7e70-ac13-ea7a6bc06d0e",
+        "schemaVersion": 1,
+        "skippedRecords": [4],
+        "source": {
+          "blake3": "130f48ce51f942964271ad6a46adb057b61829f7324bd5f2b0b6c2b9a7c9bfe0",
+          "logicalRecords": 4,
+          "rawBytes": 411
+        },
+        "target": {
+          "id": "018f7b40-a000-7000-8000-000000000014",
+          "kind": "create",
+          "name": "Unverified native plan"
+        },
+        "validationBlake3": "d53d18c23212ea7b6300594bb89bce60218f6eff2b9d628b8cc42d3e79bbd5ab"
+      },
+      "rows": [
+        {
+          "issue": null,
+          "personId": "018f7b40-a000-7000-8000-000000000001",
+          "record": 3,
+          "shiftId": "018f7b40-a000-7000-8000-000000000008",
+          "status": "included"
+        },
+        {
+          "issue": "unresolvedPerson",
+          "personId": null,
+          "record": 4,
+          "shiftId": "018f7b40-a000-7000-8000-000000000008",
+          "status": "skipped"
+        }
+      ],
+      "schemaVersion": 1,
+      "source": {
+        "blake3": "130f48ce51f942964271ad6a46adb057b61829f7324bd5f2b0b6c2b9a7c9bfe0",
+        "logicalRecords": 4,
+        "rawBytes": 411
+      },
+      "validationIssues": []
+    },
+    "previewId": "01a109d2-c76c-71a1-b397-27dca3903862",
+    "revision": 1,
+    "scenarioId": "01a109d2-c65f-7e70-ac13-ea7a6bc06d0e",
+    "schemaVersion": 1,
+    "sourceId": "01a109d2-c714-7f01-8701-466db45c8dfb"
+  },
+  "report": {
+    "consumed": true,
+    "disposition": "reviewable",
+    "previewId": "01a109d2-c76c-71a1-b397-27dca3903862",
+    "rows": {
+      "excludedRows": [
+        {
+          "issue": "unresolvedPerson",
+          "record": 4,
+          "skipped": true
+        }
+      ],
+      "family": "assignments"
+    },
+    "schemaVersion": 1
+  },
+  "reportSaved": {
+    "previewId": "01a109d2-c76c-71a1-b397-27dca3903862",
+    "schemaVersion": 1
+  },
+  "sample": {
+    "cells": [
+      {
+        "text": "official.workforce.assignment.018f7b40-a000-7000-8000-000000000001.018f7b40-a000-7000-8000-000000000008",
+        "truncated": false
+      },
+      {
+        "text": "018f7b40-a000-7000-8000-000000000001",
+        "truncated": false
+      },
+      {
+        "text": "018f7b40-a000-7000-8000-000000000008",
+        "truncated": false
+      }
+    ],
+    "readFormat": {
+      "family": "assignments",
+      "format": {
+        "format": "canonicalV1"
+      }
+    },
+    "record": 3,
+    "schemaVersion": 1,
+    "sourceId": "01a109d2-c714-7f01-8701-466db45c8dfb"
+  },
+  "sourceOpened": {
+    "byteCount": 411,
+    "schemaVersion": 1,
+    "sourceId": "01a109d2-c714-7f01-8701-466db45c8dfb"
+  }
+}

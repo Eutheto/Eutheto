@@ -1,0 +1,17 @@
+{
+  "source": "https://www.w3.org/copyright/document-license-2015/",
+  "retrievedOn": "2026-10-17",
+  "retrieval": "Web tool primary-page rendered extraction; complete legal content at source lines98-119",
+  "rawHtmlStatus": "Not downloaded: urllib direct HTTPS request failed with HTTP tunnel403 Forbidden. No proxy/TLS workaround used.",
+  "evidenceFile": "w3c-document-license-2015.web-evidence.txt",
+  "evidenceSha256": "1afa6f6ec0a2de6e3460a6dcc3ab26755349ca0fb4af274cc5d6b25e032ae57c",
+  "licenseTextFile": "../../fonts/W3C-DOCUMENT-LICENSE-2015",
+  "licenseTextSha256": "99e12eb0d2b8a0f1e1b075e8314ac2697e6cdc422ede17a3621a61ea82b5b487",
+  "licenseTextBytes": 3258,
+  "formatting": "Heading added from page title; source line labels removed; citation markup replaced by rendered link labels without tool-added domain annotations; link-adjacent whitespace normalized; Markdown heading markers removed. Legal words/punctuation retained. This is a rendered-text transcription, not byte-identical source HTML.",
+  "linksInLegalText": {
+    "W3C Software License": "https://www.w3.org/copyright/software-license/"
+  },
+  "originalEvidenceSha256": "a1aa82578ea8babb21da8107ed812a8fca51b9d9709b20a95c16805a63a520ec",
+  "evidenceFormatting": "Trailing whitespace and excess final blank lines removed from the retained web-tool response. Original response hash is recorded separately; complete original remains in task validation scratch. License text is unchanged."
+}

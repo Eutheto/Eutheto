@@ -57,11 +57,23 @@ pub struct ScenarioSetupViewResultV2 {
     pub view: DomainView,
 }
 
-pub(super) struct CancelOnDrop(pub(super) CancellationToken);
+pub(super) struct CancelOnDrop(Option<CancellationToken>);
+
+impl CancelOnDrop {
+    pub(super) fn new(cancellation: CancellationToken) -> Self {
+        Self(Some(cancellation))
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        self.0.cancel();
+        if let Some(cancellation) = &self.0 {
+            cancellation.cancel();
+        }
     }
 }
 
@@ -175,7 +187,7 @@ impl EuthetoApp {
         query: DomainSetupQueryV1,
         cancellation: CancellationToken,
     ) -> Result<ScenarioSetupViewResultV2, AppError> {
-        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+        let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
         self.preflight_setup_view(&source, &query, &cancellation)?;
         let project = self
             .capture_setup_project(scenario_id, Some(expected_revision), &cancellation)
@@ -217,6 +229,7 @@ impl EuthetoApp {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_setup_view(
     project: &StoredProject,
     source: &SetupSourceV2,
@@ -247,7 +260,7 @@ fn build_setup_view(
                 )
                 .map_err(setup_domain_error)?;
             if let Some(reconciliation) = output.reconciliation {
-                apply_reconciled_command_with_registry(
+                let mut prepared = apply_reconciled_command_with_registry(
                     document,
                     context.revision,
                     None,
@@ -255,13 +268,42 @@ fn build_setup_view(
                     cancellation,
                     |_, _| Ok(Some(reconciliation)),
                 )
-                .map_err(|error| reconciliation_error(error, None))?;
+                .map_err(|error| reconciliation_error(error, None))?
+                .ok_or_else(|| setup_invalid("/reconciliation"))?;
+                if let Some(protected) = super::manual::finalize_standalone_base_change(
+                    document,
+                    &mut prepared.applied.document,
+                    Some(&control),
+                )
+                .map_err(store_error)?
+                {
+                    prepared
+                        .applied
+                        .result
+                        .change_set
+                        .changes
+                        .extend(protected.changes);
+                }
+                pack.build_view(
+                    DomainViewInput::CommandPreviewSetup {
+                        original: document,
+                        prospective: &prepared.applied.document,
+                        command: &prepared.effective_command,
+                        changes: &prepared.applied.result.change_set.changes,
+                        query,
+                        context,
+                    },
+                    &control,
+                )
+                .map_err(setup_domain_error)?
+                .view
+            } else {
+                output.view
             }
-            output.view
         }
         SetupSourceV2::CommandPreview { command } => {
             let mut retained_view = None;
-            apply_reconciled_command_with_registry(
+            let prepared = apply_reconciled_command_with_registry(
                 document,
                 context.revision,
                 Some(command),
@@ -284,6 +326,33 @@ fn build_setup_view(
                 },
             )
             .map_err(|error| reconciliation_error(error, Some(command)))?;
+            if let Some(prepared) = prepared {
+                let mut applied = prepared.applied;
+                if let Some(protected) = super::manual::finalize_standalone_base_change(
+                    document,
+                    &mut applied.document,
+                    Some(&control),
+                )
+                .map_err(store_error)?
+                {
+                    applied.result.change_set.changes.extend(protected.changes);
+                }
+                retained_view = Some(
+                    pack.build_view(
+                        DomainViewInput::CommandPreviewSetup {
+                            original: document,
+                            prospective: &applied.document,
+                            command,
+                            changes: &applied.result.change_set.changes,
+                            query,
+                            context,
+                        },
+                        &control,
+                    )
+                    .map_err(setup_domain_error)?
+                    .view,
+                );
+            }
             retained_view.ok_or_else(|| setup_invalid("/view"))?
         }
     };

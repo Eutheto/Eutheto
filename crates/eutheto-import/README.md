@@ -11,7 +11,7 @@ Bounded inspection, migration and collision staging for untrusted portable scena
 - `validate_standalone_scenario` uses the same closure validator with one scenario and no supplemental assets. Standalone JSON preserves declared nonsemantic data but cannot silently depend on an absent asset or another scenario.
 - Unknown newer versions and unsupported semantic capabilities fail safely. Migration provenance is reported; historical versions are supported only by genuine registered migrations.
 
-The application owns atomic commit, exact-revision checks and user-safe error mapping. A decoded historical accepted-result record remains archival input until the application freshly verifies its original-domain bindings, required rules and score.
+The application owns atomic commit, exact-revision checks and user-safe error mapping. Imported result records remain inert supplemental data, not native accepted custody. Closed archival-result V1 requires its host capability in both source and effective manifests; copying changes only the live outer identities, while original payloads remain unchanged under recursive content/asset checks. Descriptive or forged accepted flags cannot grant native authority.
 
 ## Verification
 

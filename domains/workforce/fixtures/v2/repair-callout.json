@@ -1,0 +1,21 @@
+{
+  "format": "eutheto/workforce-repair-fixture",
+  "schemaVersion": 2,
+  "corpusVersion": 2,
+  "beforeCase": "practitioner-workflow",
+  "executionPhase": 7,
+  "baselineRequirement": "Phase07: obtain a genuine independently accepted solution of practitioner-workflow and select it as the baseline; bind this call-out to the canonical first accepted pair on the exact 2027-02-10 weekday clinic that is not Hard-locked",
+  "commandId": "official.workforce.add_entity",
+  "availabilityId": "01a04a99-f980-7488-8794-5df7409754e2",
+  "targetShiftId": "01a04a99-f980-77d1-a2b5-1b4a5bc7fe1b",
+  "timeWindow": {
+    "kind": "instant",
+    "startsAt": "2027-02-10T13:00:00Z",
+    "endsAt": "2027-02-11T01:00:00Z"
+  },
+  "effectiveRange": {
+    "startDate": "2027-02-01",
+    "endDateExclusive": "2027-03-01"
+  },
+  "repairRequirement": "Phase07: repair from that accepted and selected baseline after this single unavailable-person mutation; pure mutation validation is not repair execution"
+}

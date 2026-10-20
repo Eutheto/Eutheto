@@ -16,12 +16,19 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 
 import * as generated from "./generated";
 import { isWorkforceSetupQueryResult } from "./generated-domain-pack-contracts";
+import recipientReport from "../../../../crates/eutheto-pdf-worker/tests/fixtures/report.json";
 import acceptedDetail from "./fixtures/accepted-detail-native.json";
 import optimalityStatus from "./fixtures/optimality-status-native.json";
 import peopleCsvNative from "./fixtures/people-csv-native.json";
+import assignmentCsvNative from "./fixtures/assignment-csv-native.json";
+import eligibilityCsvNative from "./fixtures/eligibility-csv-native.json";
+import shiftCsvNative from "./fixtures/shift-csv-native.json";
+import availabilityCsvNative from "./fixtures/availability-csv-native.json";
+import eligibilityMatrixNative from "./fixtures/eligibility-matrix-native.json";
 
 const scenarioId = "01900000-0000-7000-8000-000000000001";
 const operationId = "01900000-0000-7000-8000-000000000002";
+const solveRunId = "01900000-0000-7000-8000-000000000003";
 interface Invocation {
   readonly request: { readonly requestId: string; readonly [key: string]: unknown };
   readonly onProgress?: Channel;
@@ -44,6 +51,26 @@ function summary(): generated.ScenarioSummaryV2 {
     structure: { entities: 1, rules: 0, preferences: 0, lockedAssignments: 0 },
     fast: { counts: { errors: 0, warnings: 0, information: 0 }, issues: [], omitted: 0 },
     full: { state: "notRun" },
+  };
+}
+function solveJob(
+  requestId: string,
+  status: generated.SolveJobStatusV1 = "running",
+): generated.SolveJobDtoV2 {
+  return {
+    schemaVersion: 2,
+    requestId,
+    runId: solveRunId,
+    scenarioId,
+    scenarioRevision: 3,
+    status,
+    startedAt: "2026-09-10T12:00:00Z",
+    finishedAt: status === "running" ? null : "2026-09-10T12:00:03Z",
+    solutionId: status === "optimal" || status === "feasible" ? operationId : null,
+    verificationChecksum: status === "optimal" || status === "feasible" ? "a".repeat(64) : null,
+    checkpoint: null,
+    cancelOperationId: null,
+    stale: false,
   };
 }
 const nativeError: generated.ApiErrorDto = {
@@ -124,15 +151,372 @@ function nativeOperations() {
     },
   };
 }
+function currentStatusFixture(
+  certainty: generated.ExplanationCertainty = "independentlyVerified",
+): generated.SolutionExplanationDtoV2 {
+  const result = structuredClone(optimalityStatus) as unknown as generated.SolutionExplanationDtoV2;
+  Reflect.set(result, "schemaVersion", 2);
+  Reflect.set(result.explanation, "schemaVersion", 2);
+  Reflect.set(result.explanation.evidence, "schemaVersion", 2);
+  const payload = result.explanation.evidence.evidence;
+  if (payload.kind !== "optimalityStatus") throw new Error("Fixture is not an optimality status");
+  Reflect.set(payload.status, "schemaVersion", 2);
+  Reflect.set(result.explanation.evidence, "certainty", certainty);
+  return result;
+}
+
+function solutionDifferenceFixture(): generated.SolutionExplanationDtoV2 {
+  const base = {
+    solutionId: operationId,
+    resultChecksum: "a".repeat(64),
+  };
+  const candidate = {
+    solutionId: "01900000-0000-7000-8000-000000000004",
+    resultChecksum: "b".repeat(64),
+  };
+  const comparison: generated.SolutionComparisonV2 = {
+    schemaVersion: 2,
+    base: {
+      packId: "official.test",
+      scenarioId,
+      scenarioRevision: 1,
+      documentHash: "c".repeat(64),
+      projectionVersion: 1,
+      verificationScopeChecksum: "d".repeat(64),
+      acceptedResult: base,
+    },
+    candidate: {
+      packId: "official.test",
+      scenarioId,
+      scenarioRevision: 2,
+      documentHash: "e".repeat(64),
+      projectionVersion: 1,
+      verificationScopeChecksum: "f".repeat(64),
+      acceptedResult: candidate,
+    },
+    assignments: [],
+    rules: [],
+    score: { type: "unavailable", reason: "policyOrScopeMismatch" },
+    metrics: [],
+    protections: [],
+    runs: {
+      base: {
+        runId: "01900000-0000-7000-8000-000000000005",
+        runManifestChecksum: "1".repeat(64),
+        outcome: {
+          type: "accepted",
+          status: "optimal",
+          solutionId: base.solutionId,
+          acceptedResultChecksum: base.resultChecksum,
+          verificationChecksum: "2".repeat(64),
+        },
+      },
+      candidate: {
+        runId: "01900000-0000-7000-8000-000000000006",
+        runManifestChecksum: "3".repeat(64),
+        outcome: {
+          type: "accepted",
+          status: "optimal",
+          solutionId: candidate.solutionId,
+          acceptedResultChecksum: candidate.resultChecksum,
+          verificationChecksum: "4".repeat(64),
+        },
+      },
+    },
+    affectedEntities: [],
+    entityObservations: [],
+    checksum: "5".repeat(64),
+  };
+  return {
+    schemaVersion: 2,
+    scenarioId,
+    currentRevision: 3,
+    scenarioRevisions: [1, 2],
+    explanation: {
+      schemaVersion: 2,
+      evidence: {
+        schemaVersion: 2,
+        certainty: "deterministic",
+        evidence: { kind: "solutionDifference", comparison },
+        checksum: "6".repeat(64),
+      },
+      rendered: {
+        schemaVersion: 1,
+        kind: "solutionDifference",
+        evidenceChecksum: "6".repeat(64),
+        messages: [],
+      },
+      checksum: "7".repeat(64),
+    },
+  };
+}
+
+function repairFixture(): generated.SolutionExplanationDtoV2 {
+  const result = solutionDifferenceFixture();
+  const payload = result.explanation.evidence.evidence;
+  if (payload.kind !== "solutionDifference") throw new Error("Fixture is not a Difference");
+  Reflect.set(result, "scenarioRevisions", [2, 1]);
+  Reflect.set(result.explanation.evidence, "evidence", {
+    kind: "repair",
+    repair: { comparison: payload.comparison, causality: "notEstablished" },
+  });
+  Reflect.set(result.explanation.rendered, "kind", "repair");
+  return result;
+}
 
 describe("strict desktop response boundary", () => {
-  it("preserves safe millisecond durations beyond u32 and rejects unrepresentable worker counts", async () => {
-    const result = structuredClone(optimalityStatus);
-    const status = result.explanation.evidence.evidence.status;
-    status.runInput.solveOptions.timeLimitMilliseconds = Number.MAX_SAFE_INTEGER;
-    status.runManifest.elapsedMilliseconds = Number.MAX_SAFE_INTEGER;
-    Reflect.set(status.runManifest.phaseTimings, "backendMilliseconds", Number.MAX_SAFE_INTEGER);
-    status.runInput.solveOptions.workerThreads.count = 65_535;
+  const custodyChecksum = "b".repeat(64);
+  const retainedConflictId = `infeasibility.${custodyChecksum}`;
+  it.each([
+    {
+      name: "accepts a retained conflict",
+      payloadKind: "conflict",
+      contextPatch: {},
+      requestConflictId: retainedConflictId,
+      expected: "admit",
+    },
+    {
+      name: "accepts retained unavailable evidence",
+      payloadKind: "unavailable",
+      contextPatch: {},
+      requestConflictId: retainedConflictId,
+      expected: "admit",
+    },
+    {
+      name: "accepts unavailable evidence without a requested conflict or context",
+      payloadKind: "unavailable",
+      contextPresent: false,
+      contextPatch: {},
+      requestConflictId: null,
+      expected: "admit",
+    },
+    {
+      name: "rejects a requested conflict without unavailable evidence context",
+      payloadKind: "unavailable",
+      contextPresent: false,
+      contextPatch: {},
+      requestConflictId: retainedConflictId,
+      expected: "reject",
+    },
+    {
+      name: "rejects another run",
+      payloadKind: "conflict",
+      contextPatch: { runId: operationId },
+      requestConflictId: retainedConflictId,
+      expected: "reject",
+    },
+    {
+      name: "rejects another manifest",
+      payloadKind: "conflict",
+      contextPatch: { runManifestChecksum: "c".repeat(64) },
+      requestConflictId: retainedConflictId,
+      expected: "reject",
+    },
+    {
+      name: "rejects another custody checksum",
+      payloadKind: "conflict",
+      contextPatch: { evidenceChecksum: "c".repeat(64) },
+      requestConflictId: retainedConflictId,
+      expected: "reject",
+    },
+    {
+      name: "rejects another conflict identity",
+      payloadKind: "conflict",
+      contextPatch: { conflictId: "infeasibility.other" },
+      requestConflictId: retainedConflictId,
+      expected: "reject",
+    },
+    {
+      name: "rejects a request for another conflict",
+      payloadKind: "conflict",
+      contextPatch: {},
+      requestConflictId: "infeasibility.other",
+      expected: "reject",
+    },
+    {
+      name: "rejects another unavailable custody checksum",
+      payloadKind: "unavailable",
+      contextPatch: { evidenceChecksum: "c".repeat(64) },
+      requestConflictId: retainedConflictId,
+      expected: "reject",
+    },
+    {
+      name: "rejects a request mismatch for unavailable evidence",
+      payloadKind: "unavailable",
+      contextPatch: {},
+      requestConflictId: "infeasibility.other",
+      expected: "reject",
+    },
+  ])(
+    "$name while keeping custody and general evidence checksums distinct",
+    async ({ payloadKind, contextPresent = true, contextPatch, requestConflictId, expected }) => {
+      const native = nativeOperations();
+      const scope = new generated.SetupOperationScope(scenarioId, 3);
+      const operation = generated.explainSolution(scope, {
+        schemaVersion: 1,
+        subject: {
+          kind: "infeasibility",
+          solveRunId,
+          runManifestChecksum: "a".repeat(64),
+          conflictId: requestConflictId,
+        },
+      });
+      native.prepared();
+      const input = await native.claimed.promise;
+      const retainedInfeasibility =
+        payloadKind === "conflict"
+          ? {
+              type: "conflict",
+              groups: [{ groupId: "coverage.required", requiredRules: [operationId] }],
+              minimality: "sufficient",
+              shrink: {
+                initialGroupCount: 1,
+                remainingGroupCount: 1,
+                attemptedTrials: 0,
+                maxTrials: 0,
+                stopReason: "notAttempted",
+              },
+            }
+          : { type: "unavailable", reason: "diagnosticFailed" };
+      const result = {
+        schemaVersion: 2,
+        scenarioId,
+        currentRevision: 3,
+        scenarioRevisions: [3],
+        ...(contextPresent
+          ? {
+              infeasibilityContext: {
+                runId: solveRunId,
+                sourceRevision: 3,
+                runManifestChecksum: "a".repeat(64),
+                evidenceChecksum: custodyChecksum,
+                conflictId: retainedConflictId,
+                ...contextPatch,
+              },
+            }
+          : {}),
+        explanation: {
+          schemaVersion: 2,
+          checksum: "d".repeat(64),
+          evidence: {
+            schemaVersion: 2,
+            certainty: payloadKind === "conflict" ? "sufficientConflict" : "unavailable",
+            checksum: "e".repeat(64),
+            evidence: {
+              kind: "infeasibility",
+              infeasibility: retainedInfeasibility,
+            },
+          },
+          rendered: {
+            schemaVersion: 1,
+            kind: "infeasibility",
+            evidenceChecksum: "e".repeat(64),
+            messages: [],
+          },
+        },
+      };
+      const reply = response(input, result, 3);
+      if (expected === "admit") {
+        const admitted = operation.result;
+        native.terminal.resolve(reply);
+        const value = await admitted;
+        if (contextPresent) {
+          expect(value.result.infeasibilityContext).toMatchObject({
+            runId: solveRunId,
+            sourceRevision: 3,
+            runManifestChecksum: "a".repeat(64),
+            evidenceChecksum: custodyChecksum,
+            conflictId: requestConflictId,
+          });
+          expect(value.result.infeasibilityContext?.evidenceChecksum).not.toBe(
+            value.result.explanation.evidence.checksum,
+          );
+        } else {
+          expect(value.result.infeasibilityContext).toBeUndefined();
+        }
+        const evidence = value.result.explanation.evidence.evidence;
+        if (evidence.kind !== "infeasibility") {
+          throw new Error("Fixture is not infeasibility evidence");
+        }
+        if (payloadKind === "unavailable") {
+          expect(evidence.infeasibility).toEqual({
+            type: "unavailable",
+            reason: "diagnosticFailed",
+          });
+        } else {
+          expect(evidence.infeasibility).toMatchObject({ type: "conflict" });
+        }
+      } else {
+        const rejected = expect(operation.result).rejects.toMatchObject({ category: "protocol" });
+        native.terminal.resolve(reply);
+        await rejected;
+      }
+      await operation.release();
+      scope.dispose();
+    },
+  );
+
+  it("does not rebind explanation admission when the caller edits during preparation", async () => {
+    const native = nativeOperations();
+    const result = currentStatusFixture();
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "optimalityStatus") throw new Error("Fixture is not an optimality status");
+    const status = payload.status;
+    const revision = status.runInput.scenarioRevision;
+    const scope = new generated.SetupOperationScope(result.scenarioId, revision);
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "infeasibility",
+        solveRunId,
+        runManifestChecksum: "a".repeat(64),
+        conflictId: null,
+      },
+    };
+    const operation = generated.explainSolution(scope, request);
+    Reflect.set(request, "subject", {
+      kind: "optimalityStatus",
+      solveRunId: status.runInput.runId,
+      runManifestChecksum: status.runManifest.checksum,
+      result: status.result,
+    });
+    native.prepared();
+    const input = await native.claimed.promise;
+    const rejected = expect(operation.result).rejects.toMatchObject({ category: "protocol" });
+    native.terminal.resolve(response(input, result, result.currentRevision));
+    await rejected;
+    await operation.release();
+    scope.dispose();
+  });
+
+  it("rejects an oversized explanation before running caller serialization", () => {
+    const scope = new generated.SetupOperationScope(scenarioId, 3);
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "assignment",
+        result: { solutionId: solveRunId, resultChecksum: "a".repeat(64) },
+        assignmentId: "x".repeat(64 * 1024),
+      },
+    };
+    Object.defineProperty(request, "toJSON", {
+      value: () => {
+        throw new Error("Caller serialization ran before admission");
+      },
+    });
+    expect(() => generated.explainSolution(scope, request)).toThrow(RangeError);
+    scope.dispose();
+  });
+  it("rejects current statusV2 that claims backend proof from a recorded optimal outcome", async () => {
+    const native = nativeOperations();
+    const result = currentStatusFixture("backendProof");
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "optimalityStatus") throw new Error("Fixture is not an optimality status");
+    const status = payload.status;
+    const scope = new generated.SetupOperationScope(
+      result.scenarioId,
+      status.runInput.scenarioRevision,
+    );
     const request: generated.ExplanationRequestV1 = {
       schemaVersion: 1,
       subject: {
@@ -142,22 +526,522 @@ describe("strict desktop response boundary", () => {
         result: status.result,
       },
     };
-    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
-      Promise.resolve(response(input, result, result.currentRevision)),
+    const operation = generated.explainSolution(scope, request);
+    native.prepared();
+    const input = await native.claimed.promise;
+    const rejected = expect(operation.result).rejects.toMatchObject({ category: "protocol" });
+    native.terminal.resolve(response(input, result, result.currentRevision));
+    await rejected;
+    await operation.release();
+    scope.dispose();
+  });
+
+  it("admits current Difference evidence only at its candidate anchor with exact ordered source refs", async () => {
+    const native = nativeOperations();
+    const result = solutionDifferenceFixture();
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "solutionDifference") throw new Error("Fixture is not a Difference");
+    const comparison = payload.comparison;
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "solutionDifference",
+        left: comparison.base.acceptedResult,
+        right: comparison.candidate.acceptedResult,
+      },
+    };
+    const scope = new generated.SetupOperationScope(scenarioId, 2);
+    const operation = generated.explainSolution(scope, request);
+    native.prepared();
+    const input = await native.claimed.promise;
+    expect(input.request).toMatchObject({ sourceRevision: 2, scenarioId });
+    native.terminal.resolve(response(input, result, 3));
+    await expect(operation.result).resolves.toMatchObject({
+      result: { currentRevision: 3, scenarioRevisions: [1, 2] },
+    });
+    await operation.release();
+    scope.dispose();
+  });
+
+  it.each([
+    "base accepted result",
+    "candidate accepted result",
+    "base run outcome",
+    "candidate run outcome",
+    "source revision ordering",
+  ])("rejects Difference evidence with mismatched %s", async (mismatch) => {
+    const native = nativeOperations();
+    const result = solutionDifferenceFixture();
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "solutionDifference") throw new Error("Fixture is not a Difference");
+    const comparison = payload.comparison;
+    switch (mismatch) {
+      case "base accepted result":
+        Reflect.set(comparison.base.acceptedResult, "resultChecksum", "8".repeat(64));
+        break;
+      case "candidate accepted result":
+        Reflect.set(
+          comparison.candidate.acceptedResult,
+          "solutionId",
+          "01900000-0000-7000-8000-000000000007",
+        );
+        break;
+      case "base run outcome":
+        if (comparison.runs.base.outcome.type !== "accepted")
+          throw new Error("Fixture run is not accepted");
+        Reflect.set(comparison.runs.base.outcome, "acceptedResultChecksum", "9".repeat(64));
+        break;
+      case "candidate run outcome":
+        if (comparison.runs.candidate.outcome.type !== "accepted")
+          throw new Error("Fixture run is not accepted");
+        Reflect.set(comparison.runs.candidate.outcome, "solutionId", operationId);
+        break;
+      case "source revision ordering":
+        Reflect.set(result, "scenarioRevisions", [2, 1]);
+        break;
+    }
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "solutionDifference",
+        left: { solutionId: operationId, resultChecksum: "a".repeat(64) },
+        right: {
+          solutionId: "01900000-0000-7000-8000-000000000004",
+          resultChecksum: "b".repeat(64),
+        },
+      },
+    };
+    const scope = new generated.SetupOperationScope(scenarioId, 2);
+    const operation = generated.explainSolution(scope, request);
+    native.prepared();
+    const input = await native.claimed.promise;
+    const rejected = expect(operation.result).rejects.toMatchObject({ category: "protocol" });
+    native.terminal.resolve(response(input, result, 3));
+    await rejected;
+    await operation.release();
+    scope.dispose();
+  });
+
+  it("admits Repair evidence with the current candidate anchored before its saved base", async () => {
+    const native = nativeOperations();
+    const result = repairFixture();
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "repair") throw new Error("Fixture is not Repair evidence");
+    const comparison = payload.repair.comparison;
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "repair",
+        current: comparison.candidate.acceptedResult,
+        base: comparison.base.acceptedResult,
+      },
+    };
+    const scope = new generated.SetupOperationScope(scenarioId, 2);
+    const operation = generated.explainSolution(scope, request);
+    native.prepared();
+    const input = await native.claimed.promise;
+    expect(input.request).toMatchObject({ sourceRevision: 2, scenarioId });
+    native.terminal.resolve(response(input, result, 3));
+    await expect(operation.result).resolves.toMatchObject({
+      result: {
+        currentRevision: 3,
+        scenarioRevisions: [2, 1],
+        explanation: { evidence: { evidence: { repair: { causality: "notEstablished" } } } },
+      },
+    });
+    await operation.release();
+    scope.dispose();
+  });
+
+  it.each(["current result", "saved repair base", "source revision ordering"])(
+    "rejects Repair evidence with mismatched %s",
+    async (mismatch) => {
+      const native = nativeOperations();
+      const result = repairFixture();
+      const payload = result.explanation.evidence.evidence;
+      if (payload.kind !== "repair") throw new Error("Fixture is not Repair evidence");
+      const comparison = payload.repair.comparison;
+      switch (mismatch) {
+        case "current result":
+          Reflect.set(comparison.candidate.acceptedResult, "resultChecksum", "8".repeat(64));
+          break;
+        case "saved repair base":
+          Reflect.set(
+            comparison.base.acceptedResult,
+            "solutionId",
+            "01900000-0000-7000-8000-000000000007",
+          );
+          break;
+        case "source revision ordering":
+          Reflect.set(result, "scenarioRevisions", [1, 2]);
+          break;
+      }
+      const request: generated.ExplanationRequestV1 = {
+        schemaVersion: 1,
+        subject: {
+          kind: "repair",
+          current: {
+            solutionId: "01900000-0000-7000-8000-000000000004",
+            resultChecksum: "b".repeat(64),
+          },
+          base: { solutionId: operationId, resultChecksum: "a".repeat(64) },
+        },
+      };
+      const scope = new generated.SetupOperationScope(scenarioId, 2);
+      const operation = generated.explainSolution(scope, request);
+      native.prepared();
+      const input = await native.claimed.promise;
+      const rejected = expect(operation.result).rejects.toMatchObject({ category: "protocol" });
+      native.terminal.resolve(response(input, result, 3));
+      await rejected;
+      await operation.release();
+      scope.dispose();
+    },
+  );
+
+  it.each([
+    null,
+    { operationId: solveRunId },
+    { runId: operationId },
+    { evidenceChecksum: "c".repeat(64) },
+    { path: "/private/diagnostic.json" },
+  ])("admits only the exact path-free historical diagnostic export receipt %#", async (patch) => {
+    const native = nativeOperations();
+    const operation = generated.exportDiagnostic(new generated.SetupOperationScope(scenarioId, 2), {
+      runId: solveRunId,
+      runManifestChecksum: "a".repeat(64),
+      evidenceChecksum: "b".repeat(64),
+    });
+    native.prepared();
+    const input = await native.claimed.promise;
+    const receipt = {
+      schemaVersion: 1,
+      operationId,
+      requestId: input.request.requestId,
+      scenarioId,
+      sourceRevision: 2,
+      observedCurrentRevision: 3,
+      runId: solveRunId,
+      runManifestChecksum: "a".repeat(64),
+      evidenceChecksum: "b".repeat(64),
+      ...patch,
+    };
+    const terminal =
+      patch === null
+        ? expect(operation.result).resolves.toMatchObject({ result: receipt, currentRevision: 3 })
+        : expect(operation.result).rejects.toMatchObject(invalidResponse);
+    native.terminal.resolve(response(input, receipt, 3));
+    await terminal;
+  });
+
+  it.each([
+    ["historical absent context", true],
+    ["authored context one", true],
+    ["in-snapshot original context one", true],
+    ["in-snapshot manual context one", true],
+    ["captured original context two", true],
+    ["opaque capture leaves pack admission native", true],
+    ["capture at byte ceiling", true],
+    ["UTF-8 capture at byte ceiling", true],
+    ["capture above byte ceiling", false],
+    ["escaped capture above byte ceiling", false],
+    ["complete explanation above unchanged ceiling", false],
+    ["context one with capture", false],
+    ["context two without capture", false],
+    ["context two without baseline", false],
+    ["captured manual selection", false],
+    ["null capture", false],
+    ["non-JSON capture", false],
+    ["invalid Unicode capture", false],
+    ["unknown context version", false],
+    ["unknown binding field", false],
+  ] as const)("guards versioned repair carriers: %s", async (boundary, admit) => {
+    const native = nativeOperations();
+    const result = currentStatusFixture();
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "optimalityStatus") throw new Error("Fixture is not an optimality status");
+    const status = payload.status;
+    if (status.result === null) throw new Error("Fixture has no accepted result");
+    const baseline: generated.RunBaselineBinding = {
+      original: {
+        entity: { kind: "baseSchedule", id: operationId },
+        pairContentHash: "a".repeat(64),
+        acceptedResult: status.result,
+        sourceScenarioId: result.scenarioId,
+        sourceRevision: status.runInput.scenarioRevision,
+        sourceDocumentHash: status.runInput.snapshotDocumentHash,
+        sourceRunId: status.runInput.runId,
+        sourceRunInputChecksum: status.runInput.checksum,
+        sourceRunManifestChecksum: status.runManifest.checksum,
+      },
+      selection: { kind: "originalAccepted" },
+      selectedPairContentHash: "a".repeat(64),
+      capturedOriginal: {
+        kind: "baseSchedule",
+        id: operationId,
+        sourceSolutionId: status.result.solutionId,
+        sourceRevision: status.runInput.scenarioRevision,
+        assignments: [{ personId: scenarioId, shiftId: solveRunId }],
+      },
+    };
+    const context: generated.RunObjectiveContext = {
+      schemaVersion: 2,
+      packId: status.runInput.packId,
+      profileId: "official.workforce.objective.minimal-changes",
+      semanticVersion: 1,
+      operation: "repair",
+      baseline,
+    };
+    Reflect.set(status.runInput, "schemaVersion", 2);
+    Reflect.set(status.runInput, "objectiveContext", context);
+    switch (boundary) {
+      case "historical absent context":
+        Reflect.set(status.runInput, "schemaVersion", 1);
+        Reflect.deleteProperty(status.runInput, "objectiveContext");
+        break;
+      case "authored context one":
+        Reflect.set(context, "schemaVersion", 1);
+        Reflect.set(context, "profileId", "eutheto.objective.authored");
+        Reflect.set(context, "operation", "optimize");
+        Reflect.deleteProperty(context, "baseline");
+        break;
+      case "in-snapshot original context one":
+      case "in-snapshot manual context one":
+        Reflect.set(context, "schemaVersion", 1);
+        Reflect.deleteProperty(baseline, "capturedOriginal");
+        break;
+      case "opaque capture leaves pack admission native":
+        // Structural IPC admission is not validation of the pack's closed BaseSchedule record.
+        Reflect.set(baseline, "capturedOriginal", {});
+        break;
+      case "capture at byte ceiling":
+      case "complete explanation above unchanged ceiling":
+        Reflect.set(
+          baseline,
+          "capturedOriginal",
+          "x".repeat(generated.MAX_CAPTURED_BASELINE_BYTES - 2),
+        );
+        if (boundary === "complete explanation above unchanged ceiling") {
+          const message: generated.EvidenceMessageV1 = {
+            messageKey: "test.render",
+            parameters: { text: { type: "text", value: "x".repeat(800 * 1024) } },
+            entities: [],
+            rules: [],
+            assignments: [],
+            evidence: [],
+          };
+          Reflect.set(result.explanation.rendered, "messages", [message, message]);
+        }
+        break;
+      case "UTF-8 capture at byte ceiling":
+        Reflect.set(
+          baseline,
+          "capturedOriginal",
+          "\u{10400}".repeat((generated.MAX_CAPTURED_BASELINE_BYTES - 4) / 4) + "xx",
+        );
+        break;
+      case "capture above byte ceiling":
+        Reflect.set(
+          baseline,
+          "capturedOriginal",
+          "x".repeat(generated.MAX_CAPTURED_BASELINE_BYTES - 1),
+        );
+        break;
+      case "escaped capture above byte ceiling":
+        Reflect.set(
+          baseline,
+          "capturedOriginal",
+          '"'.repeat(generated.MAX_CAPTURED_BASELINE_BYTES / 2),
+        );
+        break;
+      case "context one with capture":
+        Reflect.set(context, "schemaVersion", 1);
+        break;
+      case "context two without capture":
+        Reflect.deleteProperty(baseline, "capturedOriginal");
+        break;
+      case "context two without baseline":
+        Reflect.deleteProperty(context, "baseline");
+        break;
+      case "null capture":
+        Reflect.set(baseline, "capturedOriginal", null);
+        break;
+      case "non-JSON capture":
+        Reflect.set(baseline, "capturedOriginal", { value: Infinity });
+        break;
+      case "invalid Unicode capture":
+        Reflect.set(baseline, "capturedOriginal", "\ud800");
+        break;
+      case "unknown context version":
+        Reflect.set(context, "schemaVersion", 3);
+        break;
+      case "unknown binding field":
+        Reflect.set(baseline, "unrecognized", true);
+        break;
+      case "captured original context two":
+      case "captured manual selection":
+        break;
+    }
+    if (boundary === "in-snapshot manual context one" || boundary === "captured manual selection") {
+      Reflect.set(baseline, "selection", {
+        kind: "manualSelection",
+        entity: { kind: "manualSelection", id: solveRunId },
+        recordChecksum: "b".repeat(64),
+        admissionSourceScenarioId: result.scenarioId,
+        admissionSourceRevision: status.runInput.scenarioRevision,
+        admissionSourceDocumentHash: status.runInput.snapshotDocumentHash,
+      });
+    }
+    const scope = new generated.SetupOperationScope(
+      result.scenarioId,
+      status.runInput.scenarioRevision,
     );
-    const accepted = await generated.explainSolution({ scenarioId: result.scenarioId, request });
+    const operation = generated.explainSolution(scope, {
+      schemaVersion: 1,
+      subject: {
+        kind: "optimalityStatus",
+        solveRunId: status.runInput.runId,
+        runManifestChecksum: status.runManifest.checksum,
+        result: status.result,
+      },
+    });
+    native.prepared();
+    const input = await native.claimed.promise;
+    const terminal = admit
+      ? expect(operation.result).resolves.toMatchObject({ result })
+      : expect(operation.result).rejects.toMatchObject(invalidResponse);
+    native.terminal.resolve(response(input, result, result.currentRevision));
+    await terminal;
+    await operation.release();
+    scope.dispose();
+  });
+
+  it("preserves safe millisecond durations beyond u32 and rejects unrepresentable worker counts", async () => {
+    const result = currentStatusFixture();
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "optimalityStatus") throw new Error("Fixture is not an optimality status");
+    const status = payload.status;
+    const sourceRevision = status.runInput.scenarioRevision;
+    // The retained source is historical; the response also reports a newer current revision.
+    Reflect.set(result, "scenarioRevisions", [sourceRevision]);
+    Reflect.set(result, "currentRevision", sourceRevision + 1);
+    Reflect.set(status.runInput.solveOptions, "timeLimitMilliseconds", Number.MAX_SAFE_INTEGER);
+    Reflect.set(status.runManifest, "elapsedMilliseconds", Number.MAX_SAFE_INTEGER);
+    Reflect.set(status.runManifest.phaseTimings, "backendMilliseconds", Number.MAX_SAFE_INTEGER);
+    Reflect.set(status.runInput.solveOptions.workerThreads, "count", 65_535);
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "optimalityStatus",
+        solveRunId: status.runInput.runId,
+        runManifestChecksum: status.runManifest.checksum,
+        result: status.result,
+      },
+    };
+    tauri.invoke.mockImplementation((command: string, input: Invocation) => {
+      if (command === "operation_prepare")
+        return Promise.resolve(response(input, { schemaVersion: 1, operationId }));
+      if (command === "operation_release")
+        return Promise.resolve(response(input, { schemaVersion: 1, acknowledgement: "released" }));
+      if (command === "operation_cancel")
+        return Promise.resolve(
+          response(input, {
+            schemaVersion: 1,
+            acknowledgement: "cancellationRequested",
+          }),
+        );
+      return Promise.resolve(response(input, result, result.currentRevision));
+    });
+    const scope = new generated.SetupOperationScope(
+      result.scenarioId,
+      status.runInput.scenarioRevision,
+    );
+    const accepted = await generated.explainSolution(scope, request).result;
     expect(accepted.result.explanation.evidence.evidence).toMatchObject({
       status: { runManifest: { elapsedMilliseconds: Number.MAX_SAFE_INTEGER } },
     });
-    status.runInput.solveOptions.workerThreads.count = 65_536;
-    await expect(
-      generated.explainSolution({ scenarioId: result.scenarioId, request }),
-    ).rejects.toMatchObject(invalidResponse);
-    status.runInput.solveOptions.workerThreads.count = 1;
-    status.runManifest.elapsedMilliseconds = Number.MAX_SAFE_INTEGER + 1;
-    await expect(
-      generated.explainSolution({ scenarioId: result.scenarioId, request }),
-    ).rejects.toMatchObject(invalidResponse);
+    Reflect.set(status.runInput.solveOptions.workerThreads, "count", 65_536);
+    await expect(generated.explainSolution(scope, request).result).rejects.toMatchObject(
+      invalidResponse,
+    );
+    Reflect.set(status.runInput.solveOptions.workerThreads, "count", 1);
+    Reflect.set(status.runManifest, "elapsedMilliseconds", Number.MAX_SAFE_INTEGER + 1);
+    await expect(generated.explainSolution(scope, request).result).rejects.toMatchObject(
+      invalidResponse,
+    );
+  });
+
+  it("admits a clock-marked native alarm but refuses fabricated timing or another outcome", async () => {
+    const result = currentStatusFixture("deterministic");
+    const payload = result.explanation.evidence.evidence;
+    if (payload.kind !== "optimalityStatus") throw new Error("Fixture is not an optimality status");
+    const status = payload.status;
+    const manifest = status.runManifest;
+    const alarm = { type: "verificationAlarm", diagnosticCode: "verification.projection_failed" };
+    Reflect.set(status, "result", null);
+    Reflect.set(manifest, "outcome", alarm);
+    Reflect.set(manifest, "clockFailure", { kind: "unreliableObservation" });
+    Reflect.set(manifest, "elapsedMilliseconds", null);
+    Reflect.set(manifest, "firstIncumbentMilliseconds", null);
+    Reflect.set(manifest, "firstVerifiedFeasibleMilliseconds", null);
+    for (const key in manifest.phaseTimings) Reflect.set(manifest.phaseTimings, key, null);
+    const request: generated.ExplanationRequestV1 = {
+      schemaVersion: 1,
+      subject: {
+        kind: "optimalityStatus",
+        solveRunId: status.runInput.runId,
+        runManifestChecksum: manifest.checksum,
+        result: null,
+      },
+    };
+    tauri.invoke.mockImplementation((command: string, input: Invocation) => {
+      if (command === "operation_prepare")
+        return Promise.resolve(response(input, { schemaVersion: 1, operationId }));
+      if (command === "operation_release")
+        return Promise.resolve(response(input, { schemaVersion: 1, acknowledgement: "released" }));
+      return Promise.resolve(response(input, result, result.currentRevision));
+    });
+    const scope = new generated.SetupOperationScope(
+      result.scenarioId,
+      status.runInput.scenarioRevision,
+    );
+    await expect(generated.explainSolution(scope, request).result).resolves.toMatchObject({
+      result: {
+        explanation: {
+          evidence: {
+            evidence: {
+              status: {
+                runManifest: { outcome: alarm, clockFailure: { kind: "unreliableObservation" } },
+              },
+            },
+          },
+        },
+      },
+    });
+    for (const marker of [
+      { kind: "unknown" },
+      { kind: "unreliableObservation", measuredMilliseconds: 0 },
+    ]) {
+      Reflect.set(manifest, "clockFailure", marker);
+      await expect(generated.explainSolution(scope, request).result).rejects.toMatchObject(
+        invalidResponse,
+      );
+    }
+    Reflect.set(manifest, "clockFailure", { kind: "unreliableObservation" });
+    Reflect.set(manifest, "elapsedMilliseconds", 0);
+    await expect(generated.explainSolution(scope, request).result).rejects.toMatchObject(
+      invalidResponse,
+    );
+    Reflect.set(manifest, "elapsedMilliseconds", null);
+    Reflect.set(manifest.phaseTimings, "backendMilliseconds", 0);
+    await expect(generated.explainSolution(scope, request).result).rejects.toMatchObject(
+      invalidResponse,
+    );
+    Reflect.set(manifest.phaseTimings, "backendMilliseconds", null);
+    Reflect.set(manifest, "outcome", { type: "noResult", status: "infeasible" });
+    await expect(generated.explainSolution(scope, request).result).rejects.toMatchObject(
+      invalidResponse,
+    );
   });
 
   it("rejects conflicting envelope revisions and scenario echoes without retrying the read", async () => {
@@ -385,6 +1269,190 @@ describe("strict desktop response boundary", () => {
     expect(tauri.invoke.mock.calls[1]?.[1]).toMatchObject({
       request: { condition: { value: { value: "9007199254740993" } } },
     });
+  });
+  it("admits a native shift-calendar margin quoted from signed i64 without admitting malformed margins", async () => {
+    const shift = {
+      assignmentTypeId: operationId,
+      assignmentTypeName: "Clinic",
+      endsAt: { instant: "2030-01-16T17:00:00Z", local: "2030-01-16T17:00:00", offsetSeconds: 0 },
+      locationId: null,
+      locationName: null,
+      margin: "-1",
+      maximum: 1,
+      minimum: 1,
+      preferred: null,
+      required: 1,
+      selectedCount: 0,
+      shiftId: solveRunId,
+      startsAt: { instant: "2030-01-16T08:00:00Z", local: "2030-01-16T08:00:00", offsetSeconds: 0 },
+    };
+    const view = {
+      schemaVersion: 1,
+      scenarioId,
+      currentRevision: 3,
+      scenarioRevision: 3,
+      result: { solutionId: operationId, resultChecksum: "a".repeat(64) },
+      view: {
+        viewId: "official.workforce.result.schedule",
+        data: {
+          schemaVersion: 1,
+          timeZone: "UTC",
+          result: {
+            kind: "calendarShifts",
+            planningDates: { startDate: "2030-01-01", endDateExclusive: "2030-02-01" },
+            window: { startDate: "2030-01-15", endDateExclusive: "2030-01-22" },
+            totalItems: 1,
+            continuation: null,
+            items: [{ date: "2030-01-16", selectedPersonIds: [], shift }],
+          },
+        },
+      },
+    };
+    const input = {
+      scenarioId,
+      solutionId: operationId,
+      viewId: view.view.viewId,
+      parameters: { kind: "calendarShifts" as const, startDate: "2030-01-15" },
+    };
+    tauri.invoke.mockImplementation((_command: string, call: Invocation) =>
+      Promise.resolve(response(call, view, view.currentRevision)),
+    );
+    await expect(generated.getSolutionView(input)).resolves.toMatchObject({
+      result: { view: { data: { result: { items: [{ shift: { margin: "-1" } }] } } } },
+    });
+    Reflect.set(shift, "margin", -1);
+    await expect(generated.getSolutionView(input)).resolves.toMatchObject({
+      result: { view: { data: { result: { items: [{ shift: { margin: -1 } }] } } } },
+    });
+    for (const margin of ["-0", "4294967296", "not a number"]) {
+      shift.margin = margin;
+      await expect(generated.getSolutionView(input)).rejects.toMatchObject(invalidResponse);
+    }
+  });
+  it("uses the V3 current comparison query with V2 semantic and score-unavailable evidence", async () => {
+    const baseId = "01900000-0000-7000-8000-000000000010";
+    const candidateId = "01900000-0000-7000-8000-000000000011";
+    const digest = "a".repeat(64);
+    const base = {
+      solutionId: baseId,
+      resultChecksum: "b".repeat(64),
+    };
+    const candidate = {
+      solutionId: candidateId,
+      resultChecksum: "c".repeat(64),
+    };
+    const comparison: generated.SolutionComparisonV2 = {
+      schemaVersion: 2,
+      base: {
+        packId: "official.workforce",
+        scenarioId,
+        scenarioRevision: 1,
+        documentHash: digest,
+        projectionVersion: 1,
+        verificationScopeChecksum: "d".repeat(64),
+        acceptedResult: base,
+      },
+      candidate: {
+        packId: "official.workforce",
+        scenarioId,
+        scenarioRevision: 2,
+        documentHash: digest,
+        projectionVersion: 1,
+        verificationScopeChecksum: "e".repeat(64),
+        acceptedResult: candidate,
+      },
+      assignments: [],
+      rules: [],
+      score: { type: "unavailable", reason: "policyOrScopeMismatch" },
+      metrics: [],
+      protections: [],
+      runs: {
+        base: {
+          runId: solveRunId,
+          runManifestChecksum: "f".repeat(64),
+          outcome: {
+            type: "accepted",
+            status: "optimal",
+            solutionId: base.solutionId,
+            acceptedResultChecksum: base.resultChecksum,
+            verificationChecksum: "1".repeat(64),
+          },
+        },
+        candidate: {
+          runId: operationId,
+          runManifestChecksum: "2".repeat(64),
+          outcome: {
+            type: "accepted",
+            status: "feasible",
+            solutionId: candidate.solutionId,
+            acceptedResultChecksum: candidate.resultChecksum,
+            verificationChecksum: "3".repeat(64),
+          },
+        },
+      },
+      affectedEntities: [],
+      entityObservations: [],
+      checksum: "4".repeat(64),
+    };
+    const result: generated.SolutionComparisonDtoV3 = {
+      schemaVersion: 3,
+      scenarioId,
+      currentRevision: 3,
+      comparison,
+    };
+    const input = { scenarioId, baseSolutionId: baseId, candidateSolutionId: candidateId };
+    tauri.invoke.mockImplementation((command: string, call: Invocation) => {
+      expect(command).toBe("solution_compare");
+      expect(call.request.schemaVersion).toBe(3);
+      return Promise.resolve(response(call, result, 3));
+    });
+    await expect(generated.compareSolutions(input)).resolves.toMatchObject({
+      result: {
+        schemaVersion: 3,
+        comparison: {
+          schemaVersion: 2,
+          score: { type: "unavailable", reason: "policyOrScopeMismatch" },
+          runs: {
+            base: { runId: solveRunId, outcome: { type: "accepted", status: "optimal" } },
+            candidate: { runId: operationId, outcome: { type: "accepted", status: "feasible" } },
+          },
+        },
+      },
+    });
+    expect(result.comparison.runs.base).not.toHaveProperty("certainty");
+    expect(result.comparison.runs.candidate).not.toHaveProperty("certainty");
+    expect((tauri.invoke.mock.calls[0]?.[1] as Invocation).request.schemaVersion).toBe(3);
+
+    for (const mutation of [
+      "unavailable score reason",
+      "candidate run binding",
+      "source revision",
+    ]) {
+      const malformed = structuredClone(result);
+      switch (mutation) {
+        case "unavailable score reason":
+          if (malformed.comparison.score.type !== "unavailable")
+            throw new Error("Fixture score should be unavailable");
+          Reflect.set(malformed.comparison.score, "reason", "unknown");
+          break;
+        case "candidate run binding":
+          if (malformed.comparison.runs.candidate.outcome.type !== "accepted")
+            throw new Error("Fixture run should be accepted");
+          Reflect.set(
+            malformed.comparison.runs.candidate.outcome,
+            "acceptedResultChecksum",
+            "9".repeat(64),
+          );
+          break;
+        case "source revision":
+          Reflect.set(malformed.comparison.candidate, "scenarioRevision", 4);
+          break;
+      }
+      tauri.invoke.mockImplementationOnce((_command: string, call: Invocation) =>
+        Promise.resolve(response(call, malformed, 3)),
+      );
+      await expect(generated.compareSolutions(input)).rejects.toMatchObject(invalidResponse);
+    }
   });
 
   it.each(["9223372036854775808", "-9223372036854775809", "01", "-0"])(
@@ -648,6 +1716,174 @@ describe("setup operation ownership using the pinned SDK Channel", () => {
   });
 });
 
+describe("native solve API lifecycle", () => {
+  it("invokes bounded backend, durable job and run-list requests and rejects mismatched ownership", async () => {
+    tauri.invoke.mockImplementation((command: string, input: Invocation) => {
+      switch (command) {
+        case "solve_get_backend_options":
+          return Promise.resolve(
+            response(
+              input,
+              {
+                schemaVersion: 2,
+                scenarioId,
+                revision: 3,
+                options: [
+                  {
+                    backendId: "solver.fixture",
+                    backendVersion: "1.0.0",
+                    adapterVersion: "1.0.0",
+                    displayName: "Fixture solver",
+                  },
+                ],
+              },
+              3,
+            ),
+          );
+        case "solve_get_job":
+          return Promise.resolve(response(input, solveJob(operationId), 3));
+        case "solve_list_runs":
+          return Promise.resolve(
+            response(
+              input,
+              {
+                schemaVersion: 2,
+                scenarioId,
+                currentRevision: 3,
+                runs: [solveJob(operationId)],
+              },
+              3,
+            ),
+          );
+        default:
+          throw new Error(`Unexpected native command: ${command}`);
+      }
+    });
+    const backends = await generated.getSolveBackendOptions(scenarioId, 3);
+    expect(backends.result.options[0]?.backendId).toBe("solver.fixture");
+    const backendInput = tauri.invoke.mock.calls[0]?.[1] as Invocation;
+    expect(backendInput.request).toMatchObject({
+      schemaVersion: 2,
+      scenarioId,
+      expectedRevision: 3,
+    });
+    const job = await generated.getSolveJob(scenarioId, solveRunId);
+    expect(job.result.runId).toBe(solveRunId);
+    const runs = await generated.listSolveRuns(scenarioId, null, 1);
+    expect(runs.result.runs).toHaveLength(1);
+    expect(tauri.invoke.mock.calls[2]?.[1]).toMatchObject({
+      request: { schemaVersion: 2, scenarioId, revision: null, limit: 1 },
+    });
+    await expect(generated.getSolveJob(scenarioId, operationId)).rejects.toMatchObject(
+      invalidResponse,
+    );
+    expect(() => generated.listSolveRuns(scenarioId, null, 33)).toThrow(RangeError);
+  });
+
+  it("admits only run-owned, bounded diagnostic codes and terminal manifest evidence", async () => {
+    const safe = {
+      schemaVersion: 2,
+      job: solveJob(operationId, "verificationAlarm"),
+      elapsedMilliseconds: 2_500,
+      firstIncumbentMilliseconds: 100,
+      firstVerifiedFeasibleMilliseconds: null,
+      phaseTimings: {
+        compileMilliseconds: 20,
+        backendMilliseconds: 2_000,
+        projectionMilliseconds: null,
+        structuralValidationMilliseconds: null,
+        scoreRecomputationMilliseconds: null,
+        requiredRuleVerificationMilliseconds: null,
+        evidencePersistenceMilliseconds: 5,
+        optionalExplanationMilliseconds: null,
+      },
+      diagnosticCode: "verify.correctness-failed",
+      manifestChecksum: "b".repeat(64),
+    } satisfies generated.SolveDiagnosticsSummaryDtoV2;
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, safe, 3)),
+    );
+    const retained = await generated.getSolveDiagnosticsSummary(scenarioId, solveRunId);
+    expect(retained.result.firstIncumbentMilliseconds).toBe(100);
+    expect(retained.result.firstVerifiedFeasibleMilliseconds).toBeNull();
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(
+        response(input, { ...safe, diagnosticCode: "private roster note, not a code" }, 3),
+      ),
+    );
+    await expect(
+      generated.getSolveDiagnosticsSummary(scenarioId, solveRunId),
+    ).rejects.toMatchObject(invalidResponse);
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(
+        response(input, { ...safe, job: { ...safe.job, scenarioId: operationId } }, 3),
+      ),
+    );
+    await expect(
+      generated.getSolveDiagnosticsSummary(scenarioId, solveRunId),
+    ).rejects.toMatchObject(invalidResponse);
+  });
+
+  it("uses the explicit solve cancellation command and release does not invoke generic cancellation", async () => {
+    const terminal = deferred<unknown>();
+    const started = deferred<Invocation>();
+    const controls: string[] = [];
+    tauri.invoke.mockImplementation((command: string, input: Invocation) => {
+      switch (command) {
+        case "operation_prepare":
+          return Promise.resolve(response(input, { schemaVersion: 1, operationId }));
+        case "solve_start":
+          started.resolve(input);
+          return terminal.promise;
+        case "solve_cancel":
+          controls.push(command);
+          return Promise.resolve({
+            ...response(input, {
+              schemaVersion: 2,
+              cancelRequestId: input.request.cancelRequestId,
+              acknowledgement: "cancellationRequested",
+            }),
+            requestId: input.request.cancelRequestId,
+          });
+        case "operation_release":
+          controls.push(command);
+          return Promise.resolve(
+            response(input, { schemaVersion: 1, acknowledgement: "released" }),
+          );
+        case "operation_cancel":
+          controls.push(command);
+          return Promise.reject(new Error("generic cancellation must not be used for solves"));
+        default:
+          throw new Error(`Unexpected native command: ${command}`);
+      }
+    });
+    const scope = new generated.SetupOperationScope(scenarioId, 3);
+    const operation = generated.startSolve(scope, "deep");
+    expect("cancel" in operation).toBe(false);
+    const startInput = await started.promise;
+    await expect(
+      generated.cancelSolve({ operationId, scenarioId, expectedRevision: 3 }),
+    ).resolves.toMatchObject({
+      result: { acknowledgement: "cancellationRequested" },
+    });
+    terminal.resolve(
+      response(
+        startInput,
+        {
+          schemaVersion: 2,
+          currentRevision: 3,
+          reused: false,
+          job: solveJob(startInput.request.requestId, "cancelled"),
+        },
+        3,
+      ),
+    );
+    await operation.result;
+    await operation.release();
+    expect(controls).toEqual(["solve_cancel", "operation_release"]);
+  });
+});
+
 function csvInput(): {
   mapping: generated.PeopleCsvMapping;
   decisions: readonly generated.PeopleCsvDecision[];
@@ -697,7 +1933,7 @@ function nativeCsv(
   let nextOperation = 0;
   const lifecycle: { command: string; input: Invocation }[] = [];
   tauri.invoke.mockImplementation((command: string, input: Invocation) => {
-    if (command === "people_csv_source_close" || command === "people_csv_preview_discard")
+    if (command === "csv_source_close" || command === "csv_preview_discard")
       lifecycle.push({ command, input });
     const overridden = override?.(command, input);
     if (overridden !== undefined) return overridden;
@@ -715,24 +1951,24 @@ function nativeCsv(
         return Promise.resolve(
           response(input, { schemaVersion: 1, acknowledgement: "cancellationRequested" }),
         );
-      case "people_csv_source_close":
-      case "people_csv_preview_discard":
+      case "csv_source_close":
+      case "csv_preview_discard":
         return Promise.resolve(response(input, { schemaVersion: 1 }));
-      case "people_csv_source_open":
+      case "csv_source_open":
         return Promise.resolve(response(input, peopleCsvNative.sourceOpened));
-      case "people_csv_detect":
+      case "csv_detect":
         return Promise.resolve(response(input, peopleCsvNative.detection));
       case "people_csv_preview":
         return Promise.resolve(
           response(input, peopleCsvNative.preview, peopleCsvNative.preview.revision),
         );
-      case "people_csv_apply":
+      case "csv_apply":
         return Promise.resolve(
           response(input, peopleCsvNative.applied, peopleCsvNative.applied.outcome.revision),
         );
-      case "people_csv_rejected_rows":
+      case "csv_report":
         return Promise.resolve(response(input, peopleCsvNative.rejectedRows));
-      case "people_csv_rejected_rows_save":
+      case "csv_report_save":
         return Promise.resolve(response(input, peopleCsvNative.reportSaved));
       default:
         throw new Error(`Unexpected native CSV command: ${command}`);
@@ -744,29 +1980,724 @@ function nativeCsv(
 function csvContext() {
   const scenario = peopleCsvNative.preview.scenarioId;
   return {
-    flow: new generated.PeopleCsvFlow(scenario),
+    flow: new generated.CsvImportFlow(scenario, "people"),
     scope: new generated.SetupOperationScope(scenario, peopleCsvNative.preview.revision),
   };
 }
 
+function eligibilityInput(): Pick<generated.EligibilityCsvReview, "mapping" | "skippedRecords"> {
+  const review = eligibilityCsvNative.preview.result.preview.review;
+  return {
+    mapping: { ...review.mapping, dialect: "comma" },
+    skippedRecords: review.skippedRecords,
+  };
+}
+
+function nativeEligibilityCsv(
+  override?: (command: string, input: Invocation) => Promise<unknown> | undefined,
+) {
+  return nativeCsv((command, input) => {
+    const overridden = override?.(command, input);
+    if (overridden !== undefined) return overridden;
+    const receipt =
+      command === "csv_detect"
+        ? eligibilityCsvNative.detection
+        : command === "csv_record_sample"
+          ? eligibilityCsvNative.sample
+          : command === "eligibility_csv_preview"
+            ? eligibilityCsvNative.preview
+            : command === "csv_apply"
+              ? eligibilityCsvNative.applied
+              : command === "csv_report"
+                ? eligibilityCsvNative.report
+                : null;
+    return receipt === null
+      ? undefined
+      : Promise.resolve(response(input, receipt.result, receipt.currentRevision));
+  });
+}
+
+function shiftInput(): Pick<generated.ShiftCsvReview, "mapping" | "decisions"> {
+  const review = shiftCsvNative.preview.result.preview.review as generated.ShiftCsvReview;
+  return { mapping: review.mapping, decisions: review.decisions };
+}
+
+function nativeShiftCsv(
+  override?: (command: string, input: Invocation) => Promise<unknown> | undefined,
+) {
+  return nativeCsv((command, input) => {
+    const overridden = override?.(command, input);
+    if (overridden !== undefined) return overridden;
+    const receipt =
+      command === "csv_detect"
+        ? shiftCsvNative.detection
+        : command === "csv_record_sample"
+          ? shiftCsvNative.sample
+          : command === "shift_csv_preview"
+            ? shiftCsvNative.preview
+            : command === "csv_apply"
+              ? shiftCsvNative.applied
+              : command === "csv_report"
+                ? shiftCsvNative.report
+                : null;
+    return receipt === null
+      ? undefined
+      : Promise.resolve(response(input, receipt.result, receipt.currentRevision));
+  });
+}
+
+function availabilityInput(
+  review = availabilityCsvNative.preview.result.preview.review,
+): Pick<generated.AvailabilityCsvReview, "mapping" | "decisions"> {
+  const typed = review as generated.AvailabilityCsvReview;
+  return { mapping: typed.mapping, decisions: typed.decisions };
+}
+
+function nativeAvailabilityCsv(
+  override?: (command: string, input: Invocation) => Promise<unknown> | undefined,
+) {
+  return nativeCsv((command, input) => {
+    const overridden = override?.(command, input);
+    if (overridden !== undefined) return overridden;
+    const receipt =
+      command === "csv_detect"
+        ? availabilityCsvNative.detection
+        : command === "csv_record_sample"
+          ? availabilityCsvNative.sample
+          : command === "availability_csv_preview"
+            ? availabilityCsvNative.preview
+            : command === "csv_apply"
+              ? availabilityCsvNative.apply
+              : command === "csv_report"
+                ? availabilityCsvNative.report
+                : null;
+    return receipt === null
+      ? undefined
+      : Promise.resolve(response(input, receipt.result, receipt.currentRevision));
+  });
+}
+
+function matrixInput(
+  review = eligibilityMatrixNative.preview.result.preview.review,
+): Pick<generated.EligibilityMatrixReview, "mapping" | "skippedCells"> {
+  return { mapping: review.mapping, skippedCells: review.skippedCells };
+}
+
+function nativeEligibilityMatrix(
+  override?: (command: string, input: Invocation) => Promise<unknown> | undefined,
+  noChanges = false,
+) {
+  return nativeCsv((command, input) => {
+    const overridden = override?.(command, input);
+    if (overridden !== undefined) return overridden;
+    const receipt =
+      command === "eligibility_matrix_source_open"
+        ? noChanges
+          ? eligibilityMatrixNative.noChangesSourceOpened
+          : eligibilityMatrixNative.sourceOpened
+        : command === "csv_detect"
+          ? noChanges
+            ? eligibilityMatrixNative.noChangesDetection
+            : eligibilityMatrixNative.detection
+          : command === "csv_record_sample"
+            ? input.request.record === 5
+              ? eligibilityMatrixNative.inertSample
+              : eligibilityMatrixNative.sample
+            : command === "eligibility_matrix_preview"
+              ? noChanges
+                ? eligibilityMatrixNative.noChangesPreview
+                : eligibilityMatrixNative.preview
+              : command === "csv_apply"
+                ? noChanges
+                  ? eligibilityMatrixNative.noChangesApply
+                  : eligibilityMatrixNative.apply
+                : command === "csv_report"
+                  ? eligibilityMatrixNative.report
+                  : null;
+    return receipt === null
+      ? undefined
+      : Promise.resolve(response(input, receipt.result, receipt.currentRevision));
+  });
+}
+
+describe("native pasted eligibility matrix boundary", () => {
+  it("admits native cells, independent aliases and grouped raw-preserving proposals through apply and report", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const native = nativeEligibilityMatrix((command, input) =>
+      command === "eligibility_matrix_preview" &&
+      (input.request.skippedCells as readonly unknown[]).length === 0
+        ? Promise.resolve(
+            response(input, eligibilityMatrixNative.unresolvedPreview.result, captured.revision),
+          )
+        : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    const opened = (
+      await flow.openEligibilityMatrix(scope, eligibilityMatrixNative.submittedText).result
+    ).result;
+    expect(opened.byteCount).toBe(
+      new TextEncoder().encode(eligibilityMatrixNative.submittedText).length,
+    );
+    const detection = (await flow.detect(scope, opened.sourceId).result).result;
+    if (detection.family !== "eligibilityMatrix") throw new Error("Expected matrix census");
+    expect(detection.data).toMatchObject({
+      columns: 4,
+      cells: 12,
+      source: { rawBytes: opened.byteCount, logicalRecords: 5 },
+    });
+    const selected = { readFormat: { family: "eligibilityMatrix" }, record: 4 } as const;
+    const sample = (await flow.sample(scope, opened.sourceId, selected).result).result;
+    expect(sample.readFormat).toEqual({ family: "eligibilityMatrix" });
+    expect(sample.cells?.map(({ text }) => text)).toEqual([
+      "018f7b40-a000-7000-8000-00000000000d",
+      "false",
+      "false",
+      "TRUE",
+    ]);
+    const inert = (
+      await flow.sample(scope, opened.sourceId, {
+        readFormat: { family: "eligibilityMatrix" },
+        record: 5,
+      }).result
+    ).result;
+    expect(inert.cells?.[0]).toEqual({ text: "<img src=x>", truncated: false });
+    const unresolved = (
+      await flow.previewEligibilityMatrix(scope, opened.sourceId, {
+        mapping: { personMappings: {}, assignmentTypeMappings: {} },
+        skippedCells: [],
+      }).result
+    ).result;
+    expect(unresolved.preview).toMatchObject({
+      disposition: "blocked",
+      batch: null,
+      review: null,
+      approvalDigest: null,
+    });
+    expect(unresolved.preview.rows[1]).toMatchObject({
+      cell: { record: 2, column: 2 },
+      status: "blocked",
+      issue: "unresolvedPerson",
+    });
+    await flow.discardPreview(unresolved.previewId);
+    const reviewed = (
+      await flow.previewEligibilityMatrix(scope, opened.sourceId, matrixInput()).result
+    ).result;
+    expect(
+      reviewed.preview.rows
+        .slice(0, 3)
+        .map(({ cell, before, after, status }) => [cell, before, after, status]),
+    ).toEqual([
+      [{ record: 2, column: 1 }, false, true, "changed"],
+      [{ record: 2, column: 2 }, true, true, "unchanged"],
+      [{ record: 2, column: 3 }, false, true, "changed"],
+    ]);
+    expect(reviewed.preview.rows[0]).toMatchObject({
+      personId: "018f7b40-a000-7000-8000-000000000001",
+      assignmentTypeId: "018f7b40-a000-7000-8000-000000000015",
+    });
+    expect(reviewed.preview.batch?.commands.map(({ payload }) => payload.entity)).toMatchObject([
+      {
+        id: "018f7b40-a000-7000-8000-000000000001",
+        eligibleAssignmentTypeIds: [
+          "018F7B40-A000-7000-8000-000000000004",
+          "018f7b40-a000-7000-8000-000000000015",
+          "018f7b40-a000-7000-8000-000000000017",
+        ],
+        homeLocationId: "018f7b40a00070008000000000000005",
+        tags: ["night", "reviewed"],
+        workloadWeight: { numerator: 3, denominator: 2 },
+      },
+      { id: "018f7b40-a000-7000-8000-00000000000d", eligibleAssignmentTypeIds: [] },
+    ]);
+    if (reviewed.preview.approvalDigest === null) throw new Error("Missing matrix approval");
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: opened.sourceId,
+        previewId: reviewed.previewId,
+        approvedDigest: reviewed.preview.approvalDigest,
+        commandId: eligibilityMatrixNative.apply.result.outcome.commandId,
+        actor: { actorId: null, displayName: "Matrix boundary fixture" },
+        truncateRedo: false,
+      }).result
+    ).result;
+    expect(applied.outcome).toMatchObject({ kind: "applied", revision: 3 });
+    scope.dispose();
+    const report = (await flow.report(reviewed.previewId)).result;
+    expect(report.consumed).toBe(true);
+    expect(report.rows).toEqual({
+      family: "eligibilityMatrix",
+      excludedCells: [
+        { cell: { record: 3, column: 1 }, skipped: true, issue: "duplicatePair" },
+        { cell: { record: 3, column: 2 }, skipped: true, issue: "duplicatePair" },
+        { cell: { record: 3, column: 3 }, skipped: true, issue: "duplicatePair" },
+        { cell: { record: 4, column: 3 }, skipped: true, issue: "invalidMembership" },
+        { cell: { record: 5, column: 1 }, skipped: true, issue: "unresolvedPerson" },
+        { cell: { record: 5, column: 2 }, skipped: true, issue: "unresolvedPerson" },
+        { cell: { record: 5, column: 3 }, skipped: true, issue: "unresolvedPerson" },
+      ],
+    });
+    await flow.dispose();
+    expect(native.lifecycle.filter(({ command }) => command === "csv_source_close")).toEqual([]);
+    expect(callbacks.size).toBe(0);
+  });
+
+  it("consumes a same-text native no-op after apply/Undo/Redo without advancing revision", async () => {
+    const native = nativeEligibilityMatrix(undefined, true);
+    const captured = eligibilityMatrixNative.noChangesPreview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    expect(eligibilityMatrixNative.noChangesText).toBe(eligibilityMatrixNative.submittedText);
+    const opened = (
+      await flow.openEligibilityMatrix(scope, eligibilityMatrixNative.noChangesText).result
+    ).result;
+    const detection = (await flow.detect(scope, opened.sourceId).result).result;
+    if (detection.family !== "eligibilityMatrix") throw new Error("Expected matrix census");
+    expect(detection.data.cells).toBe(12);
+    const reviewed = (
+      await flow.previewEligibilityMatrix(
+        scope,
+        opened.sourceId,
+        matrixInput(captured.preview.review),
+      ).result
+    ).result;
+    expect(reviewed.preview).toMatchObject({ disposition: "noChanges", batch: null, cells: 12 });
+    expect(
+      reviewed.preview.rows
+        .filter(({ status }) => status !== "skipped")
+        .map(({ before, after }) => [before, after]),
+    ).toEqual([
+      [true, true],
+      [true, true],
+      [true, true],
+      [false, false],
+      [false, false],
+    ]);
+    if (reviewed.preview.approvalDigest === null) throw new Error("Missing no-op approval");
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: opened.sourceId,
+        previewId: reviewed.previewId,
+        approvedDigest: reviewed.preview.approvalDigest,
+        commandId: generated.newUuidV7(),
+        actor: { actorId: null, displayName: "Matrix no-op fixture" },
+        truncateRedo: false,
+      }).result
+    ).result;
+    expect(applied.outcome).toEqual({ kind: "noChanges", revision: 5 });
+    expect(applied.report.consumed).toBe(true);
+    scope.dispose();
+    await flow.dispose();
+    expect(native.lifecycle.filter(({ command }) => command === "csv_source_close")).toEqual([]);
+  });
+
+  it("rejects over-byte and ill-formed pasted intent and invalid cell decisions before native acquisition", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    expect(() => flow.open(scope)).toThrow(RangeError);
+    for (const text of [
+      "a".repeat(generated.MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES + 1),
+      "😀".repeat(generated.MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES / 4) + "a",
+      "\ud800",
+    ]) {
+      expect(() => flow.openEligibilityMatrix(scope, text)).toThrow(RangeError);
+    }
+    for (const skippedCells of [
+      [{ record: 1, column: 1 }],
+      [{ record: 2, column: 0 }],
+      [{ record: 2, column: 64 }],
+      [
+        { record: 3, column: 1 },
+        { record: 2, column: 1 },
+      ],
+      [
+        { record: 2, column: 1 },
+        { record: 2, column: 1 },
+      ],
+    ]) {
+      expect(() =>
+        flow.previewEligibilityMatrix(scope, captured.sourceId, {
+          ...matrixInput(),
+          skippedCells,
+        }),
+      ).toThrow(RangeError);
+    }
+    expect(tauri.invoke).not.toHaveBeenCalled();
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("refuses a native matrix detection with a false rectangle, sample width or source bound", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const original = eligibilityMatrixNative.detection.result;
+    let detection: unknown = original;
+    nativeEligibilityMatrix((command, input) =>
+      command === "csv_detect" ? Promise.resolve(response(input, detection)) : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    for (const data of [
+      { ...original.data, cells: 11 },
+      { ...original.data, samples: original.data.samples.slice(1) },
+      {
+        ...original.data,
+        samples: original.data.samples.map((sample) => ({
+          ...sample,
+          cells: sample.cells.slice(1),
+        })),
+      },
+      {
+        ...original.data,
+        source: {
+          ...original.data.source,
+          rawBytes: generated.MAX_ELIGIBILITY_MATRIX_SOURCE_BYTES + 1,
+        },
+      },
+    ]) {
+      detection = { ...original, data };
+      await expect(flow.detect(scope, captured.sourceId).result).rejects.toMatchObject(
+        invalidResponse,
+      );
+    }
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("correlates no-dialect native samples by family, source and logical record", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const original = eligibilityMatrixNative.sample.result;
+    let sample: unknown = original;
+    nativeEligibilityMatrix((command, input) =>
+      command === "csv_record_sample" ? Promise.resolve(response(input, sample)) : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    const selected = { readFormat: { family: "eligibilityMatrix" }, record: 4 } as const;
+    expect(
+      (await flow.sample(scope, captured.sourceId, selected).result).result.cells?.[3]?.text,
+    ).toBe("TRUE");
+    for (const malformed of [
+      { ...original, readFormat: { family: "eligibility", dialect: "tab" } },
+      { ...original, readFormat: { family: "eligibilityMatrix", dialect: "tab" } },
+      { ...original, sourceId: generated.newUuidV7() },
+      { ...original, record: 5 },
+    ]) {
+      sample = malformed;
+      await expect(flow.sample(scope, captured.sourceId, selected).result).rejects.toMatchObject(
+        invalidResponse,
+      );
+    }
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("refuses tampered matrix cell census, coordinates and source/review bindings instead of admitting approval", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const original = captured.preview;
+    let preview: unknown = captured;
+    nativeEligibilityMatrix((command, input) =>
+      command === "eligibility_matrix_preview"
+        ? Promise.resolve(response(input, preview, captured.revision))
+        : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    for (const malformed of [
+      { ...captured, sourceId: generated.newUuidV7() },
+      { ...captured, scenarioId: generated.newUuidV7() },
+      { ...captured, preview: { ...original, rows: original.rows.slice(1) } },
+      {
+        ...captured,
+        preview: {
+          ...original,
+          rows: original.rows.map((row, index) =>
+            index === 0 ? { ...row, cell: { record: 1, column: 1 } } : row,
+          ),
+        },
+      },
+      {
+        ...captured,
+        preview: {
+          ...original,
+          rows: original.rows.map((row, index) =>
+            index === 0 ? { ...row, cell: { record: 2, column: 0 } } : row,
+          ),
+        },
+      },
+      {
+        ...captured,
+        preview: {
+          ...original,
+          excludedCells: [
+            ...original.excludedCells,
+            { cell: { record: 6, column: 1 }, skipped: true, issue: null },
+          ],
+        },
+      },
+      ...[
+        { ...original.review, parserVersion: "unknown-parser" },
+        { ...original.review, revision: captured.revision + 1 },
+        { ...original.review, cells: 11 },
+        { ...original.review, source: { ...original.review.source, rawBytes: 220 } },
+        { ...original.review, source: { ...original.review.source, blake3: "0".repeat(64) } },
+        { ...original.review, skippedCells: [{ record: 5, column: 4 }] },
+      ].map((review) => ({ ...captured, preview: { ...original, review } })),
+    ]) {
+      preview = malformed;
+      await expect(
+        flow.previewEligibilityMatrix(scope, captured.sourceId, matrixInput()).result,
+      ).rejects.toMatchObject(invalidResponse);
+    }
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("refuses wrong-family or unsorted matrix reports and unconsumed apply receipts", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const original = eligibilityMatrixNative.report.result;
+    let report: unknown = original;
+    let applied: unknown = eligibilityMatrixNative.apply.result;
+    nativeEligibilityMatrix((command, input) =>
+      command === "csv_report"
+        ? Promise.resolve(response(input, report))
+        : command === "csv_apply"
+          ? Promise.resolve(response(input, applied, 3))
+          : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    for (const rows of [
+      { family: "eligibility", excludedRows: [] },
+      { ...original.rows, excludedCells: [...original.rows.excludedCells].reverse() },
+    ]) {
+      report = { ...original, rows };
+      applied = { ...eligibilityMatrixNative.apply.result, report };
+      await expect(flow.report(captured.previewId)).rejects.toMatchObject(invalidResponse);
+      await expect(
+        flow.apply(scope, {
+          sourceId: captured.sourceId,
+          previewId: captured.previewId,
+          approvedDigest: captured.preview.approvalDigest,
+          commandId: eligibilityMatrixNative.apply.result.outcome.commandId,
+          actor: { actorId: null, displayName: "Matrix boundary fixture" },
+          truncateRedo: false,
+        }).result,
+      ).rejects.toMatchObject(invalidResponse);
+    }
+    applied = { ...eligibilityMatrixNative.apply.result, report: { ...original, consumed: false } };
+    await expect(
+      flow.apply(scope, {
+        sourceId: captured.sourceId,
+        previewId: captured.previewId,
+        approvedDigest: captured.preview.approvalDigest,
+        commandId: eligibilityMatrixNative.apply.result.outcome.commandId,
+        actor: { actorId: null, displayName: "Matrix boundary fixture" },
+        truncateRedo: false,
+      }).result,
+    ).rejects.toMatchObject(invalidResponse);
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("retires late pasted-source custody by creator when the flow is disposed before capture settles", async () => {
+    const captured = eligibilityMatrixNative.preview.result;
+    const entered = deferred<Invocation>();
+    const terminal = deferred<unknown>();
+    const firstCleanup = deferred<Invocation>();
+    const native = nativeEligibilityMatrix((command, input) => {
+      if (command === "eligibility_matrix_source_open") {
+        entered.resolve(input);
+        return terminal.promise;
+      }
+      if (command === "csv_source_close") firstCleanup.resolve(input);
+      return undefined;
+    });
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibilityMatrix");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    const opened = flow.openEligibilityMatrix(scope, eligibilityMatrixNative.submittedText);
+    const invocation = await entered.promise;
+    const disposal = flow.dispose();
+    const cleanup = await firstCleanup.promise;
+    const target = {
+      kind: "creator",
+      operationId: await opened.operationId,
+      requestId: opened.requestId,
+    };
+    expect(cleanup.request.target).toEqual(target);
+    expect(opened.isCurrent()).toBe(false);
+    const beforeSettlement = native.lifecycle.length;
+    terminal.resolve(response(invocation, eligibilityMatrixNative.sourceOpened.result));
+    await opened.result;
+    await disposal;
+    expect(native.lifecycle.slice(beforeSettlement)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "csv_source_close",
+          input: expect.objectContaining({ request: expect.objectContaining({ target }) }),
+        }),
+      ]),
+    );
+    expect(callbacks.size).toBe(0);
+    scope.dispose();
+  });
+});
+
 describe("native CSV receipt and custody boundary", () => {
+  it("admits real availability receipts with raw references, weekly windows and signed endpoint facts", async () => {
+    nativeAvailabilityCsv();
+    const captured = availabilityCsvNative.preview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "availability");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    expect((await flow.detect(scope, captured.sourceId).result).result.family).toBe("availability");
+    const sample = await flow.sample(scope, captured.sourceId, {
+      readFormat: { family: "availability", dialect: "tab" },
+      record: 2,
+    }).result;
+    expect(sample.result.cells?.[3]?.text).toBe("2026-09-01T09:00:00.123");
+    const reviewed = (
+      await flow.previewAvailability(scope, captured.sourceId, availabilityInput()).result
+    ).result;
+    expect(reviewed.preview.rows.map(({ status }) => status)).toEqual([
+      "updated",
+      "added",
+      "unchanged",
+    ]);
+    const updated = reviewed.preview.rows[0];
+    expect(updated?.after?.personId).toBe("018F7B40-A000-7000-8000-000000000001");
+    expect(updated?.after?.assignmentTypeIds).toEqual(["018F7B40-A000-7000-8000-000000000004"]);
+    expect(updated?.after?.locationIds).toEqual(["018f7b40a00070008000000000000005"]);
+    expect(updated?.after?.timeWindow).toEqual({
+      kind: "instant",
+      startsAt: "2026-09-01T09:00:00.123-04:00",
+      endsAt: "2026-09-01T10:00:00.456-04:00",
+    });
+    expect(updated?.resolvedStartsAt).toEqual({
+      instant: "2026-09-01T13:00:00.123Z",
+      local: "2026-09-01T09:00:00.123",
+      offsetSeconds: -14400,
+    });
+    expect(reviewed.preview.rows[1]?.after).toMatchObject({
+      availabilityKind: "requestedTimeOff",
+      source: " weekly source ",
+      note: " weekly note ",
+      timeWindow: { kind: "weekly" },
+    });
+    expect(reviewed.preview.rows[2]?.resolvedEndsAt?.offsetSeconds).toBe(-14400);
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: captured.sourceId,
+        previewId: captured.previewId,
+        approvedDigest: captured.preview.approvalDigest,
+        commandId: availabilityCsvNative.apply.result.outcome.commandId,
+        actor: { actorId: null, displayName: "Availability boundary fixture" },
+        truncateRedo: false,
+      }).result
+    ).result;
+    expect(applied.outcome).toMatchObject({ kind: "applied", revision: 2 });
+    expect((await flow.report(captured.previewId)).result.rows).toEqual({
+      family: "availability",
+      excludedRows: [],
+    });
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("retains native equivalent-time facts while consuming a no-change approval at the same revision", async () => {
+    nativeAvailabilityCsv((command, input) => {
+      const receipt =
+        command === "availability_csv_preview"
+          ? availabilityCsvNative.noChangesPreview
+          : command === "csv_apply"
+            ? availabilityCsvNative.noChangesApply
+            : null;
+      return receipt === null
+        ? undefined
+        : Promise.resolve(response(input, receipt.result, receipt.currentRevision));
+    });
+    const captured = availabilityCsvNative.noChangesPreview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "availability");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    const reviewed = (
+      await flow.previewAvailability(
+        scope,
+        captured.sourceId,
+        availabilityInput(captured.preview.review),
+      ).result
+    ).result;
+    expect(reviewed.preview.disposition).toBe("noChanges");
+    expect(reviewed.preview.rows[0]?.resolvedStartsAt).toEqual({
+      instant: "2026-09-01T13:00:00.123Z",
+      local: "2026-09-01T09:00:00.123",
+      offsetSeconds: -14400,
+    });
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: captured.sourceId,
+        previewId: captured.previewId,
+        approvedDigest: captured.preview.approvalDigest,
+        commandId: generated.newUuidV7(),
+        actor: { actorId: null, displayName: "Availability no-change fixture" },
+        truncateRedo: false,
+      }).result
+    ).result;
+    expect(applied.outcome).toEqual({ kind: "noChanges", revision: 2 });
+    expect(applied.report.consumed).toBe(true);
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("refuses malformed availability endpoint facts instead of creating approval", async () => {
+    const captured = availabilityCsvNative.preview.result;
+    const first = captured.preview.rows[0];
+    if (!first?.resolvedStartsAt) throw new Error("Expected native endpoint facts");
+    const malformed = {
+      ...captured,
+      preview: {
+        ...captured.preview,
+        rows: [
+          {
+            ...first,
+            resolvedStartsAt: { ...first.resolvedStartsAt, offsetSeconds: "-14400" },
+          },
+          ...captured.preview.rows.slice(1),
+        ],
+      },
+    };
+    nativeAvailabilityCsv((command, input) =>
+      command === "availability_csv_preview"
+        ? Promise.resolve(response(input, malformed, captured.revision))
+        : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "availability");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    await expect(
+      flow.previewAvailability(scope, captured.sourceId, availabilityInput()).result,
+    ).rejects.toMatchObject(invalidResponse);
+    scope.dispose();
+    await flow.dispose();
+  });
+
   it("accepts captured picker, detection, preview, apply and retained report receipts across revision scopes", async () => {
     const native = nativeCsv();
     const { flow, scope } = csvContext();
     const opened = await flow.open(scope).result;
     const detected = await flow.detect(scope, opened.result.sourceId).result;
-    expect(detected.result.dialects).toEqual(peopleCsvNative.detection.dialects);
+    expect(detected.result).toEqual(peopleCsvNative.detection);
     expect(opened.currentRevision).toBeNull();
     expect(detected.currentRevision).toBeNull();
-    const preview = await flow.preview(scope, opened.result.sourceId, csvInput()).result;
+    const preview = await flow.previewPeople(scope, opened.result.sourceId, csvInput()).result;
     expect(preview.result.preview.rows).toEqual(peopleCsvNative.preview.preview.rows);
     const applied = await flow.apply(scope, csvApplyInput()).result;
     expect(applied.result.outcome).toEqual(peopleCsvNative.applied.outcome);
     scope.dispose();
     const current = new generated.SetupOperationScope(peopleCsvNative.preview.scenarioId, 7);
-    const retained = await flow.rejectedRows(preview.result.previewId);
-    const saved = await flow.saveRejectedRows(current, preview.result.previewId).result;
-    expect(retained.result.rejectedRows).toEqual([{ record: 3, code: "missingName" }]);
+    const retained = await flow.report(preview.result.previewId);
+    const saved = await flow.saveReport(current, preview.result.previewId).result;
+    expect(retained.result.rows).toEqual({
+      family: "people",
+      rejectedRows: [{ record: 3, code: "missingName" }],
+    });
     expect(retained.currentRevision).toBeNull();
     expect(saved.result.previewId).toBe(preview.result.previewId);
     expect(saved.currentRevision).toBeNull();
@@ -775,12 +2706,236 @@ describe("native CSV receipt and custody boundary", () => {
     expect(callbacks.size).toBe(0);
   });
 
+  it("admits real shift receipts with negative offsets and preserves raw references and local intent", async () => {
+    nativeShiftCsv();
+    const captured = shiftCsvNative.preview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "shifts");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    expect((await flow.detect(scope, captured.sourceId).result).result.family).toBe("shifts");
+    const sample = await flow.sample(scope, captured.sourceId, {
+      readFormat: { family: "shifts", dialect: "tab" },
+      record: 2,
+    }).result;
+    expect(sample.result.cells?.[3]?.text).toBe("2026-09-01T09:00:00");
+    const reviewed = (await flow.previewShifts(scope, captured.sourceId, shiftInput()).result)
+      .result;
+    expect(reviewed.preview.rows.map(({ status }) => status)).toEqual(["updated", "added"]);
+    const updated = reviewed.preview.rows[0];
+    expect(updated?.before?.tags).toEqual(["authored", "order"]);
+    expect(updated?.after?.tags).toEqual(["changed"]);
+    expect(updated?.after?.locationId).toBe("018f7b40a00070008000000000000005");
+    expect(updated?.after?.startsAt).toEqual({
+      local: "2026-09-01T09:00:00.000",
+      instant: "2026-09-01T09:00:00-04:00",
+      offsetSeconds: -14400,
+    });
+    const added = reviewed.preview.rows[1];
+    expect(added?.identity).toEqual({ kind: "supplied", shiftId: added?.shiftId });
+    expect(added?.after?.id).toBe("018f7b40-a000-7000-8000-000000000009");
+    expect(added?.after?.startsAt.offsetSeconds).toBe(-14400);
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: captured.sourceId,
+        previewId: captured.previewId,
+        approvedDigest: captured.preview.approvalDigest,
+        commandId: shiftCsvNative.applied.result.outcome.commandId,
+        actor: { actorId: null, displayName: "Shift boundary fixture" },
+        truncateRedo: false,
+      }).result
+    ).result;
+    expect(applied.outcome).toMatchObject({ kind: "applied", revision: 2 });
+    expect((await flow.report(captured.previewId)).result.rows).toEqual({
+      family: "shifts",
+      excludedRows: [],
+    });
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("refuses a shift preview with a nonnumeric resolved offset rather than creating approval", async () => {
+    const captured = shiftCsvNative.preview.result;
+    const first = captured.preview.rows[0];
+    if (!first?.after) throw new Error("Expected native shift projection");
+    const malformed = {
+      ...captured,
+      preview: {
+        ...captured.preview,
+        rows: [
+          {
+            ...first,
+            after: {
+              ...first.after,
+              startsAt: { ...first.after.startsAt, offsetSeconds: "-14400" },
+            },
+          },
+          ...captured.preview.rows.slice(1),
+        ],
+      },
+    };
+    nativeShiftCsv((command, input) =>
+      command === "shift_csv_preview"
+        ? Promise.resolve(response(input, malformed, captured.revision))
+        : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "shifts");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    await expect(
+      flow.previewShifts(scope, captured.sourceId, shiftInput()).result,
+    ).rejects.toMatchObject(invalidResponse);
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("admits native sparse eligibility review and grouped update receipts without changing raw Person meaning", async () => {
+    nativeEligibilityCsv();
+    const captured = eligibilityCsvNative.preview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibility");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    expect((await flow.detect(scope, captured.sourceId).result).result.family).toBe("eligibility");
+    const sample = await flow.sample(scope, captured.sourceId, {
+      readFormat: { family: "eligibility", dialect: "comma" },
+      record: 2,
+    }).result;
+    expect(sample.result.cells?.map((cell) => cell.text)).toEqual(
+      eligibilityCsvNative.sample.result.cells.map((cell) => cell.text),
+    );
+    const reviewed = (
+      await flow.previewEligibility(scope, captured.sourceId, eligibilityInput()).result
+    ).result;
+    expect(reviewed.preview.rows.map(({ before, after }) => [before, after])).toEqual([
+      [false, true],
+      [false, true],
+      [null, true],
+    ]);
+    expect(reviewed.preview.batch?.commands).toEqual(captured.preview.batch.commands);
+    expect(reviewed.preview.batch?.commands[0]?.payload.entity.homeLocationId).toBe(
+      "018f7b40a00070008000000000000005",
+    );
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: captured.sourceId,
+        previewId: captured.previewId,
+        approvedDigest: captured.preview.approvalDigest,
+        commandId: eligibilityCsvNative.applied.result.outcome.commandId,
+        actor: { actorId: null, displayName: "Eligibility boundary fixture" },
+        truncateRedo: false,
+      }).result
+    ).result;
+    expect(applied.outcome).toEqual(eligibilityCsvNative.applied.result.outcome);
+    expect((await flow.report(captured.previewId)).result.rows).toEqual({
+      family: "eligibility",
+      excludedRows: [{ record: 4, skipped: true, issue: "unresolvedPerson" }],
+    });
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("keeps canonical root and source identities separate from preserved raw references", async () => {
+    const captured = eligibilityCsvNative.preview.result;
+    const preview = structuredClone(captured);
+    const entity = preview.preview.batch.commands[0]?.payload.entity;
+    if (!entity) throw new Error("Expected native Person proposal");
+    nativeEligibilityCsv((command, input) =>
+      command === "eligibility_csv_preview"
+        ? Promise.resolve(response(input, preview, captured.revision))
+        : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibility");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    const canonical = entity.id;
+    entity.id = canonical.toUpperCase();
+    await expect(
+      flow.previewEligibility(scope, captured.sourceId, eligibilityInput()).result,
+    ).rejects.toMatchObject(invalidResponse);
+    entity.id = canonical;
+    preview.sourceId = preview.sourceId.toUpperCase();
+    await expect(
+      flow.previewEligibility(scope, captured.sourceId, eligibilityInput()).result,
+    ).rejects.toMatchObject(invalidResponse);
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("accepts equivalent mapping UUID spellings but rejects either alias map above its item ceiling", async () => {
+    nativeEligibilityCsv();
+    const captured = eligibilityCsvNative.preview.result;
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibility");
+    const scope = new generated.SetupOperationScope(captured.scenarioId, captured.revision);
+    const person = captured.preview.rows[0]?.personId;
+    const assignmentType = captured.preview.rows[0]?.assignmentTypeId;
+    if (!person || !assignmentType) throw new Error("Expected resolved native fixture endpoints");
+    for (const spell of [
+      (value: string) => value.toUpperCase(),
+      (value: string) => value.replaceAll("-", ""),
+      (value: string) => `{${value}}`,
+      (value: string) => `urn:uuid:${value}`,
+    ]) {
+      const input = eligibilityInput();
+      await flow.previewEligibility(scope, captured.sourceId, {
+        ...input,
+        mapping: {
+          ...input.mapping,
+          personMappings: { Staff: spell(person) },
+          assignmentTypeMappings: { Duty: spell(assignmentType) },
+        },
+      }).result;
+      await flow.discardPreview(captured.previewId);
+    }
+    for (const field of ["personMappings", "assignmentTypeMappings"] as const) {
+      const input = eligibilityInput();
+      const mapping = {
+        ...input.mapping,
+        [field]: Object.fromEntries(
+          Array.from({ length: 10_001 }, (_, index) => [String(index), person]),
+        ),
+      };
+      expect(new TextEncoder().encode(JSON.stringify(mapping)).length).toBeLessThan(1_048_576);
+      expect(() =>
+        flow.previewEligibility(scope, captured.sourceId, { ...input, mapping }),
+      ).toThrow(RangeError);
+    }
+    scope.dispose();
+    await flow.dispose();
+  });
+
+  it("keeps full eligibility exclusions separate from People limits and refuses wrong family or excess rows", async () => {
+    const captured = eligibilityCsvNative.preview.result;
+    const excludedRows = Array.from({ length: 10_000 }, (_, index) => ({
+      record: index + 2,
+      skipped: true,
+      issue: "unresolvedPerson",
+    }));
+    let report: unknown = {
+      ...eligibilityCsvNative.report.result,
+      rows: { family: "eligibility", excludedRows },
+    };
+    nativeEligibilityCsv((command, input) =>
+      command === "csv_report" ? Promise.resolve(response(input, report)) : undefined,
+    );
+    const flow = new generated.CsvImportFlow(captured.scenarioId, "eligibility");
+    const rows = (await flow.report(captured.previewId)).result.rows;
+    if (rows.family !== "eligibility") throw new Error("Expected eligibility exclusions");
+    expect(rows.excludedRows.at(-1)).toEqual({
+      record: 10_001,
+      skipped: true,
+      issue: "unresolvedPerson",
+    });
+    excludedRows.push({ record: 2, skipped: true, issue: "unresolvedPerson" });
+    await expect(flow.report(captured.previewId)).rejects.toMatchObject(invalidResponse);
+    report = {
+      ...eligibilityCsvNative.report.result,
+      rows: { family: "people", rejectedRows: [] },
+    };
+    await expect(flow.report(captured.previewId)).rejects.toMatchObject(invalidResponse);
+    await flow.dispose();
+  });
+
   it("rejects malformed native versions, source bounds and response bindings", async () => {
     const { flow, scope } = csvContext();
     let opened: unknown = { ...peopleCsvNative.sourceOpened, schemaVersion: 2 };
     let preview: unknown = peopleCsvNative.preview;
     nativeCsv((command, input) => {
-      if (command === "people_csv_source_open") return Promise.resolve(response(input, opened));
+      if (command === "csv_source_open") return Promise.resolve(response(input, opened));
       if (command === "people_csv_preview") return Promise.resolve(response(input, preview, 0));
       return undefined;
     });
@@ -789,7 +2944,7 @@ describe("native CSV receipt and custody boundary", () => {
     await expect(flow.open(scope).result).rejects.toMatchObject(invalidResponse);
     preview = { ...peopleCsvNative.preview, sourceId: scenarioId };
     await expect(
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
     ).rejects.toMatchObject(invalidResponse);
     preview = {
       ...peopleCsvNative.preview,
@@ -799,8 +2954,104 @@ describe("native CSV receipt and custody boundary", () => {
       },
     };
     await expect(
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
     ).rejects.toMatchObject(invalidResponse);
+    await flow.dispose();
+  });
+
+  it("refuses another family's detection, retained report and apply receipt", async () => {
+    const { flow, scope } = csvContext();
+    nativeCsv((command, input) => {
+      if (command === "csv_detect")
+        return Promise.resolve(
+          response(input, {
+            family: "assignments",
+            data: {
+              format: "mapped",
+              ...peopleCsvNative.detection.data,
+            },
+          }),
+        );
+      const report = {
+        ...peopleCsvNative.rejectedRows,
+        rows: { family: "assignments", excludedRows: [] },
+      };
+      if (command === "csv_report") return Promise.resolve(response(input, report));
+      if (command === "csv_apply")
+        return Promise.resolve(
+          response(
+            input,
+            {
+              ...peopleCsvNative.applied,
+              report: { ...peopleCsvNative.applied.report, rows: report.rows },
+            },
+            peopleCsvNative.applied.outcome.revision,
+          ),
+        );
+      return undefined;
+    });
+    await expect(
+      flow.detect(scope, peopleCsvNative.sourceOpened.sourceId).result,
+    ).rejects.toMatchObject(invalidResponse);
+    await expect(flow.report(peopleCsvNative.preview.previewId)).rejects.toMatchObject(
+      invalidResponse,
+    );
+    await expect(flow.apply(scope, csvApplyInput()).result).rejects.toMatchObject(invalidResponse);
+    await flow.dispose();
+  });
+
+  it("admits the complete assignment report through read and apply, but refuses an extra row", async () => {
+    const excludedRows = Array.from({ length: 10_000 }, (_, index) => ({
+      record: index + 3,
+      skipped: true,
+      issue: null,
+    }));
+    const report = {
+      ...assignmentCsvNative.report,
+      rows: { family: "assignments", excludedRows },
+    };
+    nativeCsv((command, input) => {
+      if (command === "csv_report") return Promise.resolve(response(input, report));
+      if (command === "csv_apply")
+        return Promise.resolve(
+          response(
+            input,
+            {
+              ...assignmentCsvNative.applied,
+              report,
+            },
+            assignmentCsvNative.applied.outcome.revision,
+          ),
+        );
+      return undefined;
+    });
+    const flow = new generated.CsvImportFlow(assignmentCsvNative.preview.scenarioId, "assignments");
+    const scope = new generated.SetupOperationScope(
+      assignmentCsvNative.preview.scenarioId,
+      assignmentCsvNative.preview.revision,
+    );
+    const read = (await flow.report(assignmentCsvNative.preview.previewId)).result.rows;
+    if (read.family !== "assignments") throw new Error("Expected assignment exclusions");
+    expect(read.excludedRows).toHaveLength(10_000);
+    expect(read.excludedRows.at(-1)?.record).toBe(10_002);
+    const applied = (
+      await flow.apply(scope, {
+        sourceId: assignmentCsvNative.sourceOpened.sourceId,
+        previewId: assignmentCsvNative.preview.previewId,
+        approvedDigest: assignmentCsvNative.preview.preview.approvalDigest,
+        commandId: assignmentCsvNative.applied.outcome.commandId,
+        actor: { actorId: null, displayName: "Assignment boundary fixture" },
+        truncateRedo: false,
+      }).result
+    ).result.report.rows;
+    if (applied.family !== "assignments") throw new Error("Expected assignment receipt exclusions");
+    expect(applied.excludedRows).toHaveLength(10_000);
+    expect(applied.excludedRows.at(-1)?.record).toBe(10_002);
+    excludedRows.push({ record: 3, skipped: true, issue: null });
+    await expect(flow.report(assignmentCsvNative.preview.previewId)).rejects.toMatchObject(
+      invalidResponse,
+    );
+    scope.dispose();
     await flow.dispose();
   });
 
@@ -808,34 +3059,43 @@ describe("native CSV receipt and custody boundary", () => {
     const { flow, scope } = csvContext();
     let detection: unknown = {
       ...peopleCsvNative.detection,
-      dialects: [
-        {
-          status: "rejected",
-          dialect: "comma",
-          error: { code: "logicalRecordLimit", record: 10_002 },
-        },
-        ...peopleCsvNative.detection.dialects.filter((item) => item.dialect !== "comma"),
-      ],
+      data: {
+        ...peopleCsvNative.detection.data,
+        dialects: [
+          {
+            status: "rejected",
+            dialect: "comma",
+            error: { code: "logicalRecordLimit", record: 10_002 },
+          },
+          ...peopleCsvNative.detection.data.dialects.filter((item) => item.dialect !== "comma"),
+        ],
+      },
     };
     nativeCsv((command, input) =>
-      command === "people_csv_detect" ? Promise.resolve(response(input, detection)) : undefined,
+      command === "csv_detect" ? Promise.resolve(response(input, detection)) : undefined,
     );
     const accepted = await flow.detect(scope, peopleCsvNative.sourceOpened.sourceId).result;
-    expect(accepted.result.dialects.find((item) => item.dialect === "comma")).toEqual({
+    if (accepted.result.family !== "people") throw new Error("Expected people detection");
+    expect(accepted.result.data.dialects.find((item) => item.dialect === "comma")).toEqual({
       status: "rejected",
       dialect: "comma",
       error: { code: "logicalRecordLimit", record: 10_002 },
     });
     detection = {
       ...peopleCsvNative.detection,
-      dialects: peopleCsvNative.detection.dialects.map((candidate) =>
-        candidate.dialect === "comma"
-          ? {
-              ...candidate,
-              samples: [{ record: 1, cells: [{ text: "\u{10400}".repeat(17), truncated: false }] }],
-            }
-          : candidate,
-      ),
+      data: {
+        ...peopleCsvNative.detection.data,
+        dialects: peopleCsvNative.detection.data.dialects.map((candidate) =>
+          candidate.dialect === "comma"
+            ? {
+                ...candidate,
+                samples: [
+                  { record: 1, cells: [{ text: "\u{10400}".repeat(17), truncated: false }] },
+                ],
+              }
+            : candidate,
+        ),
+      },
     };
     await expect(
       flow.detect(scope, peopleCsvNative.sourceOpened.sourceId).result,
@@ -846,7 +3106,7 @@ describe("native CSV receipt and custody boundary", () => {
   it("inspects complete later identities and rejects mismatched or over-limit samples", async () => {
     const { flow, scope } = csvContext();
     const sourceId = peopleCsvNative.sourceOpened.sourceId;
-    const selected = { dialect: "comma", record: 3 } as const;
+    const selected = { readFormat: { family: "people", dialect: "comma" }, record: 3 } as const;
     const valid = {
       schemaVersion: 1,
       sourceId,
@@ -855,13 +3115,14 @@ describe("native CSV receipt and custody boundary", () => {
     };
     let sample: unknown = valid;
     nativeCsv((command, input) =>
-      command === "people_csv_record_sample" ? Promise.resolve(response(input, sample)) : undefined,
+      command === "csv_record_sample" ? Promise.resolve(response(input, sample)) : undefined,
     );
     const inspected = await flow.sample(scope, sourceId, selected).result;
     expect(inspected.result.cells?.[0]).toEqual(valid.cells[0]);
     for (const malformed of [
       { ...valid, sourceId: scenarioId },
-      { ...valid, dialect: "tab" },
+      { ...valid, readFormat: { family: "people", dialect: "tab" } },
+      { ...valid, readFormat: { family: "assignments", format: { format: "canonicalV1" } } },
       { ...valid, record: 4 },
       { ...valid, cells: [{ text: `${"é".repeat(128)}x`, truncated: true }] },
       { ...valid, cells: Array.from({ length: 65 }, () => ({ text: "", truncated: false })) },
@@ -874,25 +3135,6 @@ describe("native CSV receipt and custody boundary", () => {
     sample = { ...valid, cells: null };
     expect((await flow.sample(scope, sourceId, selected).result).result.cells).toBeNull();
     expect(() => flow.sample(scope, sourceId, { ...selected, record: 10_002 })).toThrow(RangeError);
-    await flow.dispose();
-  });
-
-  it("allows schema-valid uppercase raw domain UUIDs without loosening native binding identities", async () => {
-    const { flow, scope } = csvContext();
-    const preview = structuredClone(peopleCsvNative.preview);
-    const entity = preview.preview.batch.commands[0]?.payload.entity;
-    if (!entity) throw new Error("Captured person missing");
-    entity.id = entity.id.toUpperCase();
-    nativeCsv((command, input) =>
-      command === "people_csv_preview" ? Promise.resolve(response(input, preview, 0)) : undefined,
-    );
-    const accepted = await flow.preview(scope, preview.sourceId, csvInput()).result;
-    expect(accepted.result.preview.batch?.commands[0]?.payload.entity.id).toBe(entity.id);
-    await flow.discardPreview(accepted.result.previewId);
-    preview.sourceId = preview.sourceId.toUpperCase();
-    await expect(
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
-    ).rejects.toMatchObject(invalidResponse);
     await flow.dispose();
   });
 
@@ -916,7 +3158,7 @@ describe("native CSV receipt and custody boundary", () => {
             0,
           ),
         );
-      if (command === "people_csv_apply")
+      if (command === "csv_apply")
         return Promise.resolve(
           response(
             input,
@@ -930,7 +3172,7 @@ describe("native CSV receipt and custody boundary", () => {
       return undefined;
     });
     await expect(
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, csvInput()).result,
     ).rejects.toMatchObject(invalidResponse);
     await expect(flow.apply(scope, csvApplyInput()).result).rejects.toMatchObject(invalidResponse);
     report = { ...peopleCsvNative.applied.report, disposition: "noChanges" };
@@ -948,7 +3190,7 @@ describe("native CSV receipt and custody boundary", () => {
     });
     nativeCsv((command) => (command === "people_csv_preview" ? rejectPreview() : undefined));
     const previewDefaults = (newPersonDefaults: generated.PeopleCsvNewPersonDefaults) =>
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, {
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, {
         ...input,
         mapping: { ...input.mapping, newPersonDefaults },
       });
@@ -987,7 +3229,7 @@ describe("native CSV receipt and custody boundary", () => {
     ).toThrow(RangeError);
     const column: generated.PeopleCsvColumn = { index: 0, field: "name", blank: "preserve" };
     expect(() =>
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, {
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, {
         ...input,
         mapping: {
           ...input.mapping,
@@ -997,7 +3239,7 @@ describe("native CSV receipt and custody boundary", () => {
       }),
     ).toThrow(RangeError);
     expect(() =>
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, {
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, {
         ...input,
         mapping: {
           ...input.mapping,
@@ -1021,7 +3263,7 @@ describe("native CSV receipt and custody boundary", () => {
     for (const date of ["02026-01-01", "-0001-01-01", "-000000-01-01", invalidRange.startDate]) {
       expect(() =>
         flow
-          .preview(scope, peopleCsvNative.sourceOpened.sourceId, {
+          .previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, {
             ...input,
             mapping: {
               ...input.mapping,
@@ -1035,7 +3277,7 @@ describe("native CSV receipt and custody boundary", () => {
       ).toThrow(RangeError);
       expect(() =>
         flow
-          .preview(scope, peopleCsvNative.sourceOpened.sourceId, {
+          .previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, {
             ...input,
             mapping: {
               ...input.mapping,
@@ -1073,7 +3315,7 @@ describe("native CSV receipt and custody boundary", () => {
         : undefined,
     );
     await expect(
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, input).result,
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, input).result,
     ).rejects.toMatchObject(invalidResponse);
     await flow.dispose();
   });
@@ -1087,7 +3329,7 @@ describe("native CSV receipt and custody boundary", () => {
     });
     nativeCsv((command) => (command === "people_csv_preview" ? rejectPreview() : undefined));
     const previewTimestamp = (effectiveFrom: string) =>
-      flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, {
+      flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, {
         ...input,
         mapping: {
           ...input.mapping,
@@ -1123,7 +3365,8 @@ describe("native CSV receipt and custody boundary", () => {
       return Promise.resolve(response(input, peopleCsvNative.preview, 0));
     });
     const draft = { ...csvInput(), sourceId: scenarioId };
-    const accepted = await flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, draft).result;
+    const accepted = await flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, draft)
+      .result;
     expect(accepted.result.sourceId).toBe(peopleCsvNative.sourceOpened.sourceId);
     expect(accepted.result.previewId).toBe(peopleCsvNative.preview.previewId);
     await flow.dispose();
@@ -1135,13 +3378,13 @@ describe("native CSV receipt and custody boundary", () => {
     const terminal = deferred<unknown>();
     const firstCleanup = deferred<Invocation>();
     const native = nativeCsv((command, input) => {
-      if (command === "people_csv_source_open") {
+      if (command === "csv_source_open") {
         entered.resolve(input);
         return terminal.promise;
       }
       if (command === "operation_release")
         return Promise.resolve(response(input, { schemaVersion: 2, acknowledgement: "released" }));
-      if (command === "people_csv_source_close") firstCleanup.resolve(input);
+      if (command === "csv_source_close") firstCleanup.resolve(input);
       return undefined;
     });
     const opened = flow.open(scope);
@@ -1166,7 +3409,7 @@ describe("native CSV receipt and custody boundary", () => {
     expect((await opened.result).result.sourceId).toBe(peopleCsvNative.sourceOpened.sourceId);
     await disposal;
     expect(native.lifecycle.slice(cleanupBeforeSettlement)).toContainEqual({
-      command: "people_csv_source_close",
+      command: "csv_source_close",
       input: expect.objectContaining({ request: expect.objectContaining({ target }) }),
     });
     expect(() => flow.open(scope)).toThrow();
@@ -1184,7 +3427,7 @@ describe("native CSV receipt and custody boundary", () => {
       return undefined;
     });
     const source = await flow.open(scope).result;
-    const preview = flow.preview(scope, source.result.sourceId, csvInput());
+    const preview = flow.previewPeople(scope, source.result.sourceId, csvInput());
     const invocation = await entered.promise;
     await preview.release();
     const target = {
@@ -1197,14 +3440,12 @@ describe("native CSV receipt and custody boundary", () => {
     expect((await preview.result).result.previewId).toBe(peopleCsvNative.preview.previewId);
     expect(preview.isCurrent()).toBe(false);
     expect(native.lifecycle.slice(cleanupBeforeSettlement)).toContainEqual({
-      command: "people_csv_preview_discard",
+      command: "csv_preview_discard",
       input: expect.objectContaining({ request: expect.objectContaining({ target }) }),
     });
-    expect(native.lifecycle.some(({ command }) => command === "people_csv_source_close")).toBe(
-      false,
-    );
-    expect((await flow.detect(scope, source.result.sourceId).result).result.dialects).toEqual(
-      peopleCsvNative.detection.dialects,
+    expect(native.lifecycle.some(({ command }) => command === "csv_source_close")).toBe(false);
+    expect((await flow.detect(scope, source.result.sourceId).result).result).toEqual(
+      peopleCsvNative.detection,
     );
     await flow.dispose();
   });
@@ -1215,9 +3456,8 @@ describe("native CSV receipt and custody boundary", () => {
       const { flow, scope } = csvContext();
       const entered = deferred<Invocation>();
       const terminal = deferred<unknown>();
-      const workCommand = kind === "source" ? "people_csv_source_open" : "people_csv_preview";
-      const cleanupCommand =
-        kind === "source" ? "people_csv_source_close" : "people_csv_preview_discard";
+      const workCommand = kind === "source" ? "csv_source_open" : "people_csv_preview";
+      const cleanupCommand = kind === "source" ? "csv_source_close" : "csv_preview_discard";
       const native = nativeCsv((command, input) => {
         if (command === workCommand) {
           entered.resolve(input);
@@ -1228,7 +3468,7 @@ describe("native CSV receipt and custody boundary", () => {
       const operation =
         kind === "source"
           ? flow.open(scope)
-          : flow.preview(scope, peopleCsvNative.sourceOpened.sourceId, csvInput());
+          : flow.previewPeople(scope, peopleCsvNative.sourceOpened.sourceId, csvInput());
       await entered.promise;
       const failed = expect(operation.result).rejects.toMatchObject(invalidResponse);
       terminal.reject("native acquisition completed but its IPC response was lost");
@@ -1256,17 +3496,17 @@ describe("native CSV receipt and custody boundary", () => {
     const native = nativeCsv();
     const { flow, scope } = csvContext();
     const source = await flow.open(scope).result;
-    const preview = await flow.preview(scope, source.result.sourceId, csvInput()).result;
+    const preview = await flow.previewPeople(scope, source.result.sourceId, csvInput()).result;
     scope.dispose();
     const replacement = new generated.SetupOperationScope(peopleCsvNative.preview.scenarioId, 1);
     const detected = await flow.detect(replacement, source.result.sourceId).result;
-    const report = await flow.rejectedRows(preview.result.previewId);
-    expect(detected.result.dialects).toEqual(peopleCsvNative.detection.dialects);
+    const report = await flow.report(preview.result.previewId);
+    expect(detected.result).toEqual(peopleCsvNative.detection);
     expect(report.result.previewId).toBe(preview.result.previewId);
     expect(native.lifecycle).toEqual([]);
     await flow.closeSource(source.result.sourceId);
-    expect((await flow.rejectedRows(preview.result.previewId)).result.rejectedRows).toEqual(
-      peopleCsvNative.rejectedRows.rejectedRows,
+    expect((await flow.report(preview.result.previewId)).result.rows).toEqual(
+      peopleCsvNative.rejectedRows.rows,
     );
     await flow.dispose();
   });
@@ -1280,11 +3520,11 @@ describe("native CSV receipt and custody boundary", () => {
       code: "people_csv.destination_exists",
     });
     nativeCsv((command, input) => {
-      if (command === "people_csv_apply") {
+      if (command === "csv_apply") {
         entered.resolve(input);
         return terminal.promise;
       }
-      if (command === "people_csv_rejected_rows_save") return rejectSave();
+      if (command === "csv_report_save") return rejectSave();
       return undefined;
     });
     const draft = csvApplyInput();
@@ -1299,11 +3539,11 @@ describe("native CSV receipt and custody boundary", () => {
     expect(committed.result.report.consumed).toBe(true);
     const current = new generated.SetupOperationScope(peopleCsvNative.preview.scenarioId, 1);
     await expect(
-      flow.saveRejectedRows(current, committed.result.report.previewId).result,
+      flow.saveReport(current, committed.result.report.previewId).result,
     ).rejects.toMatchObject({ code: "people_csv.destination_exists" });
-    expect(
-      (await flow.rejectedRows(committed.result.report.previewId)).result.rejectedRows,
-    ).toEqual(peopleCsvNative.rejectedRows.rejectedRows);
+    expect((await flow.report(committed.result.report.previewId)).result.rows).toEqual(
+      peopleCsvNative.rejectedRows.rows,
+    );
     expect(await apply.result).toBe(committed);
     await flow.dispose();
   });
@@ -1823,6 +4063,98 @@ describe("settings library operations and native review custody", () => {
   });
 });
 
+describe("recipient PDF publication binding", () => {
+  it.each([
+    "valid",
+    "missing-digest",
+    "missing-renderer",
+    "wrong-format",
+    "wrong-version",
+  ] as const)("binds PDF preview metadata: %s", async (variant) => {
+    const native = nativeOperations();
+    const scope = new generated.SetupOperationScope(recipientReport.source.scenarioId, 2);
+    const operation = scope.previewRecipientReport(
+      recipientReport.source.solutionId,
+      recipientReport.privacy,
+      undefined,
+      "pdf",
+    );
+    native.prepared();
+    const input = await native.claimed.promise;
+    expect(input.request.format).toBe("pdf");
+    native.terminal.resolve(
+      response(
+        input,
+        {
+          schemaVersion: 1,
+          previewId: solveRunId,
+          format: variant === "wrong-format" ? "html" : "pdf",
+          libraryRevision: 2,
+          modelSha256: "a".repeat(64),
+          htmlSha256: "b".repeat(64),
+          ...(variant === "missing-digest" ? {} : { pdfSha256: "c".repeat(64) }),
+          ...(variant === "missing-renderer"
+            ? {}
+            : {
+                pdfRenderer: {
+                  version: 1,
+                  typstVersion: variant === "wrong-version" ? "0.15.0" : "0.15.1",
+                  templateSha256: "d".repeat(64),
+                  fontsSha256: "e".repeat(64),
+                },
+              }),
+          expiresAfterMilliseconds: 600000,
+          report: recipientReport,
+        },
+        2,
+      ),
+    );
+    if (variant === "valid")
+      await expect(operation.result).resolves.toMatchObject({ result: { format: "pdf" } });
+    else await expect(operation.result).rejects.toMatchObject(invalidResponse);
+    scope.dispose();
+  });
+
+  it.each(["valid", "html-receipt", "wrong-format", "wrong-preview"] as const)(
+    "binds PDF approval and receipt: %s",
+    async (variant) => {
+      const native = nativeOperations();
+      const scope = new generated.SetupOperationScope(scenarioId, 3);
+      const operation = scope.createRecipientReport(solveRunId, false, undefined, "pdf");
+      native.prepared();
+      const input = await native.claimed.promise;
+      expect(input.request.format).toBe("pdf");
+      const publication = {
+        schemaVersion: 1,
+        solutionId: operationId,
+        sourceRevision: 3,
+        currentRevision: 3,
+        modelSha256: "a".repeat(64),
+        ...(variant === "html-receipt"
+          ? { htmlSha256: "b".repeat(64) }
+          : { pdfSha256: "b".repeat(64) }),
+      };
+      native.terminal.resolve(
+        response(
+          input,
+          {
+            schemaVersion: 1,
+            previewId: variant === "wrong-preview" ? operationId : solveRunId,
+            format: variant === "wrong-format" ? "html" : "pdf",
+            filename: "report.pdf",
+            publication,
+          },
+          3,
+        ),
+      );
+      if (variant === "valid")
+        await expect(operation.result).resolves.toMatchObject({ result: { publication } });
+      else await expect(operation.result).rejects.toMatchObject(invalidResponse);
+      scope.dispose();
+    },
+  );
+});
+
 function licenseInventory(): generated.LicenseInventoryV2 {
   return {
     scope: "lockedWorkspace",
@@ -1862,6 +4194,37 @@ describe("bounded offline inventory and redacted path reads", () => {
       Promise.resolve(response(input, checksummed)),
     );
     expect((await generated.getLicenseInventory()).result.packages).toEqual(checksummed.packages);
+  });
+
+  it("preserves reviewed font assets and rejects unsafe attribution metadata", async () => {
+    const asset = {
+      name: "Reviewed font",
+      version: "1",
+      source: "https://example.invalid/font",
+      licenseConcluded: "OFL-1.1",
+      files: [{ path: "fonts/font.otf", sha256: "a".repeat(64) }],
+      notices: [{ path: "fonts/LICENSE", sha256: "b".repeat(64) }],
+    };
+    const inventory = { ...licenseInventory(), assets: [asset] };
+    tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+      Promise.resolve(response(input, inventory)),
+    );
+    expect((await generated.getLicenseInventory()).result).toEqual(inventory);
+    for (const patch of [
+      { files: [] },
+      { notices: [] },
+      { source: "file:///font" },
+      { files: [{ path: "../font.otf", sha256: "a".repeat(64) }] },
+      { files: [{ path: "fonts/font.otf", sha256: "A".repeat(64) }] },
+      { files: [{ path: "fonts/font.otf", sha256: "a".repeat(64), trusted: true }] },
+      { name: "é".repeat(513) },
+      { trusted: true },
+    ]) {
+      tauri.invoke.mockImplementation((_command: string, input: Invocation) =>
+        Promise.resolve(response(input, { ...inventory, assets: [{ ...asset, ...patch }] })),
+      );
+      await expect(generated.getLicenseInventory()).rejects.toMatchObject(invalidResponse);
+    }
   });
 
   it.each([

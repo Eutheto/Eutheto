@@ -7,6 +7,7 @@ use eutheto_types::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::io;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SCENARIO_ID: &str = "01890a5d-ac96-7b64-9f74-bbfcf30f9f80";
@@ -267,6 +268,7 @@ impl DomainPack for TestPack {
         &self,
         _document: &ScenarioDocument,
         _solution: &NormalizedSolution,
+        _objective_context: Option<&RunObjectiveContext>,
         context: &VerificationContextV1,
         authoritative_score: &ScoreVector,
         control: &OperationControl,
@@ -331,6 +333,7 @@ impl DomainPack for TestPack {
         &self,
         _document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        _objective_context: Option<&RunObjectiveContext>,
         control: &OperationControl,
     ) -> Result<ScoreVector, DomainPackError> {
         control.check()?;
@@ -407,6 +410,7 @@ impl DomainPack for TestPack {
         &self,
         _document: &ScenarioDocument,
         _accepted: &AcceptedResult,
+        _objective_context: Option<&RunObjectiveContext>,
         _options: ShareResultOptions,
     ) -> Result<DomainShareResult, DomainPackError> {
         unsupported()
@@ -424,7 +428,9 @@ impl DomainPack for TestPack {
     fn render_evidence(
         &self,
         _document: &ScenarioDocument,
-        request: &EvidenceRenderRequestV1,
+        request: &EvidenceRenderRequestV2,
+        _objective_context: Option<&RunObjectiveContext>,
+        _control: &OperationControl,
     ) -> Result<EvidenceRenderResultV1, DomainPackError> {
         Err(DomainPackError::UnsupportedExplanationCapability(
             explanation_capability(request.kind),
@@ -439,6 +445,36 @@ impl DomainPack for TestPack {
     ) -> Result<PlanningProblem, DomainPackError> {
         Err(DomainPackError::UnsupportedExplanationCapability(
             ExplanationCapability::Counterfactual,
+        ))
+    }
+
+    fn compile_infeasibility(
+        &self,
+        _document: &ScenarioDocument,
+        _context: &InfeasibilityCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            DomainCapability::InfeasibilityDiagnostics,
+        ))
+    }
+
+    fn diagnostic_verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+        control: &OperationControl,
+    ) -> Result<DiagnosticVerificationScope, DomainPackError> {
+        let scope = self.verification_scope(document, scenario_revision, control)?;
+        DiagnosticVerificationScope::new(scope, vec![required_rule_id()?]).map_err(contract)
+    }
+
+    fn prepare_diagnostic_copy_changes(
+        &self,
+        _source: &ScenarioDocument,
+        _context: &DiagnosticCopyContext<'_>,
+    ) -> Result<DomainBatchCommand, DomainPackError> {
+        Err(DomainPackError::UnsupportedDomainCapability(
+            DomainCapability::InfeasibilityDiagnostics,
         ))
     }
 }
@@ -465,6 +501,46 @@ impl SequenceClock {
 impl VerificationClock for SequenceClock {
     fn now_milliseconds(&self) -> DurationMillis {
         let index = self.next.fetch_add(1, Ordering::Relaxed);
+        self.times
+            .get(index)
+            .copied()
+            .unwrap_or(DurationMillis::MAX)
+    }
+}
+
+struct CancellingClock {
+    times: Vec<DurationMillis>,
+    cancel_on: usize,
+    cancellation: CancellationToken,
+    next: AtomicUsize,
+}
+
+impl CancellingClock {
+    fn new(
+        values: &[u64],
+        cancel_on: usize,
+        cancellation: CancellationToken,
+    ) -> Result<Self, Box<dyn Error>> {
+        let times = values
+            .iter()
+            .copied()
+            .map(DurationMillis::new)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            times,
+            cancel_on,
+            cancellation,
+            next: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl VerificationClock for CancellingClock {
+    fn now_milliseconds(&self) -> DurationMillis {
+        let index = self.next.fetch_add(1, Ordering::Relaxed);
+        if index == self.cancel_on {
+            self.cancellation.cancel();
+        }
         self.times
             .get(index)
             .copied()
@@ -603,10 +679,7 @@ fn candidate(objective: Option<Vec<i64>>) -> Result<BackendCandidate, Box<dyn Er
             integers: BTreeMap::from([(IntVariableId::new("int.value")?, AUTHORITATIVE_SCORE)]),
         },
         observed_after_milliseconds: DurationMillis::new(2)?,
-        objective: objective.map(|objective_values| BackendObjectiveEvidence {
-            objective_values,
-            best_bound_values: None,
-        }),
+        objective: objective.map(|objective_values| BackendObjectiveEvidence { objective_values }),
         evidence_refs: Vec::new(),
     })
 }
@@ -619,13 +692,71 @@ fn review(
     let document = document()?;
     let problem = planning_problem()?;
     let clock = SequenceClock::new(clock_values)?;
-    let reviewer = AcceptanceReviewer::new(pack, &document, REVISION, &problem, &clock)
+    let reviewer = AcceptanceReviewer::new(pack, &document, REVISION, &problem, None, &clock)
         .map_err(|alarm| io::Error::other(format!("reviewer construction failed: {alarm:?}")))?;
     Ok(reviewer.review(
         &candidate(objective)?,
         SOLUTION_ID.parse()?,
         &OperationControl::Cancellation(CancellationToken::new()),
     ))
+}
+
+fn review_controlled(
+    pack: &TestPack,
+    clock: &dyn VerificationClock,
+    control: &OperationControl,
+) -> Result<AcceptanceDecision, Box<dyn Error>> {
+    let document = document()?;
+    let problem = planning_problem()?;
+    let reviewer = AcceptanceReviewer::new(pack, &document, REVISION, &problem, None, clock)
+        .map_err(|alarm| io::Error::other(format!("reviewer construction failed: {alarm:?}")))?;
+    Ok(reviewer.review(
+        &candidate(Some(vec![AUTHORITATIVE_SCORE]))?,
+        SOLUTION_ID.parse()?,
+        control,
+    ))
+}
+
+fn review_diagnostic(
+    pack: &TestPack,
+    clock: &dyn VerificationClock,
+    control: &OperationControl,
+) -> Result<DiagnosticDecision, Box<dyn Error>> {
+    let document = document()?;
+    let problem = planning_problem()?;
+    let mut preparation = PlanningPreparationBudget::uncontrolled(PlanningIrLimitsV1::DEFAULT);
+    let prepared = PreparedPlanningModel::prepare(
+        Arc::new(problem),
+        PlanningIrLimitsV1::DEFAULT,
+        &mut preparation,
+    )?;
+    let mut budget = PlanningPreparationBudget::uncontrolled(PlanningIrLimitsV1::DEFAULT);
+    let reviewer = AcceptanceReviewer::new_diagnostic(
+        pack,
+        &document,
+        REVISION,
+        &prepared,
+        None,
+        clock,
+        &mut budget,
+        control,
+    )
+    .map_err(|error| {
+        io::Error::other(format!(
+            "diagnostic reviewer construction failed: {error:?}"
+        ))
+    })?;
+    let decision = reviewer.review_diagnostic(
+        &candidate(None)?,
+        SOLUTION_ID.parse()?,
+        &[],
+        None,
+        control,
+        &mut budget,
+    );
+    reviewer.release_diagnostic(&mut budget)?;
+    prepared.release(&mut preparation)?;
+    Ok(decision)
 }
 
 fn accepted(
@@ -949,7 +1080,14 @@ fn reviewer_rejects_nonportable_revision_before_candidate_work() -> Result<(), B
     problem.metadata.scenario_revision = REVISION_MAX_V1 + 1;
     let clock = SequenceClock::new(&[0])?;
     let pack = TestPack::default();
-    let reviewer = AcceptanceReviewer::new(&pack, &document, REVISION_MAX_V1 + 1, &problem, &clock);
+    let reviewer = AcceptanceReviewer::new(
+        &pack,
+        &document,
+        REVISION_MAX_V1 + 1,
+        &problem,
+        None,
+        &clock,
+    );
     let Err(alarm) = reviewer else {
         return Err("nonportable revision unexpectedly constructed an acceptance reviewer".into());
     };
@@ -970,6 +1108,134 @@ fn backward_parent_clock_is_quarantined() -> Result<(), Box<dyn Error>> {
         )?,
         CorrectnessAlarmCategory::ClockFailed,
     )?;
+    Ok(())
+}
+
+#[test]
+fn established_native_failures_survive_post_stage_cancellation() -> Result<(), Box<dyn Error>> {
+    let cases = [
+        (
+            TestPack {
+                projection_mutation: ProjectionMutation::Reject,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::ProjectionFailed,
+            1,
+        ),
+        (
+            TestPack {
+                projection_mutation: ProjectionMutation::WrongSameKindValue,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::StructuralValidationFailed,
+            2,
+        ),
+        (
+            TestPack {
+                score_mutation: ScoreMutation::Reject,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::ScoreRecomputationFailed,
+            3,
+        ),
+        (
+            TestPack {
+                fail_scope: true,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::VerificationScopeFailed,
+            4,
+        ),
+        (
+            TestPack {
+                report_mutation: ReportMutation::Reject,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::RequiredRuleVerificationFailed,
+            4,
+        ),
+        (
+            TestPack {
+                report_mutation: ReportMutation::FailedRequiredRule,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::RequiredRuleRejected,
+            4,
+        ),
+        (
+            TestPack {
+                report_mutation: ReportMutation::WrongModelBinding,
+                ..TestPack::default()
+            },
+            CorrectnessAlarmCategory::ReportBindingFailed,
+            4,
+        ),
+    ];
+    for (pack, category, cancel_on) in cases {
+        let cancellation = CancellationToken::new();
+        let control = OperationControl::Cancellation(cancellation.clone());
+        let clock = CancellingClock::new(&[10, 11, 12, 13, 14], cancel_on, cancellation)?;
+        assert_quarantined(review_controlled(&pack, &clock, &control)?, category)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn structural_failure_survives_regressed_clock_but_clock_only_stays_clock_failed()
+-> Result<(), Box<dyn Error>> {
+    let pack = TestPack {
+        projection_mutation: ProjectionMutation::WrongSameKindValue,
+        ..TestPack::default()
+    };
+    let timings = quarantined(
+        review(&pack, None, &[10, 11, 10])?,
+        CorrectnessAlarmCategory::StructuralValidationFailed,
+    )?;
+    assert_ne!(
+        timings.structural_validation_milliseconds,
+        DurationMillis::MAX
+    );
+    assert_quarantined(
+        review(&TestPack::default(), None, &[10, 9])?,
+        CorrectnessAlarmCategory::ClockFailed,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn diagnostic_original_witness_survives_stop_and_unknown_timing_only_when_complete()
+-> Result<(), Box<dyn Error>> {
+    let cancellation = CancellationToken::new();
+    let control = OperationControl::Cancellation(cancellation.clone());
+    let clock = CancellingClock::new(&[10, 11, 12, 13, 12], 4, cancellation)?;
+    let DiagnosticDecision::OriginalWitness {
+        optional_stop: Some(OperationInterruption::Cancelled),
+        timings,
+    } = review_diagnostic(&TestPack::default(), &clock, &control)?
+    else {
+        return Err(
+            "complete original-source witness was erased by optional stop or timing".into(),
+        );
+    };
+    assert_ne!(
+        timings.required_rule_verification_milliseconds,
+        DurationMillis::MAX
+    );
+
+    let partial_clock = SequenceClock::new(&[10, 11, 12, 13, 12])?;
+    let partial = review_diagnostic(
+        &TestPack {
+            report_mutation: ReportMutation::FailedRequiredRule,
+            score_mutation: ScoreMutation::NonzeroFeasibility,
+            ..TestPack::default()
+        },
+        &partial_clock,
+        &OperationControl::Cancellation(CancellationToken::new()),
+    )?;
+    let DiagnosticDecision::Quarantined { alarm, .. } = partial else {
+        return Err(format!("partial diagnostic review became {partial:?}").into());
+    };
+    assert_eq!(alarm.category, CorrectnessAlarmCategory::ClockFailed);
     Ok(())
 }
 
@@ -1119,7 +1385,7 @@ fn expiry_during_acceptance_prevents_an_accepted_result() -> Result<(), Box<dyn 
             parent_clock,
         };
         let pack = TestPack::default();
-        let reviewer = AcceptanceReviewer::new(&pack, &document, REVISION, &problem, &clock)
+        let reviewer = AcceptanceReviewer::new(&pack, &document, REVISION, &problem, None, &clock)
             .map_err(|alarm| io::Error::other(format!("{alarm:?}")))?;
         let decision = reviewer.review(
             &candidate(Some(vec![AUTHORITATIVE_SCORE]))?,
@@ -1137,5 +1403,82 @@ fn expiry_during_acceptance_prevents_an_accepted_result() -> Result<(), Box<dyn 
             "stage boundary {stop_on}: {decision:?}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn diagnostic_reviewer_propagates_cancelled_child_preparation() -> Result<(), Box<dyn Error>> {
+    let pack = TestPack::default();
+    let document = document()?;
+    let problem = planning_problem()?;
+    let mut preparation = PlanningPreparationBudget::uncontrolled(PlanningIrLimitsV1::DEFAULT);
+    let prepared = PreparedPlanningModel::prepare(
+        Arc::new(problem),
+        PlanningIrLimitsV1::DEFAULT,
+        &mut preparation,
+    )?;
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let control = OperationControl::Cancellation(cancellation);
+    let mut child_preparation =
+        PlanningPreparationBudget::new(control.clone(), PlanningIrLimitsV1::DEFAULT);
+    let clock = SequenceClock::new(&[0])?;
+    let result = AcceptanceReviewer::new_diagnostic(
+        &pack,
+        &document,
+        REVISION,
+        &prepared,
+        None,
+        &clock,
+        &mut child_preparation,
+        &control,
+    );
+    assert!(matches!(
+        result,
+        Err(DiagnosticReviewerError::Preparation(
+            PlanningPreparationError::Cancelled
+        ))
+    ));
+    prepared.release(&mut preparation)?;
+    Ok(())
+}
+
+#[test]
+fn diagnostic_reviewer_propagates_child_deadline_preparation() -> Result<(), Box<dyn Error>> {
+    let pack = TestPack::default();
+    let document = document()?;
+    let problem = planning_problem()?;
+    let mut preparation = PlanningPreparationBudget::uncontrolled(PlanningIrLimitsV1::DEFAULT);
+    let prepared = PreparedPlanningModel::prepare(
+        Arc::new(problem),
+        PlanningIrLimitsV1::DEFAULT,
+        &mut preparation,
+    )?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::ZERO,
+        Arc::new(FixedMonotonicClock::default()),
+        CancellationToken::new(),
+    )?;
+    let control = OperationControl::Solve(parent.phase_view());
+    let mut child_preparation =
+        PlanningPreparationBudget::new(control.clone(), PlanningIrLimitsV1::DEFAULT);
+    let clock = SequenceClock::new(&[0])?;
+    let result = AcceptanceReviewer::new_diagnostic(
+        &pack,
+        &document,
+        REVISION,
+        &prepared,
+        None,
+        &clock,
+        &mut child_preparation,
+        &control,
+    );
+    assert!(matches!(
+        result,
+        Err(DiagnosticReviewerError::Preparation(
+            PlanningPreparationError::DeadlineExceeded
+        ))
+    ));
+    prepared.release(&mut preparation)?;
     Ok(())
 }
