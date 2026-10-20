@@ -629,6 +629,7 @@ async fn execute_attempt(
         dispatch_phase,
         Some(backend_limit),
         DurationMillis::ZERO,
+        context.backend.completion_reserve(),
     ) else {
         let _ = prepared_guard.release(preparation);
         return Ok(AttemptResult::Unavailable {

@@ -385,6 +385,7 @@ impl AttemptInputs<'_> {
             self.parent_budget.phase_view(),
             profile.map(super::profile::RoutingProfile::backend_cap),
             self.acceptance_reserve,
+            backend.completion_reserve(),
         )
         .ok()
     }

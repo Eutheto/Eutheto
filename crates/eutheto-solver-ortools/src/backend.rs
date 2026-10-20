@@ -14,9 +14,9 @@ use eutheto_solver_api::{
     BackendAssumptionCoreUnavailableReason, BackendError, BackendExecutionEvidence,
     BackendModelCountEvidence, BackendOutputSink, BackendReproducibilityEvidence,
     BackendRuntimeIdentity, BackendRuntimeIdentityError, BackendSolveFuture, BackendSolveOutcome,
-    BackendTerminationReason, BackendTimingEvidence, BackendWorkerStatistics, CapabilityMatrix,
-    CompatibilityLevel, CompatibilityReport, OutputError, RegistryError, SolverBackend,
-    SolverDescriptor, SolverRegistry, preflight,
+    BackendTerminationEvidence, BackendTerminationReason, BackendTimingEvidence,
+    BackendWorkerStatistics, CapabilityMatrix, CompatibilityLevel, CompatibilityReport,
+    OutputError, RegistryError, SolverBackend, SolverDescriptor, SolverRegistry, preflight,
 };
 use eutheto_types::{DurationMillis, ReproducibilityMode, SolveOptions, WorkerThreadPolicy};
 use prost::bytes::Bytes;
@@ -31,6 +31,9 @@ use crate::{
     bound_progress, candidate_progress, candidate_submission, duration_millis, normalize_terminal,
     ortools_compatibility, ortools_descriptor, supervise_with_observer, translate_supported_model,
 };
+
+// Measured completion margin stays inside the unchanged outer backend allocation.
+const WORKER_COMPLETION_RESERVE: Duration = Duration::from_millis(100);
 
 const WORKER_IDENTITY: &str = "eutheto-ortools-worker";
 const WORKER_BACKEND_ID: &str = "ortools-cp-sat";
@@ -108,17 +111,34 @@ impl OrToolsBackend {
         }
     }
 
-    async fn solve_request(
+    fn admit_request(
         &self,
         request: &eutheto_solver_api::SolveRequest,
-        output: &mut dyn BackendOutputSink,
-    ) -> Result<BackendSolveOutcome, BackendError> {
+    ) -> Result<Option<BackendSolveOutcome>, BackendError> {
         preflight(&self.matrix, &self.descriptor, request).map_err(|_| {
             safe_backend_error(
                 "solver.ortools.preflight",
                 "The routed request failed the shared solver preflight contract.",
             )
         })?;
+        let expected_search = request
+            .dispatch_budget()
+            .backend_limit()
+            .value()
+            .saturating_sub(self.completion_reserve().value());
+        if request.dispatch_budget().search_limit().value() != expected_search {
+            return Err(safe_backend_error(
+                "solver.ortools.completion_reserve",
+                "The routed search allocation does not match the native backend completion reserve.",
+            ));
+        }
+        if request
+            .dispatch_budget()
+            .remaining_search_duration()
+            .is_zero()
+        {
+            return Ok(Some(search_exhausted_outcome(request)));
+        }
         let compatibility = self.compatibility(request.summary(), request.options());
         if compatibility.level == CompatibilityLevel::Unsupported {
             return Err(safe_backend_error(
@@ -127,12 +147,35 @@ impl OrToolsBackend {
             ));
         }
 
+        Ok(None)
+    }
+
+    async fn solve_request(
+        &self,
+        request: &eutheto_solver_api::SolveRequest,
+        output: &mut dyn BackendOutputSink,
+    ) -> Result<BackendSolveOutcome, BackendError> {
+        if let Some(outcome) = self.admit_request(request)? {
+            return Ok(outcome);
+        }
+
         let translation_started = Instant::now();
         let translated = translate_supported_model(request.problem(), PlanningIrLimitsV1::DEFAULT)
             .map_err(|_| {
                 safe_backend_error("solver.ortools.translation", "The validated planning model could not be translated by the reviewed OR-Tools adapter.")
             })?;
-        let (worker_request, request_evidence) = build_worker_request(request, &translated)?;
+        let wall_time_millis = u64::try_from(
+            request
+                .dispatch_budget()
+                .remaining_search_duration()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        if wall_time_millis == 0 {
+            return Ok(search_exhausted_outcome(request));
+        }
+        let (worker_request, request_evidence) =
+            build_worker_request(request, &translated, wall_time_millis)?;
         let translation_milliseconds = duration_millis(translation_started.elapsed());
         let mut recorder = AdapterEvidenceRecorder::new(
             &translated,
@@ -279,6 +322,10 @@ impl OrToolsBackend {
 }
 
 impl SolverBackend for OrToolsBackend {
+    fn completion_reserve(&self) -> DurationMillis {
+        duration_millis(WORKER_COMPLETION_RESERVE)
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
     }
@@ -335,9 +382,31 @@ struct WorkerRequestEvidence {
     model_fingerprint_sha256: String,
 }
 
+// An exhausted search allocation establishes no native terminal or runtime evidence.
+fn search_exhausted_outcome(request: &eutheto_solver_api::SolveRequest) -> BackendSolveOutcome {
+    BackendSolveOutcome {
+        backend_id: request.backend_id().clone(),
+        model_hash: request.model_hash().to_owned(),
+        solve_fingerprint: request.solve_fingerprint().to_owned(),
+        termination: BackendTerminationReason::TimeLimit,
+        evidence: BackendTerminationEvidence {
+            remaining_at_dispatch_milliseconds: request.dispatch_budget().remaining_at_dispatch(),
+            backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+            elapsed_milliseconds: request.dispatch_budget().elapsed_milliseconds(),
+            first_incumbent_milliseconds: None,
+            objective: None,
+            best_bound_values: None,
+            assumption_core: None,
+            evidence_refs: Vec::new(),
+            execution: None,
+        },
+    }
+}
+
 fn build_worker_request(
     request: &eutheto_solver_api::SolveRequest,
     translated: &TranslatedCpSatModel,
+    wall_time_millis: u64,
 ) -> Result<(WorkerSolveRequest, WorkerRequestEvidence), BackendError> {
     let random_seed = i32::try_from(request.options().random_seed).map_err(|_| {
         safe_backend_error(
@@ -354,14 +423,6 @@ fn build_worker_request(
             .clamp(1, MAX_ORTOOLS_WORKER_THREADS),
     };
     let model_fingerprint: [u8; 32] = Sha256::digest(translated.cp_model_proto()).into();
-    let wall_time_millis = u64::try_from(
-        request
-            .dispatch_budget()
-            .remaining_backend_duration()
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX);
-
     let worker_request = WorkerSolveRequest {
         request_id: request.solve_fingerprint().to_owned(),
         cp_model_proto: Bytes::copy_from_slice(translated.cp_model_proto()),

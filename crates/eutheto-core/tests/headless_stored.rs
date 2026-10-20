@@ -615,6 +615,10 @@ struct FailingBackend {
 }
 
 impl SolverBackend for FailingBackend {
+    fn completion_reserve(&self) -> DurationMillis {
+        DurationMillis::ZERO
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
     }

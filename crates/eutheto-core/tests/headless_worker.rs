@@ -12,6 +12,9 @@ mod alternatives;
 #[path = "headless_worker/recipient_report.rs"]
 mod recipient_report;
 
+#[path = "headless_worker/runtime.rs"]
+mod runtime;
+
 use eutheto_core::StoredSolveFailure;
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
@@ -5072,6 +5075,10 @@ struct FaultedRealWorker {
 }
 
 impl SolverBackend for FaultedRealWorker {
+    fn completion_reserve(&self) -> DurationMillis {
+        self.inner.completion_reserve()
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         self.inner.descriptor()
     }
@@ -5247,6 +5254,10 @@ impl BackendOutputSink for InitialDiscardingOutput {
 }
 
 impl SolverBackend for RetainingContradictoryWorker {
+    fn completion_reserve(&self) -> DurationMillis {
+        self.inner.completion_reserve()
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         self.inner.descriptor()
     }

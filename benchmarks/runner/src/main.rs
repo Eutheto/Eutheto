@@ -366,6 +366,7 @@ async fn run_case(
         parent_budget.phase_view(),
         None,
         DurationMillis::ZERO,
+        backend.completion_reserve(),
     )?;
     let mut progress = DiscardProgress;
     let mut output = BoundedBackendOutput::new(
