@@ -283,7 +283,10 @@ The overview's **Optimize** section reads actual native command and backend
 capability and matching saved-revision validation. After a current, error-free
 full check it offers executable Quick, Balanced and Deep modes for the exact
 saved revision. Command availability and compatible backend names/versions sit
-behind closed technical disclosures, not in the default controls. Live phases
+behind closed technical disclosures, not in the default controls. The optional
+maximum accepts 1–30 whole seconds; leaving it blank uses the selected mode's
+existing limit. It bounds work through independent checking and result
+preparation; safe saving and cleanup may settle afterwards. Live phases
 appear only after a 350 ms display delay;
 quick completions show their durable terminal status without a transient running
 announcement. The active native window owns explicit cancellation: a view restored
@@ -297,9 +300,17 @@ lost, and its newly started run can be discovered without an event. Once the
 first candidate passes independent verification, a separate committed checkpoint
 exposes its read-only schedule
 without waiting for backend proof. It remains inspectable if the run is later
-cancelled or fails, but is not a terminal accepted solution or export authority.
+cancelled or fails, but is not a terminal accepted solution. Checkpoint status
+alone grants no export authority: sharing and export still require native
+captured-source review and custody.
 The bundled OR-Tools worker exposes the first intermediate candidate and its
 final candidate, not every improvement made during proof search.
+While the current revision has a saved verified checkpoint and this window owns
+the running solve, **Stop improving and use verified result** requests ordinary
+native cancellation and keeps that first checked schedule available for
+inspection and sharing. It does not adopt a base or change the scenario, and it
+does not claim optimality. Generic **Cancel optimization** remains available
+separately. A native terminal result that finishes first retains its actual status.
 The accepted list can select a terminal result for viewing through the native
 `solution_select` contract. The returned result identity and revision are checked
 before the view marks it selected; an interrupted selection requires a fresh

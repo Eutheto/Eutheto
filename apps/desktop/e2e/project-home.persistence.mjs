@@ -11110,7 +11110,17 @@ async function packagedRecipientExportAcceptance(sessionId, directory, practitio
       );
       accepted = { result: run.checkpoint.result };
       const checkpoint = run.checkpoint;
-      await activateButton(sessionId, "Cancel optimization", "[data-optimize-panel]");
+      await waitFor(
+        sessionId,
+        `return [...document.querySelectorAll('[data-optimize-panel] button')].some(button =>
+          button.textContent.trim() === 'Stop improving and use verified result' && !button.disabled);`,
+      );
+      await keyboardActivateButton(
+        sessionId,
+        "Stop improving and use verified result",
+        "[data-optimize-panel]",
+        64,
+      );
       while (Date.now() < deadline) {
         [run] = (
           await nativeRequest(sessionId, "solve_list_runs", {
@@ -11128,6 +11138,24 @@ async function packagedRecipientExportAcceptance(sessionId, directory, practitio
         run.checkpoint,
         checkpoint,
         "Cancellation must preserve the exact verified source",
+      );
+      await waitFor(
+        sessionId,
+        `const node = document.activeElement;
+        const rect = node?.getBoundingClientRect();
+        return node?.matches('[data-accepted-schedule] > h4') &&
+          !!rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+          !!document.querySelector('[data-optimize-state="first-verified"]') &&
+          ![...document.querySelectorAll('[data-optimize-panel] button')].some(button =>
+            button.textContent.trim() === 'Stop improving and use verified result');`,
+      );
+      assert.equal(
+        (await projects(sessionId)).find((project) => project.scenarioId === scenarioId).revision,
+        1,
+        "Using the verified checkpoint must not change the saved scenario",
+      );
+      console.log(
+        "PASS: real keyboard stop-improving preserves the exact native verified checkpoint, cancelled status and retained-schedule focus without terminal promotion",
       );
       console.log("Explicit practitioner checkpoint source", JSON.stringify(run));
     } else {

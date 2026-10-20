@@ -264,8 +264,12 @@ native editing-accelerator, accessibility and packaged-platform gates.
 The headless workflow below remains available without the desktop. The setup
 overview now offers a native **Optimize** action after current, completed,
 error-free full validation when a supported worker is available. Quick, Balanced
-and Deep are bounded modes, not optimality promises. Native progress and
-cancellation remain separate from independently accepted results; the overview
+and Deep are bounded modes, not optimality promises. An optional maximum covers
+work through independent checking and result preparation; safe saving and cleanup
+can settle afterwards. Once this window has a current saved verified checkpoint,
+**Stop improving and use verified result** stops search and keeps that first
+checked schedule available without changing the scenario or claiming optimality.
+Native progress and cancellation remain separate from independently accepted results; the overview
 lists current and historical accepted results, allows one verified terminal
 result to be selected for viewing without changing the scenario revision, and
 inspects bounded by-person, by-shift/location, UTC-ordered assignment timeline,
