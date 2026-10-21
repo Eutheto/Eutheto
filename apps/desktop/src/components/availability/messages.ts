@@ -43,7 +43,7 @@ export const availabilityMessages = {
   recordsLoading: "Loading records…",
   recordsPages: "Availability record pages",
   loadingDetail: "Loading the selected availability record…",
-  editRecord: "Edit record",
+  editRecord: "Edit availability",
   editAvailability: (id: string) => `Edit availability ${id}`,
   calendarHeading: "Calendar view",
   calendarDescription: (timeZone: string) =>
@@ -65,7 +65,7 @@ export const availabilityMessages = {
   calendarMoreOccurrences: (count: number, locale?: string) =>
     `${formatNumber(count, locale)} more on this page; see the interval list.`,
   calendarAddAvailabilityForDate: (date: string) => `Add availability for ${date}`,
-  calendarAddForDate: "Add for this date",
+  calendarAddForDate: "Add availability",
   calendarDatePages: "Visual calendar date pages",
   calendarPreviousDates: "Previous dates",
   calendarNextDates: "Next dates",

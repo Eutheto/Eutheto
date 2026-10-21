@@ -1709,13 +1709,11 @@ onScopeDispose(() => {
         @close="closeInfeasibilityInspection"
         @rule-action="emit('ruleAction', $event)"
       />
-      <p v-if="isRunning && solveOperation === null" data-optimize-state="durable-running">
+      <p v-if="isRunning && !hasActiveSolve()" data-optimize-state="durable-running">
         {{ messages.setup.optimize.detachedRunning }}
       </p>
       <button
-        v-if="
-          isRunning && (solveOperation !== null || (activeJob?.cancelOperationId ?? null) !== null)
-        "
+        v-if="isRunning && (hasActiveSolve() || (activeJob?.cancelOperationId ?? null) !== null)"
         type="button"
         :disabled="cancellationRequested"
         @click="cancelOptimization"

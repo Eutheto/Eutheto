@@ -105,7 +105,7 @@ export function toggleScopeFilter(
   field: ScopeOptionalField,
 ): WorkforceScope {
   if (scope[field] === undefined) return { ...scope, [field]: [] };
-  const { [field]: removed, ...next } = scope;
-  void removed;
+  const next = { ...scope };
+  Reflect.deleteProperty(next, field);
   return next;
 }

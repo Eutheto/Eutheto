@@ -104,7 +104,7 @@ jobs:
           const reviewed = new Map([
             ['@isaacs/cliui@9.0.0', 'BlueOak-1.0.0'],
             ['atob@2.1.2', '(MIT OR Apache-2.0)'],
-            ['axe-core@4.13.0', 'MPL-2.0'],
+            ['axe-core@4.14.0', 'MPL-2.0'],
             ['caniuse-lite@1.0.30001810', 'CC-BY-4.0'],
             ['glob@11.1.0', 'BlueOak-1.0.0'],
             ['glob@13.0.6', 'BlueOak-1.0.0'],
