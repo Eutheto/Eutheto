@@ -1,5 +1,18 @@
 # Assumptions, Decisions, and Current-Version Ledger
 
+## 2026-10-21: approved CI Action maintenance
+
+Publisher release tags were resolved to the exact approved commits before adopting this batch:
+
+| Action | Version | Commit |
+| --- | --- | --- |
+| [DeterminateSystems/determinate-nix-action](https://github.com/DeterminateSystems/determinate-nix-action/releases/tag/v3.23.3) | 3.23.3 | `96c5ee93a9dddf2830d31e1da6ec719077336c28` |
+| [actions/setup-node](https://github.com/actions/setup-node/releases/tag/v7.1.0) | 7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1` |
+| [actions/upload-artifact](https://github.com/actions/upload-artifact/releases/tag/v7.0.2) | 7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
+| [actions/download-artifact](https://github.com/actions/download-artifact/releases/tag/v8.0.2) | 8.0.2 | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
+
+The seven workflow edits retain their existing inputs, permissions, immutable handoff bindings and explicit Node 24.20.0 selection. The OR-Tools native-worker Nix installer source-tag selection is unchanged. Release notes and the exact action entry points were inspected; the three GitHub-owned actions retain Node 24 entry points. Nineteen CI-policy tests, the native harness self-checks and DCO fixtures passed locally. Hosted workflow execution remains separate evidence; benchmark, fuzz and release acceptance is not established by these static checks. No application or package-lock change is included in this batch.
+
 ## Ledger purpose and authority
 
 This dated ledger records implementation-time facts, corrections, unresolved gates, and evidence. It does **not** replace requirements in the phase roadmaps. Requirements remain in the applicable phase file; this ledger answers “what was verified, what value controls, who closes the gate, and from which evidence?”
