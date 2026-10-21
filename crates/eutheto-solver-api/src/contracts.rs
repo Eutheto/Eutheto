@@ -230,6 +230,7 @@ pub struct SolveDispatchBudget {
     parent_view: SolveBudgetView,
     remaining_at_dispatch: DurationMillis,
     backend_limit: DurationMillis,
+    search_limit: DurationMillis,
 }
 
 impl SolveDispatchBudget {
@@ -237,9 +238,10 @@ impl SolveDispatchBudget {
         parent_view: SolveBudgetView,
         backend_cap: Option<DurationMillis>,
         acceptance_reserve: DurationMillis,
+        completion_reserve: DurationMillis,
     ) -> Self {
         let remaining_at_dispatch = parent_view.snapshot().remaining_milliseconds;
-        // Both values derive from this one observation; a prior cap calculation could spend the reserve.
+        // All cutoffs derive from this one observation; a prior cap calculation could spend the reserve.
         let available = DurationMillis::new(
             remaining_at_dispatch
                 .value()
@@ -247,10 +249,17 @@ impl SolveDispatchBudget {
         )
         .unwrap_or(DurationMillis::ZERO);
         let backend_limit = backend_cap.map_or(available, |cap| cap.min(available));
+        let search_limit = DurationMillis::new(
+            backend_limit
+                .value()
+                .saturating_sub(completion_reserve.value()),
+        )
+        .unwrap_or(DurationMillis::ZERO);
         Self {
             parent_view,
             remaining_at_dispatch,
             backend_limit,
+            search_limit,
         }
     }
 
@@ -276,6 +285,20 @@ impl SolveDispatchBudget {
     #[must_use]
     pub const fn backend_limit(&self) -> DurationMillis {
         self.backend_limit
+    }
+
+    /// Search cutoff within the unchanged outer backend allocation.
+    #[must_use]
+    pub const fn search_limit(&self) -> DurationMillis {
+        self.search_limit
+    }
+
+    /// Remaining search time from the same dispatch clock; completion time is never refilled.
+    #[must_use]
+    pub fn remaining_search_duration(&self) -> Duration {
+        let remaining = self.parent_view.snapshot().remaining_milliseconds;
+        let elapsed = self.elapsed_milliseconds_value(remaining);
+        Duration::from_millis(self.search_limit.value().saturating_sub(elapsed))
     }
 
     /// Parent-measured elapsed time since backend dispatch.
@@ -362,6 +385,7 @@ impl SolveRequest {
         budget: SolveBudgetView,
         backend_cap: Option<DurationMillis>,
         acceptance_reserve: DurationMillis,
+        completion_reserve: DurationMillis,
     ) -> Result<Self, serde_json::Error> {
         let model_hash = summary.canonical_ir_hash.clone();
         Self::construct(
@@ -376,6 +400,7 @@ impl SolveRequest {
             budget,
             backend_cap,
             acceptance_reserve,
+            completion_reserve,
         )
     }
 
@@ -396,6 +421,7 @@ impl SolveRequest {
         budget: SolveBudgetView,
         backend_cap: Option<DurationMillis>,
         acceptance_reserve: DurationMillis,
+        completion_reserve: DurationMillis,
     ) -> Result<Self, serde_json::Error> {
         let problem = Arc::clone(prepared.problem());
         let model_hash = prepared.summary().canonical_ir_hash.clone();
@@ -411,6 +437,7 @@ impl SolveRequest {
             budget,
             backend_cap,
             acceptance_reserve,
+            completion_reserve,
         )
     }
 
@@ -427,6 +454,7 @@ impl SolveRequest {
         budget: SolveBudgetView,
         backend_cap: Option<DurationMillis>,
         acceptance_reserve: DurationMillis,
+        completion_reserve: DurationMillis,
     ) -> Result<Self, serde_json::Error> {
         let canonical_options = serde_json::to_vec(&options)?;
         let solve_fingerprint = routed_solve_fingerprint(&SolveFingerprintInput {
@@ -450,6 +478,7 @@ impl SolveRequest {
                 budget,
                 backend_cap,
                 acceptance_reserve,
+                completion_reserve,
             ),
         })
     }
@@ -1375,6 +1404,9 @@ pub trait SolverBackend: Send + Sync {
 
     fn runtime_identity(&self) -> &BackendRuntimeIdentity;
 
+    /// Native search headroom within one backend attempt for clean completion and transport.
+    fn completion_reserve(&self) -> DurationMillis;
+
     /// Approved manifest identity of an authenticated bundled worker, when one exists.
     ///
     /// This comes from native artifact admission, never worker output or solve options.
@@ -1481,6 +1513,7 @@ mod tests {
         Ok(SolveDispatchBudget::from_view(
             parent.phase_view(),
             None,
+            DurationMillis::ZERO,
             DurationMillis::ZERO,
         ))
     }

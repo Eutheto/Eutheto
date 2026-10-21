@@ -244,6 +244,7 @@ fn request_with_problem(
             parent.phase_view(),
             Some(DurationMillis::new(800)?),
             DurationMillis::ZERO,
+            DurationMillis::ZERO,
         )?,
         clock,
         cancellation,
@@ -313,6 +314,10 @@ struct SequenceBackend {
 }
 
 impl SolverBackend for SequenceBackend {
+    fn completion_reserve(&self) -> DurationMillis {
+        DurationMillis::ZERO
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
     }
@@ -629,6 +634,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &mismatched),
@@ -646,6 +652,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         other_parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &wrong_request),
@@ -662,6 +669,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         version_parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     assert!(matches!(
         preflight(&matrix, &descriptor, &wrong_version),
@@ -677,6 +685,7 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         solve_options(descriptor.id.clone())?,
         adapter_parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert!(matches!(
@@ -721,6 +730,7 @@ fn preflight_maps_shared_invalid_solve_options() -> TestResult {
             parent.phase_view(),
             None,
             DurationMillis::ZERO,
+            DurationMillis::ZERO,
         )?;
         assert!(matches!(
             preflight(&matrix, &descriptor, &request),
@@ -747,6 +757,7 @@ fn cancellation_and_timeout_remain_distinct() -> TestResult {
         cancel_parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     cancellation.cancel();
     assert_eq!(
@@ -764,6 +775,7 @@ fn cancellation_and_timeout_remain_distinct() -> TestResult {
         options,
         timeout_parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     timeout_clock.advance(Duration::from_millis(100))?;
@@ -791,6 +803,7 @@ fn child_budget_inherits_the_absolute_parent_deadline() -> TestResult {
         options,
         parent.phase_view(),
         Some(DurationMillis::new(500)?),
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_eq!(
@@ -831,6 +844,7 @@ fn capped_request_budget_survives_delayed_dispatch_and_child_view() -> TestResul
         options,
         capped,
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_eq!(
@@ -933,6 +947,7 @@ fn candidate_crossing_backend_cap_during_validation_is_not_retained() -> TestRes
         options,
         parent.phase_view(),
         Some(DurationMillis::new(800)?),
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     let mut progress = VecProgress(Vec::new());
@@ -1239,6 +1254,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     let repeated = SolveRequest::new(
         backend.clone(),
@@ -1249,6 +1265,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), repeated.model_hash());
@@ -1263,6 +1280,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), backend_version_changed.model_hash());
@@ -1280,6 +1298,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options.clone(),
         parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), adapter_changed.model_hash());
@@ -1299,6 +1318,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         changed_options,
         parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), options_changed.model_hash());
@@ -1320,6 +1340,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     assert_eq!(base.model_hash(), route_changed.model_hash());
     assert_ne!(base.solve_fingerprint(), route_changed.solve_fingerprint());
@@ -1337,6 +1358,7 @@ fn routed_fingerprint_separates_model_route_backend_adapter_and_options() -> Tes
         base_options,
         parent.phase_view(),
         None,
+        DurationMillis::ZERO,
         DurationMillis::ZERO,
     )?;
     assert_ne!(base.model_hash(), compiler_changed.model_hash());
@@ -1674,6 +1696,7 @@ fn final_backend_evidence_matches_objective_dimension() -> TestResult {
         parent.phase_view(),
         None,
         DurationMillis::ZERO,
+        DurationMillis::ZERO,
     )?;
     let outcome = BackendSolveOutcome {
         backend_id: backend,
@@ -1922,6 +1945,7 @@ fn assumption_contract_request(
             parent.phase_view(),
             None,
             DurationMillis::ZERO,
+            DurationMillis::ZERO,
         )?,
         cancellation,
     ))
@@ -2026,7 +2050,14 @@ fn outcome_assumption_evidence_requires_exact_profile_and_infeasible_status() ->
                 Err(OutcomeError::InvalidAssumptionCoreEvidence),
             );
             outcome.evidence.assumption_core = None;
-            validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+            if termination == BackendTerminationReason::TimeLimit {
+                assert_eq!(
+                    validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+                    Err(OutcomeError::PrematureTimeLimit)
+                );
+            } else {
+                validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+            }
             outcome.evidence.assumption_core = Some(core.clone());
         }
         let mut values = valid_candidate()?;
@@ -2074,5 +2105,118 @@ fn outcome_assumption_evidence_requires_exact_profile_and_infeasible_status() ->
             Err(OutcomeError::InvalidAssumptionCoreEvidence),
         );
     }
+    Ok(())
+}
+
+#[test]
+fn completion_reserve_keeps_one_dispatch_clock_and_the_outer_cap() -> TestResult {
+    let (parent, clock, _) = parent_budget(1_000)?;
+    clock.advance(Duration::from_millis(100))?;
+    let backend = BackendId::new(FAKE_BACKEND_ID)?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let make = |reserve| -> Result<SolveRequest, Box<dyn Error>> {
+        Ok(SolveRequest::new(
+            backend.clone(),
+            "1.0.0",
+            "1.0.0",
+            Arc::clone(&problem),
+            summary.clone(),
+            solve_options(backend.clone())?,
+            parent.phase_view(),
+            Some(DurationMillis::new(500)?),
+            DurationMillis::new(100)?,
+            reserve,
+        )?)
+    };
+    let request = make(DurationMillis::new(100)?)?;
+    let legacy = make(DurationMillis::ZERO)?;
+    let exhausted = make(DurationMillis::new(600)?)?;
+    assert_eq!(request.solve_fingerprint(), legacy.solve_fingerprint());
+    assert_eq!(
+        request.dispatch_budget().remaining_at_dispatch().value(),
+        900
+    );
+    assert_eq!(request.dispatch_budget().backend_limit().value(), 500);
+    assert_eq!(request.dispatch_budget().search_limit().value(), 400);
+    assert_eq!(legacy.dispatch_budget().search_limit().value(), 500);
+    assert_eq!(
+        exhausted.dispatch_budget().search_limit(),
+        DurationMillis::ZERO
+    );
+    assert_eq!(
+        exhausted.dispatch_budget().remaining_search_duration(),
+        Duration::ZERO
+    );
+    clock.advance(Duration::from_millis(399))?;
+    assert_eq!(
+        request.dispatch_budget().remaining_search_duration(),
+        Duration::from_millis(1)
+    );
+    clock.advance(Duration::from_millis(1))?;
+    assert_eq!(
+        request.dispatch_budget().remaining_search_duration(),
+        Duration::ZERO
+    );
+    assert_eq!(
+        request.dispatch_budget().remaining_backend_duration(),
+        Duration::from_millis(100)
+    );
+    assert_eq!(request.dispatch_budget().stop_reason(), None);
+    clock.advance(Duration::from_millis(100))?;
+    assert_eq!(
+        request.dispatch_budget().stop_reason(),
+        Some(BackendStopReason::BackendLimitExceeded)
+    );
+    assert!(!parent.is_expired());
+    Ok(())
+}
+
+#[test]
+fn time_limit_requires_the_actual_search_cutoff_and_consistent_elapsed() -> TestResult {
+    let (parent, clock, _) = parent_budget(1_000)?;
+    let backend = BackendId::new(FAKE_BACKEND_ID)?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let request = SolveRequest::new(
+        backend.clone(),
+        "1.0.0",
+        "1.0.0",
+        problem,
+        summary,
+        solve_options(backend)?,
+        parent.phase_view(),
+        Some(DurationMillis::new(800)?),
+        DurationMillis::ZERO,
+        DurationMillis::new(100)?,
+    )?;
+    let mut outcome = assumption_contract_outcome(&request);
+    outcome.termination = BackendTerminationReason::TimeLimit;
+    outcome.evidence.elapsed_milliseconds = DurationMillis::new(700)?;
+    // Matching model/fingerprint metadata and a claimed elapsed cutoff cannot advance native time.
+    assert_eq!(
+        validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+        Err(OutcomeError::PrematureTimeLimit)
+    );
+    clock.advance(Duration::from_millis(699))?;
+    assert_eq!(
+        validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+        Err(OutcomeError::PrematureTimeLimit)
+    );
+    clock.advance(Duration::from_millis(1))?;
+    for elapsed in [699, 701] {
+        outcome.evidence.elapsed_milliseconds = DurationMillis::new(elapsed)?;
+        assert_eq!(
+            validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT),
+            Err(OutcomeError::PrematureTimeLimit)
+        );
+    }
+    outcome.evidence.elapsed_milliseconds = DurationMillis::new(700)?;
+    validate_outcome(&request, &outcome, &[], SolverApiLimits::DEFAULT)?;
+    assert_eq!(request.dispatch_budget().stop_reason(), None);
+    assert_eq!(
+        request.dispatch_budget().remaining_backend_duration(),
+        Duration::from_millis(100)
+    );
     Ok(())
 }

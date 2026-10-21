@@ -1085,7 +1085,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `unplugin-utils` | `0.3.2` | `NOASSERTION` | `https://registry.npmjs.org/unplugin-utils/-/unplugin-utils-0.3.2.tgz` |
 | npm | `uri-js` | `4.4.1` | `NOASSERTION` | `https://registry.npmjs.org/uri-js/-/uri-js-4.4.1.tgz` |
 | npm | `util-deprecate` | `1.0.2` | `NOASSERTION` | `https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz` |
-| npm | `vite` | `8.2.2` | `NOASSERTION` | `https://registry.npmjs.org/vite/-/vite-8.2.2.tgz` |
+| npm | `vite` | `8.2.4` | `NOASSERTION` | `https://registry.npmjs.org/vite/-/vite-8.2.4.tgz` |
 | npm | `vitest` | `4.1.11` | `NOASSERTION` | `https://registry.npmjs.org/vitest/-/vitest-4.1.11.tgz` |
 | npm | `vscode-uri` | `3.2.0` | `NOASSERTION` | `https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.2.0.tgz` |
 | npm | `vue` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/vue/-/vue-3.5.42.tgz` |

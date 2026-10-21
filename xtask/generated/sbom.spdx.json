@@ -25162,10 +25162,10 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vite-8.2.2-1101",
+      "SPDXID": "SPDXRef-Package-npm-vite-8.2.4-1101",
       "name": "vite",
-      "versionInfo": "8.2.2",
-      "downloadLocation": "https://registry.npmjs.org/vite/-/vite-8.2.2.tgz",
+      "versionInfo": "8.2.4",
+      "downloadLocation": "https://registry.npmjs.org/vite/-/vite-8.2.4.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
@@ -25174,13 +25174,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vite@8.2.2"
+          "referenceLocator": "pkg:npm/vite@8.2.4"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA512",
-          "checksumValue": "70528b57f3d18005252119b95a332327cea3adfb73a6a7201fe52cf834bc988dc20cd887df45a1af3f2e1cbdfe30e2cf020a9b30102a59d00702984e00cfb3fd"
+          "checksumValue": "95f6ae5e7adfdb1d29f94a00fb05e1d1d8055a75230b21ba26cf79281920682c1453d9340c01c8e16e90d160b1fa1fb983e02571ed72e198b64238cad14bc607"
         }
       ]
     },
@@ -31103,7 +31103,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-npm-vite-8.2.2-1101"
+      "relatedSpdxElement": "SPDXRef-Package-npm-vite-8.2.4-1101"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

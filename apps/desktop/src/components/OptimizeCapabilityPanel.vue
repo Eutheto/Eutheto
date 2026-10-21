@@ -134,6 +134,7 @@ function statusLabel(status: CapabilityStatus): string {
 }
 
 const selectedMode = ref<SolveMode>("balanced");
+const panel = ref<HTMLElement>();
 // The intent is captured by startSolve; changing the next request never reinterprets an active job.
 const activeIntent = ref<SolveIntent | null>(null);
 const maximumTimeSeconds = ref<string | number>("");
@@ -223,6 +224,13 @@ let notifiedTerminalRun: UuidV7 | null = null;
 let pendingCompletion: SolveCompletedEvent["payload"] | null = null;
 let durableRefresh: ReturnType<typeof setTimeout> | null = null;
 let progressDelay: ReturnType<typeof setTimeout> | null = null;
+let useVerifiedFocus: {
+  readonly job: SolveJobDtoV2;
+  readonly origin: Element | null;
+  readonly owner: HTMLElement | undefined;
+  readonly home: ProjectHomeController | undefined;
+  readonly libraryEpoch: number | undefined;
+} | null = null;
 
 function stopProgressDelay(): void {
   if (progressDelay !== null) clearTimeout(progressDelay);
@@ -356,6 +364,16 @@ const firstVerifiedSchedule = computed(() => {
   if (job?.checkpoint === null || job === null || acceptedJob.value) return null;
   return { result: job.checkpoint.result, scenarioRevision: job.scenarioRevision };
 });
+const canUseVerifiedResult = computed(
+  () =>
+    props.authorityUnavailableReason === null &&
+    activeJob.value?.scenarioId === props.scenarioId &&
+    activeJob.value.status === "running" &&
+    firstVerifiedSchedule.value !== null &&
+    !isStale.value &&
+    (activeJob.value.cancelOperationId !== null ||
+      (solveStarting.value && solveOperation !== null)),
+);
 const canStart = computed(
   () =>
     props.authorityUnavailableReason === null &&
@@ -1132,7 +1150,7 @@ async function startOptimization(): Promise<void> {
   }
 }
 
-async function cancelOptimization(): Promise<void> {
+async function cancelOptimization(): Promise<boolean> {
   const operation = solveOperation;
   const restoredOperationId = activeJob.value?.cancelOperationId ?? null;
   const revision = activeRevision.value;
@@ -1142,7 +1160,7 @@ async function cancelOptimization(): Promise<void> {
     !isRunning.value ||
     revision === null
   )
-    return;
+    return false;
   const scenarioId = props.scenarioId;
   const runId = activeJob.value?.runId;
   const requestId = activeRequestId.value;
@@ -1158,10 +1176,10 @@ async function cancelOptimization(): Promise<void> {
     const operationId = operation === null ? restoredOperationId : await operation.operationId;
     if (operationId === null) {
       if (sameRun()) cancellationRequested.value = false;
-      return;
+      return false;
     }
     const response = await cancelSolve({ operationId, scenarioId, expectedRevision: revision });
-    if (!sameRun()) return;
+    if (!sameRun()) return false;
     if (response.result.acknowledgement !== "cancellationRequested") {
       cancellationRequested.value = false;
       const job = observedJob();
@@ -1169,15 +1187,81 @@ async function cancelOptimization(): Promise<void> {
         solveError.value = messages.setup.optimize.cancelNotActive;
         scheduleDurableRefresh();
       }
+      return false;
     }
+    return true;
   } catch (failure) {
-    if (!sameRun()) return;
+    if (!sameRun()) return false;
     cancellationRequested.value = false;
     solveError.value = isRevisionConflict(failure)
       ? messages.setup.optimize.conflict
       : safeMessage(failure);
+    return false;
   }
 }
+
+async function useVerifiedResult(): Promise<void> {
+  const job = activeJob.value;
+  if (!canUseVerifiedResult.value || job === null || cancellationRequested.value) return;
+  const focus = {
+    job,
+    origin: document.activeElement,
+    owner: panel.value,
+    home: props.home,
+    libraryEpoch: props.home?.state.libraryEpoch,
+  };
+  useVerifiedFocus = focus;
+  const requested = await cancelOptimization();
+  if (useVerifiedFocus === focus && !requested) useVerifiedFocus = null;
+}
+
+watch(
+  [
+    () => activeJob.value?.runId,
+    () => activeJob.value?.status,
+    () => activeJob.value?.cancelOperationId,
+    () => props.authorityUnavailableReason,
+    () => props.home,
+    () => props.home?.state.libraryEpoch,
+  ],
+  async () => {
+    const focus = useVerifiedFocus;
+    const job = activeJob.value;
+    if (focus === null) return;
+    const sameContext = () =>
+      alive &&
+      panel.value === focus.owner &&
+      props.authorityUnavailableReason === null &&
+      props.home === focus.home &&
+      props.home?.state.libraryEpoch === focus.libraryEpoch &&
+      props.scenarioId === focus.job.scenarioId &&
+      props.currentRevision === focus.job.scenarioRevision;
+    if (
+      !sameContext() ||
+      job?.runId !== focus.job.runId ||
+      (job.status === "running" && job.cancelOperationId !== focus.job.cancelOperationId)
+    ) {
+      useVerifiedFocus = null;
+      return;
+    }
+    if (job.status === "running") return;
+    useVerifiedFocus = null;
+    await nextTick();
+    const owner = panel.value;
+    if (
+      !sameContext() ||
+      !owner?.isConnected ||
+      owner.ownerDocument !== document ||
+      activeJob.value?.runId !== job.runId ||
+      (document.activeElement !== focus.origin && document.activeElement !== document.body)
+    )
+      return;
+    const target =
+      owner.querySelector<HTMLElement>("[data-accepted-schedule] > h4") ??
+      owner.querySelector<HTMLElement>("#setup-optimize");
+    target?.focus();
+  },
+);
 
 watch(
   [
@@ -1212,6 +1296,7 @@ watch(
 void subscribe();
 onScopeDispose(() => {
   alive = false;
+  useVerifiedFocus = null;
   stopProgressDelay();
   stopDurableRefresh();
   generation += 1;
@@ -1225,6 +1310,7 @@ onScopeDispose(() => {
 
 <template>
   <section
+    ref="panel"
     class="state-panel field-stack"
     aria-labelledby="setup-optimize"
     data-optimize-panel
@@ -1576,6 +1662,21 @@ onScopeDispose(() => {
       >
         {{ messages.setup.optimize.noResult }}
       </p>
+      <div v-if="canUseVerifiedResult" class="field-stack">
+        <button
+          type="button"
+          :disabled="cancellationRequested"
+          aria-describedby="optimize-use-verified-help"
+          @click="useVerifiedResult"
+        >
+          {{
+            cancellationRequested
+              ? messages.setup.optimize.useVerifiedStopping
+              : messages.setup.optimize.useVerifiedResult
+          }}
+        </button>
+        <p id="optimize-use-verified-help">{{ messages.setup.optimize.useVerifiedHelp }}</p>
+      </div>
       <button
         v-if="terminalExplanationEligible"
         type="button"

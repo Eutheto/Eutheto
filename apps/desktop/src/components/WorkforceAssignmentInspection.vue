@@ -16,6 +16,7 @@ import {
   type ProjectHomeController,
   type ProjectSummary,
 } from "../project-home";
+import { preserveVisibleFocus } from "../focus-visibility";
 import { formatNumber, messages } from "../messages";
 import WorkShiftTable from "./WorkShiftTable.vue";
 
@@ -26,6 +27,7 @@ const props = defineProps<{
   locale?: string;
 }>();
 const copy = messages.assignmentInspection;
+const root = ref<HTMLElement>();
 const heading = ref<HTMLElement>();
 const resultHeading = ref<HTMLElement>();
 const facts = shallowRef<WorkforceSetupFacts | null>(null);
@@ -67,6 +69,25 @@ function current(context: InspectionContext): boolean {
     context.epoch === props.home.state.libraryEpoch
   );
 }
+watch(
+  [facts, work],
+  ([loadedFacts, loadedWork]) => {
+    if (loadedFacts === null) return;
+    const component = root.value;
+    const context = capture();
+    const generation = workGeneration;
+    void preserveVisibleFocus(
+      component,
+      () =>
+        facts.value === loadedFacts &&
+        work.value === loadedWork &&
+        root.value === component &&
+        generation === workGeneration &&
+        current(context),
+    );
+  },
+  { flush: "pre" },
+);
 function clearInspection(): void {
   inspectionGeneration += 1;
   inspectionScope?.dispose();
@@ -278,7 +299,11 @@ defineExpose({ focus: () => heading.value?.focus() });
 </script>
 
 <template>
-  <section class="state-panel field-stack" aria-labelledby="assignment-inspection-heading">
+  <section
+    ref="root"
+    class="state-panel field-stack"
+    aria-labelledby="assignment-inspection-heading"
+  >
     <h3 id="assignment-inspection-heading" ref="heading" tabindex="-1">{{ copy.heading }}</h3>
     <p>{{ copy.description }}</p>
     <p v-if="personId === null">{{ copy.selectPerson }}</p>

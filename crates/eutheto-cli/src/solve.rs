@@ -630,7 +630,10 @@ fn diagnostics(
             "backendId": input.backend_id, "backendVersion": input.backend_version,
             "observedBeforeArtifactPreparation": before_publication,
             "outcome": manifest.outcome, "observedElapsedMilliseconds": manifest.elapsed_milliseconds,
+            "firstIncumbentMilliseconds": manifest.first_incumbent_milliseconds,
+            "firstVerifiedFeasibleMilliseconds": manifest.first_verified_feasible_milliseconds,
             "phaseTimings": manifest.phase_timings,
+            "nativeObservations": manifest.native_observations,
             "model": compilation.map(|report| json!({
                 "variableCount": report.summary.variable_count,
                 "constraintCount": report.summary.constraint_count,

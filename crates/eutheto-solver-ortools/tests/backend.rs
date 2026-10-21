@@ -28,8 +28,8 @@ use eutheto_solver_ortools::{
     ORTOOLS_BACKEND_ID, ORTOOLS_VERSION, VerifiedWorkerArtifact, registry_with_ortools,
 };
 use eutheto_types::{
-    BackendSelection, CancellationToken, DurationMillis, ExplanationMode, PackId,
-    ParentSolveBudget, PreservationPolicy, ReproducibilityMode, ResourceLimits, ScenarioId,
+    BackendSelection, CancellationToken, DurationMillis, ExplanationMode, FixedMonotonicClock,
+    PackId, ParentSolveBudget, PreservationPolicy, ReproducibilityMode, ResourceLimits, ScenarioId,
     SolveMode, SolveOptions, SystemMonotonicClock, WorkerThreadPolicy,
 };
 use sha2::{Digest, Sha256};
@@ -384,6 +384,7 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         parent_budget.phase_view(),
         None,
         DurationMillis::ZERO,
+        backend.completion_reserve(),
     )?;
     let mut progress = Progress(Vec::new());
     let mut output = BoundedBackendOutput::new(
@@ -393,9 +394,11 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         SolverApiLimits::DEFAULT,
     )?;
 
+    let native_started = std::time::Instant::now();
     let outcome = backend
         .solve(&request, &mut output as &mut dyn BackendOutputSink)
         .await?;
+    let native_wall = native_started.elapsed();
     let result = output.into_result(outcome);
     validate_outcome(
         &request,
@@ -497,6 +500,19 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         assert!(statistics.branches.is_some());
         assert!(statistics.binary_propagations.is_some());
         assert!(statistics.integer_propagations.is_some());
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "case": "early_optimal_native_completion",
+                "termination": result.outcome.termination,
+                "backendLimitMilliseconds": request.dispatch_budget().backend_limit(),
+                "backendElapsedMilliseconds": result.outcome.evidence.elapsed_milliseconds,
+                "nativeWallMilliseconds": native_wall.as_millis(),
+                "appliedParameters": execution.reproducibility.applied_parameters,
+                "appliedParametersSha256": execution.reproducibility.applied_parameters_sha256,
+                "workerWallMilliseconds": statistics.wall_time_milliseconds,
+            })
+        );
     }
     Ok(())
 }
@@ -527,6 +543,7 @@ async fn production_backend_applies_requested_intermediate_parameter() -> TestRe
         parent_budget.phase_view(),
         None,
         DurationMillis::ZERO,
+        backend.completion_reserve(),
     )?;
     let mut progress = Progress(Vec::new());
     let mut output = BoundedBackendOutput::new(
@@ -595,6 +612,7 @@ async fn production_backend_recovers_retained_incumbent_after_clean_internal_wor
         parent_budget.phase_view(),
         None,
         DurationMillis::ZERO,
+        backend.completion_reserve(),
     )?;
     let mut progress = Progress(Vec::new());
     let mut output = BoundedBackendOutput::new(
@@ -648,6 +666,7 @@ async fn real_worker_honors_enforced_absolute_difference() -> TestResult {
             parent_budget.phase_view(),
             None,
             DurationMillis::ZERO,
+            backend.completion_reserve(),
         )?;
         let mut progress = Progress(Vec::new());
         let mut output = BoundedBackendOutput::new(
@@ -679,6 +698,90 @@ async fn real_worker_honors_enforced_absolute_difference() -> TestResult {
                 enabled
             );
         }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_backend_classifies_exhausted_search_without_launch_and_refuses_inconsistent_reserve()
+-> TestResult {
+    let (artifact, _guard, _) = fixture_artifact().await?;
+    let registry = registry_with_ortools(artifact)?;
+    let backend_id = ORTOOLS_BACKEND_ID.parse()?;
+    let backend = registry.get(&backend_id).ok_or("missing backend")?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    for (allowance, declared_reserve, delay, expected) in [
+        (
+            1_000,
+            DurationMillis::ZERO,
+            0,
+            "solver.ortools.completion_reserve",
+        ),
+        (
+            50,
+            backend.completion_reserve(),
+            0,
+            "solver.ortools.search_budget_exhausted",
+        ),
+        (
+            1_000,
+            backend.completion_reserve(),
+            950,
+            "solver.ortools.search_budget_exhausted",
+        ),
+    ] {
+        let clock = FixedMonotonicClock::default();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(allowance)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        let request = SolveRequest::new(
+            backend_id.clone(),
+            ORTOOLS_VERSION,
+            ORTOOLS_ADAPTER_VERSION,
+            Arc::clone(&problem),
+            summary.clone(),
+            options()?,
+            parent.phase_view(),
+            None,
+            DurationMillis::ZERO,
+            declared_reserve,
+        )?;
+        clock.advance(std::time::Duration::from_millis(delay))?;
+        let mut progress = Progress(Vec::new());
+        let mut output = BoundedBackendOutput::new(
+            &problem,
+            &mut progress,
+            request.dispatch_budget(),
+            SolverApiLimits::DEFAULT,
+        )?;
+        let result = backend.solve(&request, &mut output).await;
+        if expected == "solver.ortools.completion_reserve" {
+            assert_eq!(
+                result.err().ok_or("inconsistent reserve admitted")?.code(),
+                expected
+            );
+        } else {
+            let outcome = result?;
+            validate_outcome(
+                &request,
+                &outcome,
+                output.candidates(),
+                SolverApiLimits::DEFAULT,
+            )?;
+            assert_eq!(outcome.termination, BackendTerminationReason::TimeLimit);
+            assert_eq!(
+                outcome.conclusive_status_without_candidate(),
+                Some(eutheto_types::SolveStatus::NoSolutionWithinLimit)
+            );
+            assert!(outcome.evidence.execution.is_none());
+            assert!(outcome.evidence.first_incumbent_milliseconds.is_none());
+        }
+        assert!(output.candidates().is_empty());
+        assert_eq!(output.progress_event_count(), 0);
+        assert!(!parent.is_expired());
     }
     Ok(())
 }

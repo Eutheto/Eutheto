@@ -43,6 +43,10 @@ struct ExactTestBackend {
 }
 
 impl SolverBackend for ExactTestBackend {
+    fn completion_reserve(&self) -> DurationMillis {
+        DurationMillis::ZERO
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
     }

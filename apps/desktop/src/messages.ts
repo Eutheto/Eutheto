@@ -2662,10 +2662,14 @@ export const messages = {
       solveStarting: "Starting optimization…",
       maximumTimeLabel: "Maximum time (seconds, optional)",
       maximumTimeHelp:
-        "Leave blank for the selected mode’s limit; enter 1–30 whole seconds to override the end-to-end limit.",
+        "Leave blank for the selected mode’s limit, or enter 1–30 whole seconds. The work deadline includes independent checking and result preparation; safe saving and cleanup may finish afterwards.",
       maximumTimeInvalid: "Enter a whole number from 1 to 30 seconds, or leave this blank.",
       solveCancel: "Cancel optimization",
       solveCancelling: "Cancellation requested. Waiting for the native solve to settle…",
+      useVerifiedResult: "Stop improving and use verified result",
+      useVerifiedStopping: "Stopping improvements. Waiting for optimization to finish safely…",
+      useVerifiedHelp:
+        "Keep the first checked and saved schedule shown below. It may be earlier than the plan still being improved. This does not change your saved scenario or establish optimality.",
       cancelNotActive:
         "This solve is no longer cancellable from this window. Refresh to read its saved status.",
       available: "Reported available",

@@ -280,6 +280,7 @@ pub fn validate_outcome(
         candidates,
     )?;
     let has_candidates = !candidates.is_empty();
+    let measured_elapsed = request.dispatch_budget().elapsed_milliseconds();
     match outcome.termination {
         BackendTerminationReason::OptimalityClaimed | BackendTerminationReason::CandidateFound
             if !has_candidates =>
@@ -301,9 +302,10 @@ pub fn validate_outcome(
             return Err(OutcomeError::UnrequestedCancellation);
         }
         BackendTerminationReason::TimeLimit
-            if !request.dispatch_budget().child_view().is_expired()
-                && outcome.evidence.elapsed_milliseconds
-                    < outcome.evidence.backend_limit_milliseconds =>
+            if measured_elapsed < request.dispatch_budget().search_limit()
+                || outcome.evidence.elapsed_milliseconds
+                    < request.dispatch_budget().search_limit()
+                || outcome.evidence.elapsed_milliseconds > measured_elapsed =>
         {
             return Err(OutcomeError::PrematureTimeLimit);
         }

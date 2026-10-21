@@ -490,6 +490,7 @@ fn smoke_external_repair(
 ) -> Result<()> {
     let before = run_cli(executable, data, &["scenario", "validate", scenario], 0)?;
     let output = root.join(format!("{label}-external-repair.json"));
+    let diagnostics = root.join(format!("{label}-external-repair-diagnostics.json"));
     let solved = run_cli(
         executable,
         data,
@@ -506,11 +507,28 @@ fn smoke_external_repair(
             "1",
             "--max-time",
             "10s",
+            "--include-diagnostics",
+            path_text(&diagnostics)?,
             "--output",
             path_text(&output)?,
         ],
         0,
-    )?;
+    )
+    .map_err(|error| match read_smoke_json(&diagnostics) {
+        Ok(metadata) => anyhow::anyhow!("{error}; solve diagnostics: {metadata}"),
+        Err(diagnostic_error) => {
+            anyhow::anyhow!("{error}; solve diagnostics unavailable: {diagnostic_error}")
+        }
+    })?;
+    let metadata = read_smoke_json(&diagnostics)?;
+    ensure!(
+        metadata["result"]["runId"] == solved["result"]["runId"]
+            && metadata["result"]["nativeObservations"]["attempt"]["backendId"]
+                == "solver.ortools-cp-sat"
+            && metadata["result"]["firstIncumbentMilliseconds"].is_number()
+            && metadata["result"]["firstVerifiedFeasibleMilliseconds"].is_number(),
+        "external repair diagnostics omitted the native attempt or candidate milestones"
+    );
     let portable = read_smoke_json(&output)?;
     let context = &portable["runInput"]["objectiveContext"];
     ensure!(
