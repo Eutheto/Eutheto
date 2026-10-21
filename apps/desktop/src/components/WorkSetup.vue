@@ -7,6 +7,7 @@ import type {
   WorkforceSetupTimedShiftContinuation,
   WorkforceSetupGenerationRow,
 } from "../api/generated-domain-pack-contracts";
+import { preserveVisibleFocus } from "../focus-visibility";
 import { formatNumber, messages } from "../messages";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
 import { useWorkSetup, type WorkSettingsDraft } from "../work-setup";
@@ -51,6 +52,7 @@ const {
 const copy = messages.work;
 const recordsCopy = messages.people;
 const view = ref<"records" | "shifts">("records");
+const root = ref<HTMLElement>();
 const editorHeading = ref<HTMLElement>();
 const listHeading = ref<HTMLElement>();
 const workHeading = ref<HTMLElement>();
@@ -356,6 +358,28 @@ watch(
 watch(diagnostics, () => {
   diagnosticsPage.value = 0;
 });
+watch(
+  [() => state.facts, () => state.work, () => state.records, view],
+  ([loadedFacts, loadedWork, loadedRecords, loadedView]) => {
+    if (loadedFacts === null) return;
+    const component = root.value;
+    const request = requestKey.value;
+    void preserveVisibleFocus(
+      component,
+      () =>
+        root.value === component &&
+        requestKey.value === request &&
+        state.facts === loadedFacts &&
+        state.work === loadedWork &&
+        state.records === loadedRecords &&
+        view.value === loadedView &&
+        loadedFacts.context.scenarioId === props.project.scenarioId &&
+        loadedFacts.context.revision === props.project.revision &&
+        loadedFacts.context.epoch === props.home.state.libraryEpoch,
+    );
+  },
+  { flush: "pre" },
+);
 const navigationError = useValidationRoute(
   props.home,
   () => props.project,
@@ -431,7 +455,7 @@ const navigationError = useValidationRoute(
 </script>
 
 <template>
-  <section class="page-stack" aria-labelledby="work-heading">
+  <section ref="root" class="page-stack" aria-labelledby="work-heading">
     <h2 id="work-heading" data-route-heading tabindex="-1">{{ copy.heading }}</h2>
     <p v-if="navigationError" class="text-danger" role="alert">{{ navigationError }}</p>
     <p v-if="project.domainPackId !== 'official.workforce'">{{ messages.setup.unsupported }}</p>

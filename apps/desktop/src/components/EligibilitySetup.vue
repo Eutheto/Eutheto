@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import type { ProjectHomeController, ProjectSummary } from "../project-home";
+import { preserveVisibleFocus } from "../focus-visibility";
 import { useEligibilitySetup } from "../eligibility-setup";
 import { formatNumber, messages } from "../messages";
 import RouteLeaveGuard from "./RouteLeaveGuard.vue";
@@ -21,8 +22,27 @@ const matrixHeading = ref<HTMLElement>(),
   reviewHeading = ref<HTMLElement>(),
   errorHeading = ref<HTMLElement>();
 const inspector = ref<InstanceType<typeof WorkforceAssignmentInspection>>();
+const root = ref<HTMLElement>();
 const warningPage = ref(0);
 const warnings = computed(() => review.state.review?.warnings.changes ?? []);
+watch(
+  () => state.window,
+  (loaded) => {
+    if (loaded === null) return;
+    const component = root.value;
+    // The matrix also displaces the workspace footer without another focus event.
+    void preserveVisibleFocus(
+      component,
+      () =>
+        state.window === loaded &&
+        root.value === component &&
+        loaded.context.scenarioId === props.project.scenarioId &&
+        loaded.context.revision === props.project.revision &&
+        loaded.context.epoch === props.home.state.libraryEpoch,
+    );
+  },
+  { flush: "pre" },
+);
 watch(
   () => review.state.review,
   () => {
@@ -62,7 +82,7 @@ async function focusAfter(action: Promise<boolean>, target: "review" | "matrix")
 </script>
 
 <template>
-  <section class="page-stack" aria-labelledby="eligibility-setup-heading">
+  <section ref="root" class="page-stack" aria-labelledby="eligibility-setup-heading">
     <h2 id="eligibility-setup-heading" ref="matrixHeading" data-route-heading tabindex="-1">
       {{ messages.eligibilityUi.heading }}
     </h2>

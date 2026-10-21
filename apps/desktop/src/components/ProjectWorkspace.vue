@@ -84,7 +84,7 @@ function discardFeedback(): void {
 </script>
 
 <template>
-  <section class="page-stack" aria-labelledby="project-heading">
+  <section class="page-stack" aria-labelledby="project-heading" data-project-workspace>
     <header class="page-heading project-heading">
       <p class="eyebrow">
         {{

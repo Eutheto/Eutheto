@@ -52,6 +52,16 @@ opens editable export in a valid project context, and Ctrl/Cmd+Z/Shift+Z invokes
 scenario history only outside text editing. Input/contenteditable events remain
 unconsumed. Route headings, dialogs, and aborted navigation restore meaningful
 focus; destructive single-letter shortcuts are absent.
+When native WebKit advances keyboard focus without revealing the control, the
+shell reveals the still-active target after rendering. It follows both
+`:focus-visible` events and actual Tab keyup, including native date hosts that
+omit the focus event or classification. Disconnected targets, superseded focus
+and intervening pointer input cancel a pending reveal.
+When the eligibility matrix, overview or work table inserts content, the page
+also keeps an already-visible focused control in the same project workspace
+visible. It preserves focus and checks the current scenario, revision, library
+epoch and exact loaded view before scrolling; new focus and deliberate prior
+scrolling remain undisturbed.
 
 Project creation, listing, and opening use closed V1 native requests. Rust
 resolves the included calendar dates to exact local-midnight boundaries and
@@ -273,7 +283,10 @@ The overview's **Optimize** section reads actual native command and backend
 capability and matching saved-revision validation. After a current, error-free
 full check it offers executable Quick, Balanced and Deep modes for the exact
 saved revision. Command availability and compatible backend names/versions sit
-behind closed technical disclosures, not in the default controls. Live phases
+behind closed technical disclosures, not in the default controls. The optional
+maximum accepts 1–30 whole seconds; leaving it blank uses the selected mode's
+existing limit. It bounds work through independent checking and result
+preparation; safe saving and cleanup may settle afterwards. Live phases
 appear only after a 350 ms display delay;
 quick completions show their durable terminal status without a transient running
 announcement. The active native window owns explicit cancellation: a view restored
@@ -287,9 +300,17 @@ lost, and its newly started run can be discovered without an event. Once the
 first candidate passes independent verification, a separate committed checkpoint
 exposes its read-only schedule
 without waiting for backend proof. It remains inspectable if the run is later
-cancelled or fails, but is not a terminal accepted solution or export authority.
+cancelled or fails, but is not a terminal accepted solution. Checkpoint status
+alone grants no export authority: sharing and export still require native
+captured-source review and custody.
 The bundled OR-Tools worker exposes the first intermediate candidate and its
 final candidate, not every improvement made during proof search.
+While the current revision has a saved verified checkpoint and this window owns
+the running solve, **Stop improving and use verified result** requests ordinary
+native cancellation and keeps that first checked schedule available for
+inspection and sharing. It does not adopt a base or change the scenario, and it
+does not claim optimality. Generic **Cancel optimization** remains available
+separately. A native terminal result that finishes first retains its actual status.
 The accepted list can select a terminal result for viewing through the native
 `solution_select` contract. The returned result identity and revision are checked
 before the view marks it selected; an interrupted selection requires a fresh
@@ -1032,8 +1053,11 @@ It follows an authoritative standalone-coverage shortage to the exact count
 field and reviews a manual repair. An America/New_York repeated-time fixture
 demonstrates that zero fast errors need not imply full readiness and navigates
 the full finding to the second authored weekly start without mutation.
-The native runner also checks WebDriver keyboard input and focus while the UI
-reports a pending full-validation request. That UI flag does not prove native
+Both debug and packaged native runners include the same WebDriver keyboard
+input and focus checks while the UI reports a running full-validation request,
+and record that same UI state when keyboard cancellation is activated. The dense
+rest fixture must retain its native
+resource-limit failure when not cancelled. That UI flag does not prove native
 admission or entry into the computation loop; input during admitted native
 validation remains unverified by this run.
 
@@ -1050,8 +1074,9 @@ stale/no-result states without claiming packaged-native acceptance.
 into a private runtime, then runs the same real Tauri/WebKit setup through a
 native Deep solve. It reads the persisted run and scenario-owned diagnostic
 timings, opens the accepted schedule through a separately re-verified native
-view, and stops before the debug suite's independent cancellation/restart
-checks. These bounded fixture runs do not prove first-result-before-proof
+view, and includes the same pending-validation input/cancellation case before
+stopping ahead of the debug suite's independent restart checks. These bounded
+fixture runs do not prove first-result-before-proof
 delivery, a calibrated performance distribution, or packaged native cancellation.
 The approved-worker `headless_worker` regression holds backend completion
 after a real incumbent, reads the committed checkpoint and independently
@@ -1062,10 +1087,44 @@ recipient-export journey. It solves the versioned tiny fixture with the bundled
 worker, checks native assignment/summary CSV and combined ICS publication against
 the reviewed byte count and SHA-256, cancels an HTML picker and requires a new
 review, then checks the published HTML's exact accepted assignment set and private
-default participant population. It also checks that no scenario revision changed.
+default participant population. PDF checks cover private defaults and all five
+disclosures, native preview/publication hashes, format retirement, picker
+cancellation, no-clobber refusal and explicit stale-source consent. It also checks
+that publication does not mutate the scenario revision.
 The full packaged run includes this journey. `just e2e true false` reuses the
-existing DEB only when application inputs have not changed; such a run proves that
-image, not a fresh source build, cross-platform packaging or screen-reader support.
+existing DEB only when application inputs have not changed. Rebuild after changes
+to Vue, Rust, generated contracts, packaged resources or worker inputs; reuse is
+for runner-only edits or repeated observations of the same image. Such a run
+proves that image, not a fresh source build, cross-platform packaging or
+screen-reader support.
+
+`EUTHETO_E2E_PRACTITIONER_EXPORT_ONLY=1 just e2e true` selects the v2 practitioner
+fixture and retains the terminal accepted-result requirement. It never substitutes
+a verified checkpoint when terminal admission fails.
+`EUTHETO_E2E_PDF_CANCELLATION_ONLY=1 just e2e true` is a separate checkpoint-source
+case: start Deep, wait for its durable verified checkpoint, cancel the solve and
+require that exact checkpoint to survive. CSV/calendar and HTML/PDF checks use
+that complete source, with native report origin `storedCheckpoint`, before active PDF
+cancellation checks. This case returns before the terminal-only stale-source journey
+and cannot establish practitioner terminal acceptance.
+
+The PDF cancellation case observes a staged native helper, its post-request lifeline
+thread and advancing CPU ticks while the preview is pending. Explicit cancellation
+must reject with `operation.cancelled`, reap the helper, remove staging, publish
+no output and permit a fresh HTML review. Its JSON and console output explicitly
+record graceful application-close cleanup as unverified. WebKitGTK 2.52.4
+[clears its last-context WebDriver session](https://github.com/WebKit/WebKit/blob/webkitgtk-2.52.4/Source/WebDriver/WebDriverService.cpp#L1301-L1317)
+and its session host can
+[force-terminate the application](https://github.com/WebKit/WebKit/blob/webkitgtk-2.52.4/Source/WebDriver/glib/SessionHostGlib.cpp#L35-L41);
+CloseWindow therefore cannot establish normal GTK/Tauri shutdown.
+The source-backed force-exit observations do not establish a product shutdown
+defect. Graceful native application-close cleanup remains a maintainer/manual
+gate. These assertions do not establish manual, screen-reader or supported-platform
+acceptance.
+
+Shared native-runner select actions wait for both an enabled control and the
+requested enabled option before dispatching a change. This includes replacement
+choices whose accepted-source people page is still loading.
 
 `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true` runs the focused packaged
 large-supported accepted-result performance journey, also included in the full
@@ -1096,7 +1155,9 @@ This is an interaction/DOM proxy, **not INP, a paint timestamp, backend-only tim
 or heap-memory evidence**; no latency pass budget is asserted. The existing bounded
 32-interaction/128-long-task/1,024-live-region limits and overflow flags apply; an
 unsupported long-task observer retains the explicitly non-equivalent event-loop
-lag fallback. Fresh measured results must come from the runner, not these docs.
+lag fallback. Support requires `PerformanceObserver.supportedEntryTypes` to include
+`longtask` and successful observation; zero entries alone never establish support
+or absence of long tasks. Fresh measured results must come from the runner, not these docs.
 Rebuild with the command above after application/native changes; use
 `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true false` only for repeat runs against
 the same unchanged package.
@@ -1145,8 +1206,8 @@ The separate 100-person × 64-type eligibility stress case measured cold
 keyboard/input/scroll double-animation-frame proxies of 12/5/20 ms and warm
 proxies of 10/6/15 ms. Its native cancellation request was acknowledged in
 4 ms; validation IPC rejected 126 ms after its initial request. The profiler
-does not classify the rejection cause. WebKit's long-task observer reported
-zero entries in the bounded sample; two live-region DOM mutations are an
+does not classify the rejection cause. The historical sample does not establish
+long-task support or absence; two live-region DOM mutations are an
 announcement proxy, not screen-reader evidence. The source artifact records
 fixture digests, platform, method and native backend phase boundaries. These
 one-run debug figures are below the provisional 300–500 ms progress-display

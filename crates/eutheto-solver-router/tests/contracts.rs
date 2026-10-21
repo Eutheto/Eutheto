@@ -61,6 +61,10 @@ struct TestBackend {
 }
 
 impl SolverBackend for TestBackend {
+    fn completion_reserve(&self) -> DurationMillis {
+        DurationMillis::ZERO
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
     }
@@ -220,6 +224,12 @@ impl SolverBackend for TestBackend {
                         }),
                         evidence_refs: Vec::new(),
                     })?;
+                }
+                if *termination == BackendTerminationReason::TimeLimit {
+                    // Descriptive elapsed evidence cannot replace the actual dispatch clock.
+                    self.clock
+                        .advance(request.dispatch_budget().remaining_search_duration())
+                        .map_err(|_| BackendError::from(OutputError::UnsafeDiagnosticLine))?;
                 }
                 return Ok(BackendSolveOutcome {
                     backend_id: self.descriptor.id.clone(),
@@ -2602,16 +2612,26 @@ async fn optimal_status_requires_the_selected_verified_final_candidate_and_equal
             provenance,
         });
         fixture.canonicalize()?;
-        let result = run(
-            &registry,
-            fixture,
-            &clock,
-            &mut Review {
-                skip_first,
-                matches: matched,
-            },
-        )
-        .await?;
+        // A real TimeLimit reaches the backend cap; leave parent time for acceptance.
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(2_000)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        let result = SolverRouter::new(&registry)
+            .execute(
+                Arc::new(fixture),
+                options(BackendSelection::Auto)?,
+                &parent,
+                DurationMillis::new(1_000)?,
+                &mut Progress,
+                &mut Review {
+                    skip_first,
+                    matches: matched,
+                },
+            )
+            .await
+            .record;
         assert_eq!(
             result.terminal_status, expected,
             "{termination:?}, skip_first={skip_first}, matched={matched}, bound={bound:?}"

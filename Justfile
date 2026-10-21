@@ -326,6 +326,8 @@ bench:
 # `EUTHETO_E2E_ALTERNATIVES_ONLY=1 just e2e true` exercises sequential profiles and retained recovery.
 # `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true` solves large-supported with the bundled worker, verifies the result, and measures keyboard view/page/calendar transitions.
 # `EUTHETO_E2E_RECIPIENT_EXPORT_ONLY=1 just e2e true` tests keyboard-operated accepted CSV/share reviews before publication checks.
+# `EUTHETO_E2E_PRACTITIONER_EXPORT_ONLY=1 just e2e true` requires a terminal accepted practitioner result; a checkpoint cannot satisfy it.
+# `EUTHETO_E2E_PDF_CANCELLATION_ONLY=1 just e2e true` selects a retained Deep/cancel checkpoint for PDF checks and active-helper cancellation; graceful native application-close cleanup remains a manual gate.
 # `EUTHETO_E2E_KEYBOARD_WORKFLOW_ONLY=1 just e2e true` creates, configures, solves, repairs, compares, and reviews export for a fictional project using UI keyboard actions.
 # `EUTHETO_E2E_EXTERNAL_PLAN_ONLY=1 just e2e true` exercises unverified source editing, Repair and recovery.
 # `EUTHETO_E2E_ASSIGNMENT_CSV_ONLY=1 just e2e true` exercises native assignment import, reports and recovery.
@@ -334,6 +336,7 @@ bench:
 # `EUTHETO_E2E_SHIFT_CSV_ONLY=1 just e2e true` exercises native shift/time mapping, reports and recovery.
 # `EUTHETO_E2E_AVAILABILITY_CSV_ONLY=1 just e2e true` exercises native availability/time-off import and recovery.
 # Set rebuild=false only to rerun against an existing artifact when application inputs are unchanged.
+# Vue, Rust, generated contracts, packaged resources and worker changes require rebuilding.
 # EUTHETO_NATIVE_DRIVER may select an explicit absolute native-driver launcher.
 e2e bundled="false" rebuild="true":
     #!/usr/bin/env bash
@@ -453,6 +456,8 @@ dco-self-test:
 ci-policy-test:
     python3 tests/security/test_ci_policy.py
     python3 tests/e2e/test_native_runtime.py
+    node tests/e2e/test_native_instrumentation.mjs
+    node tests/e2e/test_pdf_lifecycle.mjs
 
 # Validate contributor configuration only; does not start a nested CLI or hosted workers.
 codex-static-check:

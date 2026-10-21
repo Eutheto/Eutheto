@@ -1441,6 +1441,7 @@ async fn solve_with_real_worker(
         budget.phase_view(),
         None,
         DurationMillis::ZERO,
+        backend.completion_reserve(),
     )?;
     let mut progress = Progress;
     let mut output = BoundedBackendOutput::new(

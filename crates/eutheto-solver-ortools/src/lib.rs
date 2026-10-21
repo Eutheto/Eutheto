@@ -1630,6 +1630,47 @@ mod tests {
     }
 
     #[test]
+    fn search_headroom_survives_translation_and_startup_is_debited_once()
+    -> Result<(), Box<dyn Error>> {
+        let clock = FixedMonotonicClock::default();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(5_000)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        clock.advance(Duration::from_millis(400))?;
+        let at_entry = parent.remaining_duration();
+        // 3000ms backend cap minus 100ms completion and 400ms translation already spent.
+        let mut solve = WorkerSolveRequest {
+            resource_limits: Some(ResourceLimits {
+                wall_time_millis: 2_500,
+                memory_bytes: None,
+                worker_threads: 1,
+            }),
+            ..WorkerSolveRequest::default()
+        };
+        clock.advance(Duration::from_millis(50))?;
+        assert_eq!(
+            finalize_solve_for_dispatch(&mut solve, &parent.phase_view(), at_entry)?,
+            2_450
+        );
+        assert_eq!(parent.remaining_duration(), Duration::from_millis(4_550));
+        solve
+            .resource_limits
+            .as_mut()
+            .ok_or("missing resource limits")?
+            .wall_time_millis = 10;
+        let at_entry = parent.remaining_duration();
+        clock.advance(Duration::from_millis(10))?;
+        assert!(matches!(
+            finalize_solve_for_dispatch(&mut solve, &parent.phase_view(), at_entry),
+            Err(SupervisorError::DeadlineExceeded)
+        ));
+        assert!(!parent.is_expired());
+        Ok(())
+    }
+
+    #[test]
     fn submillisecond_dispatch_budget_stops_before_zero_limit_frame() -> Result<(), Box<dyn Error>>
     {
         let clock = FixedMonotonicClock::default();

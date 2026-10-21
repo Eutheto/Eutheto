@@ -35,9 +35,51 @@ const modifier = /Macintosh|Mac OS X/u.test(navigator.userAgent) ? "Command" : "
 let current = true;
 let modalReturnFocus: HTMLElement | null = null;
 let paletteNavigation = false;
+let focusPointerEpoch = 0;
+function recordPointerInteraction(): void {
+  focusPointerEpoch += 1;
+}
 function dismissMutation(): void {
   home.acknowledgeMutation();
   if (home.state.mutation === null) main.value?.focus();
+}
+function revealKeyboardFocus(event: FocusEvent | KeyboardEvent): void {
+  const tab = event instanceof KeyboardEvent;
+  if (
+    tab &&
+    (event.code !== "Tab" ||
+      (event.key !== "Tab" && event.key !== "Unidentified") ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.isComposing)
+  )
+    return;
+  const target = event.target;
+  const owner = event.currentTarget;
+  if (!(target instanceof HTMLElement) || !(owner instanceof HTMLElement)) return;
+  const pointerEpoch = focusPointerEpoch;
+  requestAnimationFrame(() => {
+    if (
+      !current ||
+      focusPointerEpoch !== pointerEpoch ||
+      !owner.isConnected ||
+      !owner.contains(target) ||
+      !target.isConnected ||
+      document.activeElement !== target ||
+      (!tab && !target.matches(":focus-visible"))
+    )
+      return;
+    // WebKit date segments can focus their host without focusin or :focus-visible.
+    const bounds = target.getBoundingClientRect();
+    if (
+      bounds.top < 0 ||
+      bounds.bottom > innerHeight ||
+      bounds.left < 0 ||
+      bounds.right > innerWidth
+    )
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 }
 function updateSystemTheme(event: MediaQueryListEvent): void {
   systemDark.value = event.matches;
@@ -292,6 +334,7 @@ function onKeydown(event: KeyboardEvent): void {
 }
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
+  window.addEventListener("pointerdown", recordPointerInteraction, true);
   await home.startEventListeners();
   await Promise.all([home.load(), settings.load()]);
 });
@@ -299,6 +342,7 @@ onUnmounted(() => {
   current = false;
   stopRouteFocus();
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("pointerdown", recordPointerInteraction, true);
   darkQuery.removeEventListener("change", updateSystemTheme);
   settings.dispose();
   delete document.documentElement.dataset.theme;
@@ -310,7 +354,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="desktop-shell">
+  <div class="desktop-shell" @focusin="revealKeyboardFocus" @keyup.capture="revealKeyboardFocus">
     <a href="#workspace-main" class="skip-link" @click.prevent="main?.focus()">{{
       messages.shell.skip
     }}</a>

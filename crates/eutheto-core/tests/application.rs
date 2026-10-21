@@ -495,6 +495,10 @@ struct CounterfactualTestBackend {
 }
 
 impl SolverBackend for CounterfactualTestBackend {
+    fn completion_reserve(&self) -> DurationMillis {
+        DurationMillis::ZERO
+    }
+
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
     }

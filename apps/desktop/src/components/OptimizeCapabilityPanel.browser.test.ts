@@ -121,6 +121,18 @@ function mockCheckpointSchedule(result: { solutionId: string; resultChecksum: st
     }),
   );
 }
+function runningCheckpoint(): SolveJobDtoV2 {
+  return {
+    ...job("running"),
+    cancelOperationId: operationId,
+    checkpoint: {
+      result: { solutionId: operationId, resultChecksum: "b".repeat(64) },
+      verifiedAfterMilliseconds: 430,
+      acceptedAt: "2026-09-10T12:00:01Z",
+      checkpointChecksum: "c".repeat(64),
+    },
+  };
+}
 function terminalExplanationResponse(
   terminalStatus: SolveJobDtoV2["status"],
   result: AcceptedResultRefV1 | null,
@@ -802,6 +814,18 @@ describe("Optimize capability lifecycle", () => {
     await expect
       .element(screen.getByRole("button", { name: messages.setup.optimize.solveCancel }))
       .toBeEnabled();
+    screen.getByRole("button", { name: messages.setup.optimize.useVerifiedResult }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(api.cancelSolve).toHaveBeenCalledExactlyOnceWith({
+      operationId,
+      scenarioId,
+      expectedRevision: projectRevision,
+    });
+    await expect
+      .element(screen.getByRole("button", { name: messages.setup.optimize.useVerifiedStopping }))
+      .toBeDisabled();
+    expect(api.manualEdit).not.toHaveBeenCalled();
+    expect(api.applyScenarioCommand).not.toHaveBeenCalled();
     expect(state.terminal).not.toHaveBeenCalled();
     await vi.waitFor(
       () => {
@@ -841,7 +865,133 @@ describe("Optimize capability lifecycle", () => {
     );
     await expect.element(screen.getByText(messages.setup.optimize.retainedVerified)).toBeVisible();
     await expect.element(screen.getByText("River")).toBeVisible();
+    await expect
+      .element(screen.getByRole("heading", { name: messages.acceptedSchedule.heading, level: 4 }))
+      .toHaveFocus();
+    expect(
+      screen.queryByRole("button", { name: messages.setup.optimize.useVerifiedResult }),
+    ).toBeNull();
   });
+
+  it.each(["missing checkpoint", "older revision", "no live owner"])(
+    "does not offer use-verified-result for %s",
+    async (condition) => {
+      const current = runningCheckpoint();
+      const retained = {
+        ...current,
+        checkpoint: condition === "missing checkpoint" ? null : current.checkpoint,
+        stale: condition === "older revision",
+        cancelOperationId: condition === "no live owner" ? null : current.cancelOperationId,
+      };
+      vi.mocked(api.getSolveJob).mockResolvedValue(response(retained));
+      if (retained.checkpoint) mockCheckpointSchedule(retained.checkpoint.result);
+      setup([retained]);
+      await screen.findByText(messages.setup.optimize.running);
+      expect(
+        screen.queryByRole("button", { name: messages.setup.optimize.useVerifiedResult }),
+      ).toBeNull();
+      expect(api.cancelSolve).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a refused stop request retryable without replay or result adoption", async () => {
+    const retained = runningCheckpoint();
+    vi.mocked(api.getSolveJob).mockResolvedValue(response(retained));
+    if (retained.checkpoint) mockCheckpointSchedule(retained.checkpoint.result);
+    setup([retained]);
+    vi.mocked(api.cancelSolve).mockRejectedValueOnce(new Error("Temporary cancellation failure"));
+    await userEvent.click(
+      await screen.findByRole("button", { name: messages.setup.optimize.useVerifiedResult }),
+    );
+    await expect
+      .element(screen.getByRole("button", { name: messages.setup.optimize.useVerifiedResult }))
+      .toBeEnabled();
+    await expect
+      .element(
+        await screen.findByText("The local project library could not complete that request."),
+      )
+      .toBeVisible();
+    expect(api.cancelSolve).toHaveBeenCalledTimes(1);
+    expect(api.manualEdit).not.toHaveBeenCalled();
+    expect(api.applyScenarioCommand).not.toHaveBeenCalled();
+  });
+
+  it.each(["original focus", "moved focus", "new revision", "library changed", "authority lost"])(
+    "preserves an optimal native terminal that wins a stop-improving race: %s",
+    async (ownership) => {
+      const retained = runningCheckpoint();
+      vi.mocked(api.getSolveJob).mockResolvedValue(response(retained));
+      if (retained.checkpoint) mockCheckpointSchedule(retained.checkpoint.result);
+      const owner = diagnosticHome();
+      const state = setup([retained], { home: owner.home });
+      const cancelled = Promise.withResolvers<Awaited<ReturnType<typeof api.cancelSolve>>>();
+      vi.mocked(api.cancelSolve).mockImplementationOnce(() => cancelled.promise);
+      await userEvent.click(
+        await screen.findByRole("button", { name: messages.setup.optimize.useVerifiedResult }),
+      );
+      let nextOwner: HTMLButtonElement | undefined;
+      if (ownership === "moved focus") {
+        nextOwner = document.createElement("button");
+        nextOwner.textContent = "New focus owner";
+        document.body.prepend(nextOwner);
+        onTestFinished(() => {
+          nextOwner?.remove();
+        });
+        await userEvent.click(nextOwner);
+      }
+      if (ownership === "new revision") {
+        await state.rendered.rerender({
+          currentRevision: projectRevision + 1,
+          summary: summary(projectRevision + 1),
+        });
+      }
+      if (ownership === "library changed") owner.state.libraryEpoch += 1;
+      if (ownership === "authority lost") {
+        await state.rendered.rerender({ authorityUnavailableReason: "Native owner unavailable" });
+      }
+      const terminal = { ...job("optimal"), checkpoint: retained.checkpoint };
+      vi.mocked(api.getSolveJob).mockResolvedValue(response(terminal));
+      state.completedListener?.({
+        type: "solveCompleted",
+        payload: {
+          context: {
+            eventVersion: 1,
+            timestamp: "2026-09-10T12:00:03Z",
+            requestId: retained.requestId,
+            scenarioId,
+            revision: projectRevision,
+            solveRunId: runId,
+          },
+          status: "optimal",
+          solutionId: terminal.solutionId,
+        },
+      });
+      await expect
+        .element(await screen.findByText(messages.setup.optimize.statuses.optimal))
+        .toBeVisible();
+      cancelled.resolve(
+        response({
+          schemaVersion: 2,
+          cancelRequestId: operationId,
+          acknowledgement: "notActive",
+        }),
+      );
+      await cancelled.promise;
+      await expect
+        .element(screen.getByText(messages.setup.optimize.statuses.optimal))
+        .toBeVisible();
+      const heading = screen.getByRole("heading", {
+        name: messages.setup.optimize.heading,
+        level: 3,
+      });
+      if (ownership === "original focus") await expect.element(heading).toHaveFocus();
+      else if (nextOwner) await expect.element(nextOwner).toHaveFocus();
+      else await expect.element(heading).not.toHaveFocus();
+      expect(state.terminal).toHaveBeenCalledWith(terminal);
+      expect(api.cancelSolve).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(messages.setup.optimize.retainedVerified)).toBeNull();
+    },
+  );
 
   it("recovers an inspectable checkpoint from the durable run when all native events are lost", async () => {
     const state = setup();

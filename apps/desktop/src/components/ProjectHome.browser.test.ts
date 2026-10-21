@@ -872,6 +872,114 @@ describe("Routed native portable settlement and restore review", () => {
 });
 
 describe("Real shell commands and route updates", () => {
+  it.each(["retained", "pointer intervention", "stale focus"])(
+    "reveals Tab keyup without native host focusin or focus-visible: %s",
+    async (ownership) => {
+      configureNative();
+      await renderWorkspace();
+      await screen.findByRole("heading", { name: messages.projects.heading });
+      const main = screen.getByRole("main");
+      const origin = document.createElement("button");
+      origin.textContent = "Date focus origin";
+      const input = document.createElement("input");
+      input.type = "date";
+      input.style.display = "block";
+      input.style.marginTop = "200vh";
+      main.prepend(origin, input);
+      const matches = input.matches.bind(input);
+      vi.spyOn(input, "matches").mockImplementation((selector) =>
+        selector === ":focus-visible" ? false : matches(selector),
+      );
+      // Emulate the observed WebKit host: focus changes without bubbling focusin or UA reveal.
+      input.addEventListener("focusin", (event) => {
+        event.stopPropagation();
+      });
+      input.addEventListener("keyup", (event) => {
+        if (event.code !== "Tab") return;
+        window.scrollTo(0, 0);
+        if (ownership === "pointer intervention")
+          input.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        if (ownership === "stale focus") origin.focus({ preventScroll: true });
+      });
+      origin.focus();
+      await userEvent.keyboard("{Tab}");
+      expect(input.matches(":focus-visible")).toBe(false);
+      if (ownership === "retained") {
+        await expect.poll(() => input.getBoundingClientRect().bottom <= innerHeight).toBe(true);
+        expect(document.activeElement).toBe(input);
+      } else {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              resolve();
+            }),
+          ),
+        );
+        expect(scrollY).toBe(0);
+        expect(input.getBoundingClientRect().top).toBeGreaterThan(innerHeight);
+        expect(document.activeElement).toBe(ownership === "stale focus" ? origin : input);
+      }
+    },
+  );
+
+  it("reveals offscreen keyboard focus without scrolling for stale or mouse focus", async () => {
+    configureNative();
+    await renderWorkspace();
+    await screen.findByRole("heading", { name: messages.projects.heading });
+    const main = screen.getByRole("main");
+    const origin = document.createElement("button");
+    origin.textContent = "Focus origin";
+    main.prepend(origin);
+    const details = document.createElement("details");
+    details.className = "state-panel setup-more";
+    details.style.marginTop = "200vh";
+    const summary = document.createElement("summary");
+    summary.textContent = "Saved metadata focus regression";
+    details.append(summary);
+    main.append(details);
+
+    origin.focus();
+    await userEvent.keyboard("{Tab}");
+    window.scrollTo(0, 0);
+    // Reproduce native WebKit's observed focus transition without its expected reveal.
+    summary.focus({ preventScroll: true });
+    expect(summary.matches(":focus-visible")).toBe(true);
+    expect(summary.getBoundingClientRect().top).toBeGreaterThan(innerHeight);
+    await expect.poll(() => summary.getBoundingClientRect().bottom <= innerHeight).toBe(true);
+
+    origin.focus();
+    window.scrollTo(0, 0);
+    const before = scrollY;
+    summary.focus({ preventScroll: true });
+    origin.focus({ preventScroll: true });
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          resolve();
+        }),
+      ),
+    );
+    expect(document.activeElement).toBe(origin);
+    expect(scrollY).toBe(before);
+
+    const mouseOrigin = document.createElement("button");
+    mouseOrigin.textContent = "Mouse focus origin";
+    main.prepend(mouseOrigin);
+    await userEvent.click(mouseOrigin);
+    expect(mouseOrigin.matches(":focus-visible")).toBe(false);
+    summary.focus({ preventScroll: true });
+    expect(summary.matches(":focus-visible")).toBe(false);
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          resolve();
+        }),
+      ),
+    );
+    expect(scrollY).toBe(before);
+    expect(summary.getBoundingClientRect().top).toBeGreaterThan(innerHeight);
+  });
+
   it("shows a first-launch library failure and lets the user retry it", async () => {
     configureNative();
     vi.mocked(generatedApi.listProjects).mockRejectedValueOnce(

@@ -264,8 +264,12 @@ native editing-accelerator, accessibility and packaged-platform gates.
 The headless workflow below remains available without the desktop. The setup
 overview now offers a native **Optimize** action after current, completed,
 error-free full validation when a supported worker is available. Quick, Balanced
-and Deep are bounded modes, not optimality promises. Native progress and
-cancellation remain separate from independently accepted results; the overview
+and Deep are bounded modes, not optimality promises. An optional maximum covers
+work through independent checking and result preparation; safe saving and cleanup
+can settle afterwards. Once this window has a current saved verified checkpoint,
+**Stop improving and use verified result** stops search and keeps that first
+checked schedule available without changing the scenario or claiming optimality.
+Native progress and cancellation remain separate from independently accepted results; the overview
 lists current and historical accepted results, allows one verified terminal
 result to be selected for viewing without changing the scenario revision, and
 inspects bounded by-person, by-shift/location, UTC-ordered assignment timeline,
@@ -519,8 +523,20 @@ the run without losing that checkpoint.
 
 `just e2e true false` re-extracts and tests the existing unsigned bundle without
 rebuilding it. Use this only after a successful bundle build when application
-inputs are unchanged, for example while correcting E2E steps. The default still
-rebuilds the selected application.
+inputs are unchanged, for example while correcting E2E steps. Changes to Vue,
+Rust, generated contracts, packaged resources or worker inputs require a rebuild.
+The default still rebuilds the selected application.
+
+`EUTHETO_E2E_RECIPIENT_EXPORT_ONLY=1 just e2e true` exercises the tiny fixture's
+terminal-result CSV/calendar and HTML/PDF review/publication paths.
+`EUTHETO_E2E_PRACTITIONER_EXPORT_ONLY=1 just e2e true` requires a terminal accepted
+result from the practitioner fixture; a verified checkpoint cannot satisfy it.
+`EUTHETO_E2E_PDF_CANCELLATION_ONLY=1 just e2e true` instead explicitly selects a
+durable verified checkpoint after cancelling a Deep solve. Its reports retain
+`storedCheckpoint` provenance. It checks active PDF helper cancellation and
+cleanup; it does not prove practitioner terminal acceptance. Graceful native
+application-close cleanup remains a separate maintainer/manual gate: this host's
+WebKitGTK last-context CloseWindow can force-terminate the app and cannot establish it.
 
 `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true` exercises the versioned
 101-person accepted-result fixture and writes bounded native/WebKit performance
