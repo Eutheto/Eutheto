@@ -52,7 +52,7 @@ jobs:
           persist-credentials: false
 
       - name: Install locked Nix
-        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+        uses: DeterminateSystems/determinate-nix-action@96c5ee93a9dddf2830d31e1da6ec719077336c28 # v3.23.3
         with:
           github-token: ""
           diagnostic-endpoint: ""
@@ -70,7 +70,7 @@ jobs:
 
       - name: Retain bounded synthetic benchmark reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

@@ -458,8 +458,14 @@ ci-policy-test:
     python3 tests/e2e/test_native_runtime.py
     node tests/e2e/test_native_instrumentation.mjs
     node tests/e2e/test_pdf_lifecycle.mjs
+
+# Validate contributor configuration only; does not start a nested CLI or hosted workers.
+codex-static-check:
+    python3 -B scripts/codex-cloud/test_check_static.py
+    python3 -B scripts/codex-cloud/check_static.py
+
 # Run the complete non-deferred Phase-01 repository suite.
-check: generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test rust-advisories-test fmt-check lint typecheck test
+check: codex-static-check generate-check protocol-check fixtures-check architecture-check dco-self-test ci-policy-test rust-advisories-test fmt-check lint typecheck test
 
 # Run real clean-tree checks, then stop at the unresolved Phase-11 release gate.
 release-preflight: check

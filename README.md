@@ -989,6 +989,8 @@ configuration files for these new operations remain explicitly unavailable.
 
 Read [`AGENTS.md`](AGENTS.md) before changing the repository. It defines source authority, phase discipline, architecture boundaries, generated-code rules, security and privacy constraints, and verification expectations for human and automated contributors.
 
+Automated contributors use the pinned [Ponytail instructions and local role profiles](.agents/README.md). Run `just codex-static-check` for repository configuration checks; see [Codex Cloud guidance](docs/contributors/codex-cloud.md) for hosted handoffs, evidence limits and saved-environment publication.
+
 Implementation now proceeds through Phase 07. Changes must preserve the
 applicable roadmap issue IDs and exit gates and avoid claiming later-phase
 production behavior. Contributions should prefer complete vertical paths over
