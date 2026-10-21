@@ -298,6 +298,18 @@
     {
       "ecosystem": "cargo",
       "name": "bit-set",
+      "version": "0.11.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "bit-set",
       "version": "0.8.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
@@ -305,6 +317,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "bit-vec",
+      "version": "0.10.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "5727b15fa97d4f4fee0a3b7c3d550ed0269f54329207b86388de918604e31269"
       }
     },
     {
@@ -377,6 +401,30 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "borsh",
+      "version": "1.8.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "borsh-derive",
+      "version": "1.8.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
       }
     },
     {
@@ -641,6 +689,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "chacha20",
+      "version": "0.10.2",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
       }
     },
     {
@@ -937,6 +997,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "3d44a101f213f6c4cdc1853d4b78aef6db6bdfa3468798cc1d9912f4735013eb"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "core_detect",
+      "version": "1.0.0",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
       }
     },
     {
@@ -3174,13 +3246,13 @@
     {
       "ecosystem": "cargo",
       "name": "jiff",
-      "version": "0.2.35",
+      "version": "0.2.38",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
+        "value": "b2b005715dcbeb0089a3c0dab99f2ff1cc3b2525323552703d648585d342a383"
       }
     },
     {
@@ -3198,25 +3270,25 @@
     {
       "ecosystem": "cargo",
       "name": "jiff-static",
-      "version": "0.2.35",
+      "version": "0.2.38",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
+        "value": "2cc9817253cf7c7ee4684451bd327e88d6f3658014e54a29198625590650695c"
       }
     },
     {
       "ecosystem": "cargo",
       "name": "jiff-tzdb",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "142bd39932ad231f10513df9ab62661fead8719872150b7ad02a2df79f4e141e"
+        "value": "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
       }
     },
     {
@@ -3414,13 +3486,13 @@
     {
       "ecosystem": "cargo",
       "name": "libc",
-      "version": "0.2.189",
+      "version": "0.2.191",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+        "value": "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
       }
     },
     {
@@ -4566,25 +4638,25 @@
     {
       "ecosystem": "cargo",
       "name": "process-wrap",
-      "version": "10.0.0",
+      "version": "10.0.1",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "0e3f4237d0e4741eb50bc5584db701f1299c85fa31ff0274dd6445e79dc42d12"
+        "value": "1f21b97672d2dc848e7b25701ab4535618b92f4861c13cc3f7f7bed52ad3c8da"
       }
     },
     {
       "ecosystem": "cargo",
       "name": "proptest",
-      "version": "1.11.0",
+      "version": "1.12.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+        "value": "b8530004ccb15eae51c7e40009fbe317f341f804db54dc033eec1c50be28cfa0"
       }
     },
     {
@@ -4734,6 +4806,18 @@
     {
       "ecosystem": "cargo",
       "name": "rand",
+      "version": "0.10.3",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "rand",
       "version": "0.8.8",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
@@ -4741,18 +4825,6 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
-      }
-    },
-    {
-      "ecosystem": "cargo",
-      "name": "rand",
-      "version": "0.9.5",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": {
-        "algorithm": "SHA256",
-        "value": "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
       }
     },
     {
@@ -4769,14 +4841,14 @@
     },
     {
       "ecosystem": "cargo",
-      "name": "rand_chacha",
-      "version": "0.9.0",
+      "name": "rand_core",
+      "version": "0.10.1",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+        "value": "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
       }
     },
     {
@@ -4793,26 +4865,14 @@
     },
     {
       "ecosystem": "cargo",
-      "name": "rand_core",
-      "version": "0.9.5",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": {
-        "algorithm": "SHA256",
-        "value": "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
-      }
-    },
-    {
-      "ecosystem": "cargo",
       "name": "rand_xorshift",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+        "value": "60aa6af80be32871323012e02e6e65f8a7cc7890931ae421d217ad8fe0df2ccf"
       }
     },
     {
@@ -5310,13 +5370,13 @@
     {
       "ecosystem": "cargo",
       "name": "serde_json",
-      "version": "1.0.151",
+      "version": "1.0.154",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+        "value": "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
       }
     },
     {
@@ -5886,13 +5946,13 @@
     {
       "ecosystem": "cargo",
       "name": "tauri",
-      "version": "2.11.5",
+      "version": "2.11.6",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "667b20e2726d572dea2de7370da16e188eb06008faf9a92fab7cdc46791190b5"
+        "value": "6fa5bacdb9bbad5954af3d1bd6cf6ae9192cab1b2e270f4a07f904610b9e85f4"
       }
     },
     {
@@ -5946,13 +6006,13 @@
     {
       "ecosystem": "cargo",
       "name": "tauri-plugin-dialog",
-      "version": "2.7.2",
+      "version": "2.7.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "b2d3c1dbe38037e7f590cdf2492594d5ceebe031e7bc7e827509b22a999d2940"
+        "value": "61854a36651aa48381e5e209f69a01273b77f3f9f91f0c430b1b98d33bd47229"
       }
     },
     {
@@ -6066,13 +6126,13 @@
     {
       "ecosystem": "cargo",
       "name": "thiserror",
-      "version": "2.0.20",
+      "version": "2.0.21",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+        "value": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
       }
     },
     {
@@ -6090,13 +6150,13 @@
     {
       "ecosystem": "cargo",
       "name": "thiserror-impl",
-      "version": "2.0.20",
+      "version": "2.0.21",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+        "value": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
       }
     },
     {
@@ -6198,13 +6258,13 @@
     {
       "ecosystem": "cargo",
       "name": "tokio",
-      "version": "1.53.1",
+      "version": "1.53.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+        "value": "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
       }
     },
     {
@@ -7026,13 +7086,13 @@
     {
       "ecosystem": "cargo",
       "name": "uuid",
-      "version": "1.26.0",
+      "version": "1.28.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
+        "value": "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
       }
     },
     {
@@ -9430,145 +9490,145 @@
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "47cc46b4ca70c9eb5ac12aa6f6460eb8c984aa48546ef714cbc9f468d5c8c689652812c4494bb97f8171fbae218004989b51fe8d25aaea3096eb3a939c7ea1a9"
+        "value": "7fbfcbb18ef84956f50a198e3f0d5a8cea718a2d064b30c082658745c8bc25462eb9a8b4e2b5ec49b1686e9981d2c3f60dd96f303fc1e59a2d127f0638631152"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-darwin-arm64",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-darwin-arm64/-/cli-darwin-arm64-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-darwin-arm64/-/cli-darwin-arm64-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "d6bc8e177661a59fe77a61d5e73570050073f630c62a628fbd63c00ce85cf378a0d0fe1b31cda2111e0d6c2eabf6c8de219e91550e20dd164862f7b385c9784d"
+        "value": "c6654da0938e2b328b8fb18b1d79972e29916f2f4ce366812096b4b01f3437ba36e1e295e49895993a0a4d12d51fdca12f4e4667f07aad248e99bccd149c0100"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-darwin-x64",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-darwin-x64/-/cli-darwin-x64-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-darwin-x64/-/cli-darwin-x64-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "b85b0640001fbb2cf593fc862e69167e406580a02a65fc6a94798b5b1f35414dbb44959f99b347088abc4fcc357be542965788b99523a4759fa04e04dc32e8dc"
+        "value": "51177ed2eb1f994410c9be6434f88ab76393f20a7ba0653b411faa3a9a41e9edf99a954114554d85673da166f7a74bbbd5f0c9d3d0e91784fa9bdc58c68201f2"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-linux-arm-gnueabihf",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-arm-gnueabihf/-/cli-linux-arm-gnueabihf-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-arm-gnueabihf/-/cli-linux-arm-gnueabihf-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "21a1d99f909d04bdb5a149a3895392d5cb70e88a753b4a63a7bd05c0e5a6633d66c967b4498f7a6488f61587fba53d26f1b23687f86bb3965b1175e1e38fcc91"
+        "value": "d24c14571d8b6e63a84d1970175a03c30eed878fcd4a5bafe19050e8a459b052a0e20d13953708889d157a1aa441851e0bdc484f5324e97b45e76988d79e5549"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-linux-arm64-gnu",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-arm64-gnu/-/cli-linux-arm64-gnu-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-arm64-gnu/-/cli-linux-arm64-gnu-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "378d7fba44d155ee974ae513112b8574678e5b68bb93adad2beea01cae4a779feae513efbe2d7d19a58054f3dbf6ef791d21a64c2852a2505fcf29d4b2cb0568"
+        "value": "80a4860f1e9fc7e1c12d0986ea0b82845762b1bac249dc7d6258be8f9b5e39aeb8826d4278cf82e8d2ebbb93e3dd992411ea74e41982163c6f5fe723a80c9c65"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-linux-arm64-musl",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "bf6efb5274ff7c1eb8c407d2ae82f93772a6ded2e6bc04d6a89270ff0448fa0ea8f8791e0f4b25c84ee03a136cd4c6e3138d51edb40e4f1315a0bddaa265099b"
+        "value": "62be7da8ccbf81cbc07c1b857421a50261a22ec6163050dbb0fe1b008ea2341cdc2531ab6166467a2421183a36f4c4307c5fcd501ab2336aa58d7bb9b59eb08d"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-linux-riscv64-gnu",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-riscv64-gnu/-/cli-linux-riscv64-gnu-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-riscv64-gnu/-/cli-linux-riscv64-gnu-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "aaa80d910daed72647c63871b196b152d4435bc748a88626df7af1fe6cf042fd127d8f71d41fa2ada8fcbd67858978e349556110c7a95d23adb354ea3f3bd735"
+        "value": "8caaf4fd11013272ca0b43b03d0664ca07b498a0da359d1bfc06df1b05720a015fc12ef7d0454b7d50e8de7b7b314bba8c96b2b51ab4f3ec528f9a9fcbe535f9"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-linux-x64-gnu",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-x64-gnu/-/cli-linux-x64-gnu-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-x64-gnu/-/cli-linux-x64-gnu-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "d9544d5a5f3814e1f49b682288390eda1d105e570c25e5fecc90e9239903210031eacfa0785defe3c1780d77c97b3e064bf15da031a73e7c350b689819b43b6d"
+        "value": "813904a8900608c44e19a9f11e7cda27343efeb5e5dfd1d6560d3f8433834b5c035811aaa1c7aa182e909b5fa641bc93d75c67b01f262aefe0c95203fd8a4523"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-linux-x64-musl",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-x64-musl/-/cli-linux-x64-musl-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-linux-x64-musl/-/cli-linux-x64-musl-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "a3d1b2858a2bfe773bc5aae6c0313791adaccee5b7bae6735e31d687ae10f185f902d4a0c5d424156ceb6383bc2a21ad54dbc5048d781f7438f508f94ce20ffc"
+        "value": "4f6753c4bd6cbd1ca6ef57d9b5a5b8a596176ed85b7c5b0426bd4d78e520fe9ee56965d96d4b7ff0331265ff2b79cbbd7fbfb517f2efd341edcec12eeaf0cef7"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-win32-arm64-msvc",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-win32-arm64-msvc/-/cli-win32-arm64-msvc-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-win32-arm64-msvc/-/cli-win32-arm64-msvc-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "95de4485be7df26d15918cb29513cd78216c05efe49b48f18ace8a80ca65dc8198e88fe2d51c105ced3923502c5d45ced960ba02f07f2f0e2a4dffdab22b8489"
+        "value": "7a8890c2911959ba6c54770cf41033aaa7b84c21eccefaf7aec33ba54438a1f2cad251758b577f8d7d10a390d832a72b52dc10b83743b8e09b713d08cdfd55c1"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-win32-ia32-msvc",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-win32-ia32-msvc/-/cli-win32-ia32-msvc-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-win32-ia32-msvc/-/cli-win32-ia32-msvc-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "d761f18b45d7fc7e551713bf6c68079055a19a5f5532010ebbd0a2763782793350d65e9fa5495b8868123fb08b2373c5b56f7f15f6de1e2799fa4c962b91fb08"
+        "value": "904f8a520e836db920bdcc349bdf70255213a0543326aa4c0405da87be16ab168bcecb0dc124d471cac7a7af905733218d03f7df4b6f7a41669d017ed0d6c4e9"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@tauri-apps/cli-win32-x64-msvc",
-      "version": "2.11.4",
+      "version": "2.12.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@tauri-apps/cli-win32-x64-msvc/-/cli-win32-x64-msvc-2.11.4.tgz",
+      "source": "https://registry.npmjs.org/@tauri-apps/cli-win32-x64-msvc/-/cli-win32-x64-msvc-2.12.3.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "faf0e2a81214e5d3084a0ff036f5f7b05f991df809189e53d0070ef841cd5d5f461801be3f97f3a1d9435c3dd074a091819c4ca029b93cfbe3dc1a8b36306d87"
+        "value": "2fbc277560205f698b5bb6a5b30a4bdddd51d0ff453765980601da424018101c471c6918e2f157f428dc450d4b0310c0308271ad8eff683ce2149782852f3835"
       }
     },
     {
