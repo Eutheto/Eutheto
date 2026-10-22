@@ -17,18 +17,18 @@ eutheto-solver-api = { path = "../eutheto-solver-api" }
 eutheto-types = { path = "../eutheto-types" }
 prost = "=0.14.4"
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 sha2 = "=0.10.9"
 tempfile = "=3.27.0"
-thiserror = "=2.0.20"
-tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "process", "rt", "signal", "time"] }
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.3", features = ["fs", "io-util", "macros", "process", "rt", "signal", "time"] }
 
 [target.'cfg(unix)'.dependencies]
-libc = "=0.2.189"
-process-wrap = { version = "=10.0.0", default-features = false, features = ["tokio1", "kill-on-drop", "process-group"] }
+libc = "=0.2.191"
+process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "kill-on-drop", "process-group"] }
 
 [target.'cfg(windows)'.dependencies]
-process-wrap = { version = "=10.0.0", default-features = false, features = ["tokio1", "kill-on-drop", "job-object", "creation-flags"] }
+process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "kill-on-drop", "job-object", "creation-flags"] }
 
 [dev-dependencies]
-tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "=1.53.3", features = ["macros", "rt-multi-thread", "time"] }

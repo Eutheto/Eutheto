@@ -25,8 +25,8 @@ eutheto-solver-api = { path = "../eutheto-solver-api" }
 eutheto-solver-ortools = { path = "../eutheto-solver-ortools" }
 eutheto-types = { path = "../eutheto-types" }
 serde = "=1.0.229"
-serde_json = "=1.0.151"
-tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync"] }
+serde_json = "=1.0.154"
+tokio = { version = "=1.53.3", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync"] }
 
 [dev-dependencies]
 eutheto-command = { path = "../eutheto-command" }
@@ -37,7 +37,7 @@ tempfile = "=3.27.0"
 sha2 = "=0.10.9"
 
 [target.'cfg(unix)'.dependencies]
-libc = "=0.2.189"
+libc = "=0.2.191"
 
 [target.'cfg(unix)'.build-dependencies]
-libc = "=0.2.189"
+libc = "=0.2.191"

@@ -195,6 +195,12 @@ Strict TypeScript checks exposed two upstream declaration defects. The version-b
 
 No compiler strictness flag or library check was disabled. Remove each patch/package extension when a deliberately adopted upstream version resolves the corresponding declaration contract, then rerun frozen installation, strict typing and the browser scenarios. License/SBOM products remain canonical `just licenses` / `just sbom` outputs; metadata-candidate review is not final assembled-artifact legal approval.
 
+### Rust/Tauri maintenance pins — 2026-10-21
+
+The approved maintenance set adopts libc 0.2.191, Tokio 1.53.3, Jiff 0.2.38, UUID 1.28.0, process-wrap 10.0.1, thiserror 2.0.21, proptest 1.12.0 and serde_json 1.0.154. Both Unix and Windows process-wrap pins remain aligned. Root and nested fuzz locks are regenerated with Cargo; unrelated harness versions remain pinned. The dated registry ledgers below retain their original verification scope.
+
+Native Tauri 2.11.6 and dialog 2.7.3 accompany CLI 2.12.3. The approved maintenance decision retains API 2.11.1 because [Tauri requires the API and native crate to share a minor version](https://v2.tauri.app/develop/updating-dependencies/#sync-npm-packages-and-cargo-crates-versions). API 2.12.4 is deferred with any native 2.12 update. The [CLI 2.12.3 compatibility check](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.3/crates/tauri-cli/src/info/plugins.rs) pairs the API with the native crate; the CLI version itself is independent. No mismatch bypass is used.
+
 ## Complete direct crates.io ledger
 
 Values are maximum stable releases reported by `https://crates.io/api/v1/crates/<crate>` on the verification date. Exact Cargo pins/features/licenses/MSRV are Phase-0 decisions; role-specific adoption remains gated by the owning phase.

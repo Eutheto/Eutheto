@@ -63,7 +63,7 @@ Define newtypes at minimum: `ScenarioId`, `PersonId`, `RuleId`, `AssignmentId`, 
 
 ### Time contract
 
-Each time scenario records IANA zone, locale, horizon, explicit ambiguity/gap policy. Recurrences use local wall time plus scenario zone; generated instances preserve UTC start/end and local display values. DST gaps explicitly reject, move forward, or use a documented pack rule; overlaps select earlier/later offset. Use `jiff` 0.2.35 rather than hand conversion. Include spring-forward/fall-back fixtures and fixed clocks.
+Each time scenario records IANA zone, locale, horizon, explicit ambiguity/gap policy. Recurrences use local wall time plus scenario zone; generated instances preserve UTC start/end and local display values. DST gaps explicitly reject, move forward, or use a documented pack rule; overlaps select earlier/later offset. Use `jiff` 0.2.38 rather than hand conversion. Include spring-forward/fall-back fixtures and fixed clocks.
 
 ### Typed error contract
 
@@ -571,7 +571,7 @@ Stop and write an ADR if UI needs DB access, a migration cannot preserve scenari
 ## Assumption/version gates
 
 - Confirm `rusqlite` 0.40.2 bundled feature/license and SQLite behavior on every target; record exact lock.
-- Confirm `jiff` 0.2.35 DST APIs and UUID 1.26 UUIDv7 behavior with fixtures.
+- Confirm `jiff` 0.2.38 DST APIs and UUID 1.28 UUIDv7 behavior with fixtures.
 - Choose centralized numeric archive/JSON size, nesting, file-count, compression-ratio, support-log, snapshot interval and DB backup limits before accepting untrusted input; record them as versioned constants and API metadata. No unbounded default is permitted.
 - Resolve public CLI/extension/reverse-domain only through the named gates. Serialized namespace is already `eutheto`.
 - Confirm Tauri data/path APIs per target, minimum capability manifest, CSP, WebView2 strategy ownership and credential-store interface seam; secrets are not implemented here.

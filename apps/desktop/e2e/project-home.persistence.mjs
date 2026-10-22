@@ -2714,7 +2714,7 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
       index < maximumTabs,
       `Keyboard Tab did not reach ${selector} within ${maximumTabs} steps`,
     );
-    const previous = await evaluate(
+    await evaluate(
       sessionId,
       `const trace = [];
       const loaded = () => ({matrix: !!document.querySelector('[data-eligibility-matrix]'),
@@ -2731,8 +2731,7 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
       };
       document.addEventListener('focusin', listener, {once: true});
       document.addEventListener('keyup', keyListener);
-      window.__euthetoFocusStep = {trace, listener, keyListener};
-      return document.activeElement;`,
+      window.__euthetoFocusStep = {trace, listener, keyListener, previous: document.activeElement};`,
     );
     await keyboardKey(sessionId, "\uE004", reverse);
     const focus = await evaluate(
@@ -2743,7 +2742,7 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
       document.removeEventListener('focusin', step.listener);
       document.removeEventListener('keyup', step.keyListener);
       delete window.__euthetoFocusStep;
-      return {matches: node?.matches(arguments[0]) ?? false, changed: node !== arguments[1],
+      return {matches: node?.matches(arguments[0]) ?? false, changed: node !== step.previous,
         loaded: {matrix: !!document.querySelector('[data-eligibility-matrix]'),
           work: !!document.querySelector('[aria-labelledby="assignment-inspection-heading"] table')},
         focusVisible: node?.matches(':focus-visible'), focus: node?.matches(':focus'), trace: step.trace,
@@ -2751,7 +2750,7 @@ async function keyboardReach(sessionId, selector, maximumTabs = 32, reverse = fa
         visible: !!rect && rect.width > 0 && rect.height > 0 &&
           rect.bottom > 0 && rect.top < innerHeight, tag: node?.tagName ?? null,
         active: node?.outerHTML.slice(0, 512), rect: rect?.toJSON(), scrollY, innerHeight};`,
-      [selector, previous],
+      [selector],
     );
     // Native date/time segments can receive Tab without changing the enclosing input.
     assert(focus.changed || focus.segmented, `Tab did not move focus while seeking ${selector}`);
@@ -2781,7 +2780,7 @@ async function keyboardReachButton(
       sessionId,
       `const node = document.activeElement;
       return node instanceof HTMLButtonElement && node.textContent.trim() === arguments[0] &&
-        node.closest(arguments[1]);`,
+        !!node.closest(arguments[1]);`,
       [text, root],
     );
     if (focused) return index;
@@ -2789,14 +2788,18 @@ async function keyboardReachButton(
       index < maximumTabs,
       `Keyboard Tab did not reach button "${text}" within ${maximumTabs} steps`,
     );
-    const previous = await evaluate(sessionId, "return document.activeElement;");
+    await evaluate(
+      sessionId,
+      "window.__euthetoButtonFocusStep = {previous: document.activeElement};",
+    );
     await keyboardKey(sessionId, "\uE004", reverse);
     const moved = await evaluate(
       sessionId,
       `const node = document.activeElement;
+      const step = window.__euthetoButtonFocusStep;
+      delete window.__euthetoButtonFocusStep;
       const segmented = node instanceof HTMLInputElement && ['date', 'time', 'datetime-local'].includes(node.type);
-      return (node !== arguments[0] || segmented) && node?.getBoundingClientRect().height > 0;`,
-      [previous],
+      return (node !== step.previous || segmented) && node?.getBoundingClientRect().height > 0;`,
     );
     assert(moved, `Tab did not move to a visible control while seeking button "${text}"`);
   }
@@ -2807,6 +2810,69 @@ async function keyboardActivateButton(sessionId, text, root = "body", maximumTab
   const tabs = await keyboardReachButton(sessionId, text, root, maximumTabs);
   await keyboardKey(sessionId, "\uE007");
   return tabs;
+}
+
+async function keyboardDetachedFocusRegression(sessionId) {
+  const root = "#keyboard-detached-focus-regression";
+  async function fixture() {
+    await evaluate(
+      sessionId,
+      `
+      const fixture = document.createElement('dialog');
+      fixture.id = 'keyboard-detached-focus-regression';
+      fixture.innerHTML = '<button id="keyboard-detached-before">Before</button><button id="keyboard-detached-after">After</button>';
+      document.body.append(fixture);
+      fixture.showModal();
+      const before = fixture.querySelector('#keyboard-detached-before');
+      before.addEventListener('blur', () => before.remove(), {once: true});
+      before.focus();
+      if (document.activeElement !== before) throw new Error('Regression fixture did not receive focus');
+    `,
+    );
+  }
+  async function cleanup() {
+    await evaluate(
+      sessionId,
+      `
+      document.querySelector('#keyboard-detached-focus-regression')?.remove();
+      const step = window.__euthetoFocusStep;
+      if (step) {
+        document.removeEventListener('focusin', step.listener);
+        document.removeEventListener('keyup', step.keyListener);
+      }
+      delete window.__euthetoFocusStep;
+      delete window.__euthetoButtonFocusStep;
+    `,
+    );
+  }
+  try {
+    await fixture();
+    const previous = await evaluate(sessionId, "return document.activeElement;");
+    await keyboardKey(sessionId, "\uE004");
+    await assert.rejects(
+      evaluate(sessionId, "return document.activeElement !== arguments[0];", [previous]),
+      /Node with identifier .* was not found|stale element/i,
+      "The old cross-RPC reference must reproduce the detached-node failure",
+    );
+    await cleanup();
+    await fixture();
+    assert.equal(await keyboardReach(sessionId, `${root} #keyboard-detached-after`, 1), 1);
+    await cleanup();
+    await fixture();
+    assert.equal(await keyboardReachButton(sessionId, "After", root, 1), 1);
+    assert.equal(
+      await evaluate(
+        sessionId,
+        `return document.querySelector('${root} #keyboard-detached-before') === null;`,
+      ),
+      true,
+    );
+    console.log(
+      "PASS: harness detached-focus regression reproduces stale RPC and preserves real Tab movement/visibility in both helpers",
+    );
+  } finally {
+    await cleanup();
+  }
 }
 
 async function keyboardReplaceFocused(sessionId, value) {
@@ -16064,6 +16130,7 @@ async function run() {
     const projectTitle = `E2E persistence ${Date.now().toString()}`;
     const firstSessionId = await createSession();
     await waitForElement(firstSessionId, "#welcome-heading");
+    await keyboardDetachedFocusRegression(firstSessionId);
     await startOperationTiming(firstSessionId);
     if (process.env.EUTHETO_E2E_LARGE_RESULT_ONLY === "1") {
       await packagedLargeResultPerformanceAcceptance(firstSessionId);

@@ -120,23 +120,23 @@ These are bootstrap inputs, not floating ranges. Phase 0 records exact selection
 
 | Role | Crate | Verified stable |
 |---|---|---:|
-| serialization/schema/DTO | `serde`, `serde_json`, `schemars`, `ts-rs` | 1.0.229, 1.0.151, 1.2.2, 12.0.1 |
-| errors | `thiserror`, edge-only `anyhow` | 2.0.20, 1.0.104 |
-| async/cancellation | `tokio`, `tokio-util`, `async-trait` | 1.53.1, 0.7.19, 0.1.92 |
+| serialization/schema/DTO | `serde`, `serde_json`, `schemars`, `ts-rs` | 1.0.229, 1.0.154, 1.2.2, 12.0.1 |
+| errors | `thiserror`, edge-only `anyhow` | 2.0.21, 1.0.104 |
+| async/cancellation | `tokio`, `tokio-util`, `async-trait` | 1.53.3, 0.7.19, 0.1.92 |
 | logging | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 |
-| IDs/time | `uuid`, `jiff` | 1.26.0, 0.2.35 |
+| IDs/time | `uuid`, `jiff` | 1.28.0, 0.2.38 |
 | database/compression/bundle/hash | `rusqlite`, `zstd`, `zip`, `blake3` | 0.40.2, 0.13.3, 8.6.0, 1.8.7 |
 | protocol | `prost`, `prost-build` | 0.14.4, 0.14.4; OR-Tools protos remain matched-gate |
 | HTTP/URL/credentials | `reqwest`, `url`, `keyring`, `zeroize` | 0.13.4, 2.5.8, 4.1.6, 1.9.0 |
 | compatibility/import/CLI/paths | `semver`, `csv`, `clap`, `directories` | 1.0.28, 1.4.0, 4.6.6, 6.0.0 |
 | geometry candidate | `rstar` | 0.13.0; custom deterministic indexed pairs first |
-| desktop | `tauri`, `tauri-build` | 2.11.5, 2.6.3 |
+| desktop | `tauri`, `tauri-build` | 2.11.6, 2.6.3 |
 
 Roles are binding: bundled SQLite behind a dedicated service; strict project ZIP wrapper; BLAKE3 not password hashing; Rustls where provider/platform permits; checked deterministic ordered maps; reviewed calendar serializer; `anyhow` only at executable/application edges.
 
 ### Rust quality tools
 
-`cargo-nextest` 0.9.143; `cargo-llvm-cov` 0.9.0; `proptest` 1.11.0; `insta`/`cargo-insta` 1.48.0; `criterion` 0.8.2; `tempfile` 3.27.0; `pretty_assertions` 1.4.1; `cargo-fuzz` 0.13.2; `libfuzzer-sys` 0.4.13; `cargo-deny` 0.20.2; `cargo-about` 0.9.2; `cargo-audit` 0.22.2; `cargo-cyclonedx` 0.5.9.
+`cargo-nextest` 0.9.143; `cargo-llvm-cov` 0.9.0; `proptest` 1.12.0; `insta`/`cargo-insta` 1.48.0; `criterion` 0.8.2; `tempfile` 3.27.0; `pretty_assertions` 1.4.1; `cargo-fuzz` 0.13.2; `libfuzzer-sys` 0.4.13; `cargo-deny` 0.20.2; `cargo-about` 0.9.2; `cargo-audit` 0.22.2; `cargo-cyclonedx` 0.5.9.
 
 ### Frontend runtime/build matrix
 
@@ -149,7 +149,7 @@ Roles are binding: bundled SQLite behind a dedicated service; strict project ZIP
 | `@pinia/colada` | 1.4.2 | Mandatory direct pin for server/async state; it does not become authoritative scenario state. |
 | `@vue/devtools-api` | 8.2.1 | Mandatory direct Pinia peer pin; production enablement remains reviewed. |
 | `vite` / `@vitejs/plugin-vue` | 8.2.2 / 6.0.8 | Node 24 compatible. |
-| `@tauri-apps/api` / CLI | 2.11.1 / 2.11.4 | Match Rust Tauri 2.11.5 by tested lock. |
+| `@tauri-apps/api` / CLI | 2.11.1 / 2.12.3 | API and native Tauri keep minor 2.11; CLI is independently versioned. |
 | updater / shell plugins | 2.10.1 / 2.3.5 | Capability-scoped; updater artifacts use `bundle.createUpdaterArtifacts`. |
 | Tailwind / Vite plugin | 4.3.3 / 4.3.3 | CSS-first; `tw-animate-css`, not `tailwindcss-animate`. |
 | shadcn-vue / Reka UI | 2.8.2 / 2.10.4 | Editable source; audit Tailwind 4 variable syntax. |
