@@ -786,6 +786,8 @@ async function package10StartPageInstrumentation(sessionId) {
     `const maxSamples = 32;
     const maxLongTasks = 128;
     const maxLiveRegionMutations = 1024;
+    const captureStartTimeMs = performance.now();
+    let captureEndTimeMs = null;
     const state = {
       samples: [],
       sampleOverflow: false,
@@ -808,14 +810,15 @@ async function package10StartPageInstrumentation(sessionId) {
       }
       return false;
     };
-    const liveObserver = new MutationObserver((mutations) => {
+    const recordLiveMutations = (mutations) => {
       for (const mutation of mutations) {
         if (!isLiveRegion(mutation.target)) continue;
         if (state.liveRegionMutationCount < maxLiveRegionMutations)
           state.liveRegionMutationCount += 1;
         else state.liveRegionMutationOverflow = true;
       }
-    });
+    };
+    const liveObserver = new MutationObserver(recordLiveMutations);
     liveObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -823,20 +826,25 @@ async function package10StartPageInstrumentation(sessionId) {
       attributes: true,
       attributeFilter: ['aria-live', 'role']
     });
+    const recordLongTasks = (entries) => {
+      for (const entry of entries) {
+        if (entry.startTime < captureStartTimeMs ||
+            (captureEndTimeMs !== null && entry.startTime > captureEndTimeMs)) continue;
+        if (state.longTaskEntries.length < maxLongTasks) {
+          state.longTaskEntries.push({
+            startTimeMs: Number(entry.startTime.toFixed(3)),
+            durationMs: Number(entry.duration.toFixed(3))
+          });
+        } else state.longTaskEntryOverflow = true;
+      }
+    };
     let longTaskObserver = null;
     try {
       if (typeof PerformanceObserver !== 'function' ||
           !PerformanceObserver.supportedEntryTypes?.includes('longtask'))
         throw new Error('PerformanceObserver longtask entries unavailable');
       longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (state.longTaskEntries.length < maxLongTasks) {
-            state.longTaskEntries.push({
-              startTimeMs: Number(entry.startTime.toFixed(3)),
-              durationMs: Number(entry.duration.toFixed(3))
-            });
-          } else state.longTaskEntryOverflow = true;
-        }
+        recordLongTasks(list.getEntries());
       });
       longTaskObserver.observe({ type: 'longtask', buffered: true });
       state.longTaskSupported = true;
@@ -1006,9 +1014,12 @@ async function package10StartPageInstrumentation(sessionId) {
       return { status: 'armed', token };
     };
     window.__euthetoPackage10Finish = () => {
+      captureEndTimeMs ??= performance.now();
+      recordLiveMutations(liveObserver.takeRecords());
       liveObserver.disconnect();
-      for (const token of Object.keys(state.pending)) window.__euthetoPackage10CancelSample(token);
+      if (longTaskObserver) recordLongTasks(longTaskObserver.takeRecords());
       longTaskObserver?.disconnect();
+      for (const token of Object.keys(state.pending)) window.__euthetoPackage10CancelSample(token);
       if (state.eventLoopLagTimer !== undefined) clearInterval(state.eventLoopLagTimer);
       return {
         schemaVersion: 1,
@@ -1019,6 +1030,9 @@ async function package10StartPageInstrumentation(sessionId) {
         longTask: {
           supported: state.longTaskSupported,
           unsupportedReason: state.longTaskUnsupportedReason,
+          captureStartTimeMs,
+          captureEndTimeMs,
+          samplingBoundary: 'task starts in inclusive capture window; full durations from records available at finish, not proof of all browser long tasks',
           entryCount: state.longTaskEntries.length,
           entries: state.longTaskEntries,
           entryOverflow: state.longTaskEntryOverflow

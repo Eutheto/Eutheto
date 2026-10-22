@@ -1158,6 +1158,16 @@ unsupported long-task observer retains the explicitly non-equivalent event-loop
 lag fallback. Support requires `PerformanceObserver.supportedEntryTypes` to include
 `longtask` and successful observation; zero entries alone never establish support
 or absence of long tasks. Fresh measured results must come from the runner, not these docs.
+
+Long-task evidence retains the inclusive `performance.now()` capture start/end
+window. Raw task start times select membership before rounding or applying the
+cap; durations remain whole even when they extend beyond the window. Finish drains
+already queued long-task and live-region records before disconnecting, using the
+same filters and caps as callbacks. This covers records available at finish, not
+all browser long tasks or paints; live-region mutations remain DOM counts rather
+than spoken assistive-technology output. `node tests/e2e/test_native_instrumentation.mjs`
+checks these boundaries against the authored probe in a VM without a native browser.
+
 Rebuild with the command above after application/native changes; use
 `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true false` only for repeat runs against
 the same unchanged package.

@@ -48,17 +48,36 @@ const instrumentation = source.slice(
   source.indexOf("async function package10AwaitSample("),
 );
 
-async function measureLongTasks(PerformanceObserver) {
+async function measureLongTasks(
+  PerformanceObserver,
+  {
+    startTimeMs = 0,
+    endTimeMs = 200,
+    mutations = [],
+    queuedMutations = [],
+  } = {},
+) {
   const observations = [];
   let lagTimerStarted = false;
+  let now = startTimeMs;
   const page = {
     window: {},
     document: { documentElement: {} },
     MutationObserver: class {
-      observe() {}
-      disconnect() {}
+      constructor(callback) {
+        this.callback = callback;
+      }
+      observe() {
+        this.callback(mutations);
+      }
+      takeRecords() {
+        return queuedMutations.splice(0);
+      }
+      disconnect() {
+        queuedMutations.length = 0;
+      }
     },
-    performance: { now: () => 0 },
+    performance: { now: () => now },
     setInterval: () => {
       lagTimerStarted = true;
       return 1;
@@ -74,8 +93,14 @@ async function measureLongTasks(PerformanceObserver) {
       evaluate: (_sessionId, script) => runInNewContext(script, page),
     },
   );
+  now = endTimeMs;
+  const finish = (at = now) => {
+    now = at;
+    return JSON.parse(JSON.stringify(page.window.__euthetoPackage10Finish()));
+  };
   return {
-    result: JSON.parse(JSON.stringify(page.window.__euthetoPackage10Finish())),
+    result: finish(),
+    finish,
     observations,
     lagTimerStarted,
   };
@@ -88,6 +113,9 @@ for (const supportedEntryTypes of [undefined, [], ["resource", "paint"]]) {
         static supportedEntryTypes = supportedEntryTypes;
         observe(options) {
           observations.push(options); // Unsupported types may silently succeed in WebKit.
+        }
+        takeRecords() {
+          return [];
         }
         disconnect() {}
       },
@@ -109,6 +137,9 @@ const supported = await measureLongTasks(
         assert.equal(options.entryTypes, undefined);
         observations.push(options);
       }
+      takeRecords() {
+        return [];
+      }
       disconnect() {}
     },
 );
@@ -128,6 +159,90 @@ const rejected = await measureLongTasks(
 );
 assert.equal(rejected.result.longTask.supported, false);
 assert.equal(rejected.lagTimerStarted, true);
+
+function taskObserver(delivered, queued = []) {
+  return () =>
+    class {
+      static supportedEntryTypes = ["longtask"];
+      constructor(callback) {
+        this.callback = callback;
+      }
+      observe() {
+        this.callback({ getEntries: () => delivered });
+      }
+      takeRecords() {
+        return queued.splice(0);
+      }
+      disconnect() {
+        queued.length = 0; // Like the browser, disconnect discards undelivered records.
+      }
+    };
+}
+const task = (startTime, duration = 60) => ({ startTime, duration });
+const liveRegion = { nodeType: 1, matches: () => true };
+const liveMutation = { target: { parentElement: liveRegion } };
+const ordinaryMutation = { target: { nodeType: 1, matches: () => false } };
+const bounded = await measureLongTasks(
+  taskObserver(
+    [...Array.from({ length: 130 }, () => task(99.9999)), task(100)],
+    [task(99), task(150, 90), task(200), task(200.0001)],
+  ),
+  {
+    startTimeMs: 100,
+    mutations: [liveMutation, ordinaryMutation],
+    queuedMutations: [ordinaryMutation, liveMutation],
+  },
+);
+assert.deepEqual(
+  {
+    entries: bounded.result.longTask.entries,
+    overflow: bounded.result.longTask.entryOverflow,
+    liveCount: bounded.result.liveRegionMutationCount,
+  },
+  {
+    entries: [
+      { startTimeMs: 100, durationMs: 60 },
+      { startTimeMs: 150, durationMs: 90 },
+      { startTimeMs: 200, durationMs: 60 },
+    ],
+    overflow: false,
+    liveCount: 2,
+  },
+  "Only task starts in the capture window count, including queued terminal records",
+);
+assert.equal(bounded.result.longTask.captureStartTimeMs, 100);
+assert.equal(bounded.result.longTask.captureEndTimeMs, 200);
+assert.match(
+  bounded.result.longTask.samplingBoundary,
+  /records available at finish/u,
+);
+assert.deepEqual(
+  bounded.finish(300),
+  bounded.result,
+  "Later finish calls preserve the capture end and do not count drained records twice",
+);
+
+for (const overflow of [false, true]) {
+  const capped = await measureLongTasks(
+    taskObserver(
+      Array.from({ length: 127 }, () => task(100)),
+      Array.from({ length: overflow ? 2 : 1 }, () => task(150)),
+    ),
+    {
+      startTimeMs: 100,
+      mutations: Array.from({ length: 1023 }, () => liveMutation),
+      queuedMutations: [
+        ordinaryMutation,
+        ...Array.from({ length: overflow ? 2 : 1 }, () => liveMutation),
+      ],
+    },
+  );
+  assert.equal(capped.result.longTask.entryCount, 128);
+  assert.equal(capped.result.longTask.entryOverflow, overflow);
+  assert.equal(capped.result.liveRegionMutationCount, 1024);
+  assert.equal(capped.result.liveRegionMutationOverflow, overflow);
+  assert.deepEqual(capped.finish(), capped.result);
+}
 
 function captureScript(marker) {
   const at = source.indexOf(marker);
