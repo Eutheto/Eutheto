@@ -244,6 +244,368 @@ for (const overflow of [false, true]) {
   assert.deepEqual(capped.finish(), capped.result);
 }
 
+async function interactionPage(longTasks = false) {
+  let now = 100;
+  let reads = 0;
+  const frames = [];
+  const timers = [];
+  const intervals = [];
+  const observers = [];
+  const taskObservers = [];
+  const listeners = new Map();
+  const target = {
+    addEventListener: (type, listener) => listeners.set(type, listener),
+    removeEventListener: (type) => listeners.delete(type),
+  };
+  let content = {
+    kind: "people",
+    totalItems: 0,
+    pageNumber: 1,
+    returnedItems: 0,
+  };
+  const rows = () =>
+    Array.from(
+      { length: content.renderedRows ?? content.returnedItems },
+      () => ({
+        textContent: content.firstLabel,
+        dataset: { index: content.firstIndex },
+      }),
+    );
+  const table = {
+    get caption() {
+      return { textContent: content.caption };
+    },
+    get tBodies() {
+      return [{ rows: rows() }];
+    },
+    querySelector: () => ({ textContent: content.startDate }),
+    getAttribute: () => String(content.returnedItems + 1),
+    classList: { contains: () => content.calendarMode === "virtual" },
+  };
+  const resultRoot = () => ({
+    querySelector: (selector) =>
+      selector.startsWith("input[value=")
+        ? { checked: selector === 'input[value="' + content.kind + '"]' }
+        : null,
+    querySelectorAll: (selector) =>
+      selector === ':scope > p[role="status"]'
+        ? [
+            {
+              textContent: `${content.totalItems} saved rows · page ${content.pageNumber}`,
+            },
+          ]
+        : selector === "table" && content.returnedItems > 0
+          ? [table]
+          : selector === "table tbody tr"
+            ? rows()
+            : [],
+  });
+  let root = resultRoot();
+  const page = {
+    window: {},
+    document: {
+      documentElement: {},
+      querySelector(selector) {
+        reads += 1;
+        return selector === "[data-accepted-schedule]" ? root : target;
+      },
+    },
+    performance: { now: () => now },
+    requestAnimationFrame: (callback) => frames.push(callback),
+    setTimeout: (callback) => timers.push(callback),
+    clearTimeout() {},
+    setInterval: (callback) => intervals.push(callback),
+    clearInterval() {},
+    MutationObserver: class {
+      constructor(callback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+      observe(node) {
+        assert(node, "Observation requires an attached result root");
+      }
+      takeRecords() {
+        return [];
+      }
+      disconnect() {}
+    },
+    ...(longTasks
+      ? {
+          PerformanceObserver: class {
+            static supportedEntryTypes = ["longtask"];
+            constructor(callback) {
+              taskObservers.push(callback);
+            }
+            observe() {}
+            takeRecords() {
+              return [];
+            }
+            disconnect() {}
+          },
+        }
+      : {}),
+  };
+  await runInNewContext(
+    `${instrumentation}; package10StartPageInstrumentation('test');`,
+    { evaluate: (_sessionId, script) => runInNewContext(script, page) },
+  );
+  const api = page.window;
+  const snapshot = (value) => JSON.parse(JSON.stringify(value));
+  return {
+    api,
+    arm: (kind = "input") => api.__euthetoPackage10Arm(kind, "#target", "cold"),
+    armResult: (expected = content) =>
+      api.__euthetoPackage10ArmResult("#target", expected, {
+        temperature: "cold",
+      }),
+    fire: (type = "input") => listeners.get(type)?.({ key: "Enter" }),
+    listener: (type = "input") => listeners.get(type),
+    frame() {
+      now += 10;
+      assert(frames.length, "Expected a queued animation frame");
+      frames.shift()();
+    },
+    flush() {
+      while (frames.length) this.frame();
+    },
+    frames,
+    timers,
+    intervals,
+    observers,
+    taskObservers,
+    reads: () => reads,
+    read: (token) => snapshot(api.__euthetoPackage10ReadSample(token)),
+    finish: () => snapshot(api.__euthetoPackage10Finish()),
+    show: (next) => (content = next),
+    detach: () => (root = null),
+    replace: () => (root = resultRoot()),
+  };
+}
+
+for (const expected of [
+  { kind: "people", pageNumber: 1, returnedItems: 2 },
+  { kind: "shifts", pageNumber: 2, returnedItems: 2 },
+  {
+    kind: "calendarPeople",
+    pageNumber: 1,
+    returnedItems: 10,
+    calendarMode: "virtual",
+    renderedRows: 4,
+    firstIndex: 0,
+  },
+  {
+    kind: "calendarShifts",
+    pageNumber: 2,
+    returnedItems: 10,
+    calendarMode: "paged",
+    renderedRows: 2,
+    firstIndex: 8,
+  },
+]) {
+  Object.assign(expected, {
+    totalItems: 12,
+    caption: "Saved rows",
+    firstLabel: "Synthetic row",
+    startDate: "2026-10-22",
+  });
+  const page = await interactionPage();
+  const armed = page.armResult(expected);
+  page.fire("keydown");
+  page.frame();
+  assert.equal(
+    page.frames.length,
+    0,
+    "Old view content cannot complete the sample",
+  );
+  page.show(expected);
+  page.observers[1].callback();
+  page.flush();
+  const measured = page.read(armed.token);
+  assert.equal(
+    measured.status,
+    "done",
+    "View/page/calendar changes within the root remain measurable",
+  );
+  assert.equal(
+    measured.sample.renderedRows,
+    expected.renderedRows ?? expected.returnedItems,
+  );
+}
+
+for (const resultProbe of [false, true]) {
+  const arm = (page) => (resultProbe ? page.armResult() : page.arm());
+  const fire = (page) => page.fire(resultProbe ? "keydown" : "input");
+  const normal = await interactionPage();
+  const completed = arm(normal);
+  const completedListener = normal.listener(resultProbe ? "keydown" : "input");
+  fire(normal);
+  normal.flush();
+  const sample = normal.read(completed.token);
+  assert.equal(sample.status, "done");
+  assert.equal(
+    resultProbe
+      ? sample.sample.eventToSettledContentDoubleAnimationFrameMs
+      : sample.sample.eventToDoubleAnimationFrameMs,
+    resultProbe ? 30 : 20,
+  );
+  completedListener({ key: "Enter" });
+  for (const timer of normal.timers) timer();
+  for (const observer of normal.observers.slice(1)) observer.callback();
+  normal.flush();
+  assert.deepEqual(normal.read(completed.token), sample);
+  assert.equal(normal.finish().samples.length, 1);
+
+  // Exercise cancellation before the event, after it, and between each queued frame.
+  for (const frameCount of [-1, 0, 1, ...(resultProbe ? [2] : [])]) {
+    for (const finish of [false, true]) {
+      const page = await interactionPage();
+      const armed = arm(page);
+      const staleListener = page.listener(resultProbe ? "keydown" : "input");
+      if (frameCount >= 0) {
+        fire(page);
+        for (let i = 0; i < frameCount; i += 1) page.frame();
+      }
+      const captured = finish ? page.finish() : null;
+      if (!finish) page.api.__euthetoPackage10CancelSample(armed.token);
+      const cancelled = page.read(armed.token);
+      const reads = page.reads();
+      staleListener({ key: "Enter" });
+      for (const observer of page.observers.slice(1)) observer.callback();
+      for (const timer of page.timers) timer();
+      page.flush();
+      assert.equal(
+        page.reads(),
+        reads,
+        "Cancelled probes must stop reading DOM",
+      );
+      assert.equal(cancelled.status, "unavailable");
+      assert.deepEqual(page.read(armed.token), cancelled);
+      assert.equal(page.finish().samples.length, 0);
+      if (finish) assert.deepEqual(page.finish(), captured);
+    }
+  }
+}
+
+for (const longTasks of [false, true]) {
+  const page = await interactionPage(longTasks);
+  const captured = page.finish();
+  const reads = page.reads();
+  assert.equal(page.arm().status, "unavailable");
+  assert.equal(page.armResult().status, "unavailable");
+  assert.equal(
+    page.reads(),
+    reads,
+    "Finished captures refuse admission before DOM reads",
+  );
+  page.observers[0].callback([liveMutation]);
+  for (const callback of page.taskObservers)
+    callback({ getEntries: () => [task(100)] });
+  for (const callback of page.intervals) callback();
+  assert.deepEqual(
+    page.finish(),
+    captured,
+    "Stale callbacks cannot change a finished capture",
+  );
+}
+
+for (const change of ["detach", "replace"]) {
+  for (const afterEvent of [false, true]) {
+    const page = await interactionPage();
+    const armed = page.armResult();
+    if (afterEvent) {
+      page.fire("keydown");
+      page.frame();
+      page.frame();
+    }
+    page[change]();
+    if (!afterEvent) page.fire("keydown");
+    page.flush();
+    assert.equal(page.read(armed.token).status, "unavailable");
+    assert.equal(page.finish().samples.length, 0);
+  }
+}
+
+for (const frameCount of [-1, 0, 1, 2]) {
+  const page = await interactionPage();
+  const armed = page.armResult();
+  if (frameCount >= 0) {
+    page.fire("keydown");
+    for (let i = 0; i < frameCount; i += 1) page.frame();
+  }
+  page.timers[0]();
+  const expired = page.read(armed.token);
+  const reads = page.reads();
+  for (const observer of page.observers.slice(1)) observer.callback();
+  page.flush();
+  assert.equal(expired.status, "unavailable");
+  assert.deepEqual(page.read(armed.token), expired);
+  assert.equal(page.reads(), reads, "Expired probes must stop reading DOM");
+  assert.equal(page.finish().samples.length, 0);
+}
+
+const sampleCap = await interactionPage();
+for (let i = 0; i < 33; i += 1) {
+  const armed = sampleCap.arm();
+  sampleCap.fire();
+  sampleCap.flush();
+  assert.equal(sampleCap.read(armed.token).status, "done");
+}
+assert.equal(sampleCap.finish().samples.length, 32);
+assert.equal(sampleCap.finish().sampleOverflow, true);
+
+const interactionHelper = source.slice(
+  source.indexOf("async function package10InteractionSample("),
+  source.indexOf("async function package10MatrixKeyboardSample("),
+);
+for (const failureAt of ["trigger", "wait", null]) {
+  const page = await interactionPage();
+  const measured = await runInNewContext(
+    `${interactionHelper}; package10InteractionSample('test', 'input', '#target', 'cold', trigger);`,
+    {
+      evaluate: async (_sessionId, script, args) =>
+        runInNewContext(`(function () { ${script} })(...args)`, {
+          window: page.api,
+          args,
+        }),
+      waitForElement: async () => {},
+      trigger: async () => {
+        if (failureAt === "trigger") throw new Error("trigger failed");
+        page.fire();
+      },
+      package10AwaitSample: async (_sessionId, token) => {
+        if (failureAt === "wait") throw new Error("wait failed");
+        page.flush();
+        return page.api.__euthetoPackage10ReadSample(token);
+      },
+    },
+  );
+  assert.equal(measured.status, failureAt ? "unavailable" : "measured");
+  const pending = page.read("1");
+  page.fire();
+  page.flush();
+  assert.equal(pending.status, failureAt ? "unavailable" : "done");
+  assert.deepEqual(page.read("1"), pending);
+  assert.equal(page.finish().samples.length, failureAt ? 0 : 1);
+}
+
+const cleanupFailure = await runInNewContext(
+  `${interactionHelper}; package10InteractionSample('test', 'input', '#target', 'cold', trigger);`,
+  {
+    Error,
+    waitForElement: async () => {},
+    evaluate: async (_sessionId, script) => {
+      if (script.includes("CancelSample"))
+        throw new Error("page unavailable during cleanup");
+      return { status: "armed", token: "1" };
+    },
+    trigger: async () => {
+      throw new Error("trigger failed");
+    },
+  },
+);
+assert.equal(cleanupFailure.status, "unavailable");
+assert.equal(cleanupFailure.reason, "trigger failed");
+
 function captureScript(marker) {
   const at = source.indexOf(marker);
   assert(at >= 0);

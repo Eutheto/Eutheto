@@ -1165,8 +1165,14 @@ cap; durations remain whole even when they extend beyond the window. Finish drai
 already queued long-task and live-region records before disconnecting, using the
 same filters and caps as callbacks. This covers records available at finish, not
 all browser long tasks or paints; live-region mutations remain DOM counts rather
-than spoken assistive-technology output. `node tests/e2e/test_native_instrumentation.mjs`
-checks these boundaries against the authored probe in a VM without a native browser.
+than spoken assistive-technology output. Cancellation and result-probe timeout
+retire pending samples; queued animation frames cannot complete them later.
+Finish closes probe admission and freezes capture evidence against late callbacks.
+Result measurements require the same schedule DOM root throughout the interaction;
+ordinary view/page/calendar changes within that root remain measurable. The generic
+interaction runner also retires its probe when its trigger or wait fails.
+`node tests/e2e/test_native_instrumentation.mjs` checks these boundaries against the
+authored probe in a VM without a native browser.
 
 Rebuild with the command above after application/native changes; use
 `EUTHETO_E2E_LARGE_RESULT_ONLY=1 just e2e true false` only for repeat runs against
