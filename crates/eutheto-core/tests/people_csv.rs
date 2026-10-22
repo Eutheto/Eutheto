@@ -1,3 +1,6 @@
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     CsvApplyOutcomeV1, CsvApplyRequestV1, EuthetoApp, PeopleCsvPreviewDtoV1,
@@ -43,9 +46,7 @@ impl<T> Boxed<T> for Result<T, AppError> {
 }
 
 fn directory() -> Result<TempDir, Box<dyn Error>> {
-    Ok(tempfile::Builder::new()
-        .prefix("eutheto-csv-test-")
-        .tempdir_in(dirs::home_dir().ok_or("home directory unavailable")?)?)
+    Ok(private_storage::tempdir("eutheto-csv-test-")?)
 }
 fn dependencies(directory: &TempDir) -> Result<AppDependencies, Box<dyn Error>> {
     Ok(AppDependencies {

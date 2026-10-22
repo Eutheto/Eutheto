@@ -8777,7 +8777,7 @@ fn store_error(error: StoreError) -> AppError {
         ),
         StoreError::PrivatePath(_) => AppError::Storage(StorageFailure {
             code: "storage.private_path_unsafe".to_owned(),
-            message: "The private application storage path is unsafe or inaccessible.".to_owned(),
+            message: "The private application storage path is unsafe or inaccessible. Use a dedicated private directory accessible to your account, and check that every parent directory's permissions prevent other users from replacing its contents.".to_owned(),
             retryable: false,
             diagnostic_id: None,
         }),
@@ -9544,6 +9544,46 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_path_failure_explains_safe_recovery_without_exposing_storage_details()
+    -> Result<(), Box<dyn Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
+        let ancestor = directory.path().canonicalize()?.join("shared-parent");
+        std::fs::create_dir(&ancestor)?;
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o770))?;
+        let private_directory = ancestor.join("private-library");
+        let error = eutheto_store::ensure_private_application_directory(&private_directory)
+            .err()
+            .ok_or("a group-writable ancestor must be rejected")?;
+        assert!(matches!(&error, StoreError::PrivatePath(_)));
+        assert!(!private_directory.exists());
+        assert_eq!(
+            std::fs::metadata(&ancestor)?.permissions().mode() & 0o777,
+            0o770
+        );
+
+        let failure = store_error(error);
+        let rendered = format!("{failure:?}");
+        assert!(!rendered.contains(ancestor.to_string_lossy().as_ref()));
+        assert!(!rendered.contains("ambient writable ancestor"));
+        assert!(matches!(
+            failure,
+            AppError::Storage(failure)
+                if failure.code == "storage.private_path_unsafe"
+                    && failure.message.contains("dedicated private directory")
+                    && failure.message.contains("parent directory")
+                    && failure.message.contains("permissions")
+                    && !failure.retryable
+                    && failure.diagnostic_id.is_none()
+        ));
+        Ok(())
+    }
+
     #[test]
     fn safety_backup_failure_mapping_accepts_backup_paths_but_not_unrelated_storage() {
         let directory_failure =
@@ -9553,13 +9593,23 @@ mod tests {
             Some("The application data directories could not be initialized.")
         );
         let unsafe_private_path = store_error(StoreError::PrivatePath(io::Error::other(
-            "/home/operator/private unsafe path",
+            "Permission denied (os error 13): /home/operator/private unsafe path",
         )));
         assert_eq!(
             safe_backup_failure_reason(&unsafe_private_path).as_deref(),
-            Some("The private application storage path is unsafe or inaccessible.")
+            Some(
+                "The private application storage path is unsafe or inaccessible. Use a dedicated private directory accessible to your account, and check that every parent directory's permissions prevent other users from replacing its contents."
+            )
         );
         assert!(!format!("{unsafe_private_path:?}").contains("/home/operator"));
+        assert!(!format!("{unsafe_private_path:?}").contains("Permission denied"));
+        assert!(matches!(
+            &unsafe_private_path,
+            AppError::Storage(failure)
+                if failure.code == "storage.private_path_unsafe"
+                    && !failure.retryable
+                    && failure.diagnostic_id.is_none()
+        ));
         let publication_failure = export_error(&ExportError::DestinationExists(PathBuf::from(
             "/private/safety-backup.eutheto",
         )));

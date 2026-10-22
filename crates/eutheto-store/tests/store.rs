@@ -4816,7 +4816,9 @@ fn private_application_directory_is_owner_only_and_refuses_symlinks() -> Result<
 {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    let directory = tempdir()?;
+    let directory = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(std::env::temp_dir().canonicalize()?)?;
     let private = directory.path().join("application").join("backups");
     ensure_private_application_directory(&private)?;
     assert_eq!(
@@ -4838,6 +4840,18 @@ fn private_application_directory_is_owner_only_and_refuses_symlinks() -> Result<
         ensure_private_application_directory(&linked),
         Err(StoreError::PrivatePath(_))
     ));
+
+    let writable_ancestor = directory.path().join("group-writable");
+    std::fs::create_dir(&writable_ancestor)?;
+    std::fs::set_permissions(&writable_ancestor, std::fs::Permissions::from_mode(0o770))?;
+    assert!(matches!(
+        ensure_private_application_directory(writable_ancestor.join("private")),
+        Err(StoreError::PrivatePath(_))
+    ));
+    assert_eq!(
+        std::fs::metadata(&writable_ancestor)?.permissions().mode() & 0o777,
+        0o770
+    );
     Ok(())
 }
 
@@ -4849,7 +4863,9 @@ async fn authoritative_database_and_safety_backup_are_private_and_refuse_indirec
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
 
-    let directory = tempdir()?;
+    let directory = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(std::env::temp_dir().canonicalize()?)?;
     let data_dir = directory.path().join("permissive-data");
     std::fs::create_dir(&data_dir)?;
     std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o777))?;

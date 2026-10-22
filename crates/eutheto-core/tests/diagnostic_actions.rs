@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 use eutheto_core::{
     AppCommand, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     DIAGNOSTIC_COPY_API_SCHEMA_VERSION, DIAGNOSTIC_EXPORT_API_SCHEMA_VERSION,
@@ -29,10 +32,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> TestResult<Self> {
-        let home = dirs::home_dir().ok_or("platform home directory is unavailable")?;
-        let directory = tempfile::Builder::new()
-            .prefix("eutheto-diagnostic-actions-")
-            .tempdir_in(home)?;
+        let directory = private_storage::tempdir("eutheto-diagnostic-actions-")?;
         let app = EuthetoApp::open(AppDependencies {
             paths: AppPaths {
                 database: directory.path().join("eutheto.sqlite"),

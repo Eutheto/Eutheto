@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 #[path = "../../../domains/workforce/core/tests/support/mod.rs"]
 mod workforce_fixture;
 
@@ -66,9 +69,7 @@ impl Fixture {
     }
 
     async fn new_with_external_plan(include_external: bool) -> TestResult<Self> {
-        let directory = tempfile::Builder::new()
-            .prefix("eutheto-headless-stored-")
-            .tempdir_in(dirs::home_dir().ok_or("platform home directory is unavailable")?)?;
+        let directory = private_storage::tempdir("eutheto-headless-stored-")?;
         let (store, initialization) =
             SqliteScenarioStore::open(directory.path().join("eutheto.sqlite")).await?;
         let mut document = workforce_fixture::fixture()?;

@@ -1,3 +1,6 @@
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 #[path = "../../../tests/support/portable_decode.rs"]
 mod portable_decode;
 
@@ -365,11 +368,7 @@ fn app_result<T>(result: Result<T, AppError>) -> TestResult<T> {
     result.map_err(|error| Box::<dyn Error>::from(std::io::Error::other(format!("{error:?}"))))
 }
 fn private_tempdir() -> TestResult<TempDir> {
-    let base = dirs::home_dir().ok_or("platform home directory is unavailable")?;
-    std::fs::create_dir_all(&base)?;
-    Ok(tempfile::Builder::new()
-        .prefix("eutheto-core-fixture-test-")
-        .tempdir_in(base)?)
+    Ok(private_storage::tempdir("eutheto-core-fixture-test-")?)
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> TestResult<&'a str> {

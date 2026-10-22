@@ -1,3 +1,6 @@
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult, EuthetoApp,
 };
@@ -19,9 +22,7 @@ fn boxed(error: impl std::fmt::Debug) -> Box<dyn Error> {
 async fn fixture(
     options: OpenOptions,
 ) -> TestResult<(tempfile::TempDir, EuthetoApp, Arc<SqliteScenarioStore>)> {
-    let directory = tempfile::Builder::new()
-        .prefix("eutheto-settings-")
-        .tempdir_in(dirs::home_dir().ok_or("home missing")?)?;
+    let directory = private_storage::tempdir("eutheto-settings-")?;
     let dependencies = AppDependencies {
         paths: AppPaths {
             database: directory.path().join("state.sqlite"),
