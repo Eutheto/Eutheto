@@ -1,4 +1,7 @@
 //! Pauses real Workforce settings authority to exercise races through the public core service.
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 #[path = "../../../domains/workforce/core/tests/support/mod.rs"]
 mod fixture;
 #[path = "support/setup_control.rs"]
@@ -79,9 +82,7 @@ async fn fixture_app(
     ScenarioDocument,
     Arc<PreparationGate>,
 )> {
-    let directory = tempfile::Builder::new()
-        .prefix("eutheto-setup-race-")
-        .tempdir_in(dirs::home_dir().ok_or("home missing")?)?;
+    let directory = private_storage::tempdir("eutheto-setup-race-")?;
     let dependencies = AppDependencies {
         paths: AppPaths {
             database: directory.path().join("state.sqlite"),

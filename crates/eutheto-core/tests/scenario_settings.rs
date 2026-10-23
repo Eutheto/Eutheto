@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 #[path = "../../../domains/workforce/core/tests/support/mod.rs"]
 mod workforce_fixture;
 
@@ -99,9 +102,7 @@ fn batch(commands: Vec<ScenarioCommand>) -> ScenarioCommand {
 }
 
 async fn stored(document: &ScenarioDocument) -> TestResult<(TempDir, AppDependencies, EuthetoApp)> {
-    let directory = tempfile::Builder::new()
-        .prefix("eutheto-scenario-settings-")
-        .tempdir_in(dirs::home_dir().ok_or("missing home directory")?)?;
+    let directory = private_storage::tempdir("eutheto-scenario-settings-")?;
     let dependencies = AppDependencies {
         paths: AppPaths {
             database: directory.path().join("eutheto.sqlite"),

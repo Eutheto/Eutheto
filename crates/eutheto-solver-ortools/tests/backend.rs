@@ -599,7 +599,8 @@ async fn production_backend_recovers_retained_incumbent_after_clean_internal_wor
     options.reproducibility = ReproducibilityMode::Performance;
     let parent_budget = ParentSolveBudget::new(
         options.time_limit_milliseconds,
-        Arc::new(SystemMonotonicClock::new()),
+        // Keep scheduler delays from replacing the intended worker error with a timeout.
+        Arc::new(FixedMonotonicClock::default()),
         CancellationToken::new(),
     )?;
     let request = SolveRequest::new(
@@ -622,11 +623,13 @@ async fn production_backend_recovers_retained_incumbent_after_clean_internal_wor
         SolverApiLimits::DEFAULT,
     )?;
 
-    let error = backend
-        .solve(&request, &mut output as &mut dyn BackendOutputSink)
-        .await
-        .err()
-        .ok_or("clean internal terminal after an incumbent must be a backend error")?;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        backend.solve(&request, &mut output as &mut dyn BackendOutputSink),
+    )
+    .await?
+    .err()
+    .ok_or("clean internal terminal after an incumbent must be a backend error")?;
     assert_eq!(error.code(), "solver.ortools.session_after_candidate");
     assert_eq!(output.candidates().len(), 1);
     Ok(())

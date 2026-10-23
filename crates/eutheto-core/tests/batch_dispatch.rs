@@ -1,5 +1,8 @@
 #![cfg(debug_assertions)]
 
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult, EuthetoApp,
 };
@@ -24,9 +27,7 @@ fn boxed(error: &AppError) -> Box<dyn Error> {
 }
 
 fn dependencies() -> Result<(TempDir, AppDependencies), Box<dyn Error>> {
-    let directory = tempfile::Builder::new()
-        .prefix("eutheto-batch-dispatch-")
-        .tempdir_in(dirs::home_dir().ok_or("missing home directory")?)?;
+    let directory = private_storage::tempdir("eutheto-batch-dispatch-")?;
     let dependencies = AppDependencies {
         paths: AppPaths {
             database: directory.path().join("eutheto.sqlite"),

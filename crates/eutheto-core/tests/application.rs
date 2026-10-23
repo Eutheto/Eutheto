@@ -1,3 +1,6 @@
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 #[path = "../../../tests/support/portable_decode.rs"]
 mod portable_decode;
 #[path = "../../../tests/support/portable_encode.rs"]
@@ -97,11 +100,24 @@ impl<T> BoxedResult<T> for Result<T, Box<dyn Error>> {
     }
 }
 fn private_tempdir() -> Result<TempDir, Box<dyn Error>> {
-    let base = dirs::home_dir().ok_or("platform home directory is unavailable")?;
-    std::fs::create_dir_all(&base)?;
-    Ok(tempfile::Builder::new()
-        .prefix("eutheto-core-test-")
-        .tempdir_in(base)?)
+    Ok(private_storage::tempdir("eutheto-core-test-")?)
+}
+
+#[cfg(unix)]
+#[test]
+fn private_storage_fixture_is_owner_only() -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = private_tempdir()?;
+    assert_eq!(
+        directory.path().metadata()?.permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        directory.path().parent(),
+        Some(std::env::temp_dir().canonicalize()?.as_path())
+    );
+    Ok(())
 }
 
 struct CancellingIdGenerator {

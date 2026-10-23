@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "support/private_storage.rs"]
+mod private_storage;
+
 #[path = "../../../domains/workforce/core/tests/support/mod.rs"]
 mod workforce_fixture;
 
@@ -26,9 +29,7 @@ fn boxed(error: impl Debug) -> Box<dyn Error> {
 }
 
 async fn stored(document: &ScenarioDocument) -> TestResult<(TempDir, AppDependencies, EuthetoApp)> {
-    let directory = tempfile::Builder::new()
-        .prefix("eutheto-history-page-")
-        .tempdir_in(dirs::home_dir().ok_or("missing home directory")?)?;
+    let directory = private_storage::tempdir("eutheto-history-page-")?;
     let dependencies = AppDependencies {
         paths: AppPaths {
             database: directory.path().join("eutheto.sqlite"),

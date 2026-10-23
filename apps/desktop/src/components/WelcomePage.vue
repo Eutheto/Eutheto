@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onScopeDispose, reactive, shallowRef, watch } from "vue";
+import { computed, onScopeDispose, reactive, shallowRef, useTemplateRef, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import type { CalendarSettingsV1 } from "../api/generated";
 import type { ProjectHomeController } from "../project-home";
@@ -36,6 +36,10 @@ const baseline = shallowRef({ ...draft });
 const keys = Object.keys(draft) as (keyof typeof draft)[];
 const dirty = computed(() => keys.some((key) => draft[key] !== baseline.value[key]));
 const pending = computed(() => props.home.state.busyAction === "create");
+const lastDateInput = useTemplateRef<HTMLInputElement>("lastDateInput");
+const planningDatesReversed = computed(
+  () => Date.parse(draft.firstDate) > Date.parse(draft.lastDate),
+);
 let current = true;
 onScopeDispose(() => {
   current = false;
@@ -51,6 +55,10 @@ function discard(): void {
   Object.assign(draft, baseline.value);
 }
 async function create(): Promise<void> {
+  if (planningDatesReversed.value) {
+    lastDateInput.value?.focus();
+    return;
+  }
   const created = await props.home.createProject({
     title: draft.title.trim(),
     description: draft.description.trim(),
@@ -144,14 +152,28 @@ async function create(): Promise<void> {
             <label for="last-date">{{ messages.projects.planningEnds }}</label>
             <input
               id="last-date"
+              ref="lastDateInput"
               v-model="draft.lastDate"
               type="date"
               required
-              aria-describedby="planning-dates-help"
+              :aria-invalid="planningDatesReversed || undefined"
+              :aria-describedby="
+                planningDatesReversed
+                  ? 'planning-dates-help planning-dates-error'
+                  : 'planning-dates-help'
+              "
             />
           </div>
         </div>
         <p id="planning-dates-help" class="field-help">{{ messages.projects.planningDatesHelp }}</p>
+        <p
+          v-if="planningDatesReversed"
+          id="planning-dates-error"
+          class="field-help text-danger"
+          role="alert"
+        >
+          {{ messages.projects.planningDatesReversed }}
+        </p>
         <details>
           <summary>{{ messages.welcome.calendarOptions }}</summary>
           <div class="form-fields">

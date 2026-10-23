@@ -2371,7 +2371,9 @@ export const messages = {
     usCustomary: "US customary",
     planningStarts: "First planning date",
     planningEnds: "Last planning date (included)",
-    planningDatesHelp: "Both dates are included, using midnight in the project's time zone.",
+    planningDatesHelp:
+      "Enter both dates explicitly; no dates are selected by default. Both dates are included, using midnight in the project's time zone.",
+    planningDatesReversed: "The last planning date must be on or after the first planning date.",
     missingClockTime: "Missing clock time",
     repeatedClockTime: "Repeated clock time",
     reject: "Reject",
