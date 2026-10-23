@@ -84,6 +84,7 @@ const error = ref<string | null>(null);
 let generation = 0;
 let alive = true;
 let unlisten: (() => void) | null = null;
+let selectedJobId: UuidV7 | null = null;
 let jobRead = 0;
 let listRead = 0;
 let peopleRead = 0;
@@ -253,6 +254,7 @@ function changeText(change: AssignmentComparisonV1): string {
   return `Changed ${assignmentText(change.before)} → ${assignmentText(change.after)}`;
 }
 function rememberJob(record: CounterfactualJobRecordV1): void {
+  if (record.request.jobId !== selectedJobId) return;
   if (
     job.value?.request.jobId === record.request.jobId &&
     terminal(job.value.state) &&
@@ -333,6 +335,8 @@ async function loadJobs(before: CounterfactualJobListCursorV1 | null = null): Pr
 async function showJob(jobId: UuidV7): Promise<void> {
   const token = generation;
   const read = ++jobRead;
+  if (selectedJobId !== jobId) job.value = null;
+  selectedJobId = jobId;
   busy.value = true;
   error.value = null;
   try {
@@ -373,6 +377,7 @@ async function start(): Promise<void> {
   const token = generation;
   busy.value = true;
   jobRead += 1;
+  selectedJobId = null;
   job.value = null;
   error.value = null;
   excludedPair.value = null;
@@ -463,9 +468,11 @@ async function start(): Promise<void> {
       totalBudgetMilliseconds: 30_000,
     });
     if (!isCurrent(token)) return;
+    selectedJobId = result.job.request.jobId;
     rememberJob(result.job);
     await loadJobs();
-    if (isCurrent(token)) await showJob(result.job.request.jobId);
+    if (isCurrent(token) && selectedJobId === result.job.request.jobId)
+      await showJob(result.job.request.jobId);
   } catch (failure) {
     if (isCurrent(token)) error.value = safeMessage(failure);
   } finally {
@@ -531,6 +538,7 @@ watch(
     questionMode.value = "replace";
     jobs.value = [];
     nextJobs.value = null;
+    selectedJobId = null;
     job.value = null;
     conflictInspectionOpen.value = false;
     excludedPair.value = null;
@@ -549,18 +557,20 @@ watch([personId, questionMode], () => {
   excludedPair.value = null;
 });
 async function refreshQuestions(): Promise<void> {
-  const current = job.value?.request.jobId;
+  const token = generation;
+  const current = selectedJobId;
   await loadJobs();
-  if (current !== undefined && job.value?.request.jobId === current) await showJob(current);
+  if (isCurrent(token) && current !== null && selectedJobId === current) await showJob(current);
 }
 void onCounterfactualProgress((event) => {
   const context = event.payload.context;
   if (
+    !alive ||
     context.scenarioId !== props.scenarioId ||
     context.revision !== props.summary.scenarioRevision
   )
     return;
-  if (job.value?.request.jobId === event.payload.jobId) void showJob(event.payload.jobId);
+  if (selectedJobId === event.payload.jobId) void showJob(event.payload.jobId);
   void loadJobs();
 })
   .then((stop) => {
@@ -572,6 +582,7 @@ void onCounterfactualProgress((event) => {
   });
 onScopeDispose(() => {
   alive = false;
+  selectedJobId = null;
   generation += 1;
   jobRead += 1;
   listRead += 1;
