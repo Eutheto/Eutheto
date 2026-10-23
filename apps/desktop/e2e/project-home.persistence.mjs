@@ -786,6 +786,9 @@ async function package10StartPageInstrumentation(sessionId) {
     `const maxSamples = 32;
     const maxLongTasks = 128;
     const maxLiveRegionMutations = 1024;
+    const captureStartTimeMs = performance.now();
+    let captureEndTimeMs = null;
+    let finished = false;
     const state = {
       samples: [],
       sampleOverflow: false,
@@ -808,13 +811,16 @@ async function package10StartPageInstrumentation(sessionId) {
       }
       return false;
     };
-    const liveObserver = new MutationObserver((mutations) => {
+    const recordLiveMutations = (mutations) => {
       for (const mutation of mutations) {
         if (!isLiveRegion(mutation.target)) continue;
         if (state.liveRegionMutationCount < maxLiveRegionMutations)
           state.liveRegionMutationCount += 1;
         else state.liveRegionMutationOverflow = true;
       }
+    };
+    const liveObserver = new MutationObserver((mutations) => {
+      if (!finished) recordLiveMutations(mutations);
     });
     liveObserver.observe(document.documentElement, {
       childList: true,
@@ -823,20 +829,25 @@ async function package10StartPageInstrumentation(sessionId) {
       attributes: true,
       attributeFilter: ['aria-live', 'role']
     });
+    const recordLongTasks = (entries) => {
+      for (const entry of entries) {
+        if (entry.startTime < captureStartTimeMs ||
+            (captureEndTimeMs !== null && entry.startTime > captureEndTimeMs)) continue;
+        if (state.longTaskEntries.length < maxLongTasks) {
+          state.longTaskEntries.push({
+            startTimeMs: Number(entry.startTime.toFixed(3)),
+            durationMs: Number(entry.duration.toFixed(3))
+          });
+        } else state.longTaskEntryOverflow = true;
+      }
+    };
     let longTaskObserver = null;
     try {
       if (typeof PerformanceObserver !== 'function' ||
           !PerformanceObserver.supportedEntryTypes?.includes('longtask'))
         throw new Error('PerformanceObserver longtask entries unavailable');
       longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (state.longTaskEntries.length < maxLongTasks) {
-            state.longTaskEntries.push({
-              startTimeMs: Number(entry.startTime.toFixed(3)),
-              durationMs: Number(entry.duration.toFixed(3))
-            });
-          } else state.longTaskEntryOverflow = true;
-        }
+        if (!finished) recordLongTasks(list.getEntries());
       });
       longTaskObserver.observe({ type: 'longtask', buffered: true });
       state.longTaskSupported = true;
@@ -848,6 +859,7 @@ async function package10StartPageInstrumentation(sessionId) {
     if (!state.longTaskSupported) {
       let expected = performance.now() + 100;
       const timer = setInterval(() => {
+        if (finished) return;
         const now = performance.now();
         const lag = Math.max(0, now - expected);
         if (state.eventLoopLagMs.length < maxSamples)
@@ -858,6 +870,7 @@ async function package10StartPageInstrumentation(sessionId) {
       state.eventLoopLagTimer = timer;
     }
     window.__euthetoPackage10Arm = (kind, selector, temperature) => {
+      if (finished) return { status: 'unavailable', reason: 'measurement capture finished' };
       const target = document.querySelector(selector);
       if (!target) return { status: 'unavailable', reason: 'measurement target unavailable' };
       const token = String(++state.nextToken);
@@ -865,20 +878,25 @@ async function package10StartPageInstrumentation(sessionId) {
       const pending = { status: 'pending' };
       state.pending[token] = pending;
       const listener = () => {
+        if (finished || pending.status !== 'pending') return;
         target.removeEventListener(eventType, listener, true);
         const eventAt = performance.now();
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const sample = {
-            kind,
-            temperature,
-            eventToDoubleAnimationFrameMs: Number((performance.now() - eventAt).toFixed(3)),
-            samplingBoundary: 'double-requestAnimationFrame proxy, not a browser paint timestamp'
-          };
-          pending.status = 'done';
-          pending.sample = sample;
-          if (state.samples.length < maxSamples) state.samples.push(sample);
-          else state.sampleOverflow = true;
-        }));
+        requestAnimationFrame(() => {
+          if (finished || pending.status !== 'pending') return;
+          requestAnimationFrame(() => {
+            if (finished || pending.status !== 'pending') return;
+            const sample = {
+              kind,
+              temperature,
+              eventToDoubleAnimationFrameMs: Number((performance.now() - eventAt).toFixed(3)),
+              samplingBoundary: 'double-requestAnimationFrame proxy, not a browser paint timestamp'
+            };
+            pending.status = 'done';
+            pending.sample = sample;
+            if (state.samples.length < maxSamples) state.samples.push(sample);
+            else state.sampleOverflow = true;
+          });
+        });
       };
       target.addEventListener(eventType, listener, true);
       pending.cancel = () => target.removeEventListener(eventType, listener, true);
@@ -891,8 +909,10 @@ async function package10StartPageInstrumentation(sessionId) {
       if (pending?.status === 'pending') pending.status = 'unavailable';
     };
     window.__euthetoPackage10ArmResult = (selector, expected, metadata) => {
+      if (finished) return { status: 'unavailable', reason: 'measurement capture finished' };
       const target = document.querySelector(selector);
       if (!target) throw new Error('Accepted-result keyboard target is missing');
+      const observedRoot = document.querySelector('[data-accepted-schedule]');
       const token = String(++state.nextToken);
       const pending = { status: 'pending' };
       state.pending[token] = pending;
@@ -902,6 +922,10 @@ async function package10StartPageInstrumentation(sessionId) {
       let framing = false;
       const ready = () => {
         const root = document.querySelector('[data-accepted-schedule]');
+        if (!root || root !== observedRoot) {
+          window.__euthetoPackage10CancelSample(token);
+          return false;
+        }
         const table = [...(root?.querySelectorAll('table') ?? [])].find(t =>
           t.caption?.textContent.trim() === expected.caption);
         const first = table?.tBodies[0]?.rows[0];
@@ -963,41 +987,51 @@ async function package10StartPageInstrumentation(sessionId) {
         target.removeEventListener('keydown', listener, true);
       };
       const check = () => {
+        if (finished || pending.status !== 'pending') return;
         if (framing || !ready()) return;
         framing = true;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          framing = false;
-          if (pending.status !== 'pending') return;
-          if (!ready()) { check(); return; }
-          const root = document.querySelector('[data-accepted-schedule]');
-          const sample = {
-            kind: 'accepted-result-keyboard',
-            ...metadata,
-            eventToSettledContentDoubleAnimationFrameMs: Number((performance.now() - started).toFixed(3)),
-            samplingBoundary: 'keyboard keydown to expected settled native content plus double-requestAnimationFrame; not INP or paint',
-            renderedRows: root.querySelectorAll('table tbody tr').length,
-            renderedGridCells: root.querySelectorAll('[role="gridcell"]').length,
-            retainedScheduleElementNodes: root.querySelectorAll('*').length + 1
-          };
-          stop();
-          pending.status = 'done';
-          pending.sample = sample;
-          if (state.samples.length < maxSamples) state.samples.push(sample);
-          else state.sampleOverflow = true;
-        }));
+        requestAnimationFrame(() => {
+          if (finished || pending.status !== 'pending') return;
+          requestAnimationFrame(() => {
+            framing = false;
+            if (finished || pending.status !== 'pending') return;
+            if (!ready()) { check(); return; }
+            const root = document.querySelector('[data-accepted-schedule]');
+            const sample = {
+              kind: 'accepted-result-keyboard',
+              ...metadata,
+              eventToSettledContentDoubleAnimationFrameMs: Number((performance.now() - started).toFixed(3)),
+              samplingBoundary: 'keyboard keydown to expected settled native content plus double-requestAnimationFrame; not INP or paint',
+              renderedRows: root.querySelectorAll('table tbody tr').length,
+              renderedGridCells: root.querySelectorAll('[role="gridcell"]').length,
+              retainedScheduleElementNodes: root.querySelectorAll('*').length + 1
+            };
+            stop();
+            pending.status = 'done';
+            pending.sample = sample;
+            if (state.samples.length < maxSamples) state.samples.push(sample);
+            else state.sampleOverflow = true;
+          });
+        });
       };
       const listener = (event) => {
+        if (finished || pending.status !== 'pending') return;
         if (!['Enter', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
         target.removeEventListener('keydown', listener, true);
+        if (!observedRoot || document.querySelector('[data-accepted-schedule]') !== observedRoot) {
+          window.__euthetoPackage10CancelSample(token);
+          return;
+        }
         started = performance.now();
         observer = new MutationObserver(check);
-        observer.observe(document.querySelector('[data-accepted-schedule]'), {
+        observer.observe(observedRoot, {
           childList: true, subtree: true, characterData: true, attributes: true
         });
         requestAnimationFrame(check);
       };
       target.addEventListener('keydown', listener, true);
       timer = setTimeout(() => {
+        if (finished || pending.status !== 'pending') return;
         ready();
         stop();
         pending.status = 'unavailable';
@@ -1006,10 +1040,16 @@ async function package10StartPageInstrumentation(sessionId) {
       return { status: 'armed', token };
     };
     window.__euthetoPackage10Finish = () => {
-      liveObserver.disconnect();
-      for (const token of Object.keys(state.pending)) window.__euthetoPackage10CancelSample(token);
-      longTaskObserver?.disconnect();
-      if (state.eventLoopLagTimer !== undefined) clearInterval(state.eventLoopLagTimer);
+      if (!finished) {
+        captureEndTimeMs ??= performance.now();
+        recordLiveMutations(liveObserver.takeRecords());
+        liveObserver.disconnect();
+        if (longTaskObserver) recordLongTasks(longTaskObserver.takeRecords());
+        longTaskObserver?.disconnect();
+        finished = true;
+        for (const token of Object.keys(state.pending)) window.__euthetoPackage10CancelSample(token);
+        if (state.eventLoopLagTimer !== undefined) clearInterval(state.eventLoopLagTimer);
+      }
       return {
         schemaVersion: 1,
         samples: state.samples,
@@ -1019,6 +1059,9 @@ async function package10StartPageInstrumentation(sessionId) {
         longTask: {
           supported: state.longTaskSupported,
           unsupportedReason: state.longTaskUnsupportedReason,
+          captureStartTimeMs,
+          captureEndTimeMs,
+          samplingBoundary: 'task starts in inclusive capture window; full durations from records available at finish, not proof of all browser long tasks',
           entryCount: state.longTaskEntries.length,
           entries: state.longTaskEntries,
           entryOverflow: state.longTaskEntryOverflow
@@ -1046,6 +1089,7 @@ async function package10AwaitSample(sessionId, token) {
 }
 
 async function package10InteractionSample(sessionId, kind, selector, temperature, trigger) {
+  let token;
   try {
     await waitForElement(sessionId, selector);
     const armed = await evaluate(
@@ -1055,6 +1099,7 @@ async function package10InteractionSample(sessionId, kind, selector, temperature
     );
     if (armed?.status !== "armed")
       return { status: "unavailable", reason: armed?.reason ?? "measurement could not be armed" };
+    token = armed.token;
     await trigger();
     const result = await package10AwaitSample(sessionId, armed.token);
     return result.status === "done"
@@ -1068,6 +1113,11 @@ async function package10InteractionSample(sessionId, kind, selector, temperature
       status: "unavailable",
       reason: failure instanceof Error ? failure.message : "Event timing sample did not settle",
     };
+  } finally {
+    if (token !== undefined)
+      await evaluate(sessionId, "window.__euthetoPackage10CancelSample(arguments[0]);", [
+        token,
+      ]).catch(() => undefined);
   }
 }
 
