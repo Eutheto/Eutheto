@@ -1361,6 +1361,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "dirs",
+      "version": "7.0.0",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "8d57d423b3c82e89b9a24ca3091fee61f456a26edbd28d26c65906f4bc1dcd8f"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "dirs-sys",
       "version": "0.5.0",
       "kind": "dependency",

@@ -122,6 +122,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `derive_more-impl` | `2.1.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `digest` | `0.10.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `dirs` | `6.0.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `dirs` | `7.0.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `dirs-sys` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `dispatch2` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `displaydoc` | `0.2.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -1268,4 +1269,4 @@ License: `CC-BY-SA-3.0`
 
 0 reviewed asset group(s) have `NOASSERTION`: exact source bytes and attribution are recorded, but their license conclusion remains unresolved.
 
-1107 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+1108 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

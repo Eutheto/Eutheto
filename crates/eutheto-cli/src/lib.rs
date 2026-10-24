@@ -3765,6 +3765,28 @@ mod tests {
     };
     use std::error::Error;
 
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn default_storage_stays_in_the_native_local_data_directory() -> Result<(), Box<dyn Error>> {
+        #[cfg(windows)]
+        let local_data = std::path::PathBuf::from(
+            std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is unavailable")?,
+        );
+        #[cfg(target_os = "macos")]
+        let local_data = dirs::home_dir()
+            .ok_or("platform home directory is unavailable")?
+            .join("Library/Application Support");
+        let dependencies = super::app_dependencies(None, &CancellationToken::new())
+            .map_err(|error| format!("default directory resolution failed: {}", error.code))?;
+        let root = local_data.join("eutheto-development");
+        assert_eq!(dependencies.paths.database, root.join("eutheto.sqlite"));
+        assert_eq!(
+            dependencies.paths.safety_backups,
+            root.join("safety-backups")
+        );
+        Ok(())
+    }
+
     #[test]
     fn restore_review_and_receipt_tokens_are_bound_to_distinct_phases() -> Result<(), Box<dyn Error>>
     {
