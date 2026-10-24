@@ -701,9 +701,9 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `zlib-rs` | `0.6.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zmij` | `1.0.23` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zopfli` | `0.8.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `zstd` | `0.13.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `zstd-safe` | `7.2.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `zstd-sys` | `2.0.16+zstd.1.5.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `zstd` | `0.14.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `zstd-safe` | `8.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `zstd-sys` | `2.1.2+zstd.1.5.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zune-core` | `0.5.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `zune-jpeg` | `0.5.15` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | npm | `@babel/code-frame` | `7.29.7` | `NOASSERTION` | `https://registry.npmjs.org/@babel/code-frame/-/code-frame-7.29.7.tgz` |

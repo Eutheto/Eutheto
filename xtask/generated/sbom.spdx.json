@@ -16296,9 +16296,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-cargo-zstd-0.13.3-0715",
+      "SPDXID": "SPDXRef-Package-cargo-zstd-0.14.3-0715",
       "name": "zstd",
-      "versionInfo": "0.13.3",
+      "versionInfo": "0.14.3",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -16308,20 +16308,20 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/zstd@0.13.3"
+          "referenceLocator": "pkg:cargo/zstd@0.14.3"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+          "checksumValue": "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-cargo-zstd-safe-7.2.4-0716",
+      "SPDXID": "SPDXRef-Package-cargo-zstd-safe-8.2.0-0716",
       "name": "zstd-safe",
-      "versionInfo": "7.2.4",
+      "versionInfo": "8.2.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -16331,20 +16331,20 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/zstd-safe@7.2.4"
+          "referenceLocator": "pkg:cargo/zstd-safe@8.2.0"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+          "checksumValue": "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-cargo-zstd-sys-2.0.16-zstd.1.5.7-0717",
+      "SPDXID": "SPDXRef-Package-cargo-zstd-sys-2.1.2-zstd.1.5.7-0717",
       "name": "zstd-sys",
-      "versionInfo": "2.0.16+zstd.1.5.7",
+      "versionInfo": "2.1.2+zstd.1.5.7",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -16354,13 +16354,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/zstd-sys@2.0.16%2Bzstd.1.5.7"
+          "referenceLocator": "pkg:cargo/zstd-sys@2.1.2%2Bzstd.1.5.7"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+          "checksumValue": "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
         }
       ]
     },
@@ -29472,17 +29472,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cargo-zstd-0.13.3-0715"
+      "relatedSpdxElement": "SPDXRef-Package-cargo-zstd-0.14.3-0715"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cargo-zstd-safe-7.2.4-0716"
+      "relatedSpdxElement": "SPDXRef-Package-cargo-zstd-safe-8.2.0-0716"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cargo-zstd-sys-2.0.16-zstd.1.5.7-0717"
+      "relatedSpdxElement": "SPDXRef-Package-cargo-zstd-sys-2.1.2-zstd.1.5.7-0717"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
