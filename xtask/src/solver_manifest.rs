@@ -2037,7 +2037,7 @@ fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hex_bytes(&Sha256::digest(bytes))
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -2056,7 +2056,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         digest.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(crate::hex_bytes(&digest.finalize()))
 }
 
 type CmakeMap = BTreeMap<String, CacheValue>;

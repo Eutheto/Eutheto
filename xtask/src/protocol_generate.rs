@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+use crate::hex_bytes;
 use crate::protocol::wire::{
     Capability, Finished, HandshakeError, HandshakeErrorCode, HandshakeRequest, HandshakeResponse,
     HandshakeSuccess, Incumbent, ParentFrame, Progress, ProgressKind, ProjectedCandidate,
@@ -323,7 +324,7 @@ fn generate_ortools_rust_binding(
     let proto = repo_root.join(ORTOOLS_PROTO_PATH);
     let proto_bytes = fs::read(&proto).context("failed to read pinned OR-Tools CP-SAT schema")?;
     ensure!(
-        format!("{:x}", Sha256::digest(&proto_bytes)) == ORTOOLS_PROTO_SHA256,
+        hex_bytes(&Sha256::digest(&proto_bytes)) == ORTOOLS_PROTO_SHA256,
         "pinned OR-Tools CP-SAT schema SHA-256 does not match its approved source contract"
     );
     prost_build::Config::new()
@@ -1088,16 +1089,6 @@ fn worker_error_code_name(value: i32) -> Result<&'static str> {
     WorkerErrorCode::try_from(value)
         .map(|code| code.as_str_name())
         .map_err(|_| anyhow::anyhow!("fixture contains unknown worker error code {value}"))
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(char::from(HEX[usize::from(byte >> 4)]));
-        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    output
 }
 
 fn semantic_json_bytes(value: &Value) -> Result<Vec<u8>> {

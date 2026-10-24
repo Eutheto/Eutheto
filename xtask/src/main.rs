@@ -398,3 +398,32 @@ fn workforce(root: &Path, arguments: &[std::ffi::OsString]) -> Result<()> {
     );
     Ok(())
 }
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::hex_bytes;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn canonical_digest_bytes_keep_lowercase_and_leading_zeroes() {
+        assert_eq!(hex_bytes(&[]), "");
+        assert_eq!(hex_bytes(&[0, 1, 15, 16, 255]), "00010f10ff");
+        let mut hash = Sha256::new();
+        hash.update(b"a");
+        hash.update(b"bc");
+        assert_eq!(
+            hex_bytes(&hash.finalize()),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

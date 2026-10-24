@@ -50,7 +50,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if bytes.is_empty()
                 || bytes.len() > 4096
                 || expected.len() != 64
-                || format!("{:x}", Sha256::digest(&bytes)) != expected
+                || Sha256::digest(&bytes)
+                    .iter()
+                    .flat_map(|byte| [byte >> 4, byte & 0x0f])
+                    .map(|nibble| char::from(b"0123456789abcdef"[usize::from(nibble)]))
+                    .collect::<String>()
+                    != expected
             {
                 return Err("PDF manifest handoff is oversized or has an incorrect digest".into());
             }

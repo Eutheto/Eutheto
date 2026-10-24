@@ -93,11 +93,11 @@ pub(crate) fn hash_file(path: &Path, limit: u64) -> Result<String> {
         ensure!(bytes <= limit, "hash input byte limit exceeded");
         digest.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex_bytes(&digest.finalize()))
 }
 
 pub(crate) fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex_bytes(&Sha256::digest(bytes))
 }
 
 pub(crate) fn digest(value: &str) -> Result<[u8; 32]> {
@@ -212,4 +212,35 @@ fn link_like(metadata: &std::fs::Metadata) -> bool {
         }
     }
     metadata.file_type().is_symlink()
+}
+
+pub(crate) fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::{hash_file, hex_bytes, sha256};
+
+    #[test]
+    fn canonical_hashes_match_streamed_files() -> anyhow::Result<()> {
+        assert_eq!(hex_bytes(&[0, 1, 15, 16, 255]), "00010f10ff");
+        assert_eq!(
+            sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("hash-input");
+        let bytes = vec![0; 16_385];
+        std::fs::write(&path, &bytes)?;
+        assert_eq!(hash_file(&path, 16_385)?, sha256(&bytes));
+        assert!(hash_file(&path, 16_384).is_err());
+        Ok(())
+    }
 }
