@@ -74,9 +74,9 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `ciborium-io` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ciborium-ll` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `citationberg` | `0.7.0` | `MIT OR Apache-2.0` | `https://github.com/typst/citationberg/tree/06a591e2f237d25e1dfdedac3f3d1494c496c52d` |
-| cargo | `clap` | `4.6.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `clap_builder` | `4.6.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `clap_derive` | `4.6.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `clap` | `4.6.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `clap_builder` | `4.6.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `clap_derive` | `4.6.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `clap_lex` | `1.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cobs` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `codex` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -424,7 +424,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `rust_decimal` | `1.43.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustc-hash` | `2.1.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustc_version` | `0.4.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `rustix` | `1.1.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `rustix` | `1.1.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustversion` | `1.0.23` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rusty-fork` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `rustybuzz` | `0.20.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
