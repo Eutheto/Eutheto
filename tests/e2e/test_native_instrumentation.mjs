@@ -11,6 +11,109 @@ const source = await readFile(
   ),
   "utf8",
 );
+const setValueHelper = source.slice(
+  source.indexOf("async function setValue("),
+  source.indexOf("async function getText("),
+);
+const workWindowStart = source.indexOf(
+  '  await setValue(sessionId, "#work-window-start", "01/15/2030");',
+);
+const workWindowSetup = source.slice(
+  workWindowStart,
+  source.indexOf("  // The completed native window read", workWindowStart),
+);
+for (const lost of [[], ["start"], ["end"], ["start", "end"]]) {
+  for (const persistent of lost.length === 0 ? [false] : [false, true]) {
+    const controls = new Map(
+      [
+        ["start", "01/15/2030", "2030-01-15", "2030-01-05"],
+        ["end", "01/18/2030", "2030-01-18", "2030-01-08"],
+      ].map(([name, typed, expected, truncated]) => [
+        `#work-window-${name}`,
+        { name, typed, expected, truncated, value: "", attempts: 0 },
+      ]),
+    );
+    let reads = 0;
+    const run = () =>
+      runInNewContext(
+        `${setValueHelper}
+         async function evaluate(_session, script, args = []) {
+           return Function(script)(...args);
+         }
+         (async () => { ${workWindowSetup} })();`,
+        {
+          assert,
+          sessionId: "fixture",
+          waitForElement: (_session, selector) =>
+            selector.replace(":not(:disabled):not([readonly])", ""),
+          document: {
+            querySelector: (selector) => ({
+              type: "date",
+              get value() {
+                return controls.get(selector).value;
+              },
+              set value(_value) {
+                assert.fail("Date setup must use native keyboard entry");
+              },
+            }),
+          },
+          command: async (method, path, payload) => {
+            assert.equal(method, "POST");
+            const match =
+              /^\/session\/fixture\/element\/([^/]+)\/(clear|value)$/u.exec(
+                path,
+              );
+            assert(
+              match,
+              "Date setup must only clear and type through WebDriver",
+            );
+            const control = controls.get(decodeURIComponent(match[1]));
+            assert(control);
+            if (match[2] === "clear") {
+              control.value = "";
+              return;
+            }
+            assert.equal(payload.text, control.typed);
+            assert.deepEqual(
+              Array.from(payload.value),
+              Array.from(control.typed),
+            );
+            control.attempts += 1;
+            control.value =
+              lost.includes(control.name) &&
+              (persistent || control.attempts === 1)
+                ? control.truncated
+                : control.expected;
+          },
+          activateButton: (_session, label) => {
+            assert.equal(label, "Read this local-date window");
+            reads += 1;
+          },
+        },
+      );
+    if (persistent) {
+      await assert.rejects(
+        run,
+        /intended local-date window before native review/u,
+      );
+      assert.equal(
+        reads,
+        0,
+        "Incorrect input must fail before requesting a native window read",
+      );
+    } else {
+      await run();
+      assert.equal(reads, 1);
+    }
+    for (const control of controls.values()) {
+      assert.equal(
+        control.attempts,
+        lost.includes(control.name) ? 2 : 1,
+        "Only a mismatched control may receive one bounded keyboard re-entry",
+      );
+    }
+  }
+}
 const recipientModeSelection = source.slice(
   source.indexOf("function assertRecipientModeSelection("),
   source.indexOf("async function run()"),

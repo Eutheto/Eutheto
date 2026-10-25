@@ -14592,14 +14592,20 @@ async function package8CoverageAcceptance(sessionId, scenarioId, shiftId) {
   await setValue(sessionId, "#work-window-start", "01/15/2030");
   await setValue(sessionId, "#work-window-end", "01/18/2030");
   // WebKitWebDriver can lose a date-editor keystroke while Vue reflects the typed segment.
-  // Check the actual control before using this range to select the saved shift.
-  if (
-    !(await evaluate(
-      sessionId,
-      "return document.querySelector('#work-window-end').value === '2030-01-18';",
-    ))
-  )
-    await setValue(sessionId, "#work-window-end", "01/18/2030");
+  // Check both actual controls before using this range to select the saved shift.
+  for (const [selector, typed, expectedDate] of [
+    ["#work-window-start", "01/15/2030", "2030-01-15"],
+    ["#work-window-end", "01/18/2030", "2030-01-18"],
+  ]) {
+    if (
+      !(await evaluate(
+        sessionId,
+        "return document.querySelector(arguments[0]).value === arguments[1];",
+        [selector, expectedDate],
+      ))
+    )
+      await setValue(sessionId, selector, typed);
+  }
   assert.deepEqual(
     await evaluate(
       sessionId,
