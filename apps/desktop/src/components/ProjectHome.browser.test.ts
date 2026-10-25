@@ -605,7 +605,7 @@ describe("Routed project deletion in the browser", () => {
     await expect.element(confirm).toBeEnabled();
     await expect
       .element(within(dialog).getByRole("status"))
-      .toHaveTextContent("reviewed-roster.eutheto");
+      .toMatchTextContent("reviewed-roster.eutheto");
     expect(generatedApi.deleteProject).not.toHaveBeenCalled();
     await userEvent.click(confirm);
     await expect.poll(() => screen.queryByRole("dialog")).toBeNull();
@@ -988,7 +988,7 @@ describe("Real shell commands and route updates", () => {
     await renderWorkspace("/");
     await expect
       .element(await screen.findByRole("alert"))
-      .toHaveTextContent(messages.projects.loadFailed);
+      .toMatchTextContent(messages.projects.loadFailed);
     await userEvent.click(screen.getByRole("button", { name: messages.projects.retry }));
     await expect.element(await screen.findByText(messages.projects.count(1))).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
@@ -1041,7 +1041,7 @@ describe("Real shell commands and route updates", () => {
     configureNative();
     mockWorkforceSetupResults([], workforceProject.revision + 1);
     await renderWorkspace(`/project/${workforceProject.scenarioId}/setup`);
-    await expect.element(await screen.findByRole("alert")).toHaveTextContent(messages.setup.stale);
+    await expect.element(await screen.findByRole("alert")).toMatchTextContent(messages.setup.stale);
     expect(screen.queryByRole("heading", { name: messages.setup.calendarSummary })).toBeNull();
   });
 
@@ -1113,7 +1113,7 @@ describe("Real shell commands and route updates", () => {
       );
       await expect
         .element(await screen.findByRole("alert"))
-        .toHaveTextContent(messages.setup.stale);
+        .toMatchTextContent(messages.setup.stale);
       expect(screen.queryByRole("heading", { name: messages.setup.calendarSummary })).toBeNull();
       expect(
         screen.queryByRole("button", {
@@ -1196,7 +1196,7 @@ describe("Real shell commands and route updates", () => {
     await userEvent.click(select);
     await expect
       .element(await within(results).findByRole("alert"))
-      .toHaveTextContent(messages.setup.selectionRecovery);
+      .toMatchTextContent(messages.setup.selectionRecovery);
     await expect.element(select).toBeDisabled();
     expect(generatedApi.selectSolution).toHaveBeenCalledTimes(1);
     const pendingRefresh = Promise.withResolvers<ApiResponseDto<SolutionListDtoV1>>();
@@ -1783,16 +1783,16 @@ describe("Real shell commands and route updates", () => {
     expect(within(dialog).getByText("official.workforce/assignment/shift-022")).toBeVisible();
     expect(within(dialog).getByText("Repair source bindings")).toBeVisible();
     expect(within(dialog).getByText("[2, 1]")).toBeVisible();
-    expect(dialog).toHaveTextContent("Accepted base A");
-    expect(dialog).toHaveTextContent(base.result.solutionId);
-    expect(dialog).toHaveTextContent(base.runId);
-    expect(dialog).toHaveTextContent(candidate.result.solutionId);
-    expect(dialog).toHaveTextContent(candidate.runId);
-    expect(dialog).toHaveTextContent("A → C");
-    expect(dialog).toHaveTextContent("B → C");
-    expect(dialog).toHaveTextContent("notEstablished");
-    expect(dialog).toHaveTextContent("no unique cause");
-    expect(dialog).not.toHaveTextContent("fairness");
+    expect(dialog).toMatchTextContent("Accepted base A");
+    expect(dialog).toMatchTextContent(base.result.solutionId);
+    expect(dialog).toMatchTextContent(base.runId);
+    expect(dialog).toMatchTextContent(candidate.result.solutionId);
+    expect(dialog).toMatchTextContent(candidate.runId);
+    expect(dialog).toMatchTextContent("A → C");
+    expect(dialog).toMatchTextContent("B → C");
+    expect(dialog).toMatchTextContent("notEstablished");
+    expect(dialog).toMatchTextContent("no unique cause");
+    expect(dialog).not.toMatchTextContent("fairness");
 
     const call = vi.mocked(generatedApi.explainSolution).mock.calls[0];
     expect(call?.[0].context.expectedRevision).toBe(candidate.scenarioRevision);
@@ -1862,7 +1862,7 @@ describe("Real shell commands and route updates", () => {
       const dialog = await screen.findByRole("dialog", { name: "Explanation" });
       await expect
         .element(await within(dialog).findByRole("alert"))
-        .toHaveTextContent(messages.setup.comparisonChanged);
+        .toMatchTextContent(messages.setup.comparisonChanged);
       expect(dialog.contains(document.activeElement)).toBe(true);
       expect(
         within(dialog).queryByRole("heading", { name: "Accepted result comparison" }),
@@ -2041,7 +2041,7 @@ describe("Real shell commands and route updates", () => {
     );
     await expect
       .element(await within(dialog).findByRole("alert"))
-      .toHaveTextContent(messages.setup.comparisonChanged);
+      .toMatchTextContent(messages.setup.comparisonChanged);
     expect(within(dialog).queryByText("Late window fact.")).toBeNull();
     expect(dialog.contains(document.activeElement)).toBe(true);
     expect(releaseOperation).toHaveBeenCalled();

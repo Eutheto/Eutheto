@@ -1445,9 +1445,9 @@ describe("Optimize capability lifecycle", () => {
       .toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Review a new diagnostic copy" }));
     const copyReview = screen.getByRole("region", { name: "Review diagnostic copy" });
-    expect(copyReview).toHaveTextContent(String(libraryRevision));
-    expect(copyReview).toHaveTextContent(operationId);
-    expect(copyReview).toHaveTextContent("coverage.group.1");
+    expect(copyReview).toMatchTextContent(String(libraryRevision));
+    expect(copyReview).toMatchTextContent(operationId);
+    expect(copyReview).toMatchTextContent("coverage.group.1");
     expect(api.getApplicationSettings).toHaveBeenCalledOnce();
     await userEvent.click(
       screen.getByRole("button", { name: "Create a new copy with this group relaxed" }),
@@ -1455,9 +1455,9 @@ describe("Optimize capability lifecycle", () => {
     const copyReceipt = await screen.findByRole("region", {
       name: "Created diagnostic copy receipt",
     });
-    expect(copyReceipt).toHaveTextContent("Clinic roster diagnostic copy");
-    expect(copyReceipt).toHaveTextContent(copiedScenarioId);
-    expect(copyReceipt).toHaveTextContent(String(libraryRevision + 1));
+    expect(copyReceipt).toMatchTextContent("Clinic roster diagnostic copy");
+    expect(copyReceipt).toMatchTextContent(copiedScenarioId);
+    expect(copyReceipt).toMatchTextContent(String(libraryRevision + 1));
     expect(api.createDiagnosticCopy).toHaveBeenCalledWith(
       expect.anything(),
       {
@@ -1481,9 +1481,9 @@ describe("Optimize capability lifecycle", () => {
     const exportReceipt = await screen.findByRole("region", {
       name: "Native diagnostic export receipt",
     });
-    expect(exportReceipt).toHaveTextContent(String(exportResult.observedCurrentRevision));
-    expect(exportReceipt).toHaveTextContent(exportResult.runManifestChecksum);
-    expect(exportReceipt).toHaveTextContent(exportResult.evidenceChecksum);
+    expect(exportReceipt).toMatchTextContent(String(exportResult.observedCurrentRevision));
+    expect(exportReceipt).toMatchTextContent(exportResult.runManifestChecksum);
+    expect(exportReceipt).toMatchTextContent(exportResult.evidenceChecksum);
     expect(exportReceipt.textContent).not.toMatch(/destinationPath|reportBytes/i);
     expect(api.exportDiagnostic).toHaveBeenCalledWith(
       expect.anything(),
@@ -1533,7 +1533,7 @@ describe("Optimize capability lifecycle", () => {
     await screen.findByText("Coverage: at least one qualified person must be assigned.");
     await userEvent.click(screen.getByRole("button", { name: "Review a new diagnostic copy" }));
     const copyReview = await screen.findByRole("region", { name: "Review diagnostic copy" });
-    expect(copyReview).toHaveTextContent("41");
+    expect(copyReview).toMatchTextContent("41");
     owner.state.libraryEpoch += 1;
     await vi.waitFor(() => {
       expect(document.querySelector("[data-diagnostic-copy-review]")).toBeNull();
@@ -2121,9 +2121,9 @@ describe("diagnostic receipts during home refresh", () => {
     expect(screen.getByRole("region", { name: "Recorded infeasibility inspection" })).toBeVisible();
 
     const receipt = await screen.findByRole("region", { name: "Created diagnostic copy receipt" });
-    expect(receipt).toHaveTextContent(copiedProject.title);
-    expect(receipt).toHaveTextContent(copiedProject.scenarioId);
-    expect(receipt).toHaveTextContent(String(libraryRevision + 1));
+    expect(receipt).toMatchTextContent(copiedProject.title);
+    expect(receipt).toMatchTextContent(copiedProject.scenarioId);
+    expect(receipt).toMatchTextContent(String(libraryRevision + 1));
     expect(document.activeElement).toBe(receipt.querySelector("[role='heading']"));
     expect(screen.getByText(messages.setup.loading)).toBeVisible();
 
@@ -2133,7 +2133,7 @@ describe("diagnostic receipts during home refresh", () => {
     });
     expect(
       screen.getByRole("region", { name: "Created diagnostic copy receipt" }),
-    ).toHaveTextContent(copiedProject.scenarioId);
+    ).toMatchTextContent(copiedProject.scenarioId);
     expect(home.state.projects).toContainEqual(copiedProject);
 
     const cancelledExport = Promise.withResolvers<ApiResponseDto<DiagnosticExportMetadataV1>>();
@@ -2167,10 +2167,10 @@ describe("diagnostic receipts during home refresh", () => {
     const exportReceipt = await screen.findByRole("region", {
       name: "Native diagnostic export receipt",
     });
-    expect(exportReceipt).toHaveTextContent(scenarioId);
-    expect(exportReceipt).toHaveTextContent(runId);
-    expect(exportReceipt).toHaveTextContent(manifestChecksum);
-    expect(exportReceipt).toHaveTextContent(exportMetadata.evidenceChecksum);
+    expect(exportReceipt).toMatchTextContent(scenarioId);
+    expect(exportReceipt).toMatchTextContent(runId);
+    expect(exportReceipt).toMatchTextContent(manifestChecksum);
+    expect(exportReceipt).toMatchTextContent(exportMetadata.evidenceChecksum);
     expect(document.activeElement).toBe(exportReceipt.querySelector("[role='heading']"));
     exportRefresh.resolve(response(currentSummary()));
     await vi.waitFor(() => {
@@ -2178,7 +2178,7 @@ describe("diagnostic receipts during home refresh", () => {
     });
     expect(
       screen.getByRole("region", { name: "Native diagnostic export receipt" }),
-    ).toHaveTextContent(exportMetadata.evidenceChecksum);
+    ).toMatchTextContent(exportMetadata.evidenceChecksum);
 
     const repeatedExport = Promise.withResolvers<ApiResponseDto<DiagnosticExportMetadataV1>>();
     vi.mocked(api.exportDiagnostic).mockReturnValueOnce(exportOperation(repeatedExport.promise));
