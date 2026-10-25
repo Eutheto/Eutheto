@@ -281,12 +281,12 @@ describe("Routed CSV review transitions", () => {
     await expect
       .poll(() => screen.queryByRole("button", { name: messages.csvImport.apply }))
       .toBeNull();
-    await expect.element(decisionRegion()).toHaveTextContent(originalId);
+    await expect.element(decisionRegion()).toMatchTextContent(originalId);
     native.preview.mockImplementation(() =>
       portableOperation(response(changedReview([originalId], 4, true))),
     );
     await previewImport();
-    await expect.element(decisionRegion()).toHaveTextContent(originalId);
+    await expect.element(decisionRegion()).toMatchTextContent(originalId);
     await expect
       .element(screen.getByRole("button", { name: messages.csvImport.apply }))
       .toBeEnabled();
@@ -360,7 +360,7 @@ describe("Routed CSV review transitions", () => {
       .element(await screen.findByRole("heading", { name: messages.csvImport.error }))
       .toHaveFocus();
     expect(screen.queryByRole("button", { name: messages.csvImport.apply })).toBeNull();
-    await expect.element(decisionRegion()).toHaveTextContent(retainedId);
+    await expect.element(decisionRegion()).toMatchTextContent(retainedId);
     await userEvent.fill(
       screen.getByRole("textbox", { name: plannerMessage("csvDecision.recordInput") }),
       "1002",
@@ -386,7 +386,7 @@ describe("Routed CSV review transitions", () => {
     await expect.element(screen.getByRole("textbox", { name: "Top number" })).toHaveValue("0002");
     await expect.element(mappingControl(1, 0, "field")).toHaveValue("externalId");
     await expect.element(mappingControl(2, 1, "field")).toHaveValue("name");
-    await expect.element(decisionRegion()).toHaveTextContent(retainedId);
+    await expect.element(decisionRegion()).toMatchTextContent(retainedId);
 
     const ids = Array.from({ length: 1000 }, (_, index) =>
       index === 0
