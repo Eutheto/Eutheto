@@ -8,11 +8,11 @@ export default defineConfig({
   optimizeDeps: { include: ["vue-router", "class-variance-authority"] },
   test: {
     include: ["src/**/*.browser.test.ts"],
+    attachmentsDir: "../../.cache/browser-tests",
     browser: {
       enabled: true,
       provider: playwright({ launchOptions: { chromiumSandbox: true } }),
       headless: true,
-      screenshotDirectory: "../../.cache/browser-tests",
       instances: [{ browser: "chromium" }],
     },
   },
