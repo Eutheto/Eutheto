@@ -2105,7 +2105,7 @@ mod tests {
 
     #[test]
     fn decodes_sha512_integrity_to_canonical_hex() -> SupplyChainResult<()> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode([0_u8; 64]);
+        let encoded = format!("{}AA==", "A".repeat(84));
         let package = pnpm_package_with_resolution(&format!("{{integrity: sha512-{encoded}}}"))?;
         assert_eq!(
             package.checksum,
@@ -2145,16 +2145,35 @@ mod tests {
     }
 
     #[test]
+    fn rejects_noncanonical_sha512_base64_at_resolution_line() {
+        let canonical = format!("{}AA==", "A".repeat(84));
+        for encoded in [
+            canonical.trim_end_matches('=').to_owned(),
+            format!("{canonical}="),
+            format!("{}AB==", "A".repeat(84)),
+            format!("{}A_==", "A".repeat(84)),
+        ] {
+            let result = pnpm_package_with_resolution(&format!("{{integrity: sha512-{encoded}}}"));
+            assert!(
+                matches!(result, Err(error) if error.to_string().starts_with(
+                    "malformed lock file pnpm-lock.yaml: line 3: malformed SHA-512 integrity:"
+                ))
+            );
+        }
+    }
+
+    #[test]
     fn rejects_wrong_sha512_integrity_length_at_resolution_line() {
-        let encoded = base64::engine::general_purpose::STANDARD.encode([0_u8; 63]);
-        assert_eq!(
-            pnpm_package_with_resolution(&format!("{{integrity: sha512-{encoded}}}"))
-                .map_err(|error| error.to_string()),
-            Err(
-                "malformed lock file pnpm-lock.yaml: line 3: SHA-512 integrity decoded to 63 bytes; expected 64"
-                    .to_owned()
-            )
-        );
+        for length in [63, 65] {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(vec![0_u8; length]);
+            assert_eq!(
+                pnpm_package_with_resolution(&format!("{{integrity: sha512-{encoded}}}"))
+                    .map_err(|error| error.to_string()),
+                Err(format!(
+                    "malformed lock file pnpm-lock.yaml: line 3: SHA-512 integrity decoded to {length} bytes; expected 64"
+                ))
+            );
+        }
     }
 
     #[test]

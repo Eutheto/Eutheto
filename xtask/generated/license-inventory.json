@@ -273,6 +273,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "base64",
+      "version": "0.23.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "biblatex",
       "version": "0.12.0",
       "kind": "dependency",
