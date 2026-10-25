@@ -1052,8 +1052,8 @@ it.each(["accepted", "external"] as const)(
       .getAllByRole("listitem")
       .find((item) => item.querySelector("code")?.textContent === personId);
     if (!missingMember) throw new Error("Missing historical member was omitted");
-    await expect.element(missingMember).toHaveTextContent(personId);
-    await expect.element(missingMember).toHaveTextContent(/unavailable/iu);
+    await expect.element(missingMember).toMatchTextContent(personId);
+    await expect.element(missingMember).toMatchTextContent(/unavailable/iu);
     expect(
       within(screen.getByRole("region", { name: messages.repair.diffHeading })).getAllByText("Sam"),
     ).toHaveLength(2);
@@ -1087,7 +1087,7 @@ it.each(["accepted", "external"] as const)(
     await expect.poll(() => vi.mocked(api.getSolutionView).mock.calls.length).toBeGreaterThan(2);
     for (const [input] of vi.mocked(api.getSolutionView).mock.calls)
       expect(input.solutionId).toBe(c.result.solutionId);
-    await expect.element(screen.getByText(/Chosen C:/u)).toHaveTextContent("immutable revision 2");
+    await expect.element(screen.getByText(/Chosen C:/u)).toMatchTextContent("immutable revision 2");
   },
 );
 

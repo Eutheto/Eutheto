@@ -303,15 +303,15 @@ it("uses native Supplied facts for same-ID Add and shows complete inert before/a
   ]);
   const records = screen.getByRole("table", { name: copy.records });
   expect(within(records).getAllByRole("row")).toHaveLength(3);
-  expect(records).toHaveTextContent("2026-01-05T08:00:00");
-  expect(records).toHaveTextContent("2026-01-05T13:00:00Z");
-  expect(records).toHaveTextContent("-18000 s");
-  expect(records).toHaveTextContent("2026-01-05T08:00:00.000-05:00");
-  expect(records).toHaveTextContent(typeId.toUpperCase());
-  expect(records).toHaveTextContent("preserved source");
-  expect(records).toHaveTextContent("requestedTimeOff");
-  expect(records).toHaveTextContent("approvedTimeOff");
-  expect(records).toHaveTextContent("Reviewed note");
+  expect(records).toMatchTextContent("2026-01-05T08:00:00");
+  expect(records).toMatchTextContent("2026-01-05T13:00:00Z");
+  expect(records).toMatchTextContent("-18000 s");
+  expect(records).toMatchTextContent("2026-01-05T08:00:00.000-05:00");
+  expect(records).toMatchTextContent(typeId.toUpperCase());
+  expect(records).toMatchTextContent("preserved source");
+  expect(records).toMatchTextContent("requestedTimeOff");
+  expect(records).toMatchTextContent("approvedTimeOff");
+  expect(records).toMatchTextContent("Reviewed note");
   expect(records.querySelector("img")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: copy.inspectRow("2") }));
   const selected = await screen.findByRole("region", { name: copy.selectedRecord });
@@ -409,7 +409,7 @@ it("invalidates mapping and stale approval while retaining exact decisions acros
     },
   });
   await expect.poll(() => screen.queryByRole("checkbox", { name: copy.approve })).toBeNull();
-  expect(screen.getByRole("table", { name: copy.records })).toHaveTextContent(suppliedId);
+  expect(screen.getByRole("table", { name: copy.records })).toMatchTextContent(suppliedId);
   await userEvent.click(screen.getByRole("button", { name: shared.preview }));
   const approval = await screen.findByRole("checkbox", { name: copy.approve });
   expect(approval).not.toBeChecked();
@@ -478,7 +478,7 @@ it("keeps identical exact tokens independent across roles and invalidates consen
     await expect.element(screen.getByRole("textbox", { name: copy.token })).toHaveFocus();
   }
   expect(screen.queryByRole("checkbox", { name: copy.approve })).toBeNull();
-  expect(screen.getByRole("table", { name: copy.records })).toHaveTextContent(storedId);
+  expect(screen.getByRole("table", { name: copy.records })).toMatchTextContent(storedId);
   await userEvent.click(screen.getByRole("button", { name: shared.preview }));
   await screen.findByRole("checkbox", { name: copy.approve });
   expect(native.preview.mock.calls.at(-1)?.[2].mapping).toMatchObject({
@@ -567,12 +567,12 @@ it("shows native equivalent endpoint facts and authored weekly order without imp
   const recurring = records.querySelector('[data-availability-csv-record="4"]');
   if (!(equivalent instanceof HTMLElement) || !(recurring instanceof HTMLElement))
     throw new Error("Missing native review records");
-  expect(equivalent).toHaveTextContent("2026-01-05T08:00:00.000-05:00");
-  expect(equivalent).toHaveTextContent(resolvedStartsAt.local);
-  expect(equivalent).toHaveTextContent(resolvedStartsAt.instant);
-  expect(equivalent).toHaveTextContent("-18000 s");
+  expect(equivalent).toMatchTextContent("2026-01-05T08:00:00.000-05:00");
+  expect(equivalent).toMatchTextContent(resolvedStartsAt.local);
+  expect(equivalent).toMatchTextContent(resolvedStartsAt.instant);
+  expect(equivalent).toMatchTextContent("-18000 s");
   expect(within(equivalent).getByText(copy.unchanged)).toBeVisible();
-  expect(recurring).toHaveTextContent('"kind": "weekly"');
+  expect(recurring).toMatchTextContent('"kind": "weekly"');
   expect(recurring.textContent.indexOf("friday")).toBeLessThan(
     recurring.textContent.indexOf("tuesday"),
   );
@@ -629,17 +629,17 @@ it("pages raw native record projections with keyboard focus recovery rather than
     },
   });
   const records = screen.getByRole("table", { name: copy.records });
-  expect(records).toHaveTextContent("Authored note 2");
-  expect(records).not.toHaveTextContent("Authored note 52");
+  expect(records).toMatchTextContent("Authored note 2");
+  expect(records).not.toMatchTextContent("Authored note 52");
   const next = screen.getByRole("button", { name: copy.nextRecords });
   next.focus();
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("heading", { name: copy.decisions })).toHaveFocus();
-  expect(records).toHaveTextContent("Authored note 52");
-  expect(records).not.toHaveTextContent("Authored note 2");
+  expect(records).toMatchTextContent("Authored note 52");
+  expect(records).not.toMatchTextContent("Authored note 2");
   const previous = screen.getByRole("button", { name: copy.previousRecords });
   previous.focus();
   await userEvent.keyboard("{Enter}");
   await expect.element(screen.getByRole("heading", { name: copy.decisions })).toHaveFocus();
-  expect(records).toHaveTextContent("Authored note 2");
+  expect(records).toMatchTextContent("Authored note 2");
 });
