@@ -8034,7 +8034,7 @@ class OperationScope<C extends OperationContextV1> {
             // A parser or consumer exception must not stall the SDK's channel ordering/cleanup.
           }
         });
-        // Pinned @tauri-apps/api2.11.1 has no public Channel disposal. Its callback deletion is
+        // Pinned @tauri-apps/api 2.12.4 has no public Channel disposal. Its callback deletion is
         // idempotent and also covers ACL/dispatch failures where Rust never constructs a Channel.
         detachChannel = () => {
           this.#callbacks.unregisterCallback(channel.id);

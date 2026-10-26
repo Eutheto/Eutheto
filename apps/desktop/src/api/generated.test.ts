@@ -1664,10 +1664,14 @@ describe("setup operation ownership using the pinned SDK Channel", () => {
       { ...progress, sequence: 2, timestamp: "2026-09-10T11:59:59Z" },
       { ...progress, sequence: 1 },
     ];
-    messages.forEach((message, index) => {
-      callback({ message, index });
+    callback({ end: true, index: messages.length });
+    callback({ message: messages[1], index: 1 });
+    callback({ message: messages[0], index: 0 });
+    messages.slice(2).forEach((message, index) => {
+      callback({ message, index: index + 2 });
     });
     expect(sequences).toEqual([1, 2]);
+    expect(callbacks.size).toBe(0);
     native.terminal.resolve(response(input, summary(), 3));
     expect((await operation.result).result.full).toEqual({ state: "notRun" });
     expect(callbacks.size).toBe(0);
