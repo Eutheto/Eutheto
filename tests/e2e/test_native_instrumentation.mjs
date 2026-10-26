@@ -718,6 +718,272 @@ function captureScript(marker) {
   );
 }
 
+function workRenderPage(fullWindow, selected = true, expectedRows = 2) {
+  let now = 100;
+  let reads = 0;
+  let ready = !fullWindow;
+  let visible = true;
+  let rowCount = 2;
+  let observer;
+  let nav = {};
+  const frames = [];
+  const timers = [];
+  const results = [];
+  const location = { hash: "#/project/fixture/work" };
+  const start = { value: "2030-01-01" };
+  const end = { value: "2030-02-01" };
+  const button = {
+    disabled: false,
+    click: () => {
+      ready = false;
+    },
+  };
+  end.closest = () => ({ querySelector: () => button });
+  const rows = () => Array.from({ length: ready ? rowCount : 0 }, () => ({}));
+  const makeSection = () => ({
+    get offsetParent() {
+      return visible ? {} : null;
+    },
+    querySelector(selector) {
+      reads += 1;
+      if (selector === "nav.action-row") return ready ? nav : null;
+      if (selector === "#work-window-start") return start;
+      if (selector === "#work-window-end") return end;
+      return null;
+    },
+    querySelectorAll: () => {
+      reads += 1;
+      return rows();
+    },
+  });
+  let section = makeSection();
+  const switcher = {
+    textContent: "Shifts starting in these dates",
+    getAttribute: () => String(selected),
+    click: () => {
+      selected = true;
+    },
+  };
+  const document = {
+    body: {},
+    querySelector(selector) {
+      reads += 1;
+      if (selector === "#work-window-end") return end;
+      if (selector.endsWith(" nav.action-row")) return ready ? nav : null;
+      return section;
+    },
+    querySelectorAll(selector) {
+      reads += 1;
+      return selector.endsWith(" tbody tr") ? rows() : [switcher];
+    },
+  };
+  runInNewContext(
+    `(function () { ${captureScript(
+      fullWindow
+        ? "full-horizon Work query to native rows"
+        : "Work navigation and section selection to visible native shift rows",
+    )} })(...args)`,
+    {
+      args: [
+        fullWindow ? expectedRows : location.hash,
+        (result) => results.push(JSON.parse(JSON.stringify(result))),
+      ],
+      document,
+      window: { location },
+      performance: {
+        now: () => {
+          reads += 1;
+          return now;
+        },
+      },
+      requestAnimationFrame: (callback) => frames.push(callback),
+      setTimeout: (callback, delay) => {
+        assert.equal(delay, 90_000);
+        timers.push(callback);
+      },
+      clearTimeout() {},
+      MutationObserver: class {
+        constructor(callback) {
+          observer = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    },
+  );
+  return {
+    frames,
+    timers,
+    results,
+    start,
+    end,
+    location,
+    reads: () => reads,
+    observe: () => observer(),
+    show() {
+      ready = true;
+      observer();
+    },
+    unready: () => {
+      ready = false;
+    },
+    hide: () => {
+      visible = false;
+    },
+    rows: (count) => {
+      rowCount = count;
+    },
+    replaceNav: () => {
+      nav = {};
+    },
+    detach: () => {
+      section = null;
+    },
+    replace: () => {
+      section = makeSection();
+    },
+    frame() {
+      assert(frames.length, "Expected a queued Work render frame");
+      now += 10;
+      frames.shift()();
+    },
+    flush() {
+      while (frames.length) this.frame();
+    },
+  };
+}
+
+for (const fullWindow of [false, true]) {
+  for (const frameCount of [0, 1]) {
+    const page = workRenderPage(fullWindow);
+    if (fullWindow) page.show();
+    for (let i = 0; i < frameCount; i += 1) page.frame();
+    page.timers[0]();
+    const reads = page.reads();
+    page.observe();
+    page.flush();
+    assert.equal(
+      page.reads(),
+      reads,
+      "Expired Work probes must stop DOM/timing reads",
+    );
+    assert.equal(page.results.length, 1);
+    assert.equal(page.results[0].status, "unavailable");
+  }
+
+  const bounded = workRenderPage(fullWindow);
+  if (fullWindow) bounded.show();
+  for (let i = 0; i < 100; i += 1) bounded.observe();
+  assert.equal(
+    bounded.frames.length,
+    1,
+    "Work observations share one frame chain",
+  );
+  bounded.frame();
+  for (let i = 0; i < 100; i += 1) bounded.observe();
+  assert.equal(bounded.frames.length, 1);
+  bounded.flush();
+  assert.equal(bounded.results.length, 1);
+  assert.equal(bounded.results[0].status, "measured");
+  assert.equal(bounded.results[0].renderedRows, 2);
+  assert.equal(bounded.results[0].actionToDoubleAnimationFrameMs, 20);
+  const reads = bounded.reads();
+  bounded.observe();
+  bounded.timers[0]();
+  bounded.flush();
+  assert.equal(
+    bounded.reads(),
+    reads,
+    "Completed Work probes must stop reading",
+  );
+  assert.equal(bounded.results.length, 1);
+
+  for (const change of ["unready", "hide", "rows", "replaceNav"]) {
+    for (const frameCount of [0, 1]) {
+      const page = workRenderPage(fullWindow);
+      if (fullWindow) page.show();
+      for (let i = 0; i < frameCount; i += 1) page.frame();
+      page[change](1);
+      for (let i = frameCount; i < 2; i += 1) page.frame();
+      assert.equal(
+        page.results.length,
+        0,
+        `${change} cannot complete a stale Work sample`,
+      );
+      if (change === "rows") page.rows(2);
+      if (change !== "hide") {
+        page.show();
+        page.flush();
+        assert.equal(page.results[0].status, "measured");
+      } else {
+        page.timers[0]();
+        assert.equal(page.results[0].status, "unavailable");
+      }
+    }
+  }
+  for (const change of ["detach", "replace", "start", "end", "route"]) {
+    const page = workRenderPage(fullWindow);
+    if (fullWindow) page.show();
+    page.frame();
+    if (change === "start" || change === "end")
+      page[change].value = "2031-01-01";
+    else if (change === "route") page.location.hash = "#/library";
+    else page[change]();
+    page.flush();
+    assert.equal(page.results.length, 1);
+    assert.equal(
+      page.results[0].status,
+      "unavailable",
+      `${change} invalidates the Work sample`,
+    );
+  }
+}
+
+const selectedWork = workRenderPage(false, false);
+for (let i = 0; i < 100; i += 1) selectedWork.observe();
+assert.equal(
+  selectedWork.frames.length,
+  1,
+  "Section selection also shares one frame chain",
+);
+selectedWork.flush();
+assert.equal(selectedWork.results[0].status, "measured");
+assert.equal(selectedWork.results[0].actionToDoubleAnimationFrameMs, 30);
+const emptyWork = workRenderPage(false);
+emptyWork.rows(0);
+emptyWork.flush();
+assert.equal(emptyWork.results[0].status, "measured");
+assert.equal(
+  emptyWork.results[0].renderedRows,
+  0,
+  "The initial default window may be empty",
+);
+const emptyFullWindow = workRenderPage(true, true, 0);
+assert.equal(
+  emptyFullWindow.frames.length,
+  0,
+  "An empty query still waits for native navigation",
+);
+emptyFullWindow.rows(0);
+emptyFullWindow.show();
+emptyFullWindow.flush();
+assert.equal(emptyFullWindow.results[0].status, "measured");
+assert.equal(emptyFullWindow.results[0].renderedRows, 0);
+for (const count of [0, 1, 3]) {
+  const page = workRenderPage(true);
+  page.rows(count);
+  page.show();
+  assert.equal(
+    page.frames.length,
+    0,
+    "Full-horizon rows must match the caller's expected count",
+  );
+  page.rows(2);
+  page.show();
+  page.flush();
+  assert.equal(page.results[0].status, "measured");
+}
+
 function validationPage() {
   const listeners = new Map();
   let running = false;

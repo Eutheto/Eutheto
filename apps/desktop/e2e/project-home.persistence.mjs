@@ -673,12 +673,26 @@ async function package10MeasureWorkRender(sessionId, scenarioId, endDateExclusiv
       script: `const done = arguments[arguments.length - 1];
         const started = performance.now();
         let finished = false;
+        let framing = false;
+        let source = null;
         const section = '[aria-labelledby="work-window-heading"]';
         const ready = () => {
-          const window = document.querySelector(section);
-          return window !== null && window.offsetParent !== null && window.querySelector('nav.action-row') !== null;
+          const current = document.querySelector(section);
+          if (window.location.hash !== arguments[0] || (source &&
+              (current !== source.window || current.querySelector('#work-window-start')?.value !== source.start ||
+               current.querySelector('#work-window-end')?.value !== source.end))) {
+            stop({status: 'unavailable', reason: 'initial Work route, section or dates changed'});
+            return false;
+          }
+          if (!current || current.offsetParent === null || !current.querySelector('nav.action-row')) return false;
+          source ??= {
+            window: current,
+            start: current.querySelector('#work-window-start')?.value,
+            end: current.querySelector('#work-window-end')?.value
+          };
+          return true;
         };
-        const rows = () => document.querySelectorAll(section + ' tbody tr').length;
+        const rows = () => source.window.querySelectorAll('tbody tr').length;
         let requested = false;
         const stop = (result) => {
           if (finished) return;
@@ -688,24 +702,37 @@ async function package10MeasureWorkRender(sessionId, scenarioId, endDateExclusiv
           done(result);
         };
         const check = () => {
+          if (finished || framing) return;
           const switcher = [...document.querySelectorAll('[role="group"][aria-label="Work setup sections"] button')]
             .find(button => button.textContent.trim() === 'Shifts starting in these dates');
           if (!switcher) return;
-          if (!requested && switcher.getAttribute('aria-pressed') !== 'true') {
-            requested = true;
-            switcher.click();
-            requestAnimationFrame(check);
+          if (switcher.getAttribute('aria-pressed') !== 'true') {
+            if (!requested) {
+              requested = true;
+              framing = true;
+              switcher.click();
+              requestAnimationFrame(() => { framing = false; check(); });
+            }
             return;
           }
           if (!ready()) return;
-          requestAnimationFrame(() => requestAnimationFrame(() =>
-            stop({
-              status: 'measured',
-              actionToDoubleAnimationFrameMs: Number((performance.now() - started).toFixed(3)),
-              renderedRows: rows(),
-              boundary: 'in-page Work navigation and section selection to visible native shift rows at a double-requestAnimationFrame boundary'
-            })
-          ));
+          const nav = source.window.querySelector('nav.action-row');
+          const renderedRows = rows();
+          framing = true;
+          requestAnimationFrame(() => {
+            if (finished) return;
+            requestAnimationFrame(() => {
+              framing = false;
+              if (finished || !ready()) return;
+              if (source.window.querySelector('nav.action-row') !== nav || rows() !== renderedRows) { check(); return; }
+              stop({
+                status: 'measured',
+                actionToDoubleAnimationFrameMs: Number((performance.now() - started).toFixed(3)),
+                renderedRows,
+                boundary: 'in-page Work navigation and section selection to visible native shift rows at a double-requestAnimationFrame boundary'
+              });
+            });
+          });
         };
         const observer = new MutationObserver(check);
         observer.observe(document.body, {childList: true, subtree: true});
@@ -742,11 +769,16 @@ async function package10MeasureWorkRender(sessionId, scenarioId, endDateExclusiv
     {
       script: `const done = arguments[arguments.length - 1];
         const section = '[aria-labelledby="work-window-heading"]';
-        const nav = () => document.querySelector(section + ' nav.action-row');
-        const rows = () => document.querySelectorAll(section + ' tbody tr').length;
+        const source = document.querySelector(section);
+        const route = window.location.hash;
+        const start = source?.querySelector('#work-window-start')?.value;
+        const end = source?.querySelector('#work-window-end')?.value;
         const button = document.querySelector('#work-window-end')?.closest('form')?.querySelector('button[type="submit"]');
-        if (!button || button.disabled) { done({status: 'unavailable', reason: 'full-window action unavailable'}); return; }
+        if (!source || !button || button.disabled) { done({status: 'unavailable', reason: 'full-window action unavailable'}); return; }
+        const nav = () => source.querySelector('nav.action-row');
+        const rows = () => source.querySelectorAll('tbody tr').length;
         let finished = false;
+        let framing = false;
         let cleared = false;
         const started = performance.now();
         const stop = (result) => {
@@ -756,17 +788,34 @@ async function package10MeasureWorkRender(sessionId, scenarioId, endDateExclusiv
           clearTimeout(timeout);
           done(result);
         };
-        const check = () => {
+        const ready = () => {
+          if (window.location.hash !== route || document.querySelector(section) !== source ||
+              source.querySelector('#work-window-start')?.value !== start ||
+              source.querySelector('#work-window-end')?.value !== end) {
+            stop({status: 'unavailable', reason: 'full-horizon Work route, section or dates changed'});
+            return false;
+          }
           if (!nav()) cleared = true;
-          if (!cleared || rows() < arguments[0]) return;
-          requestAnimationFrame(() => requestAnimationFrame(() =>
-            stop({
-              status: 'measured',
-              actionToDoubleAnimationFrameMs: Number((performance.now() - started).toFixed(3)),
-              renderedRows: rows(),
-              boundary: 'in-page full-horizon Work query to native rows at a double-requestAnimationFrame boundary'
-            })
-          ));
+          return cleared && source.offsetParent !== null && nav() !== null && rows() === arguments[0];
+        };
+        const check = () => {
+          if (finished || framing || !ready()) return;
+          const renderedNav = nav();
+          framing = true;
+          requestAnimationFrame(() => {
+            if (finished) return;
+            requestAnimationFrame(() => {
+              framing = false;
+              if (finished || !ready()) return;
+              if (nav() !== renderedNav) { check(); return; }
+              stop({
+                status: 'measured',
+                actionToDoubleAnimationFrameMs: Number((performance.now() - started).toFixed(3)),
+                renderedRows: rows(),
+                boundary: 'in-page full-horizon Work query to native rows at a double-requestAnimationFrame boundary'
+              });
+            });
+          });
         };
         const observer = new MutationObserver(check);
         observer.observe(document.body, {childList: true, subtree: true});
