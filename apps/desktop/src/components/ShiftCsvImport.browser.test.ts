@@ -278,13 +278,13 @@ it("uses native Supplied facts for same-ID Add and shows complete inert before/a
   ]);
   const records = screen.getByRole("table", { name: copy.records });
   expect(within(records).getAllByRole("row")).toHaveLength(3);
-  expect(records).toHaveTextContent("2026-01-05T08:00:00");
-  expect(records).toHaveTextContent("2026-01-05T13:00:00Z");
-  expect(records).toHaveTextContent("-18000 s");
-  expect(records).toHaveTextContent('"maximumCount": 3');
-  expect(records).toHaveTextContent('"kind": "detached"');
-  expect(records).toHaveTextContent("Retained tag");
-  expect(records).toHaveTextContent("Reviewed tag");
+  expect(records).toMatchTextContent("2026-01-05T08:00:00");
+  expect(records).toMatchTextContent("2026-01-05T13:00:00Z");
+  expect(records).toMatchTextContent("-18000 s");
+  expect(records).toMatchTextContent('"maximumCount": 3');
+  expect(records).toMatchTextContent('"kind": "detached"');
+  expect(records).toMatchTextContent("Retained tag");
+  expect(records).toMatchTextContent("Reviewed tag");
   await userEvent.click(screen.getByRole("button", { name: copy.inspectRow("2") }));
   const selected = await screen.findByRole("region", { name: copy.selectedRecord });
   expect(within(selected).getByText('<img src=x onerror="window.injected=true">')).toBeVisible();
@@ -377,7 +377,7 @@ it("invalidates mapping and stale approval while retaining exact decisions acros
     },
   });
   await expect.poll(() => screen.queryByRole("checkbox", { name: copy.approve })).toBeNull();
-  expect(screen.getByRole("table", { name: copy.records })).toHaveTextContent(suppliedId);
+  expect(screen.getByRole("table", { name: copy.records })).toMatchTextContent(suppliedId);
   await userEvent.click(screen.getByRole("button", { name: shared.preview }));
   const approval = await screen.findByRole("checkbox", { name: copy.approve });
   expect(approval).not.toBeChecked();

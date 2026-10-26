@@ -82,6 +82,29 @@ fn run_json(data_dir: &Path, args: &[&str]) -> Result<(Output, Value), Box<dyn E
     Ok((output, value))
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn default_storage_uses_xdg_local_data_and_explicit_override_wins() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let local_data = directory.path().join("local data");
+    let explicit = directory.path().join("explicit data");
+    let expected_database = local_data.join("eutheto-development/eutheto.sqlite");
+    for data_dir in [Some(&explicit), None] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_optimizer"));
+        command.env("XDG_DATA_HOME", &local_data);
+        command.args(["--format", "json"]);
+        if let Some(path) = data_dir {
+            command.arg("--data-dir").arg(path);
+        }
+        let output = command.args(["projects", "list"]).output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        assert!(explicit.join("eutheto.sqlite").is_file());
+        assert_eq!(expected_database.is_file(), data_dir.is_none());
+    }
+    Ok(())
+}
+
 fn create_project(data_dir: &Path, title: &str) -> Result<String, Box<dyn Error>> {
     let (output, value) = run_json(
         data_dir,

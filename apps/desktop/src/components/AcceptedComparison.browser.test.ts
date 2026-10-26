@@ -190,8 +190,8 @@ describe("AcceptedComparison", () => {
 
     expect(screen.getByRole("heading", { name: "Accepted result comparison" })).toBeVisible();
     const bindings = screen.getByText(/Previous result.*Latest result/);
-    expect(bindings).toHaveTextContent(baseSolutionId);
-    expect(bindings).toHaveTextContent(candidateSolutionId);
+    expect(bindings).toMatchTextContent(baseSolutionId);
+    expect(bindings).toMatchTextContent(candidateSolutionId);
     expect(screen.getByText("Score comparison unavailable")).toBeVisible();
     expect(screen.getByText(/Before source label: Ada Former/)).toBeVisible();
     expect(screen.getByText(/After source label: Ada Rivera/)).toBeVisible();

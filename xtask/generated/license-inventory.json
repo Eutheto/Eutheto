@@ -273,6 +273,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "base64",
+      "version": "0.23.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "biblatex",
       "version": "0.12.0",
       "kind": "dependency",
@@ -786,37 +798,37 @@
     {
       "ecosystem": "cargo",
       "name": "clap",
-      "version": "4.6.6",
+      "version": "4.6.7",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
+        "value": "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
       }
     },
     {
       "ecosystem": "cargo",
       "name": "clap_builder",
-      "version": "4.6.6",
+      "version": "4.6.7",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
+        "value": "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
       }
     },
     {
       "ecosystem": "cargo",
       "name": "clap_derive",
-      "version": "4.6.4",
+      "version": "4.6.7",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "d012d2b9d65aca7f18f4d9878a045bc17899bba951561ba5ec3c2ba1eed9a061"
+        "value": "f9c751b79415d4e559e3d1fcf128e09e720eb673a06d26cf6f392d37d75b66e0"
       }
     },
     {
@@ -1357,6 +1369,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "dirs",
+      "version": "7.0.0",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "8d57d423b3c82e89b9a24ca3091fee61f456a26edbd28d26c65906f4bc1dcd8f"
       }
     },
     {
@@ -5154,13 +5178,13 @@
     {
       "ecosystem": "cargo",
       "name": "rustix",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+        "value": "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
       }
     },
     {
@@ -8618,13 +8642,13 @@
     {
       "ecosystem": "npm",
       "name": "@blazediff/core",
-      "version": "1.9.1",
+      "version": "1.10.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@blazediff/core/-/core-1.9.1.tgz",
+      "source": "https://registry.npmjs.org/@blazediff/core/-/core-1.10.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "7a18378c89182ae95987ef289bf3b6e6f92f4ac5d7c02fac9179b203cec5171e80ff8e5ea8e919b0196d330fd356d79bd269688864fca06453723440cfaeb368"
+        "value": "00e41f7f4ce047b706b192fee04ee15649ae8e83d4a66d09f71cd6196663e700a3777826c4449700f7cacaececf7755da5034584794185f3a3adc67e5d3111b5"
       }
     },
     {
@@ -9213,18 +9237,6 @@
     },
     {
       "ecosystem": "npm",
-      "name": "@standard-schema/spec",
-      "version": "1.1.0",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@standard-schema/spec/-/spec-1.1.0.tgz",
-      "checksum": {
-        "algorithm": "SHA512",
-        "value": "976685cb98c02e19e21b91e0aab0fa8d72e2feb516acabea37fa89c7aca826c80a85b95577e8aaa94e110976af9bf8cf8adc83a394c2bca327a632a73ab8b2d3"
-      }
-    },
-    {
-      "ecosystem": "npm",
       "name": "@swc/helpers",
       "version": "0.5.23",
       "kind": "dependency",
@@ -9730,13 +9742,13 @@
     {
       "ecosystem": "npm",
       "name": "@types/node",
-      "version": "24.13.3",
+      "version": "24.19.2",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@types/node/-/node-24.13.3.tgz",
+      "source": "https://registry.npmjs.org/@types/node/-/node-24.19.2.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "0e1f2f02c577ea2839c1af4e5f8a57bcc73d0f755e89b7f0db08b1d0253060e0cb0fc9e48fd52c2e3012af8f673e0fb678acf184157ebfb2fca57bd3e1eeb7f5"
+        "value": "f77778f700962640b237ceccc4ba4d37a2973c2c05c3b6d5520efd986515d4e4b8d09196c150abf27eb50d7092ab3ec257afd57cf91bef179ceee3f633e40759"
       }
     },
     {
@@ -9886,109 +9898,85 @@
     {
       "ecosystem": "npm",
       "name": "@vitest/browser",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/browser/-/browser-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/@vitest/browser/-/browser-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "6f0328bef01eb9314e2b990815ebf0e1511ffb58151080afe1260ae24de49c93b197a6f5cc45ae77c998283ef77b5074a1d027d7be21d4ca1f511cb64cf59fdf"
+        "value": "203328657fe267cae48a5c3bc1e69280df2d27b899f6152fd30628297ca2ca35a3585c0b496018ef4ec37154e0c5360eb9d582d44dc703d2d89fb9156bd6bbb9"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@vitest/browser-playwright",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/browser-playwright/-/browser-playwright-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/@vitest/browser-playwright/-/browser-playwright-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "ae22c1c4fab09c9d255acd8337659e51f61e28ba008db3f65f1f1c2d075275dccc8b6d2c92c21ae8ada63f3efd0f231928a54a1f692c382db226fb4d71983c72"
-      }
-    },
-    {
-      "ecosystem": "npm",
-      "name": "@vitest/expect",
-      "version": "4.1.11",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/expect/-/expect-4.1.11.tgz",
-      "checksum": {
-        "algorithm": "SHA512",
-        "value": "557db1e6f3495c44f8eca005cf011123e29132d4d30925937d230ab16ec9b14b17578a6cabef9edc3bd9a6e4c33a91dcc72b620ecea9da78556f6b550e289463"
+        "value": "95c75384551470c57d986195d525226573f17e3816e02b2c03ba37493c7387c58ad2d4f6af9dba91cd76b592014597e82ccc248718cb98c5e459738dcddb0343"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@vitest/mocker",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/mocker/-/mocker-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/@vitest/mocker/-/mocker-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "d972550f9e5dd68e40668bace42086292ef883fae23a3f68744b766d0a4255979b947c8776731e165e239745e3536d6cb5fe266e35247b0d9e5d066deb983909"
+        "value": "c4b2f79640de809670f8c1a819a082b056b20d9b611a0a40b6bdd5ce2c9f738a7bc47f3d2bb2913dc441061fe41189b402a92de43b539a462906d455fc5ac766"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@vitest/pretty-format",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/pretty-format/-/pretty-format-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/@vitest/pretty-format/-/pretty-format-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "ca26733db1934bd4abfc9a4597ccc7adc2240287cd6c557a936d6f22040dfdc63fa3165e5e126fe6c73f3012798c5296996b3ea091f0d145cb66399ff77d7e57"
-      }
-    },
-    {
-      "ecosystem": "npm",
-      "name": "@vitest/runner",
-      "version": "4.1.11",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/runner/-/runner-4.1.11.tgz",
-      "checksum": {
-        "algorithm": "SHA512",
-        "value": "2f3b6f52077030d24c2248f78509e7c620b65f2d73371abddbc5bfc618c22da342cea4d93ae763c1b41feaff489ed6463f0d77da2d8bab6ae04d16470f724737"
-      }
-    },
-    {
-      "ecosystem": "npm",
-      "name": "@vitest/snapshot",
-      "version": "4.1.11",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/snapshot/-/snapshot-4.1.11.tgz",
-      "checksum": {
-        "algorithm": "SHA512",
-        "value": "a4dee2927d4e37b87c79ee20200a78033c8afb306d24fcd56ea3a0bb92c2121e1568955b3d072061060920c1903d755e249ab57e77dace2b3b6b9a4534f6a1a2"
+        "value": "db8b1274894c03d0d53d79d8881f6c8b05346d377cf3b63d8d7dfebda6f3b424acbc7c28ee2a6f27f6b62f74658f0f3edab2b57f97c28f787953d23f26caa06f"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@vitest/spy",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/spy/-/spy-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/@vitest/spy/-/spy-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "6a935afe9ad0cb6a827b2c219e2c4e1cf442806361be0ed3e036a97e5d466a12e9fd1fae8419b970fc85a0d572aac35dda1d672712fa06aa9d22388004beb460"
+        "value": "970251131b87e35ef6e7b439c2ff5062e80df48309928c5cacaad8c463d0901ce5ef094da535310ffe72357e0448a55421284a3e090672160f14c58e3a4d30cf"
+      }
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vitest/ui",
+      "version": "5.0.5",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "https://registry.npmjs.org/@vitest/ui/-/ui-5.0.5.tgz",
+      "checksum": {
+        "algorithm": "SHA512",
+        "value": "742a0650e76098269207683e590feca4f081932b4059d354905497638cfe798a7677c244398f2fd2e0d16894c6f6a7ff913953559e02b98318333fdfd474bfa9"
       }
     },
     {
       "ecosystem": "npm",
       "name": "@vitest/utils",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vitest/utils/-/utils-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/@vitest/utils/-/utils-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "cd30951a9c85b0658186594ec8a953c3fbe7afa0fdab1b1f483c9f6f26664f28c7c3937f56ebf31e91e84239b6649ce7e11260c79c38afb5747abebd0a62e03d"
+        "value": "feb06eee0ccb0d023f482efd4e7f7c6f90f03a068753f1ade08f4e55e3f76287f335a62d6c899108e250993d52eaf38983d804225582fabdd0c4a923b926b59d"
       }
     },
     {
@@ -10534,13 +10522,13 @@
     {
       "ecosystem": "npm",
       "name": "chai",
-      "version": "6.2.2",
+      "version": "6.3.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/chai/-/chai-6.2.2.tgz",
+      "source": "https://registry.npmjs.org/chai/-/chai-6.3.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "3543d196e39f3a24ca04abd63ed483e0f845bd60aa3a2d01192b4d5ace7b5fd8eced7193a6b4a6168cf9174b56851e163e335e47d8d7a9d0bbfd4a522539e546"
+        "value": "5d602dc09e8e1cefad8f410a0acd18d946a69f23b1b1e65696d538c76536c21f20e008a0763c2fb548ef2cfdadaa403f6afc4712dcf135aa86abf6063707242a"
       }
     },
     {
@@ -11149,6 +11137,18 @@
       "checksum": {
         "algorithm": "SHA512",
         "value": "b486d8b596ee70eb340511aa3c992c84951874bf920c7edd54cf208f2f84469dd60148cb105244fb4da46a7c87b708d63a7c2b298062c0098cd29e242c90275e"
+      }
+    },
+    {
+      "ecosystem": "npm",
+      "name": "fflate",
+      "version": "0.8.3",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "https://registry.npmjs.org/fflate/-/fflate-0.8.3.tgz",
+      "checksum": {
+        "algorithm": "SHA512",
+        "value": "b5b64db89acbc06529df3b2106d772e16f8e47166e221f1ae629722044030b9ad8d5fdd4db424caf2d0b977581cd4e7c1192ac12e2455e16f9830bfc0ac3ef80"
       }
     },
     {
@@ -12173,6 +12173,18 @@
     },
     {
       "ecosystem": "npm",
+      "name": "magic-string",
+      "version": "1.4.3",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "https://registry.npmjs.org/magic-string/-/magic-string-1.4.3.tgz",
+      "checksum": {
+        "algorithm": "SHA512",
+        "value": "cf5d8ec6668f184d05e3196919d8ee0147248a92e94254c0b809b21a13680fb383a58533bc37efb7151b8ccfe3c339f23f5efca23bbf2837728b6db4c0d27445"
+      }
+    },
+    {
+      "ecosystem": "npm",
       "name": "magic-string-ast",
       "version": "1.0.3",
       "kind": "dependency",
@@ -12390,13 +12402,13 @@
     {
       "ecosystem": "npm",
       "name": "obug",
-      "version": "2.1.4",
+      "version": "3.0.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/obug/-/obug-2.1.4.tgz",
+      "source": "https://registry.npmjs.org/obug/-/obug-3.0.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "e1af8eb18bfd524b4e24a13e9750383ae7c381d445f4f89f5a3fad2671d4468fcff963b1a46e06cd414bf6a09a96659ab9aa3aa20886f90be70a8bf03e8c8058"
+        "value": "e6fbc1e7e5bb78fbfea77baac62f91716d570332d6d3f871b77ff85f82dce2a1ee7733a1981881c0e63a0d1a1be169da9c0106bcd70b8c5f8a34eb9fad4a0443"
       }
     },
     {
@@ -12929,18 +12941,6 @@
     },
     {
       "ecosystem": "npm",
-      "name": "siginfo",
-      "version": "2.0.0",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/siginfo/-/siginfo-2.0.0.tgz",
-      "checksum": {
-        "algorithm": "SHA512",
-        "value": "c9bc7458ed7ff1b4812c459766f11dee0316dd29f7245956dd3bd7d674446c32d135035a78d37c58ad26781c0f74068e23b4ed4514499ff12cd7386bac21eeee"
-      }
-    },
-    {
-      "ecosystem": "npm",
       "name": "sirv",
       "version": "3.0.2",
       "kind": "dependency",
@@ -12965,26 +12965,14 @@
     },
     {
       "ecosystem": "npm",
-      "name": "stackback",
-      "version": "0.0.2",
-      "kind": "dependency",
-      "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/stackback/-/stackback-0.0.2.tgz",
-      "checksum": {
-        "algorithm": "SHA512",
-        "value": "d573091397d0a358c61fa63fede6e7c0f3811242049d3e10177d9de51d7e557757bde334201309b7ccdf6b15f53f7421570ad87bee7bebe8e400db524b69816f"
-      }
-    },
-    {
-      "ecosystem": "npm",
       "name": "std-env",
-      "version": "4.2.0",
+      "version": "4.3.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/std-env/-/std-env-4.2.0.tgz",
+      "source": "https://registry.npmjs.org/std-env/-/std-env-4.3.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "a0250a4aea4a4c75f9dc4ca30edb9943ae298cb27ac980ada66130d20a18c6d8c6f4aa5b45ef0a02c976b4150653d0f231c27447027c1aa2401733177175b547"
+        "value": "3ad53f1204359089b92b0a90a410ba644317ad946e8b5d70f3381f4d6a7c71d3bd07c39a3ec6c0f1b4c73b63fe1cda3556551318c541c0f87276eea9a1e5e26a"
       }
     },
     {
@@ -13050,25 +13038,25 @@
     {
       "ecosystem": "npm",
       "name": "tinybench",
-      "version": "2.9.0",
+      "version": "6.2.2",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/tinybench/-/tinybench-2.9.0.tgz",
+      "source": "https://registry.npmjs.org/tinybench/-/tinybench-6.2.2.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "d3e0d4bea58c55a94b9a16ba96be240fc88030ad47cd5d3f68a9c2b566fdbfdeb8d539cffcc15becf7366f1a314234d7004aebc9756050e7efd98a8d965a867a"
+        "value": "9c8676376745a6306c8368608ad2aeee603e16fb0826e1893b0cac4678265514665a047f5323e3c098fc73f7d3fdd866f049079c5e443a88117fed19daaae298"
       }
     },
     {
       "ecosystem": "npm",
       "name": "tinyexec",
-      "version": "1.3.0",
+      "version": "1.3.1",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/tinyexec/-/tinyexec-1.3.0.tgz",
+      "source": "https://registry.npmjs.org/tinyexec/-/tinyexec-1.3.1.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "40a025f66f2059618757c8d970f7b29ba8fe5d42e2ead39fd664fcdd6609e0b936cad5bfbb001692b3f4b85b1da1831db9e549d2ab36eb067edb7c5e07889b35"
+        "value": "182bc1ddaa32b3de88b8314131c4c1e3a24e47a99d32d013a2ac225bc2655a1b288759a11e2ff19fdb2cfc383b379e791a227212ddaace81bf3470b033a87510"
       }
     },
     {
@@ -13086,13 +13074,13 @@
     {
       "ecosystem": "npm",
       "name": "tinyrainbow",
-      "version": "3.1.1",
+      "version": "3.2.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/tinyrainbow/-/tinyrainbow-3.1.1.tgz",
+      "source": "https://registry.npmjs.org/tinyrainbow/-/tinyrainbow-3.2.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "c9abbcc89753b7df3d326d0177fdb7e909f31223dfdb12cb4ea51945424ea3fdc2074efc2d2c337a2df8dc382d25599f24a244dd3308358d6ee36490b0fea65f"
+        "value": "2e03b70fdc99263029522b947e5f62140c2bb5a5f8fa5a24df0248aadb46a0a08795652a1ea6d0a67c427fcd8bf058e02ac878886a3bf21a89c202fc17a4e8d8"
       }
     },
     {
@@ -13206,13 +13194,13 @@
     {
       "ecosystem": "npm",
       "name": "undici-types",
-      "version": "7.18.2",
+      "version": "7.24.6",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/undici-types/-/undici-types-7.18.2.tgz",
+      "source": "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "02cb82cdf7c61c9c9b49a46b9abe5e1ebf359b0254de48f0e8cfaea6b5af09788d78df52386c10dc99fc8dbf26dd9ea2cd58249e7d51d054c21003f642b2d8ff"
+        "value": "591356fac2608f9381378ff42691c5aadab38696e75741ae07e3a8cc0f6008bedaf7ddd2994fb5241642ccb37162c6cc7c87832fe953b29843e6337937e9f4ce"
       }
     },
     {
@@ -13278,13 +13266,13 @@
     {
       "ecosystem": "npm",
       "name": "vitest",
-      "version": "4.1.11",
+      "version": "5.0.5",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/vitest/-/vitest-4.1.11.tgz",
+      "source": "https://registry.npmjs.org/vitest/-/vitest-5.0.5.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "7e1002acd5d489d21b19206be4595bb8190eed5582d59c8b9740cee025360eb42800fc57f3862cc6cf877864298a2e656565754388016534eee3d985f80e8477"
+        "value": "70f38338c17c627922898b43747a3a9f8c16981ace0416ce2181f6777dcce25dc274d9fbda1faa3263bab977df50de80e406455cd343fddfa4ad2f668245d17e"
       }
     },
     {
@@ -13434,13 +13422,13 @@
     {
       "ecosystem": "npm",
       "name": "why-is-node-running",
-      "version": "2.3.0",
+      "version": "3.2.1",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/why-is-node-running/-/why-is-node-running-2.3.0.tgz",
+      "source": "https://registry.npmjs.org/why-is-node-running/-/why-is-node-running-3.2.1.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "854ae669605d543731bd8aa7ca1d3dcee9cacd13968db65388dcbc741123912ede8440d089b5c9ed7be59ad6f0b9372552223237e0b25d00f8566928f1f366f3"
+        "value": "4dbd85521078bd4b064257d2aae40b62402992e3c01505c6173c562871ee995cf674af97d51526fc79c80f8f937c819827591373039a0a4fdbb9808426be988d"
       }
     },
     {
@@ -13458,13 +13446,13 @@
     {
       "ecosystem": "npm",
       "name": "ws",
-      "version": "8.21.3",
+      "version": "8.22.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz",
+      "source": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "db4d5367f90f5b1a0faff38a5a3aae651d5258a5dcbf1747f9ed71af1f3d6f761b9b32cc1422df9da1b51c52205b324e11667b32fa4afbea1d66e7e0611e7447"
+        "value": "61d82073df3bf913b40275ad67fed6abd16d36f72b2f56ff44ed2e77d9968d43e00ebb00030412179d6c9b6866d57a1f6d4ff88e4a4612c2c5b1967153ed433a"
       }
     },
     {
