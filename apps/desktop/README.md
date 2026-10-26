@@ -1208,6 +1208,10 @@ from the versioned Workforce corpus, applies the tiny, initial and
 large-supported fixtures through typed native commands in disposable projects,
 and compares settings, entity counts, authored Required rules and resolved
 shifts; new project identity/history means the scenarios are not byte-identical.
+Work render probes keep one pending frame chain and recheck the visible section,
+route, selected dates, query navigation and row count before recording a sample.
+Timeout or a changed route, section or dates makes the probe unavailable; the
+double-animation-frame boundary remains a proxy rather than a paint timestamp.
 In one Linux debug Tauri/WebKit 60.5 run (24 September 2026; GPU acceleration
 unavailable), Work's initial-window action-to-double-animation-frame spans
 were 139/122/160 ms for tiny/initial/large-supported; full-horizon spans were
