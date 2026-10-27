@@ -782,7 +782,7 @@ fn read_asset_file(
     if max_bytes.is_some_and(|limit| bytes.len() > limit) {
         return Err(asset_error("extracted license text exceeds its byte limit"));
     }
-    if format!("{:x}", Sha256::digest(&bytes)) != file.sha256 {
+    if crate::hex_bytes(&Sha256::digest(&bytes)) != file.sha256 {
         return Err(asset_error(&format!(
             "reviewed asset digest changed: {}",
             file.path
@@ -2292,7 +2292,7 @@ mod tests {
         std::fs::write(directory.path().join("LICENSE"), b"license fixture")?;
         let file = super::ReviewedAssetFile {
             path: "font.otf".to_owned(),
-            sha256: format!("{:x}", Sha256::digest(b"font fixture")),
+            sha256: crate::hex_bytes(&Sha256::digest(b"font fixture")),
         };
         let asset = super::ReviewedAsset {
             name: "Fixture font".to_owned(),
@@ -2302,7 +2302,7 @@ mod tests {
             files: vec![file.clone()],
             notices: vec![super::ReviewedAssetFile {
                 path: "LICENSE".to_owned(),
-                sha256: format!("{:x}", Sha256::digest(b"license fixture")),
+                sha256: crate::hex_bytes(&Sha256::digest(b"license fixture")),
             }],
         };
         super::validate_assets(directory.path(), std::slice::from_ref(&asset))?;
@@ -2365,7 +2365,7 @@ mod tests {
                 "licenseId": "LicenseRef-Fixture-1.0",
                 "name": "Fixture license",
                 "source": "https://example.test/license",
-                "file": {"path": "LICENSE", "sha256": format!("{:x}", Sha256::digest(text))}
+                "file": {"path": "LICENSE", "sha256": crate::hex_bytes(&Sha256::digest(text))}
             }]
         }))?)
     }
@@ -2460,7 +2460,7 @@ mod tests {
             "reviewedAssets": [{
                 "name": "fixture", "version": "1", "source": "https://example.test/asset",
                 "licenseConcluded": "LicenseRef-Fixture-1.0",
-                "files": [{"path": "asset.bin", "sha256": format!("{:x}", sha2::Sha256::digest(b"asset"))}],
+                "files": [{"path": "asset.bin", "sha256": crate::hex_bytes(&sha2::Sha256::digest(b"asset"))}],
                 "notices": [stale_license.clone()]
             }],
             "extractedLicenses": [{
@@ -2545,10 +2545,10 @@ mod tests {
             "reviewedVendoredPackages": [{"ecosystem":"cargo", "name":"fixture", "version":"1.0.0", "license":"MIT", "path":"vendor/fixture", "source":source}],
             "reviewedAssets": [{"name":"fixture source", "version":"1.0.0", "source":source, "licenseConcluded":"MIT",
                 "files":[
-                    {"path":"vendor/fixture/Cargo.toml", "sha256":format!("{:x}", sha2::Sha256::digest(manifest))},
-                    {"path":"vendor/fixture/nested/source.rs", "sha256":format!("{:x}", sha2::Sha256::digest(b"nested source"))},
-                    {"path":"vendor/fixture/lib.rs", "sha256":format!("{:x}", sha2::Sha256::digest(b"source"))}
-                ], "notices":[{"path":"vendor/fixture/LICENSE", "sha256":format!("{:x}", sha2::Sha256::digest(b"license"))}]}]
+                    {"path":"vendor/fixture/Cargo.toml", "sha256":crate::hex_bytes(&sha2::Sha256::digest(manifest))},
+                    {"path":"vendor/fixture/nested/source.rs", "sha256":crate::hex_bytes(&sha2::Sha256::digest(b"nested source"))},
+                    {"path":"vendor/fixture/lib.rs", "sha256":crate::hex_bytes(&sha2::Sha256::digest(b"source"))}
+                ], "notices":[{"path":"vendor/fixture/LICENSE", "sha256":crate::hex_bytes(&sha2::Sha256::digest(b"license"))}]}]
         });
         let save = |inputs: &serde_json::Value| -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(

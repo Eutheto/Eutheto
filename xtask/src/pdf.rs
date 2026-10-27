@@ -87,8 +87,8 @@ fn renderer_identity(authority: &Path) -> Result<RecipientPdfRendererV1> {
     Ok(RecipientPdfRendererV1 {
         version: 1,
         typst_version: "0.15.1".into(),
-        template_sha256: format!("{:x}", Sha256::digest(template)),
-        fonts_sha256: format!("{:x}", fonts.finalize()),
+        template_sha256: crate::hex_bytes(&Sha256::digest(template)),
+        fonts_sha256: crate::hex_bytes(&fonts.finalize()),
     })
 }
 
@@ -114,7 +114,7 @@ pub(crate) fn finalize(
         .with_context(|| format!("failed to create PDF manifest {}", manifest.display()))?;
     output.write_all(&bytes)?;
     output.sync_all()?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(crate::hex_bytes(&Sha256::digest(bytes)))
 }
 
 pub(crate) fn build(repository: &Path) -> Result<Artifact> {
@@ -251,7 +251,7 @@ pub(crate) fn copy_into(
         );
         bytes += copy_checked(&source, staging, &resources.join(notice), false)?;
     }
-    Ok((format!("{:x}", Sha256::digest(expected)), bytes))
+    Ok((crate::hex_bytes(&Sha256::digest(expected)), bytes))
 }
 
 pub(crate) fn stage_desktop(repository: &Path) -> Result<(PathBuf, String, PackageStageGuard)> {
@@ -299,7 +299,7 @@ pub(crate) fn stage_cli(repository: &Path, staging: &Path) -> Result<(PathBuf, S
 pub(crate) fn verify_staged(executable: &Path, manifest: &Path, expected: &str) -> Result<()> {
     let bytes = read_asset(manifest, 4096)?;
     ensure!(
-        format!("{:x}", Sha256::digest(&bytes)) == expected,
+        crate::hex_bytes(&Sha256::digest(&bytes)) == expected,
         "staged PDF manifest changed during the application build"
     );
     let value: Manifest = serde_json::from_slice(&bytes)?;

@@ -220,7 +220,7 @@ fn assert_schedule_preview(
     assert_eq!(preview.schema_version, 1);
     assert_eq!(preview.format, capture.format());
     assert_eq!(usize::try_from(preview.byte_count)?, bytes.len());
-    assert_eq!(preview.sha256, format!("{:x}", Sha256::digest(bytes)));
+    assert_eq!(preview.sha256, eutheto_export::sha256_hex(bytes));
     assert!(text.starts_with(&preview.sample));
     assert!(preview.sample.len() <= MAX_SCHEDULE_EXPORT_SAMPLE_BYTES);
     assert_eq!(
@@ -1195,7 +1195,7 @@ async fn assert_recipient_budget(
     assert!(cancellation.is_cancelled());
     assert_eq!(
         receipt.html_sha256,
-        format!("{:x}", Sha256::digest(std::fs::read(destination)?))
+        eutheto_export::sha256_hex(&std::fs::read(destination)?)
     );
     Ok(())
 }

@@ -1550,7 +1550,7 @@ fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hex_bytes(&Sha256::digest(bytes))
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -1564,7 +1564,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hash.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(crate::hex_bytes(&hash.finalize()))
 }
 
 struct LicenseInput {

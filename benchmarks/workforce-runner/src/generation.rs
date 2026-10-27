@@ -104,7 +104,7 @@ pub(crate) fn identity(root: &Path) -> Result<GeneratorIdentity> {
     }
     Ok(GeneratorIdentity {
         method: "role-keyed-uuidv7-fixed-clock;source-sha256-framing-v1".to_owned(),
-        source_sha256: format!("{:x}", hash.finalize()),
+        source_sha256: files::hex_bytes(&hash.finalize()),
         sources,
         seed: 0,
         license: "Apache-2.0".to_owned(),

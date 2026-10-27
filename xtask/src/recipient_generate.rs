@@ -437,7 +437,7 @@ fn renderer_files(
         }
         let digest = Sha256::digest(&bytes);
         for (suffix, value) in [
-            ("SHA256", format!("{digest:x}")),
+            ("SHA256", crate::hex_bytes(&digest)),
             (
                 "CSP",
                 format!(

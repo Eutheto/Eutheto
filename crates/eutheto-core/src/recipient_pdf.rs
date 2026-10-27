@@ -166,7 +166,15 @@ async fn stage_worker(
             .await
             .map_err(|_| renderer_error())?;
     }
-    if copied != metadata.len() || format!("{:x}", hash.finalize()) != expected {
+    if copied != metadata.len()
+        || hash
+            .finalize()
+            .iter()
+            .flat_map(|byte| [byte >> 4, byte & 0x0f])
+            .map(|nibble| char::from(b"0123456789abcdef"[usize::from(nibble)]))
+            .collect::<String>()
+            != expected
+    {
         return Err(renderer_error());
     }
     output.flush().await.map_err(|_| renderer_error())?;
@@ -275,7 +283,7 @@ async fn response<R: AsyncRead + Unpin>(
     {
         return Err(renderer_error());
     }
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = eutheto_export::sha256_hex(&bytes);
     if digest != header.pdf_sha256 || !bytes.starts_with(b"%PDF-") {
         return Err(renderer_error());
     }
@@ -292,7 +300,7 @@ async fn supervise(
     if model.len() > MAX_RECIPIENT_REPORT_BYTES {
         return Err(renderer_error());
     }
-    let model_sha256 = format!("{:x}", Sha256::digest(model));
+    let model_sha256 = eutheto_export::sha256_hex(model);
     let header = serde_json::to_vec(&RecipientPdfRequestV1 {
         schema_version: RECIPIENT_PDF_PROTOCOL_VERSION,
         model_bytes: u32::try_from(model.len()).map_err(|_| renderer_error())?,
@@ -399,7 +407,7 @@ mod tests {
             schema_version: 1,
             model_sha256: model.clone(),
             pdf_bytes: u32::try_from(bytes.len())?,
-            pdf_sha256: format!("{:x}", Sha256::digest(bytes)),
+            pdf_sha256: eutheto_export::sha256_hex(bytes),
             renderer: identity(),
         };
         let wire = frame(&header, bytes)?;
@@ -506,16 +514,16 @@ mod tests {
         let model = b"{}";
         let header = RecipientPdfResponseV1 {
             schema_version: 1,
-            model_sha256: format!("{:x}", Sha256::digest(model)),
+            model_sha256: eutheto_export::sha256_hex(model),
             pdf_bytes: u32::try_from(bytes.len())?,
-            pdf_sha256: format!("{:x}", Sha256::digest(bytes)),
+            pdf_sha256: eutheto_export::sha256_hex(bytes),
             renderer: identity(),
         };
         let request_len = 12
             + serde_json::to_vec(&RecipientPdfRequestV1 {
                 schema_version: 1,
                 model_bytes: 2,
-                model_sha256: format!("{:x}", Sha256::digest(model)),
+                model_sha256: eutheto_export::sha256_hex(model),
             })?
             .len()
             + model.len();
@@ -537,7 +545,7 @@ mod tests {
             )?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
             let staged = directory.path().join(format!("staged-{exit}"));
-            let digest = format!("{:x}", Sha256::digest(std::fs::read(&path)?));
+            let digest = eutheto_export::sha256_hex(&std::fs::read(&path)?);
             stage_worker(&path, &staged, &digest)
                 .await
                 .map_err(|error| format!("{error:?}"))?;

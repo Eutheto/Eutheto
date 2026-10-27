@@ -925,7 +925,7 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String> {
         bytes += u64::try_from(count).context("hash byte count exceeds u64")?;
     }
     ensure!(bytes == length, "packaged file changed while hashing");
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(crate::hex_bytes(&digest.finalize()))
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finalize_artifact(

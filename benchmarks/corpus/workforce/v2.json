@@ -4,11 +4,11 @@
   "corpusVersion": 2,
   "generator": {
     "method": "role-keyed-uuidv7-fixed-clock;source-sha256-framing-v1",
-    "sourceSha256": "0f87a170e103b493f4ec8ddc7358b799a50795b802642f0c36d3156c8a661aa0",
+    "sourceSha256": "4367e6fbb9e06a01ff95d17a3388babf87d66b7380f14f184ab11f900dc88a03",
     "sources": [
       {
         "path": "benchmarks/workforce-runner/Cargo.toml",
-        "sha256": "cf86a00cf91b2f48e2a154dd54f04fda0fb3e3fe30e08e075d1894ecc20bc9a2",
+        "sha256": "c27f3f8a778172eb7207d701b4ceb76e61e6dba74af9a6058b928890dc1fa3ba",
         "bytes": 1669
       },
       {
@@ -38,13 +38,13 @@
       },
       {
         "path": "benchmarks/workforce-runner/src/files.rs",
-        "sha256": "07ee9298a1c09cddd01aeb6ebc9db5d536e118dd2068a1ad1a499917a400efbf",
-        "bytes": 7350
+        "sha256": "3e924baa8f922fee19cfe07d7b9ff7361a66082b03cffde02200d3220c45b63a",
+        "bytes": 8353
       },
       {
         "path": "benchmarks/workforce-runner/src/generation.rs",
-        "sha256": "cbb1e2fd7f9b512b489f064372b3868a60e29b339ebae3053fbb539de51259d7",
-        "bytes": 15052
+        "sha256": "f8ad4c76929fda1f066a19a718fe010f74d68ac915665615959c89a7b857239c",
+        "bytes": 15054
       },
       {
         "path": "benchmarks/workforce-runner/src/generation_tests.rs",
@@ -235,7 +235,7 @@
   ],
   "expectations": {
     "path": "benchmarks/expected/workforce/v2.json",
-    "sha256": "b2ab39f0063d1b1463afdf3b0b31e84fab007b96dc96793863547b6d86b4d4e2",
+    "sha256": "503a50078c43b8f481ce7fcac9a063fe515c0ffe7441f2154bdea132ef66491b",
     "bytes": 15915
   },
   "repair": {

@@ -458,7 +458,7 @@ fn validate_values(contract: &SourceContract) -> Result<()> {
 fn verify_file_sha256(repo_root: &Path, relative_path: &str, expected: &str) -> Result<()> {
     let bytes = fs::read(repo_root.join(relative_path))
         .with_context(|| format!("failed to read approved input {relative_path}"))?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = crate::hex_bytes(&Sha256::digest(bytes));
     ensure!(
         actual == expected,
         "approved input {relative_path} has SHA-256 {actual}, expected {expected}"

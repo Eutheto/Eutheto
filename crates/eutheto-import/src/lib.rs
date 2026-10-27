@@ -1240,7 +1240,12 @@ fn stream_validate_checksums(
         )?;
         reject_prohibited_content(&path, &prefix)?;
         if let Some(expected) = expected {
-            let actual = format!("{:x}", hasher.finalize());
+            let actual = hasher
+                .finalize()
+                .iter()
+                .flat_map(|byte| [byte >> 4, byte & 0x0f])
+                .map(|nibble| char::from(b"0123456789abcdef"[usize::from(nibble)]))
+                .collect::<String>();
             if actual != expected.to_ascii_lowercase() {
                 return Err(ImportError::ChecksumMismatch(path.clone()));
             }
