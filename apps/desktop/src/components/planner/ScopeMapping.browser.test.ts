@@ -280,11 +280,11 @@ describe("Physical CSV mapping repair and inert native metadata", () => {
     await expect.element(within(table).getByText("=SUM(A1:A2)", { exact: false })).toBeVisible();
     expect(container.querySelector("img, script, iframe")).toBeNull();
     const bounded = within(table).getByText("é".repeat(32), { exact: false });
-    await expect.element(bounded).toHaveTextContent(plannerMessage("mapping.truncated"));
+    await expect.element(bounded).toMatchTextContent(plannerMessage("mapping.truncated"));
     expect(bounded.textContent).not.toContain("é".repeat(33));
     await expect
       .element(within(table).getByText("native prefix", { exact: false }))
-      .toHaveTextContent(plannerMessage("mapping.truncated"));
+      .toMatchTextContent(plannerMessage("mapping.truncated"));
     expect(screen.queryByText("omitted third record", { exact: false })).toBeNull();
   });
 });

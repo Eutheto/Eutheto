@@ -735,15 +735,15 @@ it("renders exact accepted fairness distributions with source policy and period"
   expect(
     river.getByRole("cell", { name: /-1\/2 – 1; Spread: 3\/2 in authored bucket units/ }),
   ).toBeVisible();
-  expect(screen.getByRole("row", { name: /River/ })).toHaveTextContent(
+  expect(screen.getByRole("row", { name: /River/ })).toMatchTextContent(
     "Clinical minutes · weightedEqualShare · 018f7b40-a000-7000-8000-00000000000a",
   );
-  expect(screen.getByRole("row", { name: /River/ })).toHaveTextContent("3/2");
-  expect(screen.getByRole("row", { name: /River/ })).toHaveTextContent("-1/2");
-  expect(screen.getByRole("row", { name: /River/ })).toHaveTextContent(
+  expect(screen.getByRole("row", { name: /River/ })).toMatchTextContent("3/2");
+  expect(screen.getByRole("row", { name: /River/ })).toMatchTextContent("-1/2");
+  expect(screen.getByRole("row", { name: /River/ })).toMatchTextContent(
     "River (018f7b40-a000-7000-8000-000000000001)",
   );
-  expect(screen.getByRole("row", { name: /River/ })).toHaveTextContent(
+  expect(screen.getByRole("row", { name: /River/ })).toMatchTextContent(
     "2026-11-01T00:00:00 UTC−04:00 – 2026-11-02T00:00:00 UTC−05:00",
   );
 });
@@ -753,23 +753,23 @@ it("renders original-rule Health margins with exact fractions, authored upper li
   const table = await screen.findByRole("table", { name: copy.kinds.health });
   expect(screen.getByText(copy.health.description)).toBeVisible();
   const rest = within(table).getByRole("row", { name: /Minimum rest/ });
-  expect(rest).toHaveTextContent(`1/2 ${copy.health.unitsLabels.minutes}`);
-  expect(rest).toHaveTextContent(`${copy.health.rule} ${personId(9)}`);
+  expect(rest).toMatchTextContent(`1/2 ${copy.health.unitsLabels.minutes}`);
+  expect(rest).toMatchTextContent(`${copy.health.rule} ${personId(9)}`);
   await userEvent.click(within(rest).getByText(copy.health.showEvidence));
   expect(within(rest).getByText("201/2")).toBeVisible();
   expect(within(rest).getByText(copy.health.directionLabels.minimum)).toBeVisible();
   const maximum = within(table).getByRole("row", { name: /Staffing headcount.*Met/ });
-  expect(maximum).toHaveTextContent(`${copy.health.ownerLabels.shiftInstance} ${shiftId}`);
-  expect(maximum).toHaveTextContent(`1 ${copy.health.unitsLabels.people}`);
+  expect(maximum).toMatchTextContent(`${copy.health.ownerLabels.shiftInstance} ${shiftId}`);
+  expect(maximum).toMatchTextContent(`1 ${copy.health.unitsLabels.people}`);
   await userEvent.click(within(maximum).getByText(copy.health.showEvidence));
   expect(within(maximum).getByText(copy.health.directionLabels.maximum)).toBeVisible();
-  expect(maximum).toHaveTextContent("2026-11-01T13:00:00Z");
+  expect(maximum).toMatchTextContent("2026-11-01T13:00:00Z");
   const noApplicable = within(table).getByRole("row", {
     name: /Staffing headcount.*No applicable work/,
   });
-  expect(noApplicable).toHaveTextContent(`${copy.health.rule} ${personId(11)}`);
-  expect(noApplicable).not.toHaveTextContent("0/1");
-  expect(noApplicable).toHaveTextContent(copy.notAvailable);
+  expect(noApplicable).toMatchTextContent(`${copy.health.rule} ${personId(11)}`);
+  expect(noApplicable).not.toMatchTextContent("0/1");
+  expect(noApplicable).toMatchTextContent(copy.notAvailable);
   await userEvent.click(within(rest).getByText(copy.health.assignmentIds(1, 1)));
   expect(within(rest).getByText(assignmentId)).toBeVisible();
 });
@@ -948,7 +948,7 @@ it("keeps checkpoint-only assignment inspection honest and rejects a mismatched 
     portableOperation(explainedResponse(3, personId(99))),
   );
   checkpoint.status = "feasible";
-  expect(await within(details).findByRole("alert")).toHaveTextContent(copy.sourceChanged);
+  expect(await within(details).findByRole("alert")).toMatchTextContent(copy.sourceChanged);
   expect(within(details).queryByText(copy.inspection.limits)).toBeNull();
   await userEvent.click(within(details).getByRole("button", { name: copy.inspection.retry }));
   expect(await within(details).findByText(copy.inspection.limits)).toBeVisible();
@@ -1025,7 +1025,7 @@ it("does not promote retained status to verified facts when a fresh report disag
   expect(screen.queryByText(copy.verification.current)).toBeNull();
   pending.resolve(verifiedResponse(3, "0".repeat(64)));
   const error = await screen.findByRole("alert");
-  expect(error).toHaveTextContent(copy.sourceChanged);
+  expect(error).toMatchTextContent(copy.sourceChanged);
   expect(screen.queryByText(copy.verification.current)).toBeNull();
 
   await userEvent.click(screen.getByRole("button", { name: copy.verification.retry }));

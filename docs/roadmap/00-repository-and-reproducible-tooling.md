@@ -130,7 +130,7 @@ These are bootstrap inputs, not floating ranges. Phase 0 records exact selection
 | HTTP/URL/credentials | `reqwest`, `url`, `keyring`, `zeroize` | 0.13.4, 2.5.8, 4.1.6, 1.9.0 |
 | compatibility/import/CLI/paths | `semver`, `csv`, `clap`, `directories` | 1.0.28, 1.4.0, 4.6.6, 6.0.0 |
 | geometry candidate | `rstar` | 0.13.0; custom deterministic indexed pairs first |
-| desktop | `tauri`, `tauri-build` | 2.11.6, 2.6.3 |
+| desktop | `tauri`, `tauri-build` | 2.12.5, 2.7.4 |
 
 Roles are binding: bundled SQLite behind a dedicated service; strict project ZIP wrapper; BLAKE3 not password hashing; Rustls where provider/platform permits; checked deterministic ordered maps; reviewed calendar serializer; `anyhow` only at executable/application edges.
 
@@ -149,7 +149,7 @@ Roles are binding: bundled SQLite behind a dedicated service; strict project ZIP
 | `@pinia/colada` | 1.4.2 | Mandatory direct pin for server/async state; it does not become authoritative scenario state. |
 | `@vue/devtools-api` | 8.2.1 | Mandatory direct Pinia peer pin; production enablement remains reviewed. |
 | `vite` / `@vitejs/plugin-vue` | 8.2.2 / 6.0.8 | Node 24 compatible. |
-| `@tauri-apps/api` / CLI | 2.11.1 / 2.12.3 | API and native Tauri keep minor 2.11; CLI is independently versioned. |
+| `@tauri-apps/api` / CLI | 2.12.4 / 2.12.4 | API and native Tauri keep minor 2.12; CLI is independently versioned. |
 | updater / shell plugins | 2.10.1 / 2.3.5 | Capability-scoped; updater artifacts use `bundle.createUpdaterArtifacts`. |
 | Tailwind / Vite plugin | 4.3.3 / 4.3.3 | CSS-first; `tw-animate-css`, not `tailwindcss-animate`. |
 | shadcn-vue / Reka UI | 2.8.2 / 2.10.4 | Editable source; audit Tailwind 4 variable syntax. |

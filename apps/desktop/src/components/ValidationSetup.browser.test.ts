@@ -189,7 +189,7 @@ it("checks only the selected full-report occurrence despite another finding with
   await userEvent.click(screen.getByRole("button", { name: messages.validationWorkspace.explain }));
   expect(
     await screen.findByRole("region", { name: messages.validationWorkspace.explanationHeading }),
-  ).toHaveTextContent(second.message);
+  ).toMatchTextContent(second.message);
 
   await userEvent.click(full.getByRole("button", { name: /First source conflict/ }));
   vi.mocked(explainSolution).mockReturnValue(
@@ -213,8 +213,8 @@ it("shows only source-bound native count contradictions and refuses impossible p
   const proof = await screen.findByRole("region", {
     name: messages.validationWorkspace.explanationProofHeading,
   });
-  expect(proof).toHaveTextContent(messages.validationWorkspace.explanationProofCount("1", "2"));
-  expect(proof).toHaveTextContent(coverageRuleId);
+  expect(proof).toMatchTextContent(messages.validationWorkspace.explanationProofCount("1", "2"));
+  expect(proof).toMatchTextContent(coverageRuleId);
   expect(screen.getByText(messages.validationWorkspace.explanationProofBoundary)).toBeVisible();
 
   vi.mocked(explainSolution).mockReturnValue(portableOperation(response(sourceConflict("2"))));

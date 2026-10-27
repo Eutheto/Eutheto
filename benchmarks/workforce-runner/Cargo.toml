@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "=1.0.104"
-clap = { version = "=4.6.6", features = ["derive"] }
+clap = { version = "=4.6.7", features = ["derive"] }
 eutheto-core = { path = "../../crates/eutheto-core" }
 eutheto-domain-api = { path = "../../crates/eutheto-domain-api" }
 eutheto-domain-ir = { path = "../../crates/eutheto-domain-ir" }

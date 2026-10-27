@@ -18,6 +18,7 @@ let
     ".tmp"
     ".turbo"
     ".vite"
+    ".vitest"
     ".vscode"
     ".yarn"
     "CMakeFiles"

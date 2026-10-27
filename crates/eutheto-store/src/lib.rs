@@ -4864,6 +4864,87 @@ fn bounded_decompress_snapshot(compressed: &[u8]) -> Result<Vec<u8>, StoreError>
     Ok(bytes)
 }
 
+#[cfg(test)]
+mod snapshot_codec_tests {
+    use super::{MAX_SCENARIO_DOCUMENT_BYTES, StoreError, bounded_decompress_snapshot};
+    use std::error::Error;
+
+    const DOCUMENT: &[u8] = br#"{"synthetic":"snapshot compatibility","revision":7}"#;
+    // Captured with libzstd 1.5.7, the codec used by the previous zstd 0.13.3 pin.
+    const PREVIOUS_FRAME: &[u8] = b"\x28\xb5\x2f\xfd\x20\x33\x99\x01\x00{\"synthetic\":\"snapshot compatibility\",\"revision\":7}";
+
+    #[test]
+    fn reads_previous_codec_frames_without_changing_document_bytes() -> Result<(), Box<dyn Error>> {
+        assert_eq!(bounded_decompress_snapshot(PREVIOUS_FRAME)?, DOCUMENT);
+        let compressed = [
+            0x28, 0xb5, 0x2f, 0xfd, 0x60, 0x40, 0x00, 0x15, 0x02, 0x00, 0x12, 0x44, 0x0e, 0x15,
+            0xa0, 0xb7, 0x0d, 0x36, 0x7f, 0xd6, 0x43, 0x8b, 0x7c, 0x2e, 0xcd, 0x9b, 0x88, 0xff,
+            0x17, 0xe8, 0x39, 0x4e, 0xff, 0x5f, 0x11, 0x49, 0x60, 0xc6, 0xbc, 0xfe, 0x40, 0x86,
+            0x8b, 0xcf, 0xe6, 0x01, 0x7f, 0xce, 0x29, 0x17, 0xaf, 0x3d, 0x71, 0xe1, 0x7b, 0xaa,
+            0x48, 0x03, 0x6c, 0x26, 0x55, 0x87, 0x6a, 0xb3, 0xf9, 0xa2, 0xb4, 0xb8, 0xd4, 0x48,
+            0x01, 0x00, 0xc2, 0xa7, 0x00, 0x14,
+        ];
+        let mut padded_document = br#"{"synthetic":"snapshot compatibility","padding":""#.to_vec();
+        padded_document.extend_from_slice(&[b'a'; 256]);
+        padded_document.extend_from_slice(br#"","revision":7}"#);
+        assert_eq!(bounded_decompress_snapshot(&compressed)?, padded_document);
+        Ok(())
+    }
+
+    #[test]
+    fn reads_concatenated_frames_and_skips_metadata() -> Result<(), Box<dyn Error>> {
+        let metadata = b"synthetic";
+        let mut frames = 0x184D_2A50_u32.to_le_bytes().to_vec();
+        frames.extend_from_slice(&u32::try_from(metadata.len())?.to_le_bytes());
+        frames.extend_from_slice(metadata);
+        frames.extend_from_slice(PREVIOUS_FRAME);
+        frames.extend_from_slice(PREVIOUS_FRAME);
+        assert_eq!(
+            bounded_decompress_snapshot(&frames)?,
+            [DOCUMENT, DOCUMENT].concat()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_truncated_corrupt_and_trailing_invalid_frames() {
+        for length in [1, 4, 8, PREVIOUS_FRAME.len() - 1] {
+            assert!(matches!(
+                bounded_decompress_snapshot(&PREVIOUS_FRAME[..length]),
+                Err(StoreError::Compression(_))
+            ));
+        }
+        let mut corrupt = PREVIOUS_FRAME.to_vec();
+        corrupt[0] ^= 1;
+        assert!(matches!(
+            bounded_decompress_snapshot(&corrupt),
+            Err(StoreError::Compression(_))
+        ));
+        let mut trailing = PREVIOUS_FRAME.to_vec();
+        trailing.extend_from_slice(b"invalid");
+        assert!(matches!(
+            bounded_decompress_snapshot(&trailing),
+            Err(StoreError::Compression(_))
+        ));
+    }
+
+    #[test]
+    fn retains_exact_decompressed_size_boundary() -> Result<(), Box<dyn Error>> {
+        let limit = usize::try_from(MAX_SCENARIO_DOCUMENT_BYTES)?;
+        for length in [limit, limit + 1] {
+            let document = vec![b'x'; length];
+            let compressed = zstd::stream::encode_all(document.as_slice(), 3)?;
+            let decoded = bounded_decompress_snapshot(&compressed);
+            if length == limit {
+                assert_eq!(decoded?, document);
+            } else {
+                assert!(matches!(decoded, Err(StoreError::SnapshotTooLarge)));
+            }
+        }
+        Ok(())
+    }
+}
+
 fn parse_run_input(bytes: &[u8]) -> Result<RunInput, StoreError> {
     if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
         > eutheto_export::PORTABLE_LIMITS.max_json_bytes
