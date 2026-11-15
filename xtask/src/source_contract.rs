@@ -17,7 +17,7 @@ const APPROVAL_RECORD: &str =
 const ORTOOLS_ARCHIVE_SHA256: &str =
     "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026";
 const ORTOOLS_PATCH_SHA256: &str =
-    "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6";
+    "f813cd763263b3139996c84152cbb2300ceed09a5b46129d35eb12b68880e743";
 const PROTOBUF_ARCHIVE_SHA256: &str =
     "fda132cb0c86400381c0af1fe98bd0f775cb566cb247cdcc105e344e00acc30e";
 const PROTOCOL_SCHEMA_SHA256: &str =
@@ -30,7 +30,7 @@ const EXPECTED_DEPENDENCY_VERSIONS: [(&str, &str); 5] = [
     ("bzip2", "66c46b8c9436613fd81bc5d03f63a61933a4dcc3"),
     ("eigen", "3.4.0"),
     ("re2", "2025-08-12"),
-    ("zlib", "1.3.1"),
+    ("zlib", "1.4"),
 ];
 
 #[derive(Serialize)]
@@ -187,12 +187,12 @@ fn dependency_sources() -> DependencySources {
             (
                 "zlib",
                 DependencySource {
-                    archive_name: "zlib-v1.3.1.tar.gz",
-                    archive_root: "zlib-1.3.1",
-                    patch: "ZLIB-v1.3.1.patch",
-                    sha256: "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
-                    source_url: "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
-                    version: "1.3.1",
+                    archive_name: "zlib-v1.4.tar.gz",
+                    archive_root: "zlib-1.4",
+                    patch: "ZLIB-v1.4.patch",
+                    sha256: "4331355048e286908260fdbeaa0b8cf75ceaf2907c75855a093a6487c7032aaa",
+                    source_url: "https://github.com/madler/zlib/archive/refs/tags/v1.4.tar.gz",
+                    version: "1.4",
                 },
             ),
         ]),
@@ -590,7 +590,7 @@ mod tests {
         );
         assert_eq!(
             contract["ortools"]["patch_sha256"],
-            "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6"
+            "f813cd763263b3139996c84152cbb2300ceed09a5b46129d35eb12b68880e743"
         );
         assert_eq!(
             contract["ortools"]["sha256"],
@@ -665,12 +665,12 @@ mod tests {
                         "version": "2025-08-12"
                     },
                     "zlib": {
-                        "archive_name": "zlib-v1.3.1.tar.gz",
-                        "archive_root": "zlib-1.3.1",
-                        "patch": "ZLIB-v1.3.1.patch",
-                        "sha256": "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
-                        "source_url": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
-                        "version": "1.3.1"
+                        "archive_name": "zlib-v1.4.tar.gz",
+                        "archive_root": "zlib-1.4",
+                        "patch": "ZLIB-v1.4.patch",
+                        "sha256": "4331355048e286908260fdbeaa0b8cf75ceaf2907c75855a093a6487c7032aaa",
+                        "source_url": "https://github.com/madler/zlib/archive/refs/tags/v1.4.tar.gz",
+                        "version": "1.4"
                     }
                 },
                 "ortools": {

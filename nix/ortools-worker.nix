@@ -153,7 +153,7 @@ assert dependencySources.abseil.version == "20250814.1";
 assert dependencySources.bzip2.version == "66c46b8c9436613fd81bc5d03f63a61933a4dcc3";
 assert dependencySources.eigen.version == "3.4.0";
 assert dependencySources.re2.version == "2025-08-12";
-assert dependencySources.zlib.version == "1.3.1";
+assert dependencySources.zlib.version == "1.4";
 assert dependencyValuesAreSafe;
 assert builtins.elem stdenv.hostPlatform.system supportedSystems;
 stdenv.mkDerivation {

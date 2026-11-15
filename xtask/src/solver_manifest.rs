@@ -108,9 +108,9 @@ const BZIP2_SHA256: &str = "3a4cff5f9d197e9e6c6138660afa6b1f9370df0bed135bd94924
 const RE2_VERSION: &str = "2025-08-12";
 const RE2_URL: &str = "https://github.com/google/re2/archive/refs/tags/2025-08-12.tar.gz";
 const RE2_SHA256: &str = "2f3bec634c3e51ea1faf0d441e0a8718b73ef758d7020175ed7e352df3f6ae12";
-const ZLIB_VERSION: &str = "1.3.1";
-const ZLIB_URL: &str = "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz";
-const ZLIB_SHA256: &str = "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c";
+const ZLIB_VERSION: &str = "1.4";
+const ZLIB_URL: &str = "https://github.com/madler/zlib/archive/refs/tags/v1.4.tar.gz";
+const ZLIB_SHA256: &str = "4331355048e286908260fdbeaa0b8cf75ceaf2907c75855a093a6487c7032aaa";
 const ORTOOLS_VERSION: &str = "9.15.6755";
 const ORTOOLS_URL: &str = "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz";
 const ORTOOLS_SHA256: &str = "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026";
@@ -1687,7 +1687,7 @@ fn validate_ortools_cmake_values(map: &CmakeMap, windows: bool, name: &str) -> R
         ),
         (
             "FETCHCONTENT_SOURCE_DIR_ZLIB",
-            "@source-root@/sources/zlib-1.3.1",
+            "@source-root@/sources/zlib-1.4",
         ),
     ] {
         require_cmake_string(map, key, path, name)?;
@@ -2576,7 +2576,7 @@ mod tests {
                     ),
                     (
                         "FETCHCONTENT_SOURCE_DIR_ZLIB",
-                        "@source-root@/sources/zlib-1.3.1",
+                        "@source-root@/sources/zlib-1.4",
                     ),
                 ] {
                     map.insert(key.to_owned(), CacheValue::String(value.to_owned()));

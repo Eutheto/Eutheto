@@ -36,7 +36,7 @@
   },
   "ortools": {
     "patch_path": "workers/ortools/patches/9.15-candidate-fixes.patch",
-    "patch_sha256": "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6",
+    "patch_sha256": "f813cd763263b3139996c84152cbb2300ceed09a5b46129d35eb12b68880e743",
     "sha256": "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026",
     "source_url": "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz",
     "version": "9.15.6755"
