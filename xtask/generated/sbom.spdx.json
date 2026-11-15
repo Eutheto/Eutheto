@@ -6872,9 +6872,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-cargo-libsqlite3-sys-0.38.2-0305",
+      "SPDXID": "SPDXRef-Package-cargo-libsqlite3-sys-0.39.1-0305",
       "name": "libsqlite3-sys",
-      "versionInfo": "0.38.2",
+      "versionInfo": "0.39.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -6884,13 +6884,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/libsqlite3-sys@0.38.2"
+          "referenceLocator": "pkg:cargo/libsqlite3-sys@0.39.1"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+          "checksumValue": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
         }
       ]
     },
@@ -9862,9 +9862,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-cargo-rusqlite-0.40.2-0435",
+      "SPDXID": "SPDXRef-Package-cargo-rusqlite-0.41.0-0435",
       "name": "rusqlite",
-      "versionInfo": "0.40.2",
+      "versionInfo": "0.41.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -9874,13 +9874,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/rusqlite@0.40.2"
+          "referenceLocator": "pkg:cargo/rusqlite@0.41.0"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+          "checksumValue": "9c026b4444579e8d754556c6c75d040d69c4a44283cdb648ab8a8d5965c2cfa8"
         }
       ]
     },
@@ -9954,9 +9954,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-cargo-rustix-1.1.5-0439",
+      "SPDXID": "SPDXRef-Package-cargo-rustix-1.1.6-0439",
       "name": "rustix",
-      "versionInfo": "1.1.5",
+      "versionInfo": "1.1.6",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
@@ -9966,13 +9966,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/rustix@1.1.5"
+          "referenceLocator": "pkg:cargo/rustix@1.1.6"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+          "checksumValue": "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
         }
       ]
     },
@@ -27422,7 +27422,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cargo-libsqlite3-sys-0.38.2-0305"
+      "relatedSpdxElement": "SPDXRef-Package-cargo-libsqlite3-sys-0.39.1-0305"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -28072,7 +28072,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cargo-rusqlite-0.40.2-0435"
+      "relatedSpdxElement": "SPDXRef-Package-cargo-rusqlite-0.41.0-0435"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -28092,7 +28092,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-cargo-rustix-1.1.5-0439"
+      "relatedSpdxElement": "SPDXRef-Package-cargo-rustix-1.1.6-0439"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

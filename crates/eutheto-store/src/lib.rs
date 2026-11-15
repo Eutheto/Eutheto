@@ -37,8 +37,8 @@ use eutheto_types::{
     validate_scenario_owned_uuid_uniqueness, visit_asset_reference_map,
 };
 use rusqlite::{
-    Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, limits::Limit, params,
-    types::ValueRef,
+    Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, backup::NO_PROGRESS,
+    limits::Limit, params, types::ValueRef,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -3698,7 +3698,7 @@ impl SqliteScenarioStore {
         self.call(move |connection| {
             let guard = prepare_private_new_file(&destination)?;
             connection.pragma_update(None, "synchronous", "FULL")?;
-            let backup_result = connection.backup(MAIN_DB, &destination, None);
+            let backup_result = connection.backup(MAIN_DB, &destination, NO_PROGRESS);
             let restore_result = connection.pragma_update(None, "synchronous", "NORMAL");
             if let Err(error) = backup_result {
                 remove_guarded_file(&destination, &guard);
@@ -9495,7 +9495,7 @@ fn ensure_pre_v2_backup(
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let guard = prepare_private_new_file(&backup_path)?;
-            if let Err(error) = connection.backup(MAIN_DB, &backup_path, None) {
+            if let Err(error) = connection.backup(MAIN_DB, &backup_path, NO_PROGRESS) {
                 remove_guarded_file(&backup_path, &guard);
                 return Err(StoreError::Database(error));
             }
@@ -9518,7 +9518,7 @@ fn validate_v1_backup_matches_live(
     let temporary_path = PathBuf::from(temporary_name);
     let guard = prepare_private_new_file(&temporary_path)?;
     let result = (|| {
-        live.backup(MAIN_DB, &temporary_path, None)?;
+        live.backup(MAIN_DB, &temporary_path, NO_PROGRESS)?;
         ensure_same_file(&guard.file, &temporary_path)?;
         restrict_private_file(&temporary_path)?;
         validate_v1_backup(&temporary_path, v1_checksum)?;
