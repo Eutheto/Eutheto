@@ -735,6 +735,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `@humanwhocodes/retry` | `0.4.3` | `NOASSERTION` | `https://registry.npmjs.org/@humanwhocodes/retry/-/retry-0.4.3.tgz` |
 | npm | `@internationalized/date` | `3.12.4` | `NOASSERTION` | `https://registry.npmjs.org/@internationalized/date/-/date-3.12.4.tgz` |
 | npm | `@internationalized/number` | `3.6.8` | `NOASSERTION` | `https://registry.npmjs.org/@internationalized/number/-/number-3.6.8.tgz` |
+| npm | `@isaacs/nonrecursive-glob-match` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/@isaacs/nonrecursive-glob-match/-/nonrecursive-glob-match-1.1.0.tgz` |
 | npm | `@jridgewell/gen-mapping` | `0.3.13` | `NOASSERTION` | `https://registry.npmjs.org/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz` |
 | npm | `@jridgewell/remapping` | `2.3.5` | `NOASSERTION` | `https://registry.npmjs.org/@jridgewell/remapping/-/remapping-2.3.5.tgz` |
 | npm | `@jridgewell/resolve-uri` | `3.1.2` | `NOASSERTION` | `https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz` |
@@ -932,7 +933,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `functions-have-names` | `1.2.3` | `NOASSERTION` | `https://registry.npmjs.org/functions-have-names/-/functions-have-names-1.2.3.tgz` |
 | npm | `get-intrinsic` | `1.3.0` | `NOASSERTION` | `https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz` |
 | npm | `get-proto` | `1.0.1` | `NOASSERTION` | `https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz` |
-| npm | `glob` | `13.0.6` | `NOASSERTION` | `https://registry.npmjs.org/glob/-/glob-13.0.6.tgz` |
+| npm | `glob` | `14.0.2` | `NOASSERTION` | `https://registry.npmjs.org/glob/-/glob-14.0.2.tgz` |
 | npm | `glob-parent` | `6.0.2` | `NOASSERTION` | `https://registry.npmjs.org/glob-parent/-/glob-parent-6.0.2.tgz` |
 | npm | `gopd` | `1.2.0` | `NOASSERTION` | `https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz` |
 | npm | `graceful-fs` | `4.2.11` | `NOASSERTION` | `https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz` |
@@ -1010,7 +1011,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `magic-string` | `1.4.3` | `NOASSERTION` | `https://registry.npmjs.org/magic-string/-/magic-string-1.4.3.tgz` |
 | npm | `magic-string-ast` | `1.0.3` | `NOASSERTION` | `https://registry.npmjs.org/magic-string-ast/-/magic-string-ast-1.0.3.tgz` |
 | npm | `math-intrinsics` | `1.1.0` | `NOASSERTION` | `https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz` |
-| npm | `minimatch` | `10.2.6` | `NOASSERTION` | `https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz` |
+| npm | `minimatch` | `11.0.1` | `NOASSERTION` | `https://registry.npmjs.org/minimatch/-/minimatch-11.0.1.tgz` |
 | npm | `minipass` | `7.1.3` | `NOASSERTION` | `https://registry.npmjs.org/minipass/-/minipass-7.1.3.tgz` |
 | npm | `mlly` | `1.8.2` | `NOASSERTION` | `https://registry.npmjs.org/mlly/-/mlly-1.8.2.tgz` |
 | npm | `mrmime` | `2.0.1` | `NOASSERTION` | `https://registry.npmjs.org/mrmime/-/mrmime-2.0.1.tgz` |
@@ -1034,7 +1035,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `path-browserify` | `1.0.1` | `NOASSERTION` | `https://registry.npmjs.org/path-browserify/-/path-browserify-1.0.1.tgz` |
 | npm | `path-exists` | `4.0.0` | `NOASSERTION` | `https://registry.npmjs.org/path-exists/-/path-exists-4.0.0.tgz` |
 | npm | `path-key` | `3.1.1` | `NOASSERTION` | `https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz` |
-| npm | `path-scurry` | `2.0.2` | `NOASSERTION` | `https://registry.npmjs.org/path-scurry/-/path-scurry-2.0.2.tgz` |
+| npm | `path-scurry` | `3.0.0` | `NOASSERTION` | `https://registry.npmjs.org/path-scurry/-/path-scurry-3.0.0.tgz` |
 | npm | `pathe` | `2.0.3` | `NOASSERTION` | `https://registry.npmjs.org/pathe/-/pathe-2.0.3.tgz` |
 | npm | `perfect-debounce` | `2.1.0` | `NOASSERTION` | `https://registry.npmjs.org/perfect-debounce/-/perfect-debounce-2.1.0.tgz` |
 | npm | `picocolors` | `1.1.1` | `NOASSERTION` | `https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz` |
@@ -1267,4 +1268,4 @@ License: `CC-BY-SA-3.0`
 
 0 reviewed asset group(s) have `NOASSERTION`: exact source bytes and attribution are recorded, but their license conclusion remains unresolved.
 
-1106 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+1107 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

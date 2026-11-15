@@ -59,6 +59,7 @@ frontend-typecheck:
 # Run the frontend unit and component tests.
 frontend-test:
     pnpm --filter @eutheto/desktop run test
+    node tests/security/npm-dependency-regressions.mjs
 
 
 # Explicitly install the pinned headless Chromium used by browser component tests.
