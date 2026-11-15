@@ -7643,6 +7643,8 @@ async fn copied_archive_owns_only_live_root_and_survives_original_scenario_delet
 
 #[tokio::test]
 async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box<dyn Error>> {
+    // RUSTSEC-2026-0459: older SQLite can expose stale memory through crafted WAL files.
+    assert!(rusqlite::version_number() >= 3_054_000);
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
     let (store, _) = SqliteScenarioStore::open(&path).await?;
