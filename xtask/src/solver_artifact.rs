@@ -49,7 +49,7 @@ const LICENSE_SOURCE_SHA256: [(&str, &str); 8] = [
     ),
     (
         "licenses/zlib-Zlib.txt",
-        "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+        "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
     ),
 ];
 const CAPABILITIES: [&str; 8] = [
@@ -392,12 +392,12 @@ fn validate_dependency_profile(
         ),
         (
             "zlib",
-            "1.3.1",
-            "zlib-v1.3.1.tar.gz",
-            "zlib-1.3.1",
-            "ZLIB-v1.3.1.patch",
-            "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
-            "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+            "1.4",
+            "zlib-v1.4.tar.gz",
+            "zlib-1.4",
+            "ZLIB-v1.4.patch",
+            "https://github.com/madler/zlib/archive/refs/tags/v1.4.tar.gz",
+            "4331355048e286908260fdbeaa0b8cf75ceaf2907c75855a093a6487c7032aaa",
         ),
     ];
     ensure!(

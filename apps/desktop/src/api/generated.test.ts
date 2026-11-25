@@ -4772,7 +4772,12 @@ describe("portable review ownership", () => {
       previewId: preview.previewId,
       collisionPlan,
     };
-    last.key = "x".repeat(64 * 1_048_576 - JSON.stringify(framed).length + 1);
+    // Each x contributes one JSON byte. Measure only the frame with empty keys.
+    const frameBytes = JSON.stringify(framed, (name, value) =>
+      name === "key" ? "" : value,
+    ).length;
+    const filledKeyBytes = (choices.length - 1) * chunk.length;
+    last.key = "x".repeat(64 * 1_048_576 + 1 - frameBytes - filledKeyBytes);
     const apply = flow.applyImport(new generated.LibraryOperationScope(7), {
       previewId: preview.previewId,
       collisionPlan,
