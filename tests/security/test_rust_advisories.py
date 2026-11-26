@@ -3,7 +3,7 @@
 """Exercise the actual advisory gate's expiry and negative scope boundaries."""
 
 from copy import deepcopy
-from datetime import date
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import io
 import json
@@ -37,11 +37,17 @@ class AdvisoryGateTests(unittest.TestCase):
                        "vulnerabilities": {"found": False, "count": 0, "list": []},
                        "warnings": {"unmaintained": rows}}
 
-    def test_inclusive_utc_deadline(self):
-        for today in (date(2026, 10, 18), date(2026, 11, 16)):
-            gate.check_scope(self.lock, self.ignored, today)
-        with self.assertRaisesRegex(ValueError, "expired"):
-            gate.check_scope(self.lock, self.ignored, date(2026, 11, 17))
+    def test_reviewed_utc_window(self):
+        approved = datetime(2026, 11, 26, 6, 38, 18, tzinfo=timezone.utc)
+        cutoff = datetime(2026, 12, 17, tzinfo=timezone.utc)
+        tick = timedelta(microseconds=1)
+        with self.assertRaisesRegex(ValueError, "not started"):
+            gate.check_scope(self.lock, self.ignored, approved - tick)
+        for instant in (approved, cutoff - tick):
+            gate.check_scope(self.lock, self.ignored, instant)
+        for instant in (cutoff, cutoff + tick):
+            with self.subTest(instant=instant), self.assertRaisesRegex(ValueError, "expired"):
+                gate.check_scope(self.lock, self.ignored, instant)
 
     def test_every_exact_package_identity_is_required(self):
         for index in range(6):
@@ -50,10 +56,10 @@ class AdvisoryGateTests(unittest.TestCase):
                     lock = deepcopy(self.lock)
                     lock["package"][index][field] += "-changed"
                     with self.assertRaisesRegex(ValueError, "re-review"):
-                        gate.check_scope(lock, self.ignored, date(2026, 11, 16))
+                        gate.check_scope(lock, self.ignored, gate.APPROVED_AT)
         self.lock["package"].append(deepcopy(self.lock["package"][0]))
         with self.assertRaises(ValueError):
-            gate.check_scope(self.lock, self.ignored, date(2026, 11, 16))
+            gate.check_scope(self.lock, self.ignored, gate.APPROVED_AT)
 
     def test_only_six_matching_maintenance_notices_pass(self):
         self.assertTrue(gate.check_report(self.report, self.ignored))
@@ -81,7 +87,7 @@ class AdvisoryGateTests(unittest.TestCase):
             with self.subTest(advisory_id=advisory_id):
                 ignored = self.ignored | {advisory_id}
                 with self.assertRaises(ValueError):
-                    gate.check_scope(self.lock, ignored, date(2026, 11, 16))
+                    gate.check_scope(self.lock, ignored, gate.APPROVED_AT)
                 report = deepcopy(self.report)
                 report["vulnerabilities"] = {"found": True, "count": 1, "list": [
                     {"advisory": {"id": advisory_id}, "package": {"name": "zip"}}]}
@@ -103,7 +109,7 @@ class AdvisoryGateTests(unittest.TestCase):
         report["vulnerabilities"] = {"found": True, "count": 1, "list": [
             {"advisory": {"id": advisory_id}, "package": {"name": "new-vulnerable-dependency"}}]}
         with self.assertRaisesRegex(ValueError, "existing GTK policy"):
-            gate.check_scope(self.lock, ignored, date(2026, 11, 16))
+            gate.check_scope(self.lock, ignored, gate.APPROVED_AT)
         with self.assertRaisesRegex(ValueError, "existing GTK policy"):
             gate.check_report(report, ignored)
 
