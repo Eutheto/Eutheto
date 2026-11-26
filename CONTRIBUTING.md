@@ -59,9 +59,12 @@ Report exactly what you ran and what it proved. A build does not prove product a
 
 ## Temporary Phase 07 maintenance dispositions
 
-Owner **Phase07maintainer** accepts only the following informational
-`unmaintained` notices through **2026-11-16 UTC inclusive**, with **no automatic
-renewal**. These are maintenance-risk dispositions, not vulnerability exemptions.
+Owner **Phase07maintainer** approved only the six exact informational
+`unmaintained` notices below on **2026-11-26 at 06:38:18 UTC**. Review them on
+**2026-12-10 UTC**. This window expires at **2026-12-17 00:00 UTC exclusive**,
+with **no automatic renewal**. Chrono is outside this decision. The separate
+Tauri/GTK review remains on hold and its November 30 guard still applies.
+[Maintainer decision](https://github.com/Eutheto/Eutheto/pull/103#issuecomment-7184628514). These are maintenance-risk dispositions, not vulnerability exemptions.
 
 | Locked package | Maintenance notice |
 | --- | --- |

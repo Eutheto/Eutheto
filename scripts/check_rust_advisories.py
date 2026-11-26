@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Enforce the exact, temporary Phase 07 maintenance dispositions before deny."""
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import subprocess
@@ -11,7 +11,8 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPIRY = date(2026, 11, 16)  # Inclusive UTC; no automatic renewal.
+APPROVED_AT = datetime(2026, 11, 26, 6, 38, 18, tzinfo=timezone.utc)
+EXPIRY = datetime(2026, 12, 17, tzinfo=timezone.utc)  # Exclusive UTC cutoff.
 SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 # Owner: Phase07maintainer. Re-review conditions are in CONTRIBUTING.md.
 MAINTENANCE = {
@@ -47,9 +48,11 @@ def matches(package, expected):
             package.get("checksum")) == (name, version, SOURCE, checksum)
 
 
-def check_scope(lock, ignored, today):
-    if today > EXPIRY:
-        raise ValueError(f"Phase 07 maintenance dispositions expired after {EXPIRY} UTC; no automatic renewal")
+def check_scope(lock, ignored, now):
+    if now < APPROVED_AT:
+        raise ValueError("Phase 07 reviewed window has not started")
+    if now >= EXPIRY:
+        raise ValueError(f"Phase 07 maintenance dispositions expired at {EXPIRY.isoformat()}; no automatic renewal")
     if PROTECTED & ignored or not MAINTENANCE.keys() <= ignored:
         raise ValueError("deny.toml must contain the six approved maintenance IDs and no protected vulnerability IDs")
     check_ignored_ids(ignored)
@@ -101,7 +104,7 @@ def main():
         lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
         policy = tomllib.loads((ROOT / "deny.toml").read_text())
         ignored = {item["id"] for item in policy["advisories"]["ignore"]}
-        check_scope(lock, ignored, datetime.now(timezone.utc).date())
+        check_scope(lock, ignored, datetime.now(timezone.utc))
         result = subprocess.run(
             ["cargo", "audit", "--json", "--deny", "warnings"],
             cwd=ROOT, text=True, stdout=subprocess.PIPE, check=False,
@@ -114,7 +117,7 @@ def main():
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"Rust advisory gate failed: {error}", file=sys.stderr)
         return 1
-    print(f"Rust advisory gate: six exact maintenance dispositions valid through {EXPIRY} UTC")
+    print(f"Rust advisory gate: six exact maintenance dispositions expire at {EXPIRY.isoformat()}")
     return 0
 
 
