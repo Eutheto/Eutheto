@@ -62,7 +62,7 @@ Report exactly what you ran and what it proved. A build does not prove product a
 Owner **Phase07maintainer** approved only the six exact informational
 `unmaintained` notices below on **2026-11-26 at 06:38:18 UTC**. Review them on
 **2026-12-10 UTC**. This window expires at **2026-12-17 00:00 UTC exclusive**,
-with **no automatic renewal**. Chrono is outside this decision. The separate
+with **no automatic renewal**. Chrono has a separate lockfile-only decision below. The separate
 Tauri/GTK review remains on hold and its November 30 guard still applies.
 [Maintainer decision](https://github.com/Eutheto/Eutheto/pull/103#issuecomment-7184628514). These are maintenance-risk dispositions, not vulnerability exemptions.
 
@@ -92,14 +92,26 @@ gate checks dependency identity and advisory findings, not semantic reachability
 Run `just rust-advisories` locally and in CI. Its mandatory Python precheck binds
 each exact package version, crates.io source and checksum, checks the current UTC
 date, then inspects an unfiltered `cargo audit --json --deny warnings` report.
-Only the six matching `unmaintained` findings receive these dispositions;
+The six matching PDF `unmaintained` findings and the separately reviewed, inactive
+Chrono finding receive their respective dispositions;
 reclassification, missing notices, changed identities and new findings fail.
-The ignore-ID set is fixed to these six notices plus the 17 existing GTK
+The ignore-ID set is fixed to the six PDF notices plus the 17 existing GTK
 exceptions; adding an ignored advisory ID requires an explicit policy review.
 `cargo deny --locked check advisories licenses bans sources` runs only after that
 precheck passes. Direct `cargo deny` ignores advisory IDs alone and does not
 enforce these dispositions' expiry or package scope. `just rust-advisories-test`
 exercises the accepted deadline and rejection boundaries without network access.
+The maintainer separately approved RUSTSEC-2026-0543 only for the crates.io
+`chrono 0.4.45` lock entry with SHA-256
+`1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327`.
+It is an optional dependency of `serde_with`. Review on December 10 UTC.
+The disposition expires December 17, 2026 at 00:00 UTC exclusive. The canonical
+gate requires a successful locked forward Cargo tree over every workspace member,
+all workspace features and all target platforms, including normal, build and
+development edges. Any active Chrono package, failed graph proof, changed
+identity, or changed classification requires re-review. Continue scanning the
+unfiltered lockfile for new findings. Chrono is never added to the cargo-deny ignore list.
+
 Existing GTK exceptions retain their separate 2026-11-30 gate.
 
 Never suppress RUSTSEC-2026-0194, RUSTSEC-2026-0195, RUSTSEC-2026-0367,

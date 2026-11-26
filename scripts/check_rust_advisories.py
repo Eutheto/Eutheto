@@ -4,6 +4,7 @@
 
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,11 @@ MAINTENANCE = {
     "RUSTSEC-2024-0449": ("unsafe-libyaml", "0.2.11", "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"),
     "RUSTSEC-2024-0320": ("yaml-rust", "0.4.5", "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"),
 }
+# Separate lockfile-only decision. Both reviewed windows end at EXPIRY.
+CHRONO_ID = "RUSTSEC-2026-0543"
+REVIEWED = {**MAINTENANCE, CHRONO_ID: (
+    "chrono", "0.4.45", "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327",
+)}
 PROTECTED = {
     "RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368", "RUSTSEC-2026-0369",
@@ -56,10 +62,30 @@ def check_scope(lock, ignored, now):
     if PROTECTED & ignored or not MAINTENANCE.keys() <= ignored:
         raise ValueError("deny.toml must contain the six approved maintenance IDs and no protected vulnerability IDs")
     check_ignored_ids(ignored)
-    for advisory_id, expected in MAINTENANCE.items():
+    for advisory_id, expected in REVIEWED.items():
         packages = [p for p in lock["package"] if p["name"] == expected[0]]
         if len(packages) != 1 or not matches(packages[0], expected):
             raise ValueError(f"{advisory_id}: locked package/version/source/checksum changed; re-review required")
+
+
+def check_chrono_inactive(root):
+    # Use the forward graph: a successful inverse query can return empty output.
+    command = ["cargo", "tree", "--locked", "--workspace", "--all-features", "--target", "all",
+               "--edges", "normal,build,dev", "--prefix", "none", "--format", "{p}",
+               "--color", "never"]
+    result = subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE, check=True)
+    packages = set()
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        row = re.fullmatch(r"([A-Za-z0-9_-]+) v[0-9]+\.[0-9]+\.[0-9]+[^ ]*(?: .*)?", line)
+        if not row:
+            raise ValueError("unrecognized cargo tree output; chrono inactivity unproven")
+        packages.add(row[1])
+    if "chrono" in packages:
+        raise ValueError("chrono is active; lockfile-only disposition refused")
+    if not {"eutheto-desktop", "serde_with"} <= packages:
+        raise ValueError("incomplete desktop dependency graph; chrono inactivity unproven")
 
 
 def check_report(report, ignored):
@@ -84,17 +110,17 @@ def check_report(report, ignored):
         advisory_id = advisory.get("id")
         if advisory_id in PROTECTED:
             raise ValueError(f"{advisory_id}: vulnerability disposition is forbidden")
-        if advisory_id in MAINTENANCE:
+        if advisory_id in REVIEWED:
             if (kind != "unmaintained" or row.get("kind") != "unmaintained"
                     or advisory.get("informational") != "unmaintained"
-                    or advisory.get("package") != MAINTENANCE[advisory_id][0]
-                    or not matches(row["package"], MAINTENANCE[advisory_id])
+                    or advisory.get("package") != REVIEWED[advisory_id][0]
+                    or not matches(row["package"], REVIEWED[advisory_id])
                     or advisory_id in seen):
                 raise ValueError(f"{advisory_id}: maintenance classification or exact package scope changed")
             seen.add(advisory_id)
         elif advisory_id not in ignored:
             raise ValueError(f"unreviewed {kind}: {advisory_id or row.get('package', {}).get('name', 'unknown')}")
-    if seen != MAINTENANCE.keys():
+    if seen != REVIEWED.keys():
         raise ValueError("expected maintenance notices missing; re-review required")
     return bool(findings)
 
@@ -105,6 +131,7 @@ def main():
         policy = tomllib.loads((ROOT / "deny.toml").read_text())
         ignored = {item["id"] for item in policy["advisories"]["ignore"]}
         check_scope(lock, ignored, datetime.now(timezone.utc))
+        check_chrono_inactive(ROOT)
         result = subprocess.run(
             ["cargo", "audit", "--json", "--deny", "warnings"],
             cwd=ROOT, text=True, stdout=subprocess.PIPE, check=False,
@@ -114,10 +141,10 @@ def main():
         findings = check_report(json.loads(result.stdout), ignored)
         if result.returncode and not findings:
             raise ValueError("cargo audit failed without advisory findings")
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError) as error:
         print(f"Rust advisory gate failed: {error}", file=sys.stderr)
         return 1
-    print(f"Rust advisory gate: six exact maintenance dispositions expire at {EXPIRY.isoformat()}")
+    print(f"Rust advisory gate: reviewed PDF and lockfile-only dispositions expire at {EXPIRY.isoformat()}")
     return 0
 
 
