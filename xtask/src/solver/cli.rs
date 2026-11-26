@@ -327,6 +327,16 @@ fn smoke_stored_comparison(
     let first_id = first["result"]["solutions"][0]["result"]["solutionId"]
         .as_str()
         .context("first stored solution omitted its identity")?;
+    let unavailable = run_cli(
+        executable,
+        library,
+        &["solutions", "compare", stored_id, "--latest"],
+        6,
+    )?;
+    ensure!(
+        unavailable["error"]["code"] == "solution.comparison_pair_unavailable",
+        "latest comparison must refuse a single retained result"
+    );
     let second_output = root.join("stored-second-result.json");
     let second = run_cli(
         executable,
@@ -356,10 +366,23 @@ fn smoke_stored_comparison(
         candidate_id != first_id,
         "distinct runs must retain distinct result identities"
     );
+    let listed = run_cli(executable, library, &["solutions", "list", stored_id], 0)?;
+    let latest_candidate = listed["result"]["solutions"][0]["result"]["solutionId"]
+        .as_str()
+        .context("latest stored candidate omitted its identity")?;
+    let latest_base = listed["result"]["solutions"][1]["result"]["solutionId"]
+        .as_str()
+        .context("previous stored result omitted its identity")?;
     let compared = run_cli(
         executable,
         library,
-        &["solutions", "compare", stored_id, first_id, candidate_id],
+        &[
+            "solutions",
+            "compare",
+            stored_id,
+            latest_base,
+            latest_candidate,
+        ],
         0,
     )?;
     ensure!(
@@ -367,10 +390,26 @@ fn smoke_stored_comparison(
             && compared["status"] == "compared"
             && compared["result"]["schemaVersion"] == 3
             && compared["result"]["comparison"]["score"]["type"] == "comparable"
-            && compared["result"]["comparison"]["base"]["acceptedResult"]["solutionId"] == first_id
+            && compared["result"]["comparison"]["base"]["acceptedResult"]["solutionId"]
+                == latest_base
             && compared["result"]["comparison"]["candidate"]["acceptedResult"]["solutionId"]
-                == candidate_id,
+                == latest_candidate,
         "relocated CLI compared response omitted the independently accepted result pair"
+    );
+    let latest = run_cli(
+        executable,
+        library,
+        &["solutions", "compare", stored_id, "--latest"],
+        0,
+    )?;
+    ensure!(
+        latest == compared,
+        "latest comparison differs from the explicit pair in saved-result order"
+    );
+    let after = run_cli(executable, library, &["solutions", "list", stored_id], 0)?;
+    ensure!(
+        after == listed,
+        "read-only latest comparison changed the saved results or selection"
     );
     Ok(())
 }

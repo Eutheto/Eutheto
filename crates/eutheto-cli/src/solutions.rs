@@ -6,7 +6,10 @@ use super::{
     execute_solution_explain, execute_solution_list, execute_solution_verify, files, open_app,
     scenario_files,
 };
-use eutheto_core::{AppQuery, AppQueryResult, RecipientReportRequestV1};
+use eutheto_core::{
+    AppQuery, AppQueryResult, RecipientReportRequestV1, SOLUTION_API_SCHEMA_VERSION,
+    SolutionListRequestV1,
+};
 use eutheto_domain_ir::{DomainAssignmentId, PortableAcceptedResult};
 use eutheto_export::PORTABLE_LIMITS;
 use eutheto_types::{
@@ -71,7 +74,14 @@ pub(super) async fn execute(
             scenario,
             solution_a,
             solution_b,
+            latest,
         } => {
+            if latest {
+                return compare_latest(data_dir, &scenario, cancellation).await;
+            }
+            let (solution_a, solution_b) = solution_a
+                .zip(solution_b)
+                .ok_or_else(|| ("solutions.compare", super::unexpected_result()))?;
             let left = paired_ids(Path::new(&scenario), Path::new(&solution_a))
                 .map_err(|error| ("solutions.compare", error))?;
             let right = paired_ids(Path::new(&scenario), Path::new(&solution_b))
@@ -91,6 +101,53 @@ pub(super) async fn execute(
             execute_solution_compare(&app, &scenario, &solution_a, &solution_b).await
         }
     }
+}
+
+async fn compare_latest(
+    data_dir: Option<PathBuf>,
+    scenario: &str,
+    cancellation: &CancellationToken,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let scenario_id = files::scenario_id_or_file(Path::new(scenario))
+        .map_err(|error| ("solutions.compare", error))?
+        .ok_or_else(|| {
+            (
+                "solutions.compare",
+                SafeCliError::unavailable(
+                    "solution.stored_comparison_required",
+                    "Latest comparison requires a stored scenario identifier.",
+                ),
+            )
+        })?;
+    let app = open_app(data_dir, cancellation)
+        .await
+        .map_err(|error| ("solutions.compare", error))?;
+    let AppQueryResult::SolutionList(list) = app
+        .query(AppQuery::SolutionList(SolutionListRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id,
+        }))
+        .await
+        .map_err(|error| ("solutions.compare", app_error(error)))?
+    else {
+        return Err(("solutions.compare", super::unexpected_result()));
+    };
+    let [candidate, base, ..] = list.solutions.as_slice() else {
+        return Err((
+            "solutions.compare",
+            SafeCliError::unavailable(
+                "solution.comparison_pair_unavailable",
+                "Latest comparison requires at least two retained accepted results; solve this scenario again and retry.",
+            ),
+        ));
+    };
+    execute_solution_compare(
+        &app,
+        scenario,
+        &base.result.solution_id.to_string(),
+        &candidate.result.solution_id.to_string(),
+    )
+    .await
 }
 
 fn paired_ids(

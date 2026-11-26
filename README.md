@@ -609,11 +609,19 @@ optimizer --format json solutions export ./scenario.json ./result.json --format 
 ```
 
 For two stored accepted results, compare an explicit base and candidate under
-the same scenario ID:
+the same scenario ID, or use the latest-two shortcut:
 
 ```sh
 target/cli-package/optimizer --format json solutions compare "$scenario_id" "$base_solution_id" "$candidate_solution_id"
+target/cli-package/optimizer --format json solutions compare "$scenario_id" --latest
 ```
+
+`--latest` uses the first two accepted records from `solutions list`, with the
+newest as candidate and the previous as base, matching the desktop's **Compare
+latest two results** action. Viewing an older selected result does not change
+this pair. The shortcut requires a stored scenario ID and at least two retained
+accepted results, and does not change the scenario or selected result. Use either
+`--latest` or the two explicit IDs, not both.
 
 The CLI independently re-verifies both original source results before returning
 the current V3 comparison envelope. Score ordering requires recognized,

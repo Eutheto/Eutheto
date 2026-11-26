@@ -1807,6 +1807,8 @@ Pause and write an ADR if a rule cannot be independently verified, a backend nee
 
 ## Exit gate
 
+Use the [Workforce checkpoint walkthrough](../contributors/phase07-workforce-checkpoint.md) to record owner and native desktop evidence.
+
 Phase 07 is complete only when:
 
 - the user has tested the complete Workforce workflow, feedback is resolved, and explicit checkpoint acceptance and authorization to enter Phase 08 are recorded under the [manual checkpoint policy](README.md#user-manual-checkpoint-gates);

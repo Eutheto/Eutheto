@@ -519,10 +519,21 @@ enum SolutionsCommand {
     Compare {
         #[arg(value_name = "SCENARIO")]
         scenario: String,
-        #[arg(value_name = "BASE_SOLUTION")]
-        solution_a: String,
-        #[arg(value_name = "CANDIDATE_SOLUTION")]
-        solution_b: String,
+        #[arg(
+            value_name = "BASE_SOLUTION",
+            required_unless_present = "latest",
+            requires = "solution_b"
+        )]
+        solution_a: Option<String>,
+        #[arg(
+            value_name = "CANDIDATE_SOLUTION",
+            required_unless_present = "latest",
+            requires = "solution_a"
+        )]
+        solution_b: Option<String>,
+        /// Compare the latest two retained accepted results in saved-result order.
+        #[arg(long, conflicts_with_all = ["solution_a", "solution_b"])]
+        latest: bool,
     },
     Explain {
         #[arg(value_name = "SCENARIO")]
