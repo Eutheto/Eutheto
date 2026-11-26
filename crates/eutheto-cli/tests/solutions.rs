@@ -93,6 +93,70 @@ fn solution_list_is_a_real_versioned_core_query() -> Result<(), Box<dyn Error>> 
 }
 
 #[test]
+fn latest_comparison_requires_two_retained_results() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = create_project(directory.path())?;
+    let (output, envelope) = run_json(
+        directory.path(),
+        &["solutions", "compare", &scenario, "--latest"],
+    )?;
+    assert_eq!(output.status.code(), Some(6), "{envelope}");
+    assert_eq!(envelope["command"], "solutions.compare");
+    assert_eq!(
+        envelope["error"]["code"],
+        "solution.comparison_pair_unavailable"
+    );
+    let (_, list) = run_json(directory.path(), &["solutions", "list", &scenario])?;
+    assert_eq!(list["result"]["solutions"], serde_json::json!([]));
+    Ok(())
+}
+
+#[test]
+fn latest_comparison_rejects_files_without_reading_or_opening_a_library()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = directory.path().join("private-scenario.json");
+    let (output, envelope) = run_json(
+        directory.path(),
+        &[
+            "solutions",
+            "compare",
+            scenario.to_str().ok_or("non-UTF-8 scenario path")?,
+            "--latest",
+        ],
+    )?;
+    assert_eq!(output.status.code(), Some(6), "{envelope}");
+    assert_eq!(envelope["command"], "solutions.compare");
+    assert_eq!(
+        envelope["error"]["code"],
+        "solution.stored_comparison_required"
+    );
+    assert!(!serde_json::to_string(&envelope)?.contains("private-scenario"));
+    assert_eq!(fs::read_dir(directory.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn comparison_requires_either_latest_or_a_complete_explicit_pair() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let scenario = "01900000-0000-7000-8000-000000000100";
+    for operands in [
+        vec![],
+        vec![MISSING_SOLUTION_A],
+        vec!["--latest", MISSING_SOLUTION_A],
+        vec![MISSING_SOLUTION_A, MISSING_SOLUTION_B, "--latest"],
+    ] {
+        let mut arguments = vec!["solutions", "compare", scenario];
+        arguments.extend(operands);
+        let (output, envelope) = run_json(directory.path(), &arguments)?;
+        assert_eq!(output.status.code(), Some(2), "{envelope}");
+        assert_eq!(envelope["error"]["code"], "cli.usage");
+        assert_eq!(fs::read_dir(directory.path())?.count(), 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn real_solution_queries_reject_malformed_typed_ids_before_authority_lookup()
 -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
@@ -101,6 +165,11 @@ fn real_solution_queries_reject_malformed_typed_ids_before_authority_lookup()
         (
             &["solutions", "list", "not-a-scenario"],
             "solutions.list",
+            "scenario.id_invalid",
+        ),
+        (
+            &["solutions", "compare", "not-a-scenario", "--latest"],
+            "solutions.compare",
             "scenario.id_invalid",
         ),
         (
@@ -153,6 +222,10 @@ fn verify_compare_and_explain_dispatch_to_core_authority() -> Result<(), Box<dyn
     let directory = private_tempdir()?;
     let scenario = create_project(directory.path())?;
     let cases: &[(&[&str], &str)] = &[
+        (
+            &["solutions", "compare", MISSING_SOLUTION_A, "--latest"],
+            "solutions.compare",
+        ),
         (
             &["solutions", "verify", &scenario, MISSING_SOLUTION_A],
             "solutions.verify",
