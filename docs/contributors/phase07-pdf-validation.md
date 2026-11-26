@@ -49,6 +49,43 @@ scoped fixture-license reviews are complete;
 their findings were fixed and revalidated. This dependency follow-up does not
 clear the desktop UI or manual gates below.
 
+## Mixed-direction selection and clipboard check
+
+When comparing a recipient-PDF renderer against the Phase 07 baseline, exercise
+these authored, synthetic labels in two separate table cells. They deliberately
+combine a left-to-right prefix and suffix, parentheses, two right-to-left words
+and Western digits.
+
+```text
+ABC (ليلى منصور) 123 XYZ
+ABC (נועה כהן) 123 XYZ
+```
+
+Use the exact PDF artifacts from the same input for both renderers. On each
+native platform under test, record the OS, viewer and viewer version, renderer
+identity and PDF SHA-256. Check the current Typst baseline as well as any new
+candidate; a baseline failure is evidence, not permission to ship a candidate.
+
+1. Inspect both labels at normal zoom. Check Arabic joining, Hebrew word order,
+   the parentheses and Western digits, and clipping. Check the platform's
+   accessibility reading order for the heading, table headers and both rows.
+2. Select **one complete label cell**, from prefix through suffix, and paste
+   into a plain-text editor. Repeat for the other cell. Record the actual text,
+   not a screenshot or an extraction command result. Do not paste through a
+   rich-text editor that may reinsert direction or punctuation.
+3. Compare each paste by logical Unicode order with the matching line above.
+   Report visual, reading-order and clipboard outcomes separately. Inspect the
+   code points if the text looks the same but differs. Except for one final
+   line ending added by the editor, do not strip spaces, bidi controls, or
+   punctuation; do not reverse letters to make a comparison pass.
+
+Desktop viewer evidence is per viewer and platform. A headless extractor,
+matching PDF structure tags and exact semantic replacement text can help
+diagnose a discrepancy; none establishes that a user can copy the label
+correctly. A clipboard failure or an untested platform leaves that acceptance
+case open. This check does not authorize a renderer replacement, package
+change, advisory exception, or release.
+
 ## Stored-project CLI follow-up (2026-10-18)
 
 A disposable library was created through `projects create`, populated from the
