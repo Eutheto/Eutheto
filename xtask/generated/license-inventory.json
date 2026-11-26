@@ -954,13 +954,13 @@
     {
       "ecosystem": "cargo",
       "name": "cookie",
-      "version": "0.18.2",
+      "version": "0.18.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
+        "value": "d55f2d6c30eeec7d5c6f98bd4395d4abb1895629eab97ee6522d340623615f8a"
       }
     },
     {
@@ -2082,13 +2082,13 @@
     {
       "ecosystem": "cargo",
       "name": "form_urlencoded",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+        "value": "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
       }
     },
     {
@@ -3570,13 +3570,13 @@
     {
       "ecosystem": "cargo",
       "name": "libsqlite3-sys",
-      "version": "0.38.2",
+      "version": "0.39.1",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+        "value": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
       }
     },
     {
@@ -5130,13 +5130,13 @@
     {
       "ecosystem": "cargo",
       "name": "rusqlite",
-      "version": "0.40.2",
+      "version": "0.41.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+        "value": "9c026b4444579e8d754556c6c75d040d69c4a44283cdb648ab8a8d5965c2cfa8"
       }
     },
     {
@@ -5178,13 +5178,13 @@
     {
       "ecosystem": "cargo",
       "name": "rustix",
-      "version": "1.1.5",
+      "version": "1.1.6",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+        "value": "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
       }
     },
     {
@@ -7038,13 +7038,13 @@
     {
       "ecosystem": "cargo",
       "name": "url",
-      "version": "2.5.8",
+      "version": "2.5.9",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+        "value": "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
       }
     },
     {

@@ -3,13 +3,14 @@
 """Exercise the actual advisory gate's expiry and negative scope boundaries."""
 
 from copy import deepcopy
-from datetime import date
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -25,11 +26,11 @@ class AdvisoryGateTests(unittest.TestCase):
     def setUp(self):
         self.ignored = set(gate.MAINTENANCE) | gate.LEGACY_IGNORES
         packages = [dict(name=name, version=version, source=gate.SOURCE, checksum=checksum)
-                    for name, version, checksum in gate.MAINTENANCE.values()]
+                    for name, version, checksum in gate.REVIEWED.values()]
         self.lock = {"package": packages}
         rows = [dict(kind="unmaintained", package=deepcopy(package), advisory=dict(
                     id=advisory_id, package=package["name"], informational="unmaintained"))
-                for advisory_id, package in zip(gate.MAINTENANCE, packages)]
+                for advisory_id, package in zip(gate.REVIEWED, packages)]
         self.report = {"settings": {"ignore": [], "target_arch": [], "target_os": [],
                                     "severity": None,
                                     "informational_warnings": ["unmaintained", "unsound", "notice"]},
@@ -37,25 +38,31 @@ class AdvisoryGateTests(unittest.TestCase):
                        "vulnerabilities": {"found": False, "count": 0, "list": []},
                        "warnings": {"unmaintained": rows}}
 
-    def test_inclusive_utc_deadline(self):
-        for today in (date(2026, 10, 18), date(2026, 11, 16)):
-            gate.check_scope(self.lock, self.ignored, today)
-        with self.assertRaisesRegex(ValueError, "expired"):
-            gate.check_scope(self.lock, self.ignored, date(2026, 11, 17))
+    def test_reviewed_utc_window(self):
+        approved = datetime(2026, 11, 26, 6, 38, 18, tzinfo=timezone.utc)
+        cutoff = datetime(2026, 12, 17, tzinfo=timezone.utc)
+        tick = timedelta(microseconds=1)
+        with self.assertRaisesRegex(ValueError, "not started"):
+            gate.check_scope(self.lock, self.ignored, approved - tick)
+        for instant in (approved, cutoff - tick):
+            gate.check_scope(self.lock, self.ignored, instant)
+        for instant in (cutoff, cutoff + tick):
+            with self.subTest(instant=instant), self.assertRaisesRegex(ValueError, "expired"):
+                gate.check_scope(self.lock, self.ignored, instant)
 
     def test_every_exact_package_identity_is_required(self):
-        for index in range(6):
+        for index in range(len(gate.REVIEWED)):
             for field in ("name", "version", "source", "checksum"):
                 with self.subTest(index=index, field=field):
                     lock = deepcopy(self.lock)
                     lock["package"][index][field] += "-changed"
                     with self.assertRaisesRegex(ValueError, "re-review"):
-                        gate.check_scope(lock, self.ignored, date(2026, 11, 16))
+                        gate.check_scope(lock, self.ignored, gate.APPROVED_AT)
         self.lock["package"].append(deepcopy(self.lock["package"][0]))
         with self.assertRaises(ValueError):
-            gate.check_scope(self.lock, self.ignored, date(2026, 11, 16))
+            gate.check_scope(self.lock, self.ignored, gate.APPROVED_AT)
 
-    def test_only_six_matching_maintenance_notices_pass(self):
+    def test_only_reviewed_matching_maintenance_notices_pass(self):
         self.assertTrue(gate.check_report(self.report, self.ignored))
         for field in ("name", "version", "source", "checksum"):
             report = deepcopy(self.report)
@@ -81,7 +88,7 @@ class AdvisoryGateTests(unittest.TestCase):
             with self.subTest(advisory_id=advisory_id):
                 ignored = self.ignored | {advisory_id}
                 with self.assertRaises(ValueError):
-                    gate.check_scope(self.lock, ignored, date(2026, 11, 16))
+                    gate.check_scope(self.lock, ignored, gate.APPROVED_AT)
                 report = deepcopy(self.report)
                 report["vulnerabilities"] = {"found": True, "count": 1, "list": [
                     {"advisory": {"id": advisory_id}, "package": {"name": "zip"}}]}
@@ -103,7 +110,7 @@ class AdvisoryGateTests(unittest.TestCase):
         report["vulnerabilities"] = {"found": True, "count": 1, "list": [
             {"advisory": {"id": advisory_id}, "package": {"name": "new-vulnerable-dependency"}}]}
         with self.assertRaisesRegex(ValueError, "existing GTK policy"):
-            gate.check_scope(self.lock, ignored, date(2026, 11, 16))
+            gate.check_scope(self.lock, ignored, gate.APPROVED_AT)
         with self.assertRaisesRegex(ValueError, "existing GTK policy"):
             gate.check_report(report, ignored)
 
@@ -116,7 +123,7 @@ class AdvisoryGateTests(unittest.TestCase):
             elif mutation == "duplicate":
                 rows.append(deepcopy(rows[0]))
             elif mutation == "filtered":
-                report["settings"]["ignore"] = [next(iter(gate.MAINTENANCE))]
+                report["settings"]["ignore"] = [next(iter(gate.REVIEWED))]
             elif mutation == "empty-database":
                 report["database"]["advisory-count"] = 0
             else:
@@ -143,9 +150,55 @@ class AdvisoryGateTests(unittest.TestCase):
             result = subprocess.CompletedProcess([], code, output)
             with self.subTest(code=code, output=output), \
                     patch.object(gate, "check_scope"), \
+                    patch.object(gate, "check_chrono_inactive"), \
                     patch.object(gate.subprocess, "run", return_value=result), \
                     patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(gate.main(), 1)
+
+    def test_chrono_forward_graph(self):
+        anchors = "eutheto-desktop v0.1.0 (workspace)\nserde_with v3.22.0\n"
+        for output in (anchors, anchors + "chrono-tz v0.1.0\n"):
+            with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)):
+                gate.check_chrono_inactive(ROOT)
+        for output in ("", "serde_with v3.22.0", anchors + "unexpected", anchors + "chrono v0.4.45 (*)"):
+            with self.subTest(output=output), self.assertRaises(ValueError), patch.object(
+                    gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)):
+                gate.check_chrono_inactive(ROOT)
+
+    def test_target_specific_optional_build_dependency_is_active_under_all_features(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["desktop", "adapter"]\nexclude = ["chrono"]\nresolver = "2"\n')
+            for folder, name in (("desktop", "eutheto-desktop"), ("adapter", "serde_with"), ("chrono", "chrono")):
+                crate = root / folder
+                (crate / "src").mkdir(parents=True)
+                (crate / "src/lib.rs").touch()
+                (crate / "Cargo.toml").write_text(
+                    f'[package]\nname = "{name}"\nversion = "0.1.0"\nedition = "2021"\n')
+            manifest = root / "desktop/Cargo.toml"
+            base = manifest.read_text() + '[dependencies]\nserde_with = { path = "../adapter" }\n'
+            manifest.write_text(base)
+            subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, check=True)
+            gate.check_chrono_inactive(root)
+            manifest.write_text(base + '[target.wasm32-unknown-unknown.build-dependencies]\n'
+                                'renamed = { package = "chrono", path = "../chrono", optional = true }\n')
+            subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, check=True)
+            with self.assertRaisesRegex(ValueError, "chrono is active"):
+                gate.check_chrono_inactive(root)
+
+    def test_chrono_cannot_be_added_to_deny_ignores(self):
+        with self.assertRaises(ValueError):
+            gate.check_ignored_ids(self.ignored | {gate.CHRONO_ID})
+
+    def test_failed_graph_stops_before_audit(self):
+        with patch.object(gate, "check_scope"), patch.object(
+                gate.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "cargo tree")
+        ) as run, patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(gate.main(), 1)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0][:2], ["cargo", "tree"])
+            self.assertTrue(run.call_args.kwargs["check"])
 
     def test_standard_local_and_ci_gates_are_wired(self):
         justfile = (ROOT / "Justfile").read_text()
