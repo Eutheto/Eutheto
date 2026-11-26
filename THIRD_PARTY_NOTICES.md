@@ -88,7 +88,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `comemo` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `comemo-macros` | `0.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `constant_time_eq` | `0.4.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `cookie` | `0.18.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `cookie` | `0.18.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-foundation` | `0.10.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-foundation-sys` | `0.8.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `core-graphics` | `0.25.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -168,7 +168,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `foreign-types` | `0.5.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foreign-types-macros` | `0.2.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foreign-types-shared` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `form_urlencoded` | `1.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `form_urlencoded` | `1.2.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `futures` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `futures-channel` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `futures-core` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -581,7 +581,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `unicode-vo` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unsafe-libyaml` | `0.2.11` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `unscanny` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `url` | `2.5.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `url` | `2.5.9` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `urlpattern` | `0.3.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `usvg` | `0.47.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `utf16_iter` | `1.0.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
