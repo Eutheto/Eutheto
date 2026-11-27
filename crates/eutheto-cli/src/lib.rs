@@ -7,6 +7,8 @@ mod progress;
 mod scenario_files;
 mod solutions;
 mod solve;
+#[cfg(test)]
+mod solver_rehearsal;
 
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use eutheto_core::{
