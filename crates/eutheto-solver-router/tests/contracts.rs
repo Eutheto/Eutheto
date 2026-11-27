@@ -1187,7 +1187,13 @@ fn authorized_components_are_actually_solved_and_merged_equivalently() -> TestRe
 
 fn assert_invalid_model_without_invocations(record: &RouterExecutionRecord) {
     assert_eq!(record.invocation_count, 0);
+    assert!(record.attempts.is_empty());
     assert_eq!(record.terminal_status, SolveStatus::InvalidModel);
+    assert_eq!(
+        record.terminal_reason,
+        ExecutionTerminalReason::InvalidModel
+    );
+    assert_eq!(record.decision.status, DecisionStatus::InvalidModel);
     assert!(record.decision.component_analysis.components.is_empty());
     assert_eq!(record.decision.split, SplitDisposition::InvalidModel);
 }
@@ -1349,6 +1355,93 @@ async fn fallback_is_candidate_aware_and_shares_parent_deadline() -> TestResult 
         let result = run(&registry, problem()?, &clock, &mut reviewer).await?;
         assert_eq!(result.invocation_count, 1);
         assert!(!result.attempts[0].fallback_taken);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn backend_invalid_model_and_infeasibility_stop_a_fallback_chain_with_original_budget()
+-> TestResult {
+    for (termination, status) in [
+        (
+            BackendTerminationReason::InvalidModel,
+            SolveStatus::InvalidModel,
+        ),
+        (
+            BackendTerminationReason::InfeasibilityClaimed,
+            SolveStatus::Infeasible,
+        ),
+    ] {
+        let clock = FixedMonotonicClock::default();
+        let registry = registry(
+            vec![
+                ("tests.a", Behavior::Error(false, 600), false),
+                (
+                    "tests.b",
+                    Behavior::Outcome(termination, false, 20, 20),
+                    false,
+                ),
+                (
+                    "tests.c",
+                    Behavior::Outcome(BackendTerminationReason::Unavailable, false, 1, 0),
+                    false,
+                ),
+            ],
+            &clock,
+        )?;
+        let parent = ParentSolveBudget::new(
+            millis(1_000)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        clock.advance(Duration::from_millis(100))?;
+        let mut progress = Progress;
+        let mut reviewer = RequireIndependentVerification;
+        let record = SolverRouter::new(&registry)
+            .execute(
+                Arc::new(problem()?),
+                options(BackendSelection::Auto)?,
+                &parent,
+                DurationMillis::ZERO,
+                &mut progress,
+                &mut reviewer,
+            )
+            .await
+            .record;
+        assert_eq!(record.decision.status, DecisionStatus::Ready);
+        assert_eq!(record.decision.fallback_order.len(), 2);
+        assert_eq!(record.invocation_count, 2);
+        assert_eq!(record.terminal_status, status);
+        assert_eq!(
+            record.terminal_reason,
+            ExecutionTerminalReason::BackendTerminated
+        );
+        assert!(record.selected_candidate.is_none());
+        let [failed, terminal] = record.attempts.as_slice() else {
+            return Err("the failure and conclusive backend attempts must both be retained".into());
+        };
+        assert_eq!(failed.backend_id.as_str(), "tests.a");
+        assert_eq!(failed.backend_failure_code.as_deref(), Some("tests.crash"));
+        assert!(failed.fallback_taken);
+        assert_eq!(failed.remaining_at_dispatch_milliseconds, millis(900)?);
+        assert_eq!(terminal.backend_id.as_str(), "tests.b");
+        assert_eq!(terminal.invocation_index, Some(2));
+        assert_eq!(terminal.remaining_at_dispatch_milliseconds, millis(300)?);
+        assert_eq!(terminal.backend_limit_milliseconds, millis(300)?);
+        assert_eq!(
+            terminal.termination,
+            AttemptTermination::BackendOutcome(termination)
+        );
+        assert_eq!(
+            terminal.outcome.as_ref().map(|outcome| outcome.termination),
+            Some(termination)
+        );
+        assert!(!terminal.fallback_eligible);
+        assert!(!terminal.fallback_taken);
+        assert_eq!(parent.snapshot().remaining_milliseconds, millis(280)?);
+        let restored: RouterExecutionRecord =
+            serde_json::from_slice(&serde_json::to_vec(&record)?)?;
+        assert_eq!(restored, record);
     }
     Ok(())
 }
