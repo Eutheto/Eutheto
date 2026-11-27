@@ -11,17 +11,21 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::Arc;
 
-use eutheto_domain_ir::{DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef};
+use eutheto_domain_ir::{
+    AssumptionGroupId, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
+    OptimizationDirection,
+};
 use eutheto_planning_ir::{
-    BoolVariable, BoolVariableId, Capability, CompilerId, Constraint, ConstraintRecord,
-    InclusiveRange, IntDomain, IntVariable, IntVariableId, Literal, ObjectivePlan,
-    PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId,
-    PlanningIrLimitsV1, PlanningMetadata, PlanningProblem, ProjectionExpression, ProjectionId,
-    ProvenanceId, ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, summarize,
+    Assumption, BoolVariable, BoolVariableId, Capability, CompilerId, Constraint, ConstraintRecord,
+    InclusiveRange, IntDomain, IntVariable, IntVariableId, Literal, ObjectiveLevel,
+    ObjectiveLevelId, ObjectivePlan, PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION,
+    PlanningConstraintId, PlanningIrLimitsV1, PlanningMetadata, PlanningProblem,
+    ProjectionExpression, ProjectionId, ProvenanceId, ProvenanceRecord, ProvenanceSourceKind,
+    SolutionProjection, Variable, summarize,
 };
 use eutheto_solver_api::{
-    BackendOutputSink, BackendTerminationReason, BoundedBackendOutput, ProgressSink,
-    SolveProgressEvent, SolveRequest, SolverApiLimits, validate_outcome,
+    BackendOutputSink, BackendTerminationReason, BoundedBackendOutput, CompatibilityLevel,
+    ProgressSink, SolveProgressEvent, SolveRequest, SolverApiLimits, SupportCell, validate_outcome,
 };
 use eutheto_solver_ortools::{
     BundledWorkerArtifactError, ExecutableIdentityError, ORTOOLS_ADAPTER_VERSION,
@@ -309,6 +313,86 @@ fn options_with_intermediate(
         },
     })
 }
+
+#[tokio::test]
+async fn generated_assumption_restrictions_reach_the_registered_adapter() -> TestResult {
+    let (artifact, _artifact_guard) = verified_artifact().await?;
+    let registry = registry_with_ortools(artifact)?;
+    let backend_id = ORTOOLS_BACKEND_ID.parse()?;
+    let backend = registry
+        .get(&backend_id)
+        .ok_or("missing OR-Tools backend")?;
+    let matrix = registry.matrix();
+    assert_eq!(
+        backend.descriptor().capabilities,
+        matrix.backend_capabilities(&backend_id)?
+    );
+    let mut model = problem()?;
+    model.provenance[0].source_kind = ProvenanceSourceKind::RequiredRule;
+    model.assumptions.push(Assumption {
+        id: AssumptionGroupId::new("backend.assumption")?,
+        literal: Literal::negative(BoolVariableId::new("backend.selected")?),
+        required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f01".parse()?],
+        provenance: model.provenance[0].id.clone(),
+    });
+    model.declared_capabilities.insert(Capability::Assumptions);
+    model.canonicalize()?;
+    let summary = summarize(&model, PlanningIrLimitsV1::DEFAULT)?;
+    assert_eq!(summary.assumption_count, 1);
+    assert_eq!(summary.objective_level_count, 0);
+    let mut safe_options = options()?;
+    safe_options.explanation_mode = ExplanationMode::Standard;
+    let admitted = backend.compatibility(&summary, &safe_options);
+    assert_eq!(admitted.level, CompatibilityLevel::Degraded);
+    assert!(admitted.unsupported_features.is_empty());
+    let column = matrix
+        .backend_columns()
+        .find(|column| column.backend_id == backend_id)
+        .ok_or("missing generated OR-Tools support column")?;
+    for feature in ["ir.assumptions", "solve.infeasibility-evidence"] {
+        assert!(matches!(
+            column.cells.iter().find(|(id, _)| id.as_str() == feature).map(|(_, cell)| cell),
+            Some(SupportCell::Degraded { restriction_id, .. })
+                if restriction_id == "single-worker-satisfaction-assumptions"
+        ));
+        assert!(admitted.warnings.iter().any(|warning| {
+            warning.feature_id.as_str() == feature
+                && warning.restriction_id == "single-worker-satisfaction-assumptions"
+        }));
+    }
+    for threads in [WorkerThreadPolicy::Auto, WorkerThreadPolicy::Exact(2)] {
+        let mut unsafe_options = safe_options.clone();
+        unsafe_options.reproducibility = ReproducibilityMode::Performance;
+        unsafe_options.worker_threads = threads;
+        let refused = backend.compatibility(&summary, &unsafe_options);
+        assert_eq!(refused.level, CompatibilityLevel::Unsupported);
+        assert!(refused.unsupported_features.iter().any(|feature| {
+            feature.feature_id.as_str() == "solve.infeasibility-evidence"
+                && feature.path == "solveOptions.workerThreads"
+        }));
+    }
+
+    model.objectives.levels.push(ObjectiveLevel {
+        id: ObjectiveLevelId::new("backend.empty-objective")?,
+        direction: OptimizationDirection::Minimize,
+        lower_bound: 0,
+        upper_bound: 0,
+        terms: Vec::new(),
+        provenance: model.provenance[0].id.clone(),
+    });
+    model.canonicalize()?;
+    let summary = summarize(&model, PlanningIrLimitsV1::DEFAULT)?;
+    assert_eq!(summary.objective_level_count, 1);
+    assert_eq!(summary.objective_term_count, 0);
+    let refused = backend.compatibility(&summary, &safe_options);
+    assert_eq!(refused.level, CompatibilityLevel::Unsupported);
+    assert!(refused.unsupported_features.iter().any(|feature| {
+        feature.feature_id.as_str() == "ir.assumptions"
+            && feature.path == "planningProblem.objectives"
+    }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn artifact_verification_rejects_untrusted_manifest_and_tampered_worker() -> TestResult {
     let (_artifact, directory, manifest_sha256) = fixture_artifact().await?;
