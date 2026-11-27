@@ -690,6 +690,77 @@ fn profiles_and_production_registry_are_versioned_and_safe() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn generated_metadata_does_not_admit_a_backend_before_runtime_discovery() -> TestResult {
+    let registry = production_registry()?;
+    let ortools = BackendId::new("solver.ortools-cp-sat")?;
+    let pumpkin = BackendId::new("solver.pumpkin")?;
+    assert!(
+        registry
+            .matrix()
+            .production_backend_ids()
+            .any(|id| id == &ortools)
+    );
+    assert!(
+        registry
+            .matrix()
+            .deferred_candidates()
+            .iter()
+            .any(|candidate| candidate.backend_id == pumpkin)
+    );
+    let clock = FixedMonotonicClock::default();
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(clock),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let mut reviewer = RequireIndependentVerification;
+    for (selection, reason, diagnostic) in [
+        (
+            BackendSelection::Auto,
+            ExecutionTerminalReason::NoCompatibleBackend,
+            "solver.no_compatible_backend",
+        ),
+        (
+            BackendSelection::Specific(ortools),
+            ExecutionTerminalReason::UnsupportedOverride,
+            "solver.unknown_override",
+        ),
+        (
+            BackendSelection::Specific(pumpkin),
+            ExecutionTerminalReason::UnsupportedOverride,
+            "solver.unknown_override",
+        ),
+    ] {
+        let record = SolverRouter::new(&registry)
+            .execute(
+                Arc::new(problem()?),
+                options(selection)?,
+                &parent,
+                DurationMillis::ZERO,
+                &mut progress,
+                &mut reviewer,
+            )
+            .await
+            .record;
+        assert_eq!(record.terminal_status, SolveStatus::BackendUnavailable);
+        assert_eq!(record.terminal_reason, reason);
+        assert_eq!(record.invocation_count, 0);
+        assert!(record.attempts.is_empty());
+        assert!(record.selected_candidate.is_none());
+        assert_eq!(
+            record
+                .diagnostics
+                .iter()
+                .map(|entry| entry.code.as_str())
+                .collect::<Vec<_>>(),
+            vec![diagnostic]
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn auto_override_and_component_authorization_are_exact_and_deterministic() -> TestResult {
     let clock = FixedMonotonicClock::default();
